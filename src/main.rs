@@ -22,9 +22,9 @@ mod html;
 mod id_map;
 mod mat;
 mod md;
-mod named_queries;
 #[cfg(test)]
 mod md_test;
+mod named_queries;
 mod opts;
 mod pass1;
 mod pass2;
@@ -33,10 +33,10 @@ mod query;
 mod reader;
 mod report;
 mod retained;
-mod run_oql;
-mod source;
 mod rpo_dfs;
+mod run_oql;
 mod serve;
+mod source;
 mod sweep;
 mod trace;
 mod types;
@@ -46,9 +46,9 @@ mod vbyte;
 use std::io::IsTerminal;
 use std::{io, process, time::Instant};
 
-use opts::{AnalyzeOptions, DetailLevel, OutputFormat, DEFAULT_QUERY_PATH_DEPTH};
-use run_oql::{NoClassIndex, query_uses_edges, RetainedEdgeStructs, run_oql_escalated};
+use opts::{AnalyzeOptions, DEFAULT_QUERY_PATH_DEPTH, DetailLevel, OutputFormat};
 use pass1::Pass1;
+use run_oql::{NoClassIndex, RetainedEdgeStructs, query_uses_edges, run_oql_escalated};
 
 /// clap `value_parser` for `--query-path-depth`: reject `0` (and non-numeric
 /// input) with an actionable message. `usize`'s parser already rejects negative
@@ -498,7 +498,11 @@ fn main() {
                     Err(e) => fail(e),
                 }
             }
-            CompareCmd::Reports { reports, format, output } => {
+            CompareCmd::Reports {
+                reports,
+                format,
+                output,
+            } => {
                 // Name a missing input up front for a clear error, mirroring the
                 // MAT arm. Skip "-" (stdin) — it has no filesystem path.
                 for p in &reports {
@@ -514,8 +518,14 @@ fn main() {
                                 use std::io::Write;
                                 match std::fs::File::create(&path) {
                                     Ok(f) => {
-                                        let mut gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
-                                        if let Err(e) = gz.write_all(&bytes).and_then(|_| gz.finish().map(|_| ())) {
+                                        let mut gz = flate2::write::GzEncoder::new(
+                                            f,
+                                            flate2::Compression::default(),
+                                        );
+                                        if let Err(e) = gz
+                                            .write_all(&bytes)
+                                            .and_then(|_| gz.finish().map(|_| ()))
+                                        {
                                             fail(format!("gzip write error: {e}"));
                                         }
                                     }
@@ -599,9 +609,11 @@ fn main() {
             if server {
                 // Loopback HTTP server: POST OQL, get JSON back. Reads no stdin;
                 // --query/--query-file are ignored.
-                if let Err(e) =
-                    crate::query::server::run_server(&input, query_path_depth, port.unwrap_or(serve::DEFAULT_PORT))
-                {
+                if let Err(e) = crate::query::server::run_server(
+                    &input,
+                    query_path_depth,
+                    port.unwrap_or(serve::DEFAULT_PORT),
+                ) {
                     fail(analyze_error_hint(&input, &e));
                 }
             } else if repl {
@@ -619,10 +631,16 @@ fn main() {
                 }
                 let mut queries_vec = query;
                 if let Some(ref name) = run {
-                    let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
+                    let nq = crate::named_queries::NAMED_QUERIES
+                        .iter()
+                        .find(|q| q.name == name);
                     match nq {
                         None => {
-                            let prefix_end = name.char_indices().nth(3).map(|(i, _)| i).unwrap_or(name.len());
+                            let prefix_end = name
+                                .char_indices()
+                                .nth(3)
+                                .map(|(i, _)| i)
+                                .unwrap_or(name.len());
                             let prefix = &name[..prefix_end];
                             let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
                                 .iter()
@@ -663,7 +681,12 @@ fn main() {
             }
         }
         Some(Cmd::Mat { cmd }) => match cmd {
-            MatCmd::Caches { input, dir, mat_binary, trace_rss } => {
+            MatCmd::Caches {
+                input,
+                dir,
+                mat_binary,
+                trace_rss,
+            } => {
                 if !input_is_hprof(&input) {
                     fail(format!("'{input}' does not look like a .hprof[.gz] file"));
                 }
@@ -686,17 +709,22 @@ fn main() {
                     .or_else(|| base.strip_suffix(".hprof"))
                     .unwrap_or(base);
                 let mat_bin_path = mat_binary.as_deref().map(std::path::Path::new);
-                let mat_emitter = match mat::MatEmitter::new(std::path::Path::new(mat_dir), prefix, mat_bin_path) {
-                    Ok(e) => e,
-                    Err(e) => fail(format!("cannot create MAT index dir '{mat_dir}': {e}")),
-                };
+                let mat_emitter =
+                    match mat::MatEmitter::new(std::path::Path::new(mat_dir), prefix, mat_bin_path)
+                    {
+                        Ok(e) => e,
+                        Err(e) => fail(format!("cannot create MAT index dir '{mat_dir}': {e}")),
+                    };
                 if let Err(e) = run(
                     &input,
                     Some("/dev/null"),
                     OutputFormat::Md,
                     false,
                     cvec::Codec::Deflate9,
-                    AnalyzeOptions { skip_report: true, ..DetailLevel::Default.options() },
+                    AnalyzeOptions {
+                        skip_report: true,
+                        ..DetailLevel::Default.options()
+                    },
                     Some(mat_emitter),
                 ) {
                     fail(e);
@@ -761,7 +789,10 @@ fn run_default(cli: Cli) {
                     .unwrap_or(base);
                 match mat::MatEmitter::new(dir, prefix, cli.mat_binary.as_deref()) {
                     Ok(e) => Some(e),
-                    Err(e) => fail(format!("cannot create MAT index dir '{}': {e}", dir.display())),
+                    Err(e) => fail(format!(
+                        "cannot create MAT index dir '{}': {e}",
+                        dir.display()
+                    )),
                 }
             }
             None => None,
@@ -868,7 +899,15 @@ fn analyze_to_report_inner(
         _refwalk_csr,
         _string_values,
         _string_values_truncated,
-    ) = pass2::Pass2::build(source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(
+        source,
+        p1,
+        compress,
+        opts,
+        &[],
+        &mut no_in_sets,
+        &mut no_exists_bools,
+    )?;
 
     inbound.compress_id_map(compress)?;
 
@@ -1253,7 +1292,10 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
                 };
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("--query-file '{qf}': parse error on line {line_num}: {}{semi_hint}", e.0),
+                    format!(
+                        "--query-file '{qf}': parse error on line {line_num}: {}{semi_hint}",
+                        e.0
+                    ),
                 ));
             }
             collected.push(CollectedQuery {
@@ -1376,10 +1418,10 @@ fn edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=m {
         curr[0] = i;
         for j in 1..=n {
-            curr[j] = if a[i-1] == b[j-1] {
-                prev[j-1]
+            curr[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
             } else {
-                1 + prev[j-1].min(prev[j]).min(curr[j-1])
+                1 + prev[j - 1].min(prev[j]).min(curr[j - 1])
             };
         }
         std::mem::swap(&mut prev, &mut curr);
@@ -1438,7 +1480,9 @@ fn annotate_missing_classes(
     }
     // Resolve the dump's dotted class-name set once (slash-form normalized to
     // dots, matching how FROM names are written and how LiveResolver maps them).
-    let Ok(p1) = Pass1::run(&crate::source::HprofSource::from(input), false) else { return };
+    let Ok(p1) = Pass1::run(&crate::source::HprofSource::from(input), false) else {
+        return;
+    };
     let names: std::collections::HashSet<String> = p1
         .class_map
         .values()
@@ -1463,9 +1507,15 @@ fn annotate_missing_classes(
                 let mut candidates: Vec<&str> = names
                     .iter()
                     .filter(|n| {
-                        if n.starts_with('[') { return false; }
+                        if n.starts_with('[') {
+                            return false;
+                        }
                         let nl = n.to_ascii_lowercase();
-                        let sn = n.rsplit('.').next().unwrap_or(n.as_str()).to_ascii_lowercase();
+                        let sn = n
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or(n.as_str())
+                            .to_ascii_lowercase();
                         sn == simple_lower
                             || nl.contains(&lower)
                             || (prefix_len >= 4 && sn.starts_with(&simple_lower[..prefix_len]))
@@ -1586,9 +1636,9 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     // implements that. When any query uses a FROM- or IN-subquery, route through
     // it so the `query` subcommand fully supports subqueries. The inline path
     // below stays for the common no-subquery case (one scan, no re-parse).
-    let uses_subqueries = parsed
-        .iter()
-        .any(|(_, p)| p.from_subplan.is_some() || !p.in_subplans.is_empty() || !p.exists_subplans.is_empty());
+    let uses_subqueries = parsed.iter().any(|(_, p)| {
+        p.from_subplan.is_some() || !p.in_subplans.is_empty() || !p.exists_subplans.is_empty()
+    });
 
     // Cross-phase queries (retained sizes, dominators, N-hop RefPath, edges,
     // gc-roots) cannot be answered by the query-only fast path — it never builds
@@ -1631,8 +1681,25 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         };
         let mut no_in_sets = std::collections::HashMap::new();
         let mut no_exists_bools = std::collections::HashMap::new();
-        let (g, _inbound, _fwd_off_c, _fwd_tgt_c, _in_c, query_state, refwalk_csr, string_values, _sv_trunc) =
-            pass2::Pass2::build(&source_q, p1, cvec::Codec::Deflate9, &opts, &flat, &mut no_in_sets, &mut no_exists_bools)?;
+        let (
+            g,
+            _inbound,
+            _fwd_off_c,
+            _fwd_tgt_c,
+            _in_c,
+            query_state,
+            refwalk_csr,
+            string_values,
+            _sv_trunc,
+        ) = pass2::Pass2::build(
+            &source_q,
+            p1,
+            cvec::Codec::Deflate9,
+            &opts,
+            &flat,
+            &mut no_in_sets,
+            &mut no_exists_bools,
+        )?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
@@ -1679,54 +1746,91 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             continue;
         }
         let headers: Vec<String> = r.columns.iter().map(|c| c.name.clone()).collect();
-        let body: Vec<Vec<String>> = r.rows.iter().map(|row| row.iter().map(fmt_query_value).collect()).collect();
+        let body: Vec<Vec<String>> = r
+            .rows
+            .iter()
+            .map(|row| row.iter().map(fmt_query_value).collect())
+            .collect();
         let ncols = headers.len();
         // Numeric columns (all non-null values are Int or Float) get right-aligned.
-        let is_numeric: Vec<bool> = (0..ncols).map(|col| {
-            r.rows.iter().all(|row| matches!(
-                row.get(col),
-                Some(query::model::QueryValue::Int(_))
-                    | Some(query::model::QueryValue::Float(_))
-                    | Some(query::model::QueryValue::Null)
-                    | None
-            )) && r.rows.iter().any(|row| matches!(
-                row.get(col),
-                Some(query::model::QueryValue::Int(_)) | Some(query::model::QueryValue::Float(_))
-            ))
-        }).collect();
+        let is_numeric: Vec<bool> = (0..ncols)
+            .map(|col| {
+                r.rows.iter().all(|row| {
+                    matches!(
+                        row.get(col),
+                        Some(query::model::QueryValue::Int(_))
+                            | Some(query::model::QueryValue::Float(_))
+                            | Some(query::model::QueryValue::Null)
+                            | None
+                    )
+                }) && r.rows.iter().any(|row| {
+                    matches!(
+                        row.get(col),
+                        Some(query::model::QueryValue::Int(_))
+                            | Some(query::model::QueryValue::Float(_))
+                    )
+                })
+            })
+            .collect();
         // Compute per-column widths (header width vs max cell width).
         let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
         for row in &body {
             for (i, cell) in row.iter().enumerate() {
-                if i < ncols { widths[i] = widths[i].max(cell.chars().count()); }
+                if i < ncols {
+                    widths[i] = widths[i].max(cell.chars().count());
+                }
             }
         }
         let pad_left = |s: &str, w: usize| -> String {
             let n = s.chars().count();
-            if n >= w { s.to_string() } else { format!("{s}{}", " ".repeat(w - n)) }
+            if n >= w {
+                s.to_string()
+            } else {
+                format!("{s}{}", " ".repeat(w - n))
+            }
         };
         let pad_right = |s: &str, w: usize| -> String {
             let n = s.chars().count();
-            if n >= w { s.to_string() } else { format!("{}{s}", " ".repeat(w - n)) }
+            if n >= w {
+                s.to_string()
+            } else {
+                format!("{}{s}", " ".repeat(w - n))
+            }
         };
         // Header row — left-aligned (even for numeric columns, conventional).
-        let hdr_cells: Vec<String> = headers.iter().enumerate()
-            .map(|(i, h)| if i + 1 < ncols { pad_left(h, widths[i]) } else { h.clone() })
+        let hdr_cells: Vec<String> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                if i + 1 < ncols {
+                    pad_left(h, widths[i])
+                } else {
+                    h.clone()
+                }
+            })
             .collect();
         out.push_str(&hdr_cells.join(" | "));
         out.push('\n');
         // Separator.
-        let sep: Vec<String> = widths.iter().enumerate()
+        let sep: Vec<String> = widths
+            .iter()
+            .enumerate()
             .map(|(i, &w)| "-".repeat(if i + 1 < ncols { w } else { w }))
             .collect();
         out.push_str(&sep.join("-+-"));
         out.push('\n');
         // Data rows — numeric columns right-aligned, others left-aligned.
         for row in &body {
-            let cells: Vec<String> = row.iter().enumerate()
+            let cells: Vec<String> = row
+                .iter()
+                .enumerate()
                 .map(|(i, cell)| {
                     if i + 1 < ncols {
-                        if i < ncols && is_numeric[i] { pad_right(cell, widths[i]) } else { pad_left(cell, widths[i]) }
+                        if i < ncols && is_numeric[i] {
+                            pad_right(cell, widths[i])
+                        } else {
+                            pad_left(cell, widths[i])
+                        }
                     } else {
                         cell.clone()
                     }
@@ -1870,7 +1974,15 @@ fn run(
         refwalk_csr,
         string_values,
         string_values_truncated,
-    ) = pass2::Pass2::build(&source, p1, compress, &opts, &flat_queries, &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(
+        &source,
+        p1,
+        compress,
+        &opts,
+        &flat_queries,
+        &mut no_in_sets,
+        &mut no_exists_bools,
+    )?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),
@@ -1903,7 +2015,10 @@ fn run(
     // address after idom is known (post compute_dominators). The snapshot is a
     // Vec<u64> of length g.n; compress immediately so it doesn't sit uncompressed
     // through the inbound + dominator peak window (~90 MB for 11M objects).
-    let (mat_coc_snapshot, mat_addrs_c): (Option<std::collections::HashMap<u32, u32>>, Option<cvec::CompressedU64>) = if let Some(_) = mat {
+    let (mat_coc_snapshot, mat_addrs_c): (
+        Option<std::collections::HashMap<u32, u32>>,
+        Option<cvec::CompressedU64>,
+    ) = if let Some(_) = mat {
         let id_map = inbound
             .id_map
             .as_ref()
@@ -2257,8 +2372,11 @@ fn run(
         if let Some(ref m) = mat {
             m.emit_long_index_iter(
                 "idx",
-                std::iter::once(0i64)
-                    .chain(mm.sorted().iter().map(|&old_id| addrs[old_id as usize] as i64)),
+                std::iter::once(0i64).chain(
+                    mm.sorted()
+                        .iter()
+                        .map(|&old_id| addrs[old_id as usize] as i64),
+                ),
             )?;
             drop(addrs); // free ~4 GB after idx emission
             crate::trace::probe("main: after emit idx + drop(addrs) (before o2hprof)");
@@ -2294,13 +2412,12 @@ fn run(
     crate::trace::probe("main: before mat_inv (free_addrs done at idx emission)");
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
-    let mut mat_inv: Option<Vec<i32>> = if let (Some(ref mm), Some(ref coc)) =
-        (mat_map.as_ref(), mat_coc_snapshot.as_ref())
-    {
-        Some(mat::build_row_to_classobj_id(coc, g.class_names.len(), mm))
-    } else {
-        None
-    };
+    let mut mat_inv: Option<Vec<i32>> =
+        if let (Some(ref mm), Some(ref coc)) = (mat_map.as_ref(), mat_coc_snapshot.as_ref()) {
+            Some(mat::build_row_to_classobj_id(coc, g.class_names.len(), mm))
+        } else {
+            None
+        };
     // Patch alias rows: some class names have two histogram rows — a canonical row
     // (JLC_KEY or PRIM_KEY) where the class-object is registered, and an addr-based
     // row where instances are counted. Only the canonical row has inv[row] != -1.
@@ -2308,7 +2425,8 @@ fn run(
     // class-object as the canonical row.
     if let (Some(ref mut inv), Some(ref mm)) = (mat_inv.as_mut(), mat_map.as_ref()) {
         // Build: name → canonical class-object mat-id (first row with inv[row]!=-1)
-        let mut name_to_coid: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+        let mut name_to_coid: std::collections::HashMap<&str, i32> =
+            std::collections::HashMap::new();
         for (row, name) in g.class_names.iter().enumerate() {
             if inv[row] >= 0 {
                 name_to_coid.entry(name.as_str()).or_insert(inv[row]);
@@ -2322,7 +2440,7 @@ fn run(
                 }
             }
         }
-        let _ = mm;  // mm borrow ends here
+        let _ = mm; // mm borrow ends here
     };
     // Resolve class_obj_ids from the raw class_idx rows now that mat_inv is ready.
     // mat_fwd_snap.1 holds the compressed class_idx; restore, map through inv,
@@ -2357,7 +2475,11 @@ fn run(
         {
             // Restore fwd_off (prefix-sum offsets), drop compressed blob.
             let mut fwd_off = fwd_off_c.restore()?;
-            let total_edges = if fwd_off.len() > 0 { fwd_off[fwd_off.len() - 1] as usize } else { 0 };
+            let total_edges = if fwd_off.len() > 0 {
+                fwd_off[fwd_off.len() - 1] as usize
+            } else {
+                0
+            };
             // Pre-allocate fwd_tgt and scatter-fill via HPROF rescan.
             let mut fwd_tgt: Vec<u32> = vec![0u32; total_edges];
             crate::trace::probe("main: before outbound rescan (fwd_off+fwd_tgt allocated)");
@@ -2386,10 +2508,18 @@ fn run(
                 }
                 let old_id = sorted[idx - 1];
                 idx += 1;
-                let lo = if old_id == 0 { 0 } else { fwd_off[old_id as usize - 1] as usize };
+                let lo = if old_id == 0 {
+                    0
+                } else {
+                    fwd_off[old_id as usize - 1] as usize
+                };
                 let hi = fwd_off[old_id as usize] as usize;
                 let coid = class_obj_ids[old_id as usize];
-                let class_mat = if coid == u32::MAX { 0i32 } else { mm.translate(coid as i32).max(0) };
+                let class_mat = if coid == u32::MAX {
+                    0i32
+                } else {
+                    mm.translate(coid as i32).max(0)
+                };
                 // Translate dense ids to MAT ids in-place; compact reachable ones to front.
                 let mut count = 0usize;
                 for i in lo..hi {
@@ -2422,7 +2552,9 @@ fn run(
     drop(mat_outbound_rescan_ctx);
     drop(mat_fwd_snap);
     drop(mat_class_obj_ids_c);
-    crate::trace::probe("main: after drop(mat_fwd_snap) — restore inb_data + build inb offset table");
+    crate::trace::probe(
+        "main: after drop(mat_fwd_snap) — restore inb_data + build inb offset table",
+    );
     // Restore inb_data now (was compressed across emit_outbound to save ~80 MB).
     let inb_data = inb_data_c.restore()?;
     // MAT inbound: build a block-sampled byte-offset table into inb_data.
@@ -2483,7 +2615,9 @@ fn run(
                         if prev > 0 {
                             let dense = vertex[prev as usize] as i32;
                             let mid = mm.translate(dense);
-                            if mid >= 0 { e.push(mid); }
+                            if mid >= 0 {
+                                e.push(mid);
+                            }
                         }
                     }
                     e.sort_unstable();
@@ -2552,7 +2686,10 @@ fn run(
         let hi0 = dc_off[n + 1] as usize;
         let vroot_children: Vec<i32> = dc_tgt[lo0..hi0]
             .iter()
-            .filter_map(|&v| { let mid = mm.translate(v as i32); if mid >= 0 { Some(mid) } else { None } })
+            .filter_map(|&v| {
+                let mid = mm.translate(v as i32);
+                if mid >= 0 { Some(mid) } else { None }
+            })
             .collect();
         let iter = std::iter::once(vroot_children)
             .chain(std::iter::once(Vec::new())) // entry 1: mat-id 0 synthetic root
@@ -2561,7 +2698,10 @@ fn run(
                 let hi = dc_off[old_id as usize + 1] as usize;
                 dc_tgt[lo..hi]
                     .iter()
-                    .filter_map(|&v| { let mid = mm.translate(v as i32); if mid >= 0 { Some(mid) } else { None } })
+                    .filter_map(|&v| {
+                        let mid = mm.translate(v as i32);
+                        if mid >= 0 { Some(mid) } else { None }
+                    })
                     .collect::<Vec<i32>>()
             }));
         m.emit_dom_out_iter(iter)?;
@@ -2798,9 +2938,13 @@ fn run(
         }
         let class_iter = (0..num_rows).filter_map(|row| {
             let old_cobj = inv[row];
-            if old_cobj < 0 { return None; }
+            if old_cobj < 0 {
+                return None;
+            }
             let mat_cid = mm.translate(old_cobj);
-            if mat_cid <= 0 { return None; }
+            if mat_cid <= 0 {
+                return None;
+            }
             Some((mat_cid, per_class_retained[row]))
         });
         m.emit_i2sv2(class_iter)?;

@@ -10,17 +10,17 @@
 //! parity-sensitive (byte-exact, MAT-frozen counts) — most edits here should be
 //! comments, not behavior changes.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
 };
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
 
 use crate::{
     pass1::Pass1,
     reader::HprofReader,
-    types::{heap, tags, HprofType},
+    types::{HprofType, heap, tags},
 };
 
 mod boxed;
@@ -34,10 +34,10 @@ mod strings;
 
 pub(crate) use boxed::compute_boxed_holders;
 pub(crate) use dup_prim_arrays::{
-    compute_dup_array_holders, compute_dup_prim_arrays, DupPrimArrays,
+    DupPrimArrays, compute_dup_array_holders, compute_dup_prim_arrays,
 };
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
-pub(crate) use fielddecode::{builtin_coll_descs, CollDesc, CollKind};
+pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
 pub(crate) use meta::*;
 pub use model::*;
 pub(crate) use scan::*;
@@ -87,7 +87,11 @@ impl Pass2 {
             ($label:expr) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if std::env::var_os("HPROF_TIMING").is_some() {
-                    eprintln!("[timing] {}: {:.3}s", $label, _t_build.elapsed().as_secs_f64());
+                    eprintln!(
+                        "[timing] {}: {:.3}s",
+                        $label,
+                        _t_build.elapsed().as_secs_f64()
+                    );
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = $label;
@@ -661,18 +665,14 @@ impl Pass2 {
                         // Class-object for java.lang.Class: register under JLC_KEY
                         get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0)
                     } else {
-                        get_or_insert_class(
-                            addr,
-                            &|| n.to_string(),
-                            &|| ci.map(|c| c.loader_id).unwrap_or(0),
-                        )
+                        get_or_insert_class(addr, &|| n.to_string(), &|| {
+                            ci.map(|c| c.loader_id).unwrap_or(0)
+                        })
                     }
                 } else {
-                    get_or_insert_class(
-                        addr,
-                        &|| format!("unknown@{addr:#x}"),
-                        &|| ci.map(|c| c.loader_id).unwrap_or(0),
-                    )
+                    get_or_insert_class(addr, &|| format!("unknown@{addr:#x}"), &|| {
+                        ci.map(|c| c.loader_id).unwrap_or(0)
+                    })
                 };
                 class_obj_class_idx.insert(i as u32, idx);
             }
@@ -1648,12 +1648,15 @@ impl Pass2 {
 
                     // Edges from Object-type fields (dense Vec by class histogram idx)
                     if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        let named_plan = if do_names && (cidx as usize) < field_plans_named_dense.len() {
-                            &field_plans_named_dense[cidx as usize]
-                        } else {
-                            &[][..]
-                        };
-                        for (fi, &(off, excluded)) in field_plans_dense[cidx as usize].iter().enumerate() {
+                        let named_plan =
+                            if do_names && (cidx as usize) < field_plans_named_dense.len() {
+                                &field_plans_named_dense[cidx as usize]
+                            } else {
+                                &[][..]
+                            };
+                        for (fi, &(off, excluded)) in
+                            field_plans_dense[cidx as usize].iter().enumerate()
+                        {
                             let off = off as usize;
                             if off + id_size as usize <= scratch.len() {
                                 let ref_val = read_ref(&scratch[off..], id_size as usize);
@@ -1900,9 +1903,8 @@ impl Pass2 {
 
         let sc = r.u2()? as u64;
         consumed += 2;
-        let capture_props = system_class_addr != 0
-            && class_addr == system_class_addr
-            && props_name_id != 0;
+        let capture_props =
+            system_class_addr != 0 && class_addr == system_class_addr && props_name_id != 0;
         for _ in 0..sc {
             let name_id = r.id()?;
             consumed += ids;

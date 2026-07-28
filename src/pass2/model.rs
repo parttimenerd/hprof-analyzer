@@ -573,9 +573,9 @@ impl InboundBuilder {
         let n_nodes = fwd_offsets.len().saturating_sub(1);
         let mut buf: Vec<u32> = Vec::with_capacity(4096);
         let mut next_fwd_free: usize = 1 << 26; // first chunk boundary = 64 M u32 = 256 MB
-                                                // MADV_DONTNEED fwd_offsets pages as src advances past page boundaries.
-                                                // fwd_offsets[0..src] is dead after processing src; freeing pages
-                                                // immediately counteracts the inb_flat page faults during the transpose.
+        // MADV_DONTNEED fwd_offsets pages as src advances past page boundaries.
+        // fwd_offsets[0..src] is dead after processing src; freeing pages
+        // immediately counteracts the inb_flat page faults during the transpose.
         #[cfg(target_os = "linux")]
         let fwd_off_ptr = fwd_offsets.as_ptr();
         #[cfg(target_os = "linux")]
@@ -1008,9 +1008,9 @@ impl InboundBuilder {
 
         macro_rules! checked_sub {
             ($rem:expr, $sz:expr) => {
-                $rem = $rem.checked_sub($sz).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "segment overrun")
-                })?;
+                $rem = $rem
+                    .checked_sub($sz)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
             };
         }
 
@@ -1037,7 +1037,11 @@ impl InboundBuilder {
                     checked_sub!(remaining, ids + 4);
                 }
                 heap::ROOT_STICKY_CLASS | heap::ROOT_THREAD_OBJ => {
-                    let skip = if sub_tag == heap::ROOT_THREAD_OBJ { ids + 8 } else { ids };
+                    let skip = if sub_tag == heap::ROOT_THREAD_OBJ {
+                        ids + 8
+                    } else {
+                        ids
+                    };
                     r.skip(skip)?;
                     checked_sub!(remaining, skip);
                 }
@@ -1176,14 +1180,12 @@ pub fn rescan_outbound(
     fwd_off: &mut Vec<u32>,
     fwd_tgt: &mut Vec<u32>,
 ) -> io::Result<()> {
-    use std::io::ErrorKind;
     use crate::types::tags;
+    use std::io::ErrorKind;
 
     // Restore id_map from compressed blob (or live copy).
     let id_map = match ctx.id_map_c.as_ref() {
-        Some((blob, len)) => {
-            crate::id_map::IdMap::from_compressed(blob, *len, ctx.id_map_codec)?
-        }
+        Some((blob, len)) => crate::id_map::IdMap::from_compressed(blob, *len, ctx.id_map_codec)?,
         None => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1206,13 +1208,23 @@ pub fn rescan_outbound(
         match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 scan_fwd_segment(
-                    &mut r, ctx.id_size, ids, length, &id_map,
-                    &ctx.class_addr_to_hist, &ctx.field_plans_dense,
-                    fwd_off, fwd_tgt, &mut scratch, &mut cache,
+                    &mut r,
+                    ctx.id_size,
+                    ids,
+                    length,
+                    &id_map,
+                    &ctx.class_addr_to_hist,
+                    &ctx.field_plans_dense,
+                    fwd_off,
+                    fwd_tgt,
+                    &mut scratch,
+                    &mut cache,
                 )?;
             }
             tags::HEAP_DUMP_END => break,
-            _ => { r.skip(length)?; }
+            _ => {
+                r.skip(length)?;
+            }
         }
     }
     Ok(())
@@ -1230,19 +1242,25 @@ fn skip_class_dump(r: &mut HprofReader, id_size: u8, ids: u64) -> io::Result<u64
     let cp = r.u2()? as u64;
     consumed += 2;
     for _ in 0..cp {
-        r.skip(2)?; consumed += 2; // cp_index
-        let tp = r.u1()?; consumed += 1;
+        r.skip(2)?;
+        consumed += 2; // cp_index
+        let tp = r.u1()?;
+        consumed += 1;
         let vs = value_size(tp, id_size);
-        r.skip(vs)?; consumed += vs;
+        r.skip(vs)?;
+        consumed += vs;
     }
     // static fields
     let sc = r.u2()? as u64;
     consumed += 2;
     for _ in 0..sc {
-        r.skip(ids)?; consumed += ids; // name_id
-        let tp = r.u1()?; consumed += 1;
+        r.skip(ids)?;
+        consumed += ids; // name_id
+        let tp = r.u1()?;
+        consumed += 1;
         let vs = value_size(tp, id_size);
-        r.skip(vs)?; consumed += vs;
+        r.skip(vs)?;
+        consumed += vs;
     }
     // instance fields (just descriptors, no values)
     let ic = r.u2()? as u64;
@@ -1272,9 +1290,9 @@ fn scan_fwd_segment(
 
     macro_rules! checked_sub {
         ($rem:expr, $sz:expr) => {
-            $rem = $rem.checked_sub($sz).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "segment overrun")
-            })?;
+            $rem = $rem
+                .checked_sub($sz)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
         };
     }
 
@@ -1284,20 +1302,29 @@ fn scan_fwd_segment(
 
         match sub_tag {
             heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
-                r.skip(ids)?; checked_sub!(remaining, ids);
+                r.skip(ids)?;
+                checked_sub!(remaining, ids);
             }
             heap::ROOT_JNI_GLOBAL => {
-                r.skip(2 * ids)?; checked_sub!(remaining, 2 * ids);
+                r.skip(2 * ids)?;
+                checked_sub!(remaining, 2 * ids);
             }
             heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
-                r.skip(ids + 8)?; checked_sub!(remaining, ids + 8);
+                r.skip(ids + 8)?;
+                checked_sub!(remaining, ids + 8);
             }
             heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                r.skip(ids + 4)?; checked_sub!(remaining, ids + 4);
+                r.skip(ids + 4)?;
+                checked_sub!(remaining, ids + 4);
             }
             heap::ROOT_STICKY_CLASS | heap::ROOT_THREAD_OBJ => {
-                let skip = if sub_tag == heap::ROOT_THREAD_OBJ { ids + 8 } else { ids };
-                r.skip(skip)?; checked_sub!(remaining, skip);
+                let skip = if sub_tag == heap::ROOT_THREAD_OBJ {
+                    ids + 8
+                } else {
+                    ids
+                };
+                r.skip(skip)?;
+                checked_sub!(remaining, skip);
             }
             heap::CLASS_DUMP => {
                 // Class dumps don't contribute outbound edges in the MAT model.

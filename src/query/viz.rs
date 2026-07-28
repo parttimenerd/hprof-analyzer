@@ -23,7 +23,9 @@ use logos::Logos;
 use crate::query::model::{QueryColumn, QueryValue};
 
 /// The declared visualization kind. `Table` is the no-op default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum VizKind {
     #[default]
@@ -153,7 +155,8 @@ enum VizArgVal {
 /// Returns `(kind_word, args)`; semantic validation (known kind, known keys,
 /// positive cap) happens in [`parse_directive_body`] so error messages stay
 /// identical to the previous hand-rolled parser.
-fn viz_parser<'a, I>() -> impl Parser<'a, I, (String, Vec<(String, VizArgVal)>), extra::Err<Rich<'a, VizToken>>>
+fn viz_parser<'a, I>()
+-> impl Parser<'a, I, (String, Vec<(String, VizArgVal)>), extra::Err<Rich<'a, VizToken>>>
 where
     I: ValueInput<'a, Token = VizToken, Span = SimpleSpan>,
 {
@@ -177,9 +180,11 @@ where
 /// A malformed body yields the same actionable messages the callers assert on.
 fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
     if body.trim().is_empty() {
-        return Err("ignored @viz directive: missing chart kind (expected one of \
+        return Err(
+            "ignored @viz directive: missing chart kind (expected one of \
                     table, histogram, piechart, treemap)"
-            .to_string());
+                .to_string(),
+        );
     }
 
     // Lex. An unrecognized byte (e.g. `label=re;d`) is a malformed directive.
@@ -204,7 +209,8 @@ fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
     let (kind_word, args) = viz_parser().parse(stream).into_result().map_err(|_errs| {
         // A structural error (e.g. `foo` with no `=`, or a stray token) means the
         // args were not well-formed `key=value` pairs.
-        "ignored @viz argument: expected key=value (label=, value=, cap=, title=, or name=)".to_string()
+        "ignored @viz argument: expected key=value (label=, value=, cap=, title=, or name=)"
+            .to_string()
     })?;
 
     let kind = match kind_word.to_ascii_lowercase().as_str() {
@@ -412,9 +418,7 @@ mod tests {
             Some("object 0x10")
         );
         assert_eq!(
-            default_view_name(
-                &parse("SELECT * FROM (SELECT * FROM java.lang.String)").unwrap()
-            ),
+            default_view_name(&parse("SELECT * FROM (SELECT * FROM java.lang.String)").unwrap()),
             None
         );
         assert_eq!(
@@ -429,7 +433,9 @@ mod tests {
     fn cols(names: &[&str]) -> Vec<QueryColumn> {
         names
             .iter()
-            .map(|n| QueryColumn { name: n.to_string() })
+            .map(|n| QueryColumn {
+                name: n.to_string(),
+            })
             .collect()
     }
 
@@ -463,8 +469,7 @@ mod tests {
             ("piechart", VizKind::Piechart),
             ("treemap", VizKind::Treemap),
         ] {
-            let (_, spec, warn) =
-                split_directive(&format!("-- @viz {tok}\nSELECT * FROM C"));
+            let (_, spec, warn) = split_directive(&format!("-- @viz {tok}\nSELECT * FROM C"));
             assert!(warn.is_none(), "{tok} should be well-formed");
             assert_eq!(spec.unwrap().kind, kind);
         }
@@ -497,7 +502,11 @@ mod tests {
     #[test]
     fn cap_zero_is_malformed() {
         let (oql, spec, warn) = split_directive("-- @viz piechart cap=0\nSELECT * FROM C");
-        assert_eq!(oql.trim(), "SELECT * FROM C", "directive line still removed");
+        assert_eq!(
+            oql.trim(),
+            "SELECT * FROM C",
+            "directive line still removed"
+        );
         assert!(spec.is_none());
         assert!(warn.unwrap().contains("cap"));
     }
@@ -550,8 +559,7 @@ mod tests {
     fn dotted_column_name_in_value_arg() {
         // A field-path column name (e.g. an alias-qualified attribute) is a single
         // lexer Ident, dots and all.
-        let (_, spec, warn) =
-            split_directive("-- @viz histogram value=obj.size\nSELECT * FROM C");
+        let (_, spec, warn) = split_directive("-- @viz histogram value=obj.size\nSELECT * FROM C");
         assert!(warn.is_none(), "warn: {warn:?}");
         assert_eq!(spec.unwrap().value_col.as_deref(), Some("obj.size"));
     }
@@ -577,7 +585,11 @@ mod tests {
     fn bad_byte_in_directive_is_malformed_not_panic() {
         // A stray unlexable byte in the body is a malformed directive, not a crash.
         let (oql, spec, warn) = split_directive("-- @viz histogram label=a;b\nSELECT * FROM C");
-        assert_eq!(oql.trim(), "SELECT * FROM C", "directive line still removed");
+        assert_eq!(
+            oql.trim(),
+            "SELECT * FROM C",
+            "directive line still removed"
+        );
         assert!(spec.is_none());
         assert!(warn.is_some());
     }
@@ -678,14 +690,19 @@ mod tests {
     fn unterminated_quote_is_malformed_not_panic() {
         let (oql, spec, warn) =
             split_directive("-- @viz histogram title=\"unclosed\nSELECT * FROM C");
-        assert_eq!(oql.trim(), "SELECT * FROM C", "directive line still removed");
+        assert_eq!(
+            oql.trim(),
+            "SELECT * FROM C",
+            "directive line still removed"
+        );
         assert!(spec.is_none());
         assert!(warn.is_some());
     }
 
     #[test]
     fn title_is_case_insensitive_key() {
-        let (_, spec, warn) = split_directive("-- @viz histogram TITLE=Foo NAME=bar\nSELECT * FROM C");
+        let (_, spec, warn) =
+            split_directive("-- @viz histogram TITLE=Foo NAME=bar\nSELECT * FROM C");
         assert!(warn.is_none(), "warn: {warn:?}");
         let spec = spec.unwrap();
         assert_eq!(spec.title.as_deref(), Some("Foo"));
@@ -760,9 +777,11 @@ mod tests {
         };
         let columns = cols(&["a", "b"]);
         let rows = vec![vec![QueryValue::Int(1), QueryValue::Int(2)]];
-        assert!(resolve_columns(&spec, &columns, &rows)
-            .unwrap_err()
-            .contains("not found"));
+        assert!(
+            resolve_columns(&spec, &columns, &rows)
+                .unwrap_err()
+                .contains("not found")
+        );
     }
 
     #[test]
@@ -779,9 +798,11 @@ mod tests {
             QueryValue::Str("x".into()),
             QueryValue::Str("y".into()),
         ]];
-        assert!(resolve_columns(&spec, &columns, &rows)
-            .unwrap_err()
-            .contains("not numeric"));
+        assert!(
+            resolve_columns(&spec, &columns, &rows)
+                .unwrap_err()
+                .contains("not numeric")
+        );
     }
 
     #[test]
@@ -798,9 +819,11 @@ mod tests {
             QueryValue::Str("x".into()),
             QueryValue::Str("y".into()),
         ]];
-        assert!(resolve_columns(&spec, &columns, &rows)
-            .unwrap_err()
-            .contains("no numeric column"));
+        assert!(
+            resolve_columns(&spec, &columns, &rows)
+                .unwrap_err()
+                .contains("no numeric column")
+        );
     }
 
     #[test]

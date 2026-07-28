@@ -92,22 +92,40 @@ pub struct FieldDesc {
 }
 
 pub fn f_int(name: &str) -> FieldDesc {
-    FieldDesc { name: name.into(), ty: FieldType::Int }
+    FieldDesc {
+        name: name.into(),
+        ty: FieldType::Int,
+    }
 }
 pub fn f_long(name: &str) -> FieldDesc {
-    FieldDesc { name: name.into(), ty: FieldType::Long }
+    FieldDesc {
+        name: name.into(),
+        ty: FieldType::Long,
+    }
 }
 pub fn f_float(name: &str) -> FieldDesc {
-    FieldDesc { name: name.into(), ty: FieldType::Float }
+    FieldDesc {
+        name: name.into(),
+        ty: FieldType::Float,
+    }
 }
 pub fn f_bool(name: &str) -> FieldDesc {
-    FieldDesc { name: name.into(), ty: FieldType::Boolean }
+    FieldDesc {
+        name: name.into(),
+        ty: FieldType::Boolean,
+    }
 }
 pub fn f_obj(name: &str, sig: &str) -> FieldDesc {
-    FieldDesc { name: name.into(), ty: FieldType::Object(sig.into()) }
+    FieldDesc {
+        name: name.into(),
+        ty: FieldType::Object(sig.into()),
+    }
 }
 pub fn f_arr(name: &str, sig: &str) -> FieldDesc {
-    FieldDesc { name: name.into(), ty: FieldType::Array(sig.into()) }
+    FieldDesc {
+        name: name.into(),
+        ty: FieldType::Array(sig.into()),
+    }
 }
 
 /// A serializable class layer (one level of the superclass chain).
@@ -271,7 +289,12 @@ impl Ser {
     /// self-referential) write can emit a TC_REFERENCE via `ref_object(key)`. The handle is
     /// assigned right after the class-desc chain and before field values — matching the JVM, so a
     /// self-reference inside the object's own fields resolves correctly.
-    pub fn write_object_keyed(&mut self, chain: &[ClassDesc], layers: Vec<LayerData>, key: Option<&str>) {
+    pub fn write_object_keyed(
+        &mut self,
+        chain: &[ClassDesc],
+        layers: Vec<LayerData>,
+        key: Option<&str>,
+    ) {
         self.u8(TC_OBJECT);
         self.write_class_desc_chain(chain);
         let handle = self.assign_handle(); // the object instance consumes a handle
@@ -286,7 +309,10 @@ impl Ser {
 
     /// Emit a TC_REFERENCE to a previously-keyed object. Panics if the key is unknown.
     pub fn ref_object(&mut self, key: &str) {
-        let h = *self.handles.get(key).unwrap_or_else(|| panic!("no object handle for key {key}"));
+        let h = *self
+            .handles
+            .get(key)
+            .unwrap_or_else(|| panic!("no object handle for key {key}"));
         self.u8(TC_REFERENCE);
         self.i32(h as i32);
     }
@@ -295,7 +321,12 @@ impl Ser {
         let is_obj: StdMap<String, bool> = layer
             .fields
             .iter()
-            .map(|f| (f.name.clone(), matches!(f.ty, FieldType::Object(_) | FieldType::Array(_))))
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    matches!(f.ty, FieldType::Object(_) | FieldType::Array(_)),
+                )
+            })
             .collect();
         // partition indices into primitive vs object, each sorted alphabetically by name
         let mut prim_idx: Vec<usize> = Vec::new();
@@ -310,7 +341,8 @@ impl Ser {
         prim_idx.sort_by(|&a, &b| layer.values[a].0.cmp(&layer.values[b].0));
         obj_idx.sort_by(|&a, &b| layer.values[a].0.cmp(&layer.values[b].0));
 
-        let mut vals: Vec<Option<FieldVal>> = layer.values.into_iter().map(|(_, v)| Some(v)).collect();
+        let mut vals: Vec<Option<FieldVal>> =
+            layer.values.into_iter().map(|(_, v)| Some(v)).collect();
         for i in prim_idx {
             match vals[i].take().unwrap() {
                 FieldVal::Int(x) => self.i32(x),
@@ -336,7 +368,12 @@ impl Ser {
         write_elems: F,
     ) {
         self.u8(TC_ARRAY);
-        let cd = ClassDesc { name: array_class_name.into(), uid: array_uid, flags: SC_SERIALIZABLE, fields: vec![] };
+        let cd = ClassDesc {
+            name: array_class_name.into(),
+            uid: array_uid,
+            flags: SC_SERIALIZABLE,
+            fields: vec![],
+        };
         self.write_class_desc_chain(&[cd]);
         let _handle = self.assign_handle(); // array instance handle
         self.i32(len);
@@ -365,7 +402,12 @@ impl Ser {
             name: map_class_name.into(),
             uid: uid::HASH_MAP_INT_OBJECT,
             flags: SC_WRITE_METHOD | SC_SERIALIZABLE,
-            fields: vec![f_int("capacity"), f_int("limit"), f_int("size"), f_int("step")],
+            fields: vec![
+                f_int("capacity"),
+                f_int("limit"),
+                f_int("size"),
+                f_int("step"),
+            ],
         };
         self.write_class_desc_chain(&[cd]);
         let _handle = self.assign_handle();
@@ -443,10 +485,13 @@ impl Ser {
         self.i32(threshold);
         // order entries by (bucket, insertion index); bucket = spread(hash) & (cap-1)
         let mut order: Vec<usize> = (0..entries.len()).collect();
-        let buckets: Vec<u32> = entries.iter().map(|(hc, _, _)| {
-            let h = *hc as u32;
-            (h ^ (h >> 16)) & (cap - 1)
-        }).collect();
+        let buckets: Vec<u32> = entries
+            .iter()
+            .map(|(hc, _, _)| {
+                let h = *hc as u32;
+                (h ^ (h >> 16)) & (cap - 1)
+            })
+            .collect();
         order.sort_by(|&a, &b| buckets[a].cmp(&buckets[b]).then(a.cmp(&b)));
         let size = entries.len() as i32;
         let mut bd = Vec::new();
@@ -560,11 +605,15 @@ mod prime {
     // Mirror MAT PrimeFinder exactly: both methods step FIRST, then test — so they return the
     // strictly next/previous prime, never the input itself. Uses the same trial-division test.
     fn is_prime(n: i32) -> bool {
-        if n < 2 { return false; }
+        if n < 2 {
+            return false;
+        }
         let sqrt = (n as f64).sqrt() as i32;
         let mut i = 2;
         while i <= sqrt {
-            if (n / i) * i == n { return false; }
+            if (n / i) * i == n {
+                return false;
+            }
             i += 1;
         }
         true
@@ -572,13 +621,17 @@ mod prime {
     pub fn next_prime(mut floor: i32) -> i32 {
         loop {
             floor += 1;
-            if is_prime(floor) { return floor; }
+            if is_prime(floor) {
+                return floor;
+            }
         }
     }
     pub fn prev_prime(mut ceil: i32) -> i32 {
         loop {
             ceil -= 1;
-            if is_prime(ceil) { return ceil; }
+            if is_prime(ceil) {
+                return ceil;
+            }
         }
     }
 }
@@ -598,8 +651,13 @@ pub struct MatIntMap {
 impl MatIntMap {
     pub fn new(initial_capacity: i32) -> Self {
         let mut m = MatIntMap {
-            capacity: 0, step: 0, limit: 0, size: 0,
-            used: vec![], keys: vec![], slot_val: vec![],
+            capacity: 0,
+            step: 0,
+            limit: 0,
+            size: 0,
+            used: vec![],
+            keys: vec![],
+            slot_val: vec![],
         };
         m.init(initial_capacity);
         m
@@ -625,7 +683,9 @@ impl MatIntMap {
     }
     fn step_fn(&self, mut hash: i32) -> i32 {
         hash += self.step;
-        if hash >= self.capacity || hash < 0 { hash -= self.capacity; }
+        if hash >= self.capacity || hash < 0 {
+            hash -= self.capacity;
+        }
         hash
     }
     /// insert key -> value-index (val_idx is the caller's stable value id)
@@ -639,10 +699,16 @@ impl MatIntMap {
             hash = self.step_fn(hash);
         }
         if self.size == self.limit {
-            let new_cap = if self.capacity <= (i32::MAX >> 1) { self.capacity << 1 } else { self.capacity + 1 };
+            let new_cap = if self.capacity <= (i32::MAX >> 1) {
+                self.capacity << 1
+            } else {
+                self.capacity + 1
+            };
             self.resize(new_cap);
             hash = self.hash(key);
-            while self.used[hash as usize] { hash = self.step_fn(hash); }
+            while self.used[hash as usize] {
+                hash = self.step_fn(hash);
+            }
         }
         self.used[hash as usize] = true;
         self.keys[hash as usize] = key;
@@ -659,7 +725,9 @@ impl MatIntMap {
             if old_used[i] {
                 let key = old_keys[i];
                 let mut hash = self.hash(key);
-                while self.used[hash as usize] { hash = self.step_fn(hash); }
+                while self.used[hash as usize] {
+                    hash = self.step_fn(hash);
+                }
                 self.used[hash as usize] = true;
                 self.keys[hash as usize] = key;
                 self.slot_val[hash as usize] = old_vals[i];
@@ -671,7 +739,9 @@ impl MatIntMap {
     pub fn slots(&self) -> Vec<(i32, usize)> {
         let mut out = Vec::new();
         for i in 0..self.used.len() {
-            if self.used[i] { out.push((self.keys[i], self.slot_val[i])); }
+            if self.used[i] {
+                out.push((self.keys[i], self.slot_val[i]));
+            }
         }
         out
     }
@@ -720,7 +790,10 @@ mod tests {
         let before = s.buf.len();
         s.string("dup"); // second occurrence
         let after = &s.buf[before..];
-        assert_eq!(after[0], TC_REFERENCE, "duplicate string should be TC_REFERENCE");
+        assert_eq!(
+            after[0], TC_REFERENCE,
+            "duplicate string should be TC_REFERENCE"
+        );
         // 4-byte handle follows
         assert_eq!(after.len(), 5, "TC_REFERENCE + 4-byte handle = 5 bytes");
     }
@@ -757,7 +830,10 @@ mod tests {
         let vals = &data[vals_start..vals_end];
         assert_eq!(i32::from_be_bytes(vals[0..4].try_into().unwrap()), 1);
         assert_eq!(i32::from_be_bytes(vals[4..8].try_into().unwrap()), -2);
-        assert_eq!(i32::from_be_bytes(vals[8..12].try_into().unwrap(), ), 0x7FFF_FFFF);
+        assert_eq!(
+            i32::from_be_bytes(vals[8..12].try_into().unwrap(),),
+            0x7FFF_FFFF
+        );
     }
 
     #[test]
@@ -790,7 +866,10 @@ mod tests {
         let mut s = Ser::new();
         s.write_long(0x0102_0304_0506_0708i64);
         let n = s.buf.len();
-        assert_eq!(&s.buf[n - 8..n], &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        assert_eq!(
+            &s.buf[n - 8..n],
+            &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        );
     }
 
     #[test]
@@ -856,12 +935,21 @@ mod tests {
         let age_pos = after.windows(3).position(|w| w == b"age");
         let count_pos = after.windows(5).position(|w| w == b"count");
         assert!(age_pos.is_some() && count_pos.is_some());
-        assert!(age_pos.unwrap() < count_pos.unwrap(), "age before count (alpha order)");
+        assert!(
+            age_pos.unwrap() < count_pos.unwrap(),
+            "age before count (alpha order)"
+        );
         let name_pos = after.windows(4).position(|w| w == b"name");
         let tag_pos = after.windows(3).position(|w| w == b"tag");
         assert!(name_pos.is_some() && tag_pos.is_some());
-        assert!(name_pos.unwrap() < tag_pos.unwrap(), "name before tag (alpha order)");
-        assert!(count_pos.unwrap() < name_pos.unwrap(), "prims before objects");
+        assert!(
+            name_pos.unwrap() < tag_pos.unwrap(),
+            "name before tag (alpha order)"
+        );
+        assert!(
+            count_pos.unwrap() < name_pos.unwrap(),
+            "prims before objects"
+        );
     }
 
     // ── write_object superclass-first field values ────────────────────────────
@@ -871,12 +959,28 @@ mod tests {
         // Sub declares field 'z:I = 2', Super declares field 'a:I = 1'.
         // Values in the stream must be: a=1 (superclass) THEN z=2 (subclass).
         let chain = vec![
-            ClassDesc { name: "Sub".into(), uid: 1, flags: SC_SERIALIZABLE, fields: vec![f_int("z")] },
-            ClassDesc { name: "Super".into(), uid: 2, flags: SC_SERIALIZABLE, fields: vec![f_int("a")] },
+            ClassDesc {
+                name: "Sub".into(),
+                uid: 1,
+                flags: SC_SERIALIZABLE,
+                fields: vec![f_int("z")],
+            },
+            ClassDesc {
+                name: "Super".into(),
+                uid: 2,
+                flags: SC_SERIALIZABLE,
+                fields: vec![f_int("a")],
+            },
         ];
         let layers = vec![
-            LayerData { fields: vec![f_int("z")], values: vec![("z".into(), FieldVal::Int(2))] },
-            LayerData { fields: vec![f_int("a")], values: vec![("a".into(), FieldVal::Int(1))] },
+            LayerData {
+                fields: vec![f_int("z")],
+                values: vec![("z".into(), FieldVal::Int(2))],
+            },
+            LayerData {
+                fields: vec![f_int("a")],
+                values: vec![("a".into(), FieldVal::Int(1))],
+            },
         ];
         let mut s = Ser::new();
         s.write_object(&chain, layers);
@@ -893,8 +997,16 @@ mod tests {
     #[test]
     fn ref_object_produces_tc_reference_to_keyed_object() {
         let mut s = Ser::new();
-        let chain = vec![ClassDesc { name: "MyObj".into(), uid: 99, flags: SC_SERIALIZABLE, fields: vec![f_int("x")] }];
-        let layers = vec![LayerData { fields: vec![f_int("x")], values: vec![("x".into(), FieldVal::Int(42))] }];
+        let chain = vec![ClassDesc {
+            name: "MyObj".into(),
+            uid: 99,
+            flags: SC_SERIALIZABLE,
+            fields: vec![f_int("x")],
+        }];
+        let layers = vec![LayerData {
+            fields: vec![f_int("x")],
+            values: vec![("x".into(), FieldVal::Int(42))],
+        }];
         s.write_object_keyed(&chain, layers, Some("myobj_key"));
         // Now emit a reference to it
         let before = s.buf.len();
@@ -975,10 +1087,13 @@ mod tests {
     fn write_array_list_size_field_matches_elems() {
         let mut s = Ser::new();
         // Two null elements
-        s.write_array_list(2, vec![
-            Box::new(|s: &mut Ser| s.null()),
-            Box::new(|s: &mut Ser| s.null()),
-        ]);
+        s.write_array_list(
+            2,
+            vec![
+                Box::new(|s: &mut Ser| s.null()),
+                Box::new(|s: &mut Ser| s.null()),
+            ],
+        );
         // defaultWriteObject writes size:I (=2) right after the class desc + instance handle
         // We can't easily locate the exact byte offset, but we can check the stream has
         // TC_ENDBLOCKDATA at the end and no panic occurred.

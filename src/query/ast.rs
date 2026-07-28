@@ -150,11 +150,18 @@ pub enum Attr {
     /// `base[index]` — single 0-based element of an array-valued attr.
     /// Out-of-bounds or non-array base → Null (not an error).
     /// Resolved in P2 (late window).
-    ArrayIndex { base: Box<Attr>, index: Box<Expr> },
+    ArrayIndex {
+        base: Box<Attr>,
+        index: Box<Expr>,
+    },
     /// `base[start:end]` — slice of an array-valued attr.
     /// start/end are optional (None = beginning/end).
     /// Resolved in P2 (late window). Result: JSON-encoded string.
-    ArraySlice { base: Box<Attr>, start: Option<Box<Expr>>, end: Option<Box<Expr>> },
+    ArraySlice {
+        base: Box<Attr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
 }
 
 /// An arithmetic expression over attribute/field/literal operands. Leaves are
@@ -166,17 +173,31 @@ pub enum Attr {
 pub enum Expr {
     Attr(Attr),
     Lit(Value),
-    Binary { op: ArithOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Unary { op: UnaryOp, arg: Box<Expr> },
+    Binary {
+        op: ArithOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Unary {
+        op: UnaryOp,
+        arg: Box<Expr>,
+    },
     /// A method/property invocation on a resolved receiver: `receiver.name(args)`.
     /// Zero-arg for property forms. Dispatch is a FIXED table (MAT-API aliases +
     /// emulated JDK methods) keyed on name + receiver class — NOT reflection.
     /// Unknown methods are rejected at plan time (D5).
-    Method { receiver: Box<Expr>, name: String, args: Vec<Expr> },
+    Method {
+        receiver: Box<Expr>,
+        name: String,
+        args: Vec<Expr>,
+    },
     /// An aggregate function call used in HAVING position, e.g. `COUNT(*)`,
     /// `SUM(@usedHeapSize)`. Valid only inside a HAVING clause (the planner
     /// rejects aggregate expressions in WHERE or GROUP BY keys).
-    Aggregate { func: AggFunc, arg: Box<SelectItem> },
+    Aggregate {
+        func: AggFunc,
+        arg: Box<SelectItem>,
+    },
     /// `CASE WHEN <pred> THEN <expr> [WHEN <pred> THEN <expr>]* [ELSE <expr>] END`
     /// Branches evaluated left-to-right; first match wins.
     /// If no branch matches and `else_` is None, result is Null.
@@ -187,23 +208,40 @@ pub enum Expr {
     /// `COALESCE(expr, expr, ...)` — first non-Null value, or Null if all Null.
     Coalesce(Vec<Expr>),
     /// `NULLIF(a, b)` — Null if a == b, else a.
-    NullIf { lhs: Box<Expr>, rhs: Box<Expr> },
+    NullIf {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArithOp { Add, Sub, Mul, Div }
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp { Neg, Pos }
+pub enum UnaryOp {
+    Neg,
+    Pos,
+}
 
 impl Expr {
     /// The single `Attr` leaf, if this expression is exactly `Expr::Attr`.
     pub fn as_attr(&self) -> Option<&Attr> {
-        match self { Expr::Attr(a) => Some(a), _ => None }
+        match self {
+            Expr::Attr(a) => Some(a),
+            _ => None,
+        }
     }
     /// The single `Value` leaf, if this expression is exactly `Expr::Lit`.
     pub fn as_lit(&self) -> Option<&Value> {
-        match self { Expr::Lit(v) => Some(v), _ => None }
+        match self {
+            Expr::Lit(v) => Some(v),
+            _ => None,
+        }
     }
 }
 
@@ -299,7 +337,10 @@ pub enum Predicate {
     },
     /// `EXISTS (<subquery>)` / `NOT EXISTS (<subquery>)`.
     /// Non-correlated: evaluated once before the outer scan.
-    Exists { inner: Box<Query>, negated: bool },
+    Exists {
+        inner: Box<Query>,
+        negated: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

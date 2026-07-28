@@ -8,10 +8,10 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// Always format as KB with thousands separators so column width visually
-// correlates with magnitude (e.g. "198,452 KB" vs "194 KB" vs "0 KB").
+// In KB mode: plain number with 2 decimals + thousands separators. No "KB" suffix —
+// the column header shows "(KB)" as the unit indicator.
 export function formatBytesKB(n: number): string {
-  return `${Math.round(n / 1024).toLocaleString("en-US")} KB`;
+  return (n / 1024).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function fmtCount(n: number): string {

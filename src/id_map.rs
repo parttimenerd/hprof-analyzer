@@ -127,7 +127,7 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
         let ptr = sub.as_ptr();
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            use core::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
             _mm_prefetch(ptr.add(base + q) as *const i8, _MM_HINT_T0);
             _mm_prefetch(ptr.add(mid + q) as *const i8, _MM_HINT_T0);
         }
@@ -367,10 +367,13 @@ impl IdMap {
                 let mut carry_len = 0usize;
                 let mut buf = vec![0u8; 65536];
                 let mut pushed = 0usize;
-                let mut decoder: Box<dyn io::Read> = Box::new(flate2::read::DeflateDecoder::new(blob));
+                let mut decoder: Box<dyn io::Read> =
+                    Box::new(flate2::read::DeflateDecoder::new(blob));
                 loop {
                     let n = decoder.read(&mut buf)?;
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     let mut i = 0usize;
                     while i < n && pushed < len {
                         carry[carry_len] = buf[i];

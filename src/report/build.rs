@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::pass2::Graph;
-use crate::pass2::{AttributionRaw, ATTRIBUTION_TOP_N};
+use crate::pass2::{ATTRIBUTION_TOP_N, AttributionRaw};
 
 const THRESHOLD_PCT: f64 = 10.0;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
@@ -327,7 +327,11 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
         let mut retained_other = 0u64;
         for &ri in &g.reference_referent_idx[kind] {
             let i = ri as usize;
-            let ret = if i < g.retained.len() { g.retained[i] } else { 0 };
+            let ret = if i < g.retained.len() {
+                g.retained[i]
+            } else {
+                0
+            };
             let cls = class_display(g, i);
             if let Some(&idx) = known_classes.get(cls.as_str()) {
                 retained_per_class[idx] += ret;
@@ -361,16 +365,22 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
             let e = by_class.entry(class_display(g, i)).or_insert((0, 0, 0));
             e.0 += 1;
             e.1 += g.shallow[i] as u64;
-            e.2 += if i < g.retained.len() { g.retained[i] } else { 0 };
+            e.2 += if i < g.retained.len() {
+                g.retained[i]
+            } else {
+                0
+            };
         }
         let mut rows: Vec<RefStatClassRow> = by_class
             .into_iter()
-            .map(|(pretty_class, (objects, shallow, retained))| RefStatClassRow {
-                pretty_class,
-                objects,
-                shallow,
-                retained,
-            })
+            .map(
+                |(pretty_class, (objects, shallow, retained))| RefStatClassRow {
+                    pretty_class,
+                    objects,
+                    shallow,
+                    retained,
+                },
+            )
             .collect();
         // Deterministic: retained desc, then pretty_class asc.
         rows.sort_unstable_by(|a, b| {
@@ -798,7 +808,11 @@ fn aggregate_collection_attribution(
         // tiny: count empty/singleton containers per (holder, field, kind).
         if rec.elements <= 1 {
             let ta = tiny
-                .entry((rec.holder_class.clone(), rec.field.clone(), rec.container_kind))
+                .entry((
+                    rec.holder_class.clone(),
+                    rec.field.clone(),
+                    rec.container_kind,
+                ))
                 .or_insert_with(|| TinyAcc {
                     empty_count: 0,
                     singleton_count: 0,
@@ -1363,7 +1377,8 @@ pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOver
                 .map(|addr| loader_label_for_addr(g, addr));
 
             // Gated per-frame significant locals (only when --thread-locals ran).
-            let (significant_frames, max_local_retained) = build_significant_frames(g, t, total_shallow);
+            let (significant_frames, max_local_retained) =
+                build_significant_frames(g, t, total_shallow);
 
             ThreadInfo {
                 thread_serial: t.thread_serial,
@@ -2889,11 +2904,10 @@ fn build_stack_held_via(g: &Graph) -> std::collections::HashMap<u32, String> {
     let mut out: HashMap<u32, String> = HashMap::new();
     for (&_thread_serial, pairs) in &g.thread_local_frame_samples {
         // Find the ThreadStack for this thread so we can resolve frame_number.
-        let stack = g.thread_stacks.iter().find(|ts| {
-            pairs
-                .iter()
-                .any(|_| ts.thread_serial == _thread_serial)
-        });
+        let stack = g
+            .thread_stacks
+            .iter()
+            .find(|ts| pairs.iter().any(|_| ts.thread_serial == _thread_serial));
         for &(frame_number, local_idx) in pairs {
             if out.contains_key(&local_idx) {
                 continue; // first writer wins — highest-retained frame
@@ -2979,7 +2993,11 @@ fn build_top_retainers(
 
     let mut rows: Vec<RetainerRow> = by_name
         .into_iter()
-        .map(|(name, (kind, retained))| RetainerRow { name, kind, retained })
+        .map(|(name, (kind, retained))| RetainerRow {
+            name,
+            kind,
+            retained,
+        })
         .collect();
     // Retained desc; tie-break name asc for determinism.
     rows.sort_by(|a, b| b.retained.cmp(&a.retained).then(a.name.cmp(&b.name)));
@@ -3399,7 +3417,7 @@ mod leak_indicator_tests {
         assert!(is_anonymous_class("com/example/Foo$$Lambda$42/0x1234")); // lambda
         assert!(is_anonymous_class("com/example/Foo$Proxy1")); // proxy
         assert!(is_anonymous_class("com/example/$$Anon")); // anon
-                                                           // These should NOT match:
+        // These should NOT match:
         assert!(!is_anonymous_class("com/example/Foo$Bar")); // named inner
         assert!(!is_anonymous_class("java/lang/String")); // plain class
     }

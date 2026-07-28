@@ -13,7 +13,11 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_toc_graphs(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
-    render_system_overview_graphs(&r.overview, r.leak_indicators.direct_byte_buffer_capacity_sum, &mut out);
+    render_system_overview_graphs(
+        &r.overview,
+        r.leak_indicators.direct_byte_buffer_capacity_sum,
+        &mut out,
+    );
     render_leak_suspects_graphs(&r.leaks, &mut out);
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
     render_dominator_analysis(&r.dominator_analysis, true, &mut out);
@@ -437,7 +441,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
 /// Retention Concentration (md-graphs): same numbers as plain md plus a
 /// proportional bar column. Standalone section near the end of the report.
 fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     let rc = &o.retention_concentration;
     if !retention_concentration_present(o) {
         return;
@@ -482,7 +486,7 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
 /// Dominator-Depth Distribution (md-graphs): the full per-depth table with a
 /// proportional bar column. Standalone section near the end of the report.
 fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     let Some(stats) = depth_stats(&o.dominator_depth_histogram) else {
         return;
     };
@@ -526,7 +530,7 @@ fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
 /// Leak Suspects with a leading share-bar table across all suspects, then the
 /// full plain per-suspect detail (reused verbatim for byte-identical numbers).
 fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Leak Suspects\n\n");
 
     if l.suspects.is_empty() {
@@ -700,7 +704,7 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
 /// Top Consumers with share bars on Biggest Objects / Classes and a tree-drawn
 /// package hierarchy (box-drawing connectors + a retained-heap bar per row).
 fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut String) {
-    use crate::md::{bar, sparkline, tree_prefix, Align, Table};
+    use crate::md::{Align, Table, bar, sparkline, tree_prefix};
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(

@@ -123,7 +123,10 @@ fn compress_impl(iter: impl Iterator<Item = u64> + Clone, varying: u32, trailing
 
 #[cfg(test)]
 pub fn decode_int(bytes: &[u8], n: usize) -> Vec<i32> {
-    decode_impl(bytes, n).into_iter().map(|v| v as i32).collect()
+    decode_impl(bytes, n)
+        .into_iter()
+        .map(|v| v as i32)
+        .collect()
 }
 #[cfg(test)]
 pub(crate) fn decode_long(bytes: &[u8], n: usize) -> Vec<i64> {
@@ -239,7 +242,11 @@ mod tests {
         // compress_impl must not panic on varying=64 (value_mask = u64::MAX).
         let vals = vec![-1i64, 0i64, i64::MAX, i64::MIN];
         let bytes = compress_long(&vals);
-        assert_eq!(decode_long(&bytes, vals.len()), vals, "varying=64 roundtrip");
+        assert_eq!(
+            decode_long(&bytes, vals.len()),
+            vals,
+            "varying=64 roundtrip"
+        );
     }
 
     /// A mask where only bits in the range [16, 47] are set — straddles the
@@ -257,7 +264,11 @@ mod tests {
         // Must roundtrip.
         let vals = vec![0x0000_FFFF_0000_0000i64, 0x0000_0001_0000_0000i64, 0i64];
         let bytes = compress_long(&vals);
-        assert_eq!(decode_long(&bytes, vals.len()), vals, "straddle32 roundtrip");
+        assert_eq!(
+            decode_long(&bytes, vals.len()),
+            vals,
+            "straddle32 roundtrip"
+        );
     }
 
     /// Confirm that compress_int handles all-negative input (all bits set → mask=-1)

@@ -4,7 +4,9 @@
 
 use crate::query::PATH_FRONTIER_CAP;
 use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Query, SelectItem, SortDir};
-use crate::query::execute::{CrossPhaseEntry, QueryExecState, arith, compare_values, unary, value_to_qv};
+use crate::query::execute::{
+    CrossPhaseEntry, QueryExecState, arith, compare_values, unary, value_to_qv,
+};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
 use crate::query::runflags::EdgeDir;
@@ -535,11 +537,7 @@ fn dominator_rows(
         .first()
         .and_then(|o| o.as_deref())
         .map(|s| s.to_string())
-        .or_else(|| {
-            q.select
-                .first()
-                .map(crate::query::execute::column_name)
-        })
+        .or_else(|| q.select.first().map(crate::query::execute::column_name))
         .unwrap_or_else(|| "*".to_string());
     let rows: Vec<Vec<QueryValue>> = indices
         .iter()
@@ -620,12 +618,12 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(s) as i64)
                 }
-                SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
-                    ctx.shallow.get(s as usize).copied().unwrap_or(0) as i64,
-                ),
-                SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(
-                    ctx.retained.get(s as usize).copied().unwrap_or(0) as i64,
-                ),
+                SelectItem::Attr(Attr::UsedHeapSize) => {
+                    QueryValue::Int(ctx.shallow.get(s as usize).copied().unwrap_or(0) as i64)
+                }
+                SelectItem::Attr(Attr::RetainedHeapSize) => {
+                    QueryValue::Int(ctx.retained.get(s as usize).copied().unwrap_or(0) as i64)
+                }
                 SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                     match ctx.class_name_of(s) {
                         Some(name) => QueryValue::Str(name.to_string()),
@@ -727,7 +725,10 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
 
     // Aggregate over the toString-filtered set.
-    if q.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. })) {
+    if q.select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Aggregate { .. }))
+    {
         let truncated = entry.carry.truncated() || ctx.string_values_truncated;
 
         // GROUP BY path: group by the toString(s) key, one row per distinct value.
@@ -741,8 +742,11 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             for &idx in &kept {
                 let key_opt: Option<String> = ctx.string_value(idx).map(|s| s.to_string());
                 let entry_ref = group_map.entry(key_opt).or_insert_with(|| {
-                    let init: Vec<crate::query::execute::AggAcc> =
-                        q.select.iter().map(crate::query::execute::init_agg_acc).collect();
+                    let init: Vec<crate::query::execute::AggAcc> = q
+                        .select
+                        .iter()
+                        .map(crate::query::execute::init_agg_acc)
+                        .collect();
                     (idx, init)
                 });
                 for (acc, item) in entry_ref.1.iter_mut().zip(q.select.iter()) {
@@ -755,8 +759,10 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             let mut out_rows: Vec<Vec<QueryValue>> = group_map
                 .into_values()
                 .map(|(rep_idx, accs)| {
-                    let finalized: Vec<QueryValue> =
-                        accs.into_iter().map(crate::query::execute::finalize_agg_acc).collect();
+                    let finalized: Vec<QueryValue> = accs
+                        .into_iter()
+                        .map(crate::query::execute::finalize_agg_acc)
+                        .collect();
                     // Build one output row: aggregates from finalized accs; non-aggregates
                     // (GROUP BY key projections) resolved from the representative object.
                     // Using project_string_row_item ensures @classOf, @objectId, etc.
@@ -777,13 +783,18 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             if !entry.plan.having_terms.is_empty() {
                 out_rows.retain(|row| {
                     entry.plan.having_terms.iter().all(|term| {
-                        crate::query::execute::eval_having_term(&term.pred, row, q, &columns, &like_regexes)
+                        crate::query::execute::eval_having_term(
+                            &term.pred,
+                            row,
+                            q,
+                            &columns,
+                            &like_regexes,
+                        )
                     })
                 });
             }
             if let Some(ob) = &q.order_by {
-                if let Some(ci) =
-                    crate::query::execute::order_by_column_index(q, &columns, &ob.key)
+                if let Some(ci) = crate::query::execute::order_by_column_index(q, &columns, &ob.key)
                 {
                     crate::query::execute::sort_rows_by_column(&mut out_rows, ci, ob.dir);
                 }
@@ -814,8 +825,11 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         // (plan.rs gates everything else). Per-object arg value projected via
         // `project_string_row_item` (COUNT(*) ignores it; COUNT(toString(s)) sees
         // the decoded string).
-        let mut accs: Vec<crate::query::execute::AggAcc> =
-            q.select.iter().map(crate::query::execute::init_agg_acc).collect();
+        let mut accs: Vec<crate::query::execute::AggAcc> = q
+            .select
+            .iter()
+            .map(crate::query::execute::init_agg_acc)
+            .collect();
         for &idx in &kept {
             for (acc, item) in accs.iter_mut().zip(q.select.iter()) {
                 if let SelectItem::Aggregate { arg, .. } = item {
@@ -892,8 +906,11 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
         Expr::Lit(_) => false,
         Expr::Binary { lhs, rhs, .. } => expr_has_attr(lhs, pred) || expr_has_attr(rhs, pred),
         Expr::Unary { arg, .. } => expr_has_attr(arg, pred),
-        Expr::Method { receiver, args, .. } => // D2 fills this
-            expr_has_attr(receiver, pred) || args.iter().any(|a| expr_has_attr(a, pred)),
+        Expr::Method { receiver, args, .. } =>
+        // D2 fills this
+        {
+            expr_has_attr(receiver, pred) || args.iter().any(|a| expr_has_attr(a, pred))
+        }
         Expr::Aggregate { .. } => false,
         Expr::Case { branches, else_ } => {
             let pred: &dyn Fn(&Attr) -> bool = pred;
@@ -909,10 +926,13 @@ fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
     match e {
         Expr::Attr(a) => pred(a),
         Expr::Lit(_) => false,
-        Expr::Binary { lhs, rhs, .. } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred)
+        }
         Expr::Unary { arg, .. } => expr_has_attr_dyn(arg, pred),
-        Expr::Method { receiver, args, .. } =>
-            expr_has_attr_dyn(receiver, pred) || args.iter().any(|a| expr_has_attr_dyn(a, pred)),
+        Expr::Method { receiver, args, .. } => {
+            expr_has_attr_dyn(receiver, pred) || args.iter().any(|a| expr_has_attr_dyn(a, pred))
+        }
         Expr::Aggregate { .. } => false,
         Expr::Case { branches, else_ } => {
             branches.iter().any(|(cond, then_e)| {
@@ -929,7 +949,9 @@ fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
             pred_has_attr_dyn(a, pred) || pred_has_attr_dyn(b, pred)
         }
         Predicate::Not(a) => pred_has_attr_dyn(a, pred),
-        Predicate::Compare { lhs, rhs, .. } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred)
+        }
         Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => false,
     }
 }
@@ -948,9 +970,9 @@ fn eval_late_expr_multi(
         Expr::Attr(a) => match a {
             Attr::ObjectId => QueryValue::Int(idx as i64),
             Attr::RetainedHeapSize => QueryValue::Int(ret as i64),
-            Attr::UsedHeapSize => QueryValue::Int(
-                ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
-            ),
+            Attr::UsedHeapSize => {
+                QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
+            }
             Attr::ObjectAddress => QueryValue::Int(ctx.id_map.to_addr(idx) as i64),
             Attr::ClassOf | Attr::DisplayName => match ctx.class_name_of(idx) {
                 Some(name) => QueryValue::Str(name.to_string()),
@@ -1013,7 +1035,9 @@ fn eval_late_expr_multi(
         Expr::Coalesce(args) => {
             for arg in args {
                 let v = eval_late_expr_multi(arg, idx, ret, ctx, like_regexes);
-                if !matches!(v, QueryValue::Null) { return v; }
+                if !matches!(v, QueryValue::Null) {
+                    return v;
+                }
             }
             QueryValue::Null
         }
@@ -1060,7 +1084,6 @@ fn eval_late_pred_multi(
     }
 }
 
-
 /// the RHS is expected to be a `QueryValue::Str` containing the pattern, and
 /// `like_regexes` is consulted. Null operands: only `Ne` and `NotLike` are true
 /// (type-mismatch behaviour consistent with `cmp_query_value`).
@@ -1086,7 +1109,9 @@ fn cmp_late_qv(
 /// Widened: the ToString attr may appear anywhere inside the Compare's lhs or
 /// rhs expression (e.g. `toString(s) + 1 = 5` has it buried in a Binary).
 fn has_to_string_pred(p: &Predicate) -> bool {
-    fn is_tostring(a: &Attr) -> bool { matches!(a, Attr::ToString(_)) }
+    fn is_tostring(a: &Attr) -> bool {
+        matches!(a, Attr::ToString(_))
+    }
     match p {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             has_to_string_pred(a) || has_to_string_pred(b)
@@ -1113,12 +1138,12 @@ fn project_string_row_item(
             .unwrap_or(QueryValue::Null),
         SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
         SelectItem::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(dense) as i64),
-        SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
-            ctx.shallow.get(dense as usize).copied().unwrap_or(0) as i64,
-        ),
-        SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(
-            ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64,
-        ),
+        SelectItem::Attr(Attr::UsedHeapSize) => {
+            QueryValue::Int(ctx.shallow.get(dense as usize).copied().unwrap_or(0) as i64)
+        }
+        SelectItem::Attr(Attr::RetainedHeapSize) => {
+            QueryValue::Int(ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64)
+        }
         SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
             match ctx.class_name_of(dense) {
                 Some(name) => QueryValue::Str(name.to_string()),
@@ -1144,7 +1169,10 @@ fn project_string_row_item(
         }
         SelectItem::Star => QueryValue::ObjRef {
             index: dense as u64,
-            class: ctx.class_name_of(dense).unwrap_or("java.lang.String").to_string(),
+            class: ctx
+                .class_name_of(dense)
+                .unwrap_or("java.lang.String")
+                .to_string(),
             addr: ctx.id_map.to_addr_opt(dense),
         },
         _ => QueryValue::Null,
@@ -1167,15 +1195,13 @@ fn project_array_index_item(
 ) -> QueryValue {
     match it {
         SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
-        SelectItem::Attr(Attr::ObjectAddress) => {
-            QueryValue::Int(ctx.id_map.to_addr(dense) as i64)
+        SelectItem::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(dense) as i64),
+        SelectItem::Attr(Attr::RetainedHeapSize) => {
+            QueryValue::Int(ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64)
         }
-        SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(
-            ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64,
-        ),
-        SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
-            ctx.shallow.get(dense as usize).copied().unwrap_or(0) as i64,
-        ),
+        SelectItem::Attr(Attr::UsedHeapSize) => {
+            QueryValue::Int(ctx.shallow.get(dense as usize).copied().unwrap_or(0) as i64)
+        }
         SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
             match ctx.gc_root_tag(dense) {
                 Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
@@ -1341,8 +1367,12 @@ fn qv_ord(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
         (_, QueryValue::Null) => Ordering::Less,
         (QueryValue::Int(x), QueryValue::Int(y)) => x.cmp(y),
         (QueryValue::Float(x), QueryValue::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
-        (QueryValue::Int(x), QueryValue::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal),
-        (QueryValue::Float(x), QueryValue::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal),
+        (QueryValue::Int(x), QueryValue::Float(y)) => {
+            (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)
+        }
+        (QueryValue::Float(x), QueryValue::Int(y)) => {
+            x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)
+        }
         (QueryValue::Str(x), QueryValue::Str(y)) => x.cmp(y),
         _ => Ordering::Equal,
     }
@@ -1399,7 +1429,9 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                             AggFunc::Sum => QueryValue::Int(0),
                             AggFunc::Min => QueryValue::Null,
                             AggFunc::Max => QueryValue::Null,
-                            AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => QueryValue::Int(0),
+                            AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => {
+                                QueryValue::Int(0)
+                            }
                         };
                         (start, 0u64)
                     }
@@ -1415,9 +1447,9 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             };
             let val = match arg.as_ref() {
                 SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-                SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
-                    ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
-                ),
+                SelectItem::Attr(Attr::UsedHeapSize) => {
+                    QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
+                }
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
@@ -1430,19 +1462,27 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             match func {
                 AggFunc::Count => {
                     // COUNT(*) always increments; COUNT(expr) skips NULL (MAT semantics).
-                    let count_this = matches!(arg.as_ref(), SelectItem::Star)
-                        || val != QueryValue::Null;
+                    let count_this =
+                        matches!(arg.as_ref(), SelectItem::Star) || val != QueryValue::Null;
                     if count_this {
-                        if let QueryValue::Int(n) = acc { *n += 1; }
+                        if let QueryValue::Int(n) = acc {
+                            *n += 1;
+                        }
                     }
                 }
                 AggFunc::Sum => {
                     if val != QueryValue::Null {
                         *acc = match (&*acc, &val) {
                             (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
-                            (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
-                            (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
-                            (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                            (QueryValue::Float(a), QueryValue::Float(b)) => {
+                                QueryValue::Float(*a + *b)
+                            }
+                            (QueryValue::Int(a), QueryValue::Float(b)) => {
+                                QueryValue::Float(*a as f64 + *b)
+                            }
+                            (QueryValue::Float(a), QueryValue::Int(b)) => {
+                                QueryValue::Float(*a + *b as f64)
+                            }
                             _ => acc.clone(),
                         };
                     }
@@ -1476,9 +1516,15 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                         *count += 1;
                         *acc = match (&*acc, &val) {
                             (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
-                            (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
-                            (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
-                            (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                            (QueryValue::Float(a), QueryValue::Float(b)) => {
+                                QueryValue::Float(*a + *b)
+                            }
+                            (QueryValue::Int(a), QueryValue::Float(b)) => {
+                                QueryValue::Float(*a as f64 + *b)
+                            }
+                            (QueryValue::Float(a), QueryValue::Int(b)) => {
+                                QueryValue::Float(*a + *b as f64)
+                            }
                             _ => acc.clone(),
                         };
                     }
@@ -1580,22 +1626,31 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     // without a GROUP BY clause. Fold all matched objects into a single row.
     // The scan-time plan correctly carries all indices (StageKind::SingleScan),
     // but join_retained normally projects 1:1 — aggregation must happen here.
-    let is_aggregate = q.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. }));
+    let is_aggregate = q
+        .select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Aggregate { .. }));
     if is_aggregate && q.group_by.is_empty() {
         use crate::query::ast::AggFunc;
         let columns = crate::query::execute::query_columns(q);
-        let mut accs: Vec<(QueryValue, u64)> = q.select.iter().map(|it| match it {
-            SelectItem::Aggregate { func, .. } => {
-                let start = match func {
-                    AggFunc::Count => QueryValue::Int(0),
-                    AggFunc::Sum => QueryValue::Int(0),
-                    AggFunc::Min | AggFunc::Max => QueryValue::Null,
-                    AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => QueryValue::Int(0),
-                };
-                (start, 0u64)
-            }
-            _ => (QueryValue::Null, 0),
-        }).collect();
+        let mut accs: Vec<(QueryValue, u64)> = q
+            .select
+            .iter()
+            .map(|it| match it {
+                SelectItem::Aggregate { func, .. } => {
+                    let start = match func {
+                        AggFunc::Count => QueryValue::Int(0),
+                        AggFunc::Sum => QueryValue::Int(0),
+                        AggFunc::Min | AggFunc::Max => QueryValue::Null,
+                        AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => {
+                            QueryValue::Int(0)
+                        }
+                    };
+                    (start, 0u64)
+                }
+                _ => (QueryValue::Null, 0),
+            })
+            .collect();
 
         for idx in entry.carry.indices() {
             let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
@@ -1603,17 +1658,21 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 continue;
             }
             for (i, it) in q.select.iter().enumerate() {
-                let SelectItem::Aggregate { func, arg } = it else { continue };
+                let SelectItem::Aggregate { func, arg } = it else {
+                    continue;
+                };
                 let val = match arg.as_ref() {
                     SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-                    SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
-                        ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
-                    ),
+                    SelectItem::Attr(Attr::UsedHeapSize) => {
+                        QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
+                    }
                     SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
                     SelectItem::Attr(Attr::ObjectAddress) => {
                         QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
                     }
-                    SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes),
+                    SelectItem::Expr(e) => {
+                        eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes)
+                    }
                     SelectItem::Star => QueryValue::Int(1),
                     _ => QueryValue::Null,
                 };
@@ -1621,26 +1680,38 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 match func {
                     AggFunc::Count => {
                         // COUNT(*) always increments; COUNT(expr) skips NULL (MAT semantics).
-                        let count_this = matches!(arg.as_ref(), SelectItem::Star)
-                            || val != QueryValue::Null;
+                        let count_this =
+                            matches!(arg.as_ref(), SelectItem::Star) || val != QueryValue::Null;
                         if count_this {
-                            if let QueryValue::Int(n) = acc { *n += 1; }
+                            if let QueryValue::Int(n) = acc {
+                                *n += 1;
+                            }
                         }
                     }
                     AggFunc::Sum => {
                         if val != QueryValue::Null {
                             *acc = match (&*acc, &val) {
-                                (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
-                                (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
-                                (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
-                                (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                                (QueryValue::Int(a), QueryValue::Int(b)) => {
+                                    QueryValue::Int(*a + *b)
+                                }
+                                (QueryValue::Float(a), QueryValue::Float(b)) => {
+                                    QueryValue::Float(*a + *b)
+                                }
+                                (QueryValue::Int(a), QueryValue::Float(b)) => {
+                                    QueryValue::Float(*a as f64 + *b)
+                                }
+                                (QueryValue::Float(a), QueryValue::Int(b)) => {
+                                    QueryValue::Float(*a + *b as f64)
+                                }
                                 _ => acc.clone(),
                             };
                         }
                     }
                     AggFunc::Min => {
                         if val != QueryValue::Null {
-                            *acc = if *acc == QueryValue::Null { val.clone() } else {
+                            *acc = if *acc == QueryValue::Null {
+                                val.clone()
+                            } else {
                                 match qv_ord(&val, acc) {
                                     std::cmp::Ordering::Less => val.clone(),
                                     _ => acc.clone(),
@@ -1650,7 +1721,9 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                     }
                     AggFunc::Max => {
                         if val != QueryValue::Null {
-                            *acc = if *acc == QueryValue::Null { val.clone() } else {
+                            *acc = if *acc == QueryValue::Null {
+                                val.clone()
+                            } else {
                                 match qv_ord(&val, acc) {
                                     std::cmp::Ordering::Greater => val.clone(),
                                     _ => acc.clone(),
@@ -1662,10 +1735,18 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                         if val != QueryValue::Null {
                             *count += 1;
                             *acc = match (&*acc, &val) {
-                                (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
-                                (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
-                                (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
-                                (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                                (QueryValue::Int(a), QueryValue::Int(b)) => {
+                                    QueryValue::Int(*a + *b)
+                                }
+                                (QueryValue::Float(a), QueryValue::Float(b)) => {
+                                    QueryValue::Float(*a + *b)
+                                }
+                                (QueryValue::Int(a), QueryValue::Float(b)) => {
+                                    QueryValue::Float(*a as f64 + *b)
+                                }
+                                (QueryValue::Float(a), QueryValue::Int(b)) => {
+                                    QueryValue::Float(*a + *b as f64)
+                                }
                                 _ => acc.clone(),
                             };
                         }
@@ -1676,30 +1757,45 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         }
 
         // Finalize: Count/Sum/Min/Max return acc directly; Avg divides by count.
-        let row: Vec<QueryValue> = q.select.iter().enumerate().map(|(i, it)| match it {
-            SelectItem::Aggregate { func, .. } => {
-                let (acc, count) = &accs[i];
-                match func {
-                    AggFunc::Avg if *count > 0 => match acc {
-                        QueryValue::Int(s) => QueryValue::Float(*s as f64 / *count as f64),
-                        QueryValue::Float(s) => QueryValue::Float(*s / *count as f64),
-                        _ => QueryValue::Null,
-                    },
-                    _ => acc.clone(),
+        let row: Vec<QueryValue> = q
+            .select
+            .iter()
+            .enumerate()
+            .map(|(i, it)| match it {
+                SelectItem::Aggregate { func, .. } => {
+                    let (acc, count) = &accs[i];
+                    match func {
+                        AggFunc::Avg if *count > 0 => match acc {
+                            QueryValue::Int(s) => QueryValue::Float(*s as f64 / *count as f64),
+                            QueryValue::Float(s) => QueryValue::Float(*s / *count as f64),
+                            _ => QueryValue::Null,
+                        },
+                        _ => acc.clone(),
+                    }
                 }
-            }
-            _ => QueryValue::Null,
-        }).collect();
+                _ => QueryValue::Null,
+            })
+            .collect();
 
         // Apply HAVING filter on the single aggregate row.
         let passes = if entry.plan.having_terms.is_empty() {
             true
         } else {
             entry.plan.having_terms.iter().all(|term| {
-                crate::query::execute::eval_having_term(&term.pred, &row, q, &columns, &like_regexes)
+                crate::query::execute::eval_having_term(
+                    &term.pred,
+                    &row,
+                    q,
+                    &columns,
+                    &like_regexes,
+                )
             })
         };
-        let (rows, row_count) = if passes { (vec![row], 1u64) } else { (vec![], 0u64) };
+        let (rows, row_count) = if passes {
+            (vec![row], 1u64)
+        } else {
+            (vec![], 0u64)
+        };
         return QueryResult {
             name: entry.name.clone(),
             oql: String::new(),
@@ -1722,7 +1818,9 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         }
     }
 
-    let order_by_retained = q.order_by.as_ref()
+    let order_by_retained = q
+        .order_by
+        .as_ref()
         .is_some_and(|ob| ob.key == Attr::RetainedHeapSize);
 
     if order_by_retained {
@@ -1766,9 +1864,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         .collect();
     let mut truncated = entry.carry.truncated();
     if let Some(ob) = &q.order_by {
-        if let Some(col_idx) =
-            crate::query::execute::order_by_column_index(q, &columns, &ob.key)
-        {
+        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
             crate::query::execute::sort_rows_by_column(&mut out_rows, col_idx, ob.dir);
         }
     }
@@ -1834,9 +1930,9 @@ fn project_late_row(
         .map(|it| match it {
             SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
             SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-            SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
-                ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
-            ),
+            SelectItem::Attr(Attr::UsedHeapSize) => {
+                QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
+            }
             SelectItem::Attr(Attr::ObjectAddress) => {
                 QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
             }
@@ -1941,7 +2037,6 @@ mod tests {
     use super::*;
     use crate::query::execute::QueryExecState;
     use crate::query::model::{QueryResult, QueryValue};
-
 
     fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
         crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
@@ -2242,10 +2337,9 @@ mod classof_late_tests {
         let class_idx = vec![0u32, 1];
         let retained = vec![100u64, 200];
         let ctx = classof_ctx(&retained, &class_idx, &class_names);
-        let q = crate::query::parse::parse(
-            "SELECT classof(x), @retainedHeapSize FROM C",
-        ).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let q = crate::query::parse::parse("SELECT classof(x), @retainedHeapSize FROM C").unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(10);
         carry.push_index(0);
         carry.push_index(1);
@@ -2265,7 +2359,8 @@ mod classof_late_tests {
         // Empty class_idx: simulates a context without class data threaded in.
         let ctx = classof_ctx(&[500u64], &[], &[]);
         let q = crate::query::parse::parse("SELECT classof(x) FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(10);
         carry.push_index(0);
         let mut st = QueryExecState::new();
@@ -2285,8 +2380,10 @@ mod classof_late_tests {
         let q = crate::query::parse::parse(
             "SELECT classof(x) AS class, SUM(@retainedHeapSize) AS total \
              FROM C GROUP BY classof(x) ORDER BY total DESC",
-        ).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        )
+        .unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
         let mut carry = crate::query::carry::Carry::index_only(10);
         carry.push_index(0);
@@ -2301,12 +2398,28 @@ mod classof_late_tests {
         // First row (DESC) = String with SUM=200; second = Object with SUM=200.
         // Both SUMs are non-null integers.
         for row in &r.rows {
-            assert!(matches!(row[1], QueryValue::Int(_)), "SUM should be Int, got {:?}", row[1]);
-            assert!(matches!(row[0], QueryValue::Str(_)), "classof should be Str, got {:?}", row[0]);
+            assert!(
+                matches!(row[1], QueryValue::Int(_)),
+                "SUM should be Int, got {:?}",
+                row[1]
+            );
+            assert!(
+                matches!(row[0], QueryValue::Str(_)),
+                "classof should be Str, got {:?}",
+                row[0]
+            );
         }
         // DESC order: total[0] >= total[1]
-        let s0 = if let QueryValue::Int(n) = r.rows[0][1] { n } else { panic!() };
-        let s1 = if let QueryValue::Int(n) = r.rows[1][1] { n } else { panic!() };
+        let s0 = if let QueryValue::Int(n) = r.rows[0][1] {
+            n
+        } else {
+            panic!()
+        };
+        let s1 = if let QueryValue::Int(n) = r.rows[1][1] {
+            n
+        } else {
+            panic!()
+        };
         assert!(s0 >= s1, "should be sorted DESC: {s0} >= {s1}");
         // Verify the SUM values: String total=200, Object total=200 (equal).
         assert_eq!(s0 + s1, 400, "total retained should be 400");
@@ -2338,10 +2451,10 @@ mod classof_late_tests {
             class_idx: &[],
             class_names: &[],
         };
-        let q = crate::query::parse::parse(
-            "SELECT @usedHeapSize, @retainedHeapSize FROM C",
-        ).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @usedHeapSize, @retainedHeapSize FROM C").unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(10);
         carry.push_index(0);
         carry.push_index(1);
@@ -2389,7 +2502,8 @@ mod classof_late_tests {
         let q = crate::query::parse::parse(
             "SELECT classof(x) AS c, SUM(@usedHeapSize) AS sh FROM C GROUP BY classof(x) ORDER BY sh DESC",
         ).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
         let mut carry = crate::query::carry::Carry::index_only(10);
         carry.push_index(0);
@@ -2400,7 +2514,11 @@ mod classof_late_tests {
         assert_eq!(out.len(), 1);
         let r = &out[0];
         assert_eq!(r.rows.len(), 1, "one group (all Foo)");
-        assert_eq!(r.rows[0][1], QueryValue::Int(120), "SUM(@usedHeapSize) = 40+80 = 120");
+        assert_eq!(
+            r.rows[0][1],
+            QueryValue::Int(120),
+            "SUM(@usedHeapSize) = 40+80 = 120"
+        );
     }
 
     #[test]
@@ -2414,8 +2532,10 @@ mod classof_late_tests {
         let q = crate::query::parse::parse(
             "SELECT classof(x) AS c, SUM(@retainedHeapSize) AS ret \
              FROM C GROUP BY classof(x) HAVING ret > 150",
-        ).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        )
+        .unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
         let mut carry = crate::query::carry::Carry::index_only(10);
         carry.push_index(0);
@@ -2425,7 +2545,11 @@ mod classof_late_tests {
         let out = resume(st, &[q.clone(), q], &ctx);
         assert_eq!(out.len(), 1);
         let r = &out[0];
-        assert_eq!(r.rows.len(), 1, "HAVING should keep only Object group (ret=200 > 150)");
+        assert_eq!(
+            r.rows.len(),
+            1,
+            "HAVING should keep only Object group (ret=200 > 150)"
+        );
         assert_eq!(r.rows[0][0], QueryValue::Str("java.lang.Object".into()));
         assert_eq!(r.rows[0][1], QueryValue::Int(200));
     }
@@ -2486,7 +2610,6 @@ mod dom_run_tests {
     fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
         crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
     }
-
 
     #[test]
     fn dominator_children_emits_direct_children() {
@@ -3645,7 +3768,7 @@ mod arith_late_tests {
     //!     inside a Binary/Unary expression.
 
     use super::*;
-    use crate::query::ast::{Attr, CompareOp, Expr, ArithOp, UnaryOp, Predicate, Value};
+    use crate::query::ast::{ArithOp, Attr, CompareOp, Expr, Predicate, UnaryOp, Value};
     use crate::query::model::QueryValue;
 
     // ── cmp_late_qv (QueryValue vs QueryValue comparator) ────────────────────
@@ -3653,24 +3776,59 @@ mod arith_late_tests {
     /// Int vs Int ordered compare.
     #[test]
     fn cmp_late_qv_int_gt() {
-        assert!(cmp_late_qv(&QueryValue::Int(101), CompareOp::Gt, &QueryValue::Int(100), &std::collections::HashMap::new()));
-        assert!(!cmp_late_qv(&QueryValue::Int(99), CompareOp::Gt, &QueryValue::Int(100), &std::collections::HashMap::new()));
+        assert!(cmp_late_qv(
+            &QueryValue::Int(101),
+            CompareOp::Gt,
+            &QueryValue::Int(100),
+            &std::collections::HashMap::new()
+        ));
+        assert!(!cmp_late_qv(
+            &QueryValue::Int(99),
+            CompareOp::Gt,
+            &QueryValue::Int(100),
+            &std::collections::HashMap::new()
+        ));
     }
 
     /// Int vs Float cross-type compare.
     #[test]
     fn cmp_late_qv_int_vs_float() {
-        assert!(cmp_late_qv(&QueryValue::Int(3), CompareOp::Lt, &QueryValue::Float(3.5), &std::collections::HashMap::new()));
-        assert!(!cmp_late_qv(&QueryValue::Int(4), CompareOp::Lt, &QueryValue::Float(3.5), &std::collections::HashMap::new()));
+        assert!(cmp_late_qv(
+            &QueryValue::Int(3),
+            CompareOp::Lt,
+            &QueryValue::Float(3.5),
+            &std::collections::HashMap::new()
+        ));
+        assert!(!cmp_late_qv(
+            &QueryValue::Int(4),
+            CompareOp::Lt,
+            &QueryValue::Float(3.5),
+            &std::collections::HashMap::new()
+        ));
     }
 
     /// Null on either side → only Ne is true (mismatch behavior).
     #[test]
     fn cmp_late_qv_null_is_not_equal() {
         let no_re = std::collections::HashMap::new();
-        assert!(!cmp_late_qv(&QueryValue::Null, CompareOp::Eq, &QueryValue::Int(1), &no_re));
-        assert!(cmp_late_qv(&QueryValue::Null, CompareOp::Ne, &QueryValue::Int(1), &no_re));
-        assert!(!cmp_late_qv(&QueryValue::Null, CompareOp::Gt, &QueryValue::Int(1), &no_re));
+        assert!(!cmp_late_qv(
+            &QueryValue::Null,
+            CompareOp::Eq,
+            &QueryValue::Int(1),
+            &no_re
+        ));
+        assert!(cmp_late_qv(
+            &QueryValue::Null,
+            CompareOp::Ne,
+            &QueryValue::Int(1),
+            &no_re
+        ));
+        assert!(!cmp_late_qv(
+            &QueryValue::Null,
+            CompareOp::Gt,
+            &QueryValue::Int(1),
+            &no_re
+        ));
     }
 
     // ── Case A: arithmetic RHS — deferred_where_passes ───────────────────────
@@ -3678,9 +3836,9 @@ mod arith_late_tests {
     /// `@retainedHeapSize > 40 * 2` with ret=100 → passes (RHS folds to 80).
     #[test]
     fn retained_where_case_a_rhs_arith_passes() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
-        ).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2")
+                .unwrap();
         let no_re = std::collections::HashMap::new();
         assert!(deferred_where_passes(&q, 0, 100, &ctx_for(&[100]), &no_re));
     }
@@ -3688,9 +3846,9 @@ mod arith_late_tests {
     /// `@retainedHeapSize > 40 * 2` with ret=50 → fails (50 ≤ 80).
     #[test]
     fn retained_where_case_a_rhs_arith_fails() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
-        ).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2")
+                .unwrap();
         let no_re = std::collections::HashMap::new();
         assert!(!deferred_where_passes(&q, 0, 50, &ctx_for(&[50]), &no_re));
     }
@@ -3700,9 +3858,9 @@ mod arith_late_tests {
     /// `@retainedHeapSize * 2 > 100` with ret=60 → 120 > 100 → passes.
     #[test]
     fn retained_where_case_b_lhs_arith_passes() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
-        ).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100")
+                .unwrap();
         let no_re = std::collections::HashMap::new();
         assert!(deferred_where_passes(&q, 0, 60, &ctx_for(&[60]), &no_re));
     }
@@ -3710,9 +3868,9 @@ mod arith_late_tests {
     /// `@retainedHeapSize * 2 > 100` with ret=40 → 80 > 100 → fails.
     #[test]
     fn retained_where_case_b_lhs_arith_fails() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
-        ).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100")
+                .unwrap();
         let no_re = std::collections::HashMap::new();
         assert!(!deferred_where_passes(&q, 0, 40, &ctx_for(&[40]), &no_re));
     }
@@ -3724,8 +3882,9 @@ mod arith_late_tests {
     #[test]
     fn deferred_where_retained_gt_used_heap_both_known() {
         let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize > @usedHeapSize"
-        ).unwrap();
+            "SELECT @objectId FROM C WHERE @retainedHeapSize > @usedHeapSize",
+        )
+        .unwrap();
         let no_re = std::collections::HashMap::new();
         let shallow_val = [0u32];
         let test_ctx = LateCtx {
@@ -3743,9 +3902,8 @@ mod arith_late_tests {
     /// before. This is the folded-literal fast path that must be byte-identical.
     #[test]
     fn retained_where_plain_literal_still_works() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize > 100"
-        ).unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 100")
+            .unwrap();
         let no_re = std::collections::HashMap::new();
         assert!(deferred_where_passes(&q, 0, 200, &ctx_for(&[200]), &no_re));
         assert!(!deferred_where_passes(&q, 0, 50, &ctx_for(&[50]), &no_re));
@@ -3830,9 +3988,9 @@ mod arith_late_tests {
     /// Idx 1 (retained=60, 60*2=120>100 passes), idx 2 (retained=40, 40*2=80 fails).
     #[test]
     fn e2e_retained_lhs_arith_filters_correctly() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
-        ).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100")
+                .unwrap();
         let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(1);
@@ -3848,16 +4006,19 @@ mod arith_late_tests {
         let out = resume(st, &[q.clone(), q], &ctx_for(&retained));
         let r = &out[0];
         assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
-        assert_eq!(r.row_count, 1, "only idx 1 (retained=60, 60*2=120>100) passes");
+        assert_eq!(
+            r.row_count, 1,
+            "only idx 1 (retained=60, 60*2=120>100) passes"
+        );
         assert_eq!(r.rows[0][0], QueryValue::Int(1));
     }
 
     /// End-to-end: `@retainedHeapSize > 40 * 2` (RHS arithmetic). Same expectation.
     #[test]
     fn e2e_retained_rhs_arith_filters_correctly() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
-        ).unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2")
+                .unwrap();
         let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(1);
@@ -3867,7 +4028,7 @@ mod arith_late_tests {
         let retained = {
             let mut v = vec![0u64; 10];
             v[1] = 100; // 100 > 80 → passes
-            v[2] = 50;  // 50 > 80 → fails
+            v[2] = 50; // 50 > 80 → fails
             v
         };
         let out = resume(st, &[q.clone(), q], &ctx_for(&retained));
@@ -3902,12 +4063,16 @@ mod arith_late_tests {
             ..ctx_for(&retained)
         };
         // String INSTANCEOF HashMap → false; retained(500) > 10000 → false; OR → false
-        assert!(!eval_late_pred_multi(&p, 0, 500, &ctx, &no_re),
-            "String object should NOT pass HashMap instanceof OR retained>10000 with low retained");
+        assert!(
+            !eval_late_pred_multi(&p, 0, 500, &ctx, &no_re),
+            "String object should NOT pass HashMap instanceof OR retained>10000 with low retained"
+        );
 
         // Flip: now retained > 10000 so OR passes via retained arm
-        assert!(eval_late_pred_multi(&p, 0, 20000, &ctx, &no_re),
-            "High retained should pass OR even though instanceof is false");
+        assert!(
+            eval_late_pred_multi(&p, 0, 20000, &ctx, &no_re),
+            "High retained should pass OR even though instanceof is false"
+        );
 
         // Object is a HashMap: instanceof arm is true → OR passes regardless of retained
         let hm_names = vec!["java.util.HashMap".to_string()];
@@ -3917,7 +4082,9 @@ mod arith_late_tests {
             class_names: &hm_names,
             ..ctx_for(&retained)
         };
-        assert!(eval_late_pred_multi(&p, 0, 500, &ctx2, &no_re),
-            "HashMap object should pass instanceof arm even with low retained");
+        assert!(
+            eval_late_pred_multi(&p, 0, 500, &ctx2, &no_re),
+            "HashMap object should pass instanceof arm even with low retained"
+        );
     }
 }

@@ -52,7 +52,7 @@ pub(crate) fn render_duplicate_strings(
     d: &Option<crate::pass2::DupStrings>,
     graphs: bool,
 ) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {
@@ -253,7 +253,11 @@ pub fn render_markdown(r: &Report) -> String {
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
     render_waste_summary(r, &mut out);
-    render_system_overview(&r.overview, r.leak_indicators.direct_byte_buffer_capacity_sum, &mut out);
+    render_system_overview(
+        &r.overview,
+        r.leak_indicators.direct_byte_buffer_capacity_sum,
+        &mut out,
+    );
     render_leak_suspects(&r.leaks, &mut out);
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
     render_dominator_analysis(&r.dominator_analysis, false, &mut out);
@@ -327,7 +331,7 @@ pub(crate) fn render_custom_queries(
 /// `table` and a missing spec draw nothing (the table above suffices). The
 /// spec's `cap` limits the number of charted rows (the table always shows all).
 fn render_query_chart(q: &crate::query::model::QueryResult, out: &mut String) {
-    use crate::query::viz::{cell_as_f64, cell_as_label, resolve_columns, VizKind};
+    use crate::query::viz::{VizKind, cell_as_f64, cell_as_label, resolve_columns};
     use std::fmt::Write;
 
     let Some(spec) = &q.viz else { return };
@@ -370,7 +374,12 @@ fn render_query_chart(q: &crate::query::model::QueryResult, out: &mut String) {
 
     let total: f64 = pairs.iter().map(|(_, v)| *v).sum();
     let max = pairs.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
-    let label_w = pairs.iter().map(|(l, _)| l.len()).max().unwrap_or(0).min(40);
+    let label_w = pairs
+        .iter()
+        .map(|(l, _)| l.len())
+        .max()
+        .unwrap_or(0)
+        .min(40);
 
     let _ = writeln!(out, "```");
     for (label, value) in &pairs {
@@ -439,15 +448,22 @@ fn render_toc(r: &Report, out: &mut String) {
     if r.collection_attribution.is_some() {
         out.push_str(&SectionId::ContainerAttribution.toc_bullet());
     }
-    if r.fields_by_size.as_ref().map_or(false, |f| !f.rows.is_empty()) {
+    if r.fields_by_size
+        .as_ref()
+        .map_or(false, |f| !f.rows.is_empty())
+    {
         out.push_str(&SectionId::FieldsBySize.toc_bullet());
     }
-    if r.biggest_collections.as_ref().map_or(false, |b| {
-        !b.combined.is_empty() || !b.by_kind.is_empty()
-    }) {
+    if r.biggest_collections
+        .as_ref()
+        .map_or(false, |b| !b.combined.is_empty() || !b.by_kind.is_empty())
+    {
         out.push_str(&SectionId::BiggestCollections.toc_bullet());
     }
-    if r.collection_contents.as_ref().map_or(false, |c| !c.rows.is_empty()) {
+    if r.collection_contents
+        .as_ref()
+        .map_or(false, |c| !c.rows.is_empty())
+    {
         out.push_str(&SectionId::CollectionContents.toc_bullet());
     }
     out.push_str(&SectionId::References.toc_bullet());
@@ -497,10 +513,7 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
     // Key stats: the headline scalars the System Overview already exposes.
     let o = &r.overview;
     let mut stats = Table::new(&["Metric", "Value"], &[Align::Left, Align::Right]);
-    stats.row([
-        HEAP_SCALAR_LABEL.into(),
-        format_bytes(o.total_shallow),
-    ]);
+    stats.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
     stats.row(["Objects".into(), fmt_count(o.total_objects)]);
     stats.row(["Classes".into(), fmt_count(o.classes_loaded)]);
     stats.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
@@ -612,9 +625,7 @@ fn format_signal_md(s: &crate::report::TriageSignal) -> String {
 
 /// Whether the report has a nonzero Waste Summary to render.
 pub(crate) fn waste_summary_present(r: &Report) -> bool {
-    r.waste_summary
-        .as_ref()
-        .is_some_and(|w| w.total_bytes > 0)
+    r.waste_summary.as_ref().is_some_and(|w| w.total_bytes > 0)
 }
 
 /// Waste Summary (§24): one headline "reclaimable N" figure folding every
@@ -648,7 +659,6 @@ pub(crate) fn render_waste_summary(r: &Report, out: &mut String) {
     t.render(out);
     out.push('\n');
 }
-
 
 /// both renderers (and the graphs ToC) so presence stays in lock-step.
 pub(crate) fn retention_concentration_present(o: &SystemOverview) -> bool {
@@ -709,7 +719,6 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
 pub(crate) fn render_dominator_depth(o: &SystemOverview, out: &mut String) {
     render_dominator_depth_inner(o, false, out);
 }
-
 
 fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut String) {
     use crate::md::{Align, Table, bar};
@@ -1007,7 +1016,12 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     if o.gc_roots_by_type.len() > 1 {
         use crate::md::bar;
         out.push_str("### GC Roots by Type\n\n");
-        let max_count = o.gc_roots_by_type.iter().map(|r| r.count).max().unwrap_or(0);
+        let max_count = o
+            .gc_roots_by_type
+            .iter()
+            .map(|r| r.count)
+            .max()
+            .unwrap_or(0);
         let mut t = Table::new(
             &["Root Type", "Count", ""],
             &[Align::Left, Align::Right, Align::Left],
@@ -1342,7 +1356,13 @@ It is worth investigating only if the instance count is unexpectedly high \
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
                 &["Class", "Objects", "Shallow", "Retained", "% of suspect"],
-                &[Align::Left, Align::Right, Align::Right, Align::Right, Align::Right],
+                &[
+                    Align::Left,
+                    Align::Right,
+                    Align::Right,
+                    Align::Right,
+                    Align::Right,
+                ],
             );
             for row in &s.dominated_by_class {
                 let pct_str = if s.retained > 0 {
@@ -1683,7 +1703,11 @@ fn render_thread_locals(objs: &[ThreadLocalObj], out: &mut String) {
         let o = &objs[i];
         let count = objs[i..]
             .iter()
-            .take_while(|x| x.display_class == o.display_class && x.shallow == o.shallow && x.retained == o.retained)
+            .take_while(|x| {
+                x.display_class == o.display_class
+                    && x.shallow == o.shallow
+                    && x.retained == o.retained
+            })
             .count();
         let count_str = if count > 1 {
             format!("×{}", fmt_count(count as u64))
@@ -1758,7 +1782,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
 pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Arrays by Size\n\n");
     if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
     {
@@ -1848,7 +1872,7 @@ fn render_fill_ratio_table(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     if buckets.is_empty() {
         out.push_str("_No data for this section._\n\n");
         return;
@@ -1920,11 +1944,13 @@ fn render_top_contributors(
     if rows.is_empty() {
         return;
     }
-    out.push_str(
-        "_Likely wasters by field (dominant incoming `Class#field` referrer):_\n\n",
-    );
+    out.push_str("_Likely wasters by field (dominant incoming `Class#field` referrer):_\n\n");
     let has_bytes = rows.iter().any(|r| r.total_wasted_bytes > 0);
-    let waste_header = if has_bytes { "Wasted Bytes" } else { "Wasted Slots" };
+    let waste_header = if has_bytes {
+        "Wasted Bytes"
+    } else {
+        "Wasted Slots"
+    };
     let mut t = Table::new(
         &[
             "Class#field",
@@ -1972,9 +1998,7 @@ fn render_worst_single_containers(
     let mut rows: Vec<_> = a
         .biggest_single
         .iter()
-        .filter(|r| {
-            kinds.iter().any(|k| *k == r.container_kind) && r.capacity > r.elements
-        })
+        .filter(|r| kinds.iter().any(|k| *k == r.container_kind) && r.capacity > r.elements)
         .collect();
     rows.sort_by(|a, b| {
         b.capacity
@@ -2247,7 +2271,11 @@ few instances) are hidden as noise._",
     if interesting_rows.is_empty() {
         out.push_str("_No constant primitive arrays found._\n\n");
     } else {
-        let obj_max = interesting_rows.iter().map(|r| r.objects).max().unwrap_or(0);
+        let obj_max = interesting_rows
+            .iter()
+            .map(|r| r.objects)
+            .max()
+            .unwrap_or(0);
         // The Owner column (dominant `Class#field` referrer) is present only when
         // attribution data exists (i.e. `--collections` was passed).
         let has_owner = interesting_rows.iter().any(|r| r.owner.is_some());
@@ -2301,7 +2329,7 @@ few instances) are hidden as noise._",
 /// md-graphs; when `graphs` is set an extra proportional bar column is appended
 /// on Shallow.
 fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
 
     out.push_str(&format!("### Top Arrays ({kind})\n\n"));
     out.push_str(&format!(
@@ -2341,10 +2369,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
         }
         let mut tbl = Table::new(&headers, &aligns);
         for r in &t.top_individual {
-            let mut row = vec![
-                format!("`{}`", r.array_class),
-                fmt_count(r.length),
-            ];
+            let mut row = vec![format!("`{}`", r.array_class), fmt_count(r.length)];
             if has_fill {
                 row.push(match r.non_null {
                     Some(nn) => format!("{}/{}", fmt_count(nn), fmt_count(r.length)),
@@ -2431,7 +2456,7 @@ pub(crate) fn render_collection_attribution(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     let Some(a) = a else {
         return;
     };
@@ -2557,9 +2582,20 @@ pub(crate) fn render_collection_attribution(
     if a.tiny_overhead.is_empty() {
         out.push_str("_None._\n\n");
     } else {
-        let oh_max = a.tiny_overhead.iter().map(|r| r.overhead_bytes).max().unwrap_or(0);
+        let oh_max = a
+            .tiny_overhead
+            .iter()
+            .map(|r| r.overhead_bytes)
+            .max()
+            .unwrap_or(0);
         let mut headers: Vec<&str> = vec!["Class#field", "Kind", "Empty", "Size-1", "Overhead"];
-        let mut aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right, Align::Right];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
         if graphs {
             headers.push("");
             aligns.push(Align::Left);
@@ -2574,7 +2610,11 @@ pub(crate) fn render_collection_attribution(
                 format_bytes(r.overhead_bytes),
             ];
             if graphs {
-                row.push(bar(r.overhead_bytes, oh_max, render_graphs::GRAPH_BAR_WIDTH));
+                row.push(bar(
+                    r.overhead_bytes,
+                    oh_max,
+                    render_graphs::GRAPH_BAR_WIDTH,
+                ));
             }
             t.row(row);
         }
@@ -2595,7 +2635,7 @@ pub(crate) fn render_collection_attribution(
 /// and md-graphs; when `graphs` is set a proportional bar is appended on the
 /// Retained column.
 pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     let Some(f) = f else {
         return;
     };
@@ -2610,7 +2650,9 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
     );
 
     if f.rows.is_empty() {
-        out.push_str("_No field-size data — pass `--collections` to enable field attribution._\n\n");
+        out.push_str(
+            "_No field-size data — pass `--collections` to enable field attribution._\n\n",
+        );
         return;
     }
 
@@ -2756,7 +2798,7 @@ fn render_biggest_collection_table(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str(&format!("### {title}\n\n"));
     if rows.is_empty() {
         out.push_str("_No data for this section._\n\n");
@@ -2948,7 +2990,7 @@ pub(crate) fn render_collection_contents(
 /// fallback line even when no references are present so the structure stays
 /// stable.
 pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## References\n\n");
     out.push_str("_Soft/weak/phantom reference referents (what they point at)._\n\n");
 
@@ -3001,14 +3043,20 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
     for stats in [&rf.soft, &rf.weak, &rf.phantom].into_iter().flatten() {
         out.push_str(&format!("### {} References\n\n", stats.kind));
         let kind_caption = match stats.kind.as_str() {
-            "Soft" => "_Soft references keep objects alive until the JVM needs memory — they are \
+            "Soft" => {
+                "_Soft references keep objects alive until the JVM needs memory — they are \
 cleared under GC pressure. A large soft-referenced heap is often a cache that grows \
-unbounded; consider bounding the cache size._",
-            "Weak" => "_Weak references do not prevent GC. Objects listed here are reachable only \
-via weak chains — under any GC they may be reclaimed. Large counts are usually benign._",
-            "Phantom" => "_Phantom references mark objects in finalization or cleanup pipelines. \
+unbounded; consider bounding the cache size._"
+            }
+            "Weak" => {
+                "_Weak references do not prevent GC. Objects listed here are reachable only \
+via weak chains — under any GC they may be reclaimed. Large counts are usually benign._"
+            }
+            "Phantom" => {
+                "_Phantom references mark objects in finalization or cleanup pipelines. \
 A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, \
-or that native resources (file handles, native buffers) are not being released promptly._",
+or that native resources (file handles, native buffers) are not being released promptly._"
+            }
             _ => "",
         };
         if !kind_caption.is_empty() {
@@ -3024,7 +3072,9 @@ or that native resources (file handles, native buffers) are not being released p
         out.push_str("#### Only-weakly retained _(approximate)_\n\n");
         out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._\n\n");
         if stats.only_weakly_retained.is_empty() {
-            out.push_str("_None found — no objects are exclusively reachable via this reference kind._\n\n");
+            out.push_str(
+                "_None found — no objects are exclusively reachable via this reference kind._\n\n",
+            );
         } else {
             render_class_table(&stats.only_weakly_retained, out);
         }
@@ -3036,7 +3086,7 @@ or that native resources (file handles, native buffers) are not being released p
 /// Shared by plain md and md-graphs; when `graphs` is set, proportional bar
 /// columns are appended. Emits the heading + a fallback italic line when empty.
 pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
         out.push_str("_No unreachable objects._\n\n");
@@ -3215,7 +3265,7 @@ fn render_garbage_root_node(
 /// on Drop (big drops) and on Dominated Shallow (immediate dominators). Emits the
 /// headings + fallback italic lines even when empty so the structure stays stable.
 pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Dominator Analysis\n\n");
 
     // ---- Big Drops ----
@@ -3277,9 +3327,7 @@ Multiple rows with the same class are distinct objects._\n\n",
             let r = &rows[i];
             let count = rows[i..]
                 .iter()
-                .take_while(|x| {
-                    x.display_class == r.display_class && x.drop_bytes == r.drop_bytes
-                })
+                .take_while(|x| x.display_class == r.display_class && x.drop_bytes == r.drop_bytes)
                 .count();
             let child = if r.largest_child_class.is_empty() {
                 "—".to_string()
@@ -3424,7 +3472,11 @@ pub(crate) fn render_root_path(path: &[RootPathStep], out: &mut String) {
     out.push_str("**Dominator chain to GC root:**\n\n");
     if path.len() == 1 {
         let step = &path[0];
-        let mut line = format!("1. `{}` ({})", step.display_class, format_bytes(step.retained));
+        let mut line = format!(
+            "1. `{}` ({})",
+            step.display_class,
+            format_bytes(step.retained)
+        );
         if let Some(label) = &step.root_type_label {
             line.push_str(&format!(" — GC root: {label} (this object is directly held by a GC root; no intermediate chain)"));
         }
@@ -3533,8 +3585,7 @@ fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
         let child_indent = "  ".repeat(depth + 1);
         out.push_str(&format!(
             "{}_… ({} more siblings — full data in JSON)_\n",
-            child_indent,
-            remaining,
+            child_indent, remaining,
         ));
     }
 }
@@ -3611,12 +3662,7 @@ or attach a profiler before taking the heap dump._\n\n",
     let mut t = if graphs {
         Table::new(
             &["Stack", "Objects", "Shallow", ""],
-            &[
-                Align::Left,
-                Align::Right,
-                Align::Right,
-                Align::Left,
-            ],
+            &[Align::Left, Align::Right, Align::Right, Align::Left],
         )
     } else {
         Table::new(
@@ -4188,7 +4234,10 @@ mod tests {
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
         // The table still shows all rows.
-        assert!(out.contains("| name | bytes |"), "table header missing: {out}");
+        assert!(
+            out.contains("| name | bytes |"),
+            "table header missing: {out}"
+        );
         // A fenced ASCII bar block follows, with labels and `#` bars.
         assert!(out.contains("alpha"), "bar label alpha missing: {out}");
         assert!(out.contains("beta"), "bar label beta missing: {out}");
@@ -4281,7 +4330,8 @@ mod tests {
     fn viz_cap_limits_charted_rows_not_table() {
         let mut q = charted_result(crate::query::viz::VizKind::Histogram);
         // Add a third row and cap the chart at 2.
-        q.rows.push(vec![QueryValue::Str("gamma".into()), QueryValue::Int(5)]);
+        q.rows
+            .push(vec![QueryValue::Str("gamma".into()), QueryValue::Int(5)]);
         q.row_count = 3;
         if let Some(v) = q.viz.as_mut() {
             v.cap = Some(2);
@@ -4289,7 +4339,10 @@ mod tests {
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
         // The table shows all three rows.
-        assert!(out.contains("gamma"), "table must show all rows incl gamma: {out}");
+        assert!(
+            out.contains("gamma"),
+            "table must show all rows incl gamma: {out}"
+        );
         // The chart block (after the OQL fence) charts only the first two.
         let chart_block = out.rsplit("```").nth(1).unwrap_or("");
         assert!(

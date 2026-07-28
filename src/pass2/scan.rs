@@ -4,7 +4,7 @@ use std::io::{self, ErrorKind};
 
 use crate::{
     reader::HprofReader,
-    types::{heap, tags, HprofType},
+    types::{HprofType, heap, tags},
 };
 
 /// Subtract a consumed sub-record byte count from a heap-segment's `remaining`
@@ -21,7 +21,6 @@ pub(crate) fn sub_remaining(remaining: &mut u64, n: u64) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "heap segment sub-record overrun"))?;
     Ok(())
 }
-
 
 /// Full-file sequential scan invoking `f(addr, elem_bytes)` for each
 /// PRIM_ARRAY_DUMP whose array address is in `wanted`. Only wanted arrays'
@@ -124,7 +123,6 @@ where
     }
     Ok(())
 }
-
 
 /// A single materialized heap object record, passed to the [`scan_all_records`]
 /// callback. Borrows the reused scratch buffer, so it is valid only for the
@@ -260,11 +258,7 @@ where
 /// primitive values are zero-extended into the u64. Only the (bounded) static
 /// header of each class is materialized — instance-field descriptors are
 /// skipped — so RSS stays O(#static-fields-of-one-class) inside the closure.
-pub(crate) fn scan_class_dumps<O, F>(
-    open: O,
-    id_size: u8,
-    mut f: F,
-) -> io::Result<()>
+pub(crate) fn scan_class_dumps<O, F>(open: O, id_size: u8, mut f: F) -> io::Result<()>
 where
     O: Fn() -> io::Result<HprofReader>,
     F: FnMut(u64, &[(u64, u8, u64)]),
@@ -551,10 +545,8 @@ where
     let ids = id_size as u64;
     let mut inst_blobs: std::collections::HashMap<u64, (u64, Vec<u8>)> =
         std::collections::HashMap::new();
-    let mut prim_blobs: std::collections::HashMap<u64, Vec<u8>> =
-        std::collections::HashMap::new();
-    let mut obj_blobs: std::collections::HashMap<u64, Vec<u8>> =
-        std::collections::HashMap::new();
+    let mut prim_blobs: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
+    let mut obj_blobs: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
 
     if wanted_inst.is_empty() && wanted_prim.is_empty() && wanted_obj.is_empty() {
         return Ok((inst_blobs, prim_blobs, obj_blobs));
@@ -576,9 +568,7 @@ where
                     let sub_tag = r.u1()?;
                     sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
-                        heap::ROOT_UNKNOWN
-                        | heap::ROOT_MONITOR_USED
-                        | heap::ROOT_STICKY_CLASS => {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
                             sub_remaining(&mut remaining, ids)?;
                         }
@@ -586,9 +576,7 @@ where
                             r.skip(2 * ids)?;
                             sub_remaining(&mut remaining, 2 * ids)?;
                         }
-                        heap::ROOT_JNI_LOCAL
-                        | heap::ROOT_JAVA_FRAME
-                        | heap::ROOT_THREAD_OBJ => {
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
                             sub_remaining(&mut remaining, ids + 8)?;
                         }
@@ -651,9 +639,7 @@ where
                         other => {
                             return Err(io::Error::new(
                                 ErrorKind::InvalidData,
-                                format!(
-                                    "unknown heap sub-tag 0x{other:02x} in collect_blobs"
-                                ),
+                                format!("unknown heap sub-tag 0x{other:02x} in collect_blobs"),
                             ));
                         }
                     }

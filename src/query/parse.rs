@@ -302,8 +302,11 @@ where
             // prefix (`s.`) is just the alias and carries no hops → bare attr.
             match prefix {
                 Some(p) => {
-                    let segs: Vec<String> =
-                        p.trim_end_matches('.').split('.').map(str::to_string).collect();
+                    let segs: Vec<String> = p
+                        .trim_end_matches('.')
+                        .split('.')
+                        .map(str::to_string)
+                        .collect();
                     if segs.len() >= 2 {
                         Attr::RefPath {
                             hops: segs,
@@ -362,7 +365,10 @@ where
             .then_ignore(just(Token::RParen))
             .validate(|args, e, emitter| {
                 if args.is_empty() {
-                    emitter.emit(Rich::custom(e.span(), "COALESCE requires at least one argument"));
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "COALESCE requires at least one argument",
+                    ));
                 }
                 Expr::Coalesce(args)
             });
@@ -373,7 +379,10 @@ where
             .then_ignore(just(Token::Comma))
             .then(expr.clone())
             .then_ignore(just(Token::RParen))
-            .map(|(lhs, rhs)| Expr::NullIf { lhs: Box::new(lhs), rhs: Box::new(rhs) });
+            .map(|(lhs, rhs)| Expr::NullIf {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            });
 
         // `receiver.name(args)` — the greedy Ident regex swallows `s.getName` as a
         // single token. We match any dotted ident (contains `.`, does NOT end with
@@ -412,7 +421,10 @@ where
         .then_ignore(just(Token::LParen))
         .then(agg_arg)
         .then_ignore(just(Token::RParen))
-        .map(|(func, arg)| Expr::Aggregate { func, arg: Box::new(arg) });
+        .map(|(func, arg)| Expr::Aggregate {
+            func,
+            arg: Box::new(arg),
+        });
 
         let primary = agg_expr_arm
             .or(method_call)
@@ -430,15 +442,14 @@ where
                         just(Token::LBracket)
                             .ignore_then(
                                 // Optional start expression (None for `[:end]`).
-                                expr.clone().or_not()
-                                    .then(
-                                        just(Token::Colon)
-                                            .ignore_then(expr.clone().or_not())
-                                            .or_not()
-                                    )
+                                expr.clone().or_not().then(
+                                    just(Token::Colon)
+                                        .ignore_then(expr.clone().or_not())
+                                        .or_not(),
+                                ),
                             )
                             .then_ignore(just(Token::RBracket))
-                            .or_not()
+                            .or_not(),
                     )
                     .map(|(base, postfix)| {
                         let attr_val = match postfix {
@@ -464,7 +475,7 @@ where
                             }
                         };
                         Expr::Attr(attr_val)
-                    })
+                    }),
             );
 
         let unary = just(Token::Minus)
@@ -477,7 +488,10 @@ where
                 Some(UnaryOp::Neg) => match p {
                     Expr::Lit(Value::Int(n)) => Expr::Lit(Value::Int(-n)),
                     Expr::Lit(Value::Float(f)) => Expr::Lit(Value::Float(-f)),
-                    other => Expr::Unary { op: UnaryOp::Neg, arg: Box::new(other) },
+                    other => Expr::Unary {
+                        op: UnaryOp::Neg,
+                        arg: Box::new(other),
+                    },
                 },
             });
 
@@ -487,7 +501,11 @@ where
                 .or(just(Token::Divide).to(ArithOp::Div))
                 .then(unary)
                 .repeated(),
-            |lhs, (op, rhs)| Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+            |lhs, (op, rhs)| Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
         );
 
         mul.clone().foldl(
@@ -496,7 +514,11 @@ where
                 .or(just(Token::Minus).to(ArithOp::Sub))
                 .then(mul)
                 .repeated(),
-            |lhs, (op, rhs)| Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+            |lhs, (op, rhs)| Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
         )
     });
 
@@ -638,7 +660,8 @@ where
                     Token::Str(s) => Value::Str(s),
                 };
                 let null_val = ident_ci("NULL").to(Value::Null);
-                let bool_val = ident_ci("TRUE").to(Value::Bool(true))
+                let bool_val = ident_ci("TRUE")
+                    .to(Value::Bool(true))
                     .or(ident_ci("FALSE").to(Value::Bool(false)));
                 let val = null_val.or(bool_val).or(lit_val);
                 let not_in = ident_ci("NOT").then_ignore(ident_ci("IN")).to(true);
@@ -647,11 +670,20 @@ where
                 expr.clone()
                     .then(in_kw)
                     .then_ignore(just(Token::LParen))
-                    .then(val.clone().then(just(Token::Comma).ignore_then(val).repeated().collect::<Vec<_>>()).map(|(first, rest)| {
-                        let mut vals = vec![first];
-                        vals.extend(rest);
-                        vals
-                    }))
+                    .then(
+                        val.clone()
+                            .then(
+                                just(Token::Comma)
+                                    .ignore_then(val)
+                                    .repeated()
+                                    .collect::<Vec<_>>(),
+                            )
+                            .map(|(first, rest)| {
+                                let mut vals = vec![first];
+                                vals.extend(rest);
+                                vals
+                            }),
+                    )
                     .then_ignore(just(Token::RParen))
                     .map(|((lhs, negated), vals): ((Expr, bool), Vec<Value>)| {
                         if negated {
@@ -675,11 +707,8 @@ where
                         }
                     })
             };
-            let compare = expr
-                .clone()
-                .then(op)
-                .then(expr.clone())
-                .validate(|((lhs, op), rhs), e, emitter| {
+            let compare = expr.clone().then(op).then(expr.clone()).validate(
+                |((lhs, op), rhs), e, emitter| {
                     // LIKE/NOT LIKE RHS must be a string literal (MAT parity).
                     if matches!(op, CompareOp::Like | CompareOp::NotLike)
                         && !matches!(&rhs, Expr::Lit(Value::Str(_)))
@@ -691,7 +720,8 @@ where
                         ));
                     }
                     Predicate::Compare { lhs, op, rhs }
-                });
+                },
+            );
             // `expr BETWEEN a AND b` desugars to `expr >= a AND expr <= b`.
             // `expr NOT BETWEEN a AND b` desugars to `expr < a OR expr > b`.
             // Must be tried before `compare` so `AND` is not consumed as a
@@ -709,13 +739,29 @@ where
                 .map(|(((subject, negated), lo), hi)| {
                     if negated {
                         Predicate::Or(
-                            Box::new(Predicate::Compare { lhs: subject.clone(), op: CompareOp::Lt, rhs: lo }),
-                            Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Gt, rhs: hi }),
+                            Box::new(Predicate::Compare {
+                                lhs: subject.clone(),
+                                op: CompareOp::Lt,
+                                rhs: lo,
+                            }),
+                            Box::new(Predicate::Compare {
+                                lhs: subject,
+                                op: CompareOp::Gt,
+                                rhs: hi,
+                            }),
                         )
                     } else {
                         Predicate::And(
-                            Box::new(Predicate::Compare { lhs: subject.clone(), op: CompareOp::Ge, rhs: lo }),
-                            Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Le, rhs: hi }),
+                            Box::new(Predicate::Compare {
+                                lhs: subject.clone(),
+                                op: CompareOp::Ge,
+                                rhs: lo,
+                            }),
+                            Box::new(Predicate::Compare {
+                                lhs: subject,
+                                op: CompareOp::Le,
+                                rhs: hi,
+                            }),
                         )
                     }
                 });
@@ -728,7 +774,11 @@ where
                 .then_ignore(ident_ci("NULL"))
                 .map(|(lhs, negated)| Predicate::Compare {
                     lhs,
-                    op: if negated { CompareOp::Ne } else { CompareOp::Eq },
+                    op: if negated {
+                        CompareOp::Ne
+                    } else {
+                        CompareOp::Eq
+                    },
                     rhs: Expr::Lit(Value::Null),
                 });
             // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
@@ -743,7 +793,14 @@ where
                     inner: Box::new(inner),
                     negated: false,
                 });
-            let primary = paren.or(instanceof).or(in_subquery).or(in_list).or(between_pred).or(is_null).or(exists_pred).or(compare);
+            let primary = paren
+                .or(instanceof)
+                .or(in_subquery)
+                .or(in_list)
+                .or(between_pred)
+                .or(is_null)
+                .or(exists_pred)
+                .or(compare);
             let not = recursive(|not| {
                 // `NOT EXISTS (...)` must be tried before the general `NOT <pred>` recursive
                 // arm so the `EXISTS` keyword is not mistakenly parsed as a predicate.
@@ -803,15 +860,17 @@ where
             .then_ignore(just(Token::LParen))
             .then(item.clone())
             .then_ignore(just(Token::RParen))
-            .map(|(func, (arg, _alias)): (AggFunc, (SelectItem, Option<String>))| {
-                (
-                    SelectItem::Aggregate {
-                        func,
-                        arg: Box::new(arg),
-                    },
-                    None::<String>,
-                )
-            });
+            .map(
+                |(func, (arg, _alias)): (AggFunc, (SelectItem, Option<String>))| {
+                    (
+                        SelectItem::Aggregate {
+                            func,
+                            arg: Box::new(arg),
+                        },
+                        None::<String>,
+                    )
+                },
+            );
 
             // `PERCENTILE(<arg>, <p>)` — two-arg aggregate.
             let percentile_item = ident_ci("PERCENTILE")
@@ -860,9 +919,9 @@ where
                 dom_fn("toString").map(|a| (SelectItem::ToString(a), None::<String>));
 
             // CASE WHEN … THEN … ELSE … END as a select item.
-            let case_item = case_expr.clone().map(|e| {
-                (SelectItem::Expr(Box::new(e)), None::<String>)
-            });
+            let case_item = case_expr
+                .clone()
+                .map(|e| (SelectItem::Expr(Box::new(e)), None::<String>));
 
             // `expr_item` covers all arithmetic expressions AND bare attrs (folded back).
             let expr_item = expr.clone().map(|e| {
@@ -883,11 +942,12 @@ where
                 .or(expr_item);
 
             let alias_name = ident_ci("AS").ignore_then(
-                select! { Token::Str(s) => s }
-                    .or(any_ident().and_is(ident_ci("RETAINED").not())),
+                select! { Token::Str(s) => s }.or(any_ident().and_is(ident_ci("RETAINED").not())),
             );
 
-            base_item.then(alias_name.or_not()).map(|((item, _), alias)| (item, alias))
+            base_item
+                .then(alias_name.or_not())
+                .map(|((item, _), alias)| (item, alias))
         });
 
         // Collect aliased items, then unzip into parallel vecs.
@@ -920,7 +980,8 @@ where
                 ident_ci("GROUP")
                     .ignore_then(ident_ci("BY"))
                     .ignore_then(
-                        case_expr.clone()
+                        case_expr
+                            .clone()
                             .or(expr.clone())
                             .separated_by(just(Token::Comma))
                             .at_least(1)
@@ -930,11 +991,7 @@ where
                     .map(|v| v.unwrap_or_default()),
             )
             // HAVING <predicate>
-            .then(
-                ident_ci("HAVING")
-                    .ignore_then(predicate.clone())
-                    .or_not(),
-            )
+            .then(ident_ci("HAVING").ignore_then(predicate.clone()).or_not())
             .then(
                 ident_ci("ORDER")
                     .ignore_then(ident_ci("BY"))
@@ -965,8 +1022,34 @@ where
             )
             .map(
                 |(
-                    ((((((((((distinct, leading_retained), (select, select_aliases)), trailing_retained), from), alias), where_), group_by), having), order_by),
-                    limit),
+                    (
+                        (
+                            (
+                                (
+                                    (
+                                        (
+                                            (
+                                                (
+                                                    (
+                                                        (distinct, leading_retained),
+                                                        (select, select_aliases),
+                                                    ),
+                                                    trailing_retained,
+                                                ),
+                                                from,
+                                            ),
+                                            alias,
+                                        ),
+                                        where_,
+                                    ),
+                                    group_by,
+                                ),
+                                having,
+                            ),
+                            order_by,
+                        ),
+                        limit,
+                    ),
                     offset,
                 )| {
                     let mut q = Query {
@@ -1041,7 +1124,12 @@ where
         .then(trailing_limit)
         .then_ignore(end())
         .validate(
-            |(((( mut head, union_tail), intersects), excepts), trailing): ((((Query, Vec<(Query, bool)>), Vec<Query>), Vec<Query>), Option<u64>), e, emitter| {
+            |((((mut head, union_tail), intersects), excepts), trailing): (
+                (((Query, Vec<(Query, bool)>), Vec<Query>), Vec<Query>),
+                Option<u64>,
+            ),
+             e,
+             emitter| {
                 // DECISION (MAT gap #6): a trailing `LIMIT n` after a UNION binds
                 // UNION-WIDE (applied to the whole concatenated result), matching
                 // Eclipse MAT — NOT to a single branch. Two forms reach here:
@@ -1188,7 +1276,11 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             normalize_expr(rhs, alias);
         }
         Expr::Unary { arg, .. } => normalize_expr(arg, alias),
-        Expr::Method { receiver, name, args } => {
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
             // Lower `e.getKey()` / `e.getValue()` (zero-arg) to a one-hop RefPath so
             // they reuse the RefWalk late-resolution pipeline exactly like
             // `s.value.@length`. MAT reflects into a live Map.Entry; our static
@@ -1218,7 +1310,9 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
                 return;
             }
             normalize_expr(receiver, alias);
-            for a in args { normalize_expr(a, alias); }
+            for a in args {
+                normalize_expr(a, alias);
+            }
         }
         Expr::Aggregate { .. } => {} // no Attr leaves to normalize in aggregate args
         Expr::Case { branches, else_ } => {
@@ -1231,7 +1325,9 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             }
         }
         Expr::Coalesce(args) => {
-            for arg in args { normalize_expr(arg, alias); }
+            for arg in args {
+                normalize_expr(arg, alias);
+            }
         }
         Expr::NullIf { lhs, rhs } => {
             normalize_expr(lhs, alias);
@@ -1272,8 +1368,12 @@ fn normalize_attr(a: &mut Attr, alias: Option<&str>) {
     // ArraySlice: normalize the base attr and optional start/end expressions.
     if let Attr::ArraySlice { base, start, end } = a {
         normalize_attr(base, alias);
-        if let Some(s) = start { normalize_expr(s, alias); }
-        if let Some(e) = end { normalize_expr(e, alias); }
+        if let Some(s) = start {
+            normalize_expr(s, alias);
+        }
+        if let Some(e) = end {
+            normalize_expr(e, alias);
+        }
         return;
     }
     let Attr::Field(name) = a else { return };
@@ -1366,18 +1466,41 @@ pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG", "PERCENTIL
 /// Built-in scalar/graph function names used in SELECT/predicate position.
 /// Source of truth for REPL completion; matches the `dom_fn` / `path` / `classof`
 /// parser arms so completions can never drift from the grammar.
-pub const FUNCS: &[&str] = &["classof", "toString", "toHex", "path", "dominators", "dominatorof"];
+pub const FUNCS: &[&str] = &[
+    "classof",
+    "toString",
+    "toHex",
+    "path",
+    "dominators",
+    "dominatorof",
+];
 
 /// Supported method-call names for `receiver.name(args)` dispatch. Single source
 /// of truth shared by the plan-time validator and (Wave H) the REPL completer, so
 /// completions never drift from the dispatcher. NOTE: `get` is intentionally
 /// ABSENT — indexed object-array element access is not emulable statically.
 pub const METHODS: &[&str] = &[
-    "length", "size", "getKey", "getValue", "equals", "contains",
-    "intValue", "longValue", "shortValue", "byteValue",
-    "floatValue", "doubleValue", "booleanValue", "charValue",
-    "toString", "getName", "getObjectAddress", "getObjectId",
-    "getUsedHeapSize", "getRetainedHeapSize", "getClazz",
+    "length",
+    "size",
+    "getKey",
+    "getValue",
+    "equals",
+    "contains",
+    "intValue",
+    "longValue",
+    "shortValue",
+    "byteValue",
+    "floatValue",
+    "doubleValue",
+    "booleanValue",
+    "charValue",
+    "toString",
+    "getName",
+    "getObjectAddress",
+    "getObjectId",
+    "getUsedHeapSize",
+    "getRetainedHeapSize",
+    "getClazz",
 ];
 
 /// `@`-prefixed built-in attribute names (matching the `attr` parser's arms),
@@ -1533,7 +1656,11 @@ fn unknown_call_hint(src: &str, lparen: usize) -> Option<String> {
     }
     // Don't suggest for a name that is already a valid callable.
     let is_known = |name: &str| {
-        AGG_FUNCS.iter().chain(FUNCS.iter()).chain(METHODS.iter()).any(|k| k.eq_ignore_ascii_case(name))
+        AGG_FUNCS
+            .iter()
+            .chain(FUNCS.iter())
+            .chain(METHODS.iter())
+            .any(|k| k.eq_ignore_ascii_case(name))
     };
     if is_known(callee) {
         return None;
@@ -1546,9 +1673,7 @@ fn unknown_call_hint(src: &str, lparen: usize) -> Option<String> {
 /// Returns `None` for any non-blank input so the normal parse path runs.
 fn blank_query_message(src: &str) -> Option<String> {
     if src.trim().is_empty() {
-        Some(
-            "empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string(),
-        )
+        Some("empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string())
     } else {
         None
     }
@@ -1570,7 +1695,6 @@ fn missing_from_hint(src: &str) -> Option<&'static str> {
         None
     }
 }
-
 
 /// A hint for an `unexpected Eq` error caused by a `==` operator: OQL equality
 /// is a single `=`, so `==` lexes as two `Eq` tokens and the second one is
@@ -1594,9 +1718,7 @@ fn order_by_aggregate_hint(src: &str, lparen_offset: usize) -> Option<&'static s
     let before = src[..lparen_offset].trim_end();
     // Last word before the `(`
     let last_word = before.split_whitespace().next_back()?;
-    let is_agg = AGG_FUNCS
-        .iter()
-        .any(|&f| f.eq_ignore_ascii_case(last_word));
+    let is_agg = AGG_FUNCS.iter().any(|&f| f.eq_ignore_ascii_case(last_word));
     if !is_agg {
         return None;
     }
@@ -1624,7 +1746,9 @@ fn missing_by_hint(src: &str) -> Option<&'static str> {
     let mut it = words.iter().enumerate();
     while let Some((i, w)) = it.next() {
         if w == "order" && words.get(i + 1).map(String::as_str) != Some("by") {
-            return Some("`ORDER` must be followed by `BY` (e.g. `ORDER BY @retainedHeapSize DESC`)");
+            return Some(
+                "`ORDER` must be followed by `BY` (e.g. `ORDER BY @retainedHeapSize DESC`)",
+            );
         }
     }
     None
@@ -1816,7 +1940,11 @@ mod tests {
         Attr::Field(s.into())
     }
     fn cmp(lhs: Attr, op: CompareOp, rhs: Value) -> Predicate {
-        Predicate::Compare { lhs: Expr::Attr(lhs), op, rhs: Expr::Lit(rhs) }
+        Predicate::Compare {
+            lhs: Expr::Attr(lhs),
+            op,
+            rhs: Expr::Lit(rhs),
+        }
     }
     fn and(a: Predicate, b: Predicate) -> Predicate {
         Predicate::And(Box::new(a), Box::new(b))
@@ -1876,16 +2004,31 @@ mod tests {
     #[test]
     fn parse_from_objects_numeric_id() {
         use super::FromSource;
-        assert_eq!(super::parse("SELECT * FROM OBJECTS 1").unwrap().from, FromSource::Object(1));
-        assert_eq!(super::parse("SELECT * FROM OBJECTS 0x10").unwrap().from, FromSource::Object(16));
-        assert_eq!(super::parse("SELECT * FROM OBJECTS 0x0").unwrap().from, FromSource::Object(0));
+        assert_eq!(
+            super::parse("SELECT * FROM OBJECTS 1").unwrap().from,
+            FromSource::Object(1)
+        );
+        assert_eq!(
+            super::parse("SELECT * FROM OBJECTS 0x10").unwrap().from,
+            FromSource::Object(16)
+        );
+        assert_eq!(
+            super::parse("SELECT * FROM OBJECTS 0x0").unwrap().from,
+            FromSource::Object(0)
+        );
     }
     #[test]
     fn reject_from_objects_expr_and_instanceof_addr() {
         let e = super::parse("SELECT * FROM OBJECTS (1 + 2)").unwrap_err();
-        assert!(e.to_string().contains("arithmetic/boolean FROM-OBJECTS"), "got: {e}");
+        assert!(
+            e.to_string().contains("arithmetic/boolean FROM-OBJECTS"),
+            "got: {e}"
+        );
         let e = super::parse("SELECT * FROM INSTANCEOF 0x1").unwrap_err();
-        assert!(e.to_string().to_lowercase().contains("instanceof"), "got: {e}");
+        assert!(
+            e.to_string().to_lowercase().contains("instanceof"),
+            "got: {e}"
+        );
     }
 
     // ============================================================
@@ -2415,7 +2558,10 @@ mod tests {
             "expected a double-quote hint for 'foo', got: {err}"
         );
         // The single-char case is still a valid char literal (no error).
-        assert!(tokenize_spanned("x = 'a'").is_ok(), "'a' is a valid char literal");
+        assert!(
+            tokenize_spanned("x = 'a'").is_ok(),
+            "'a' is a valid char literal"
+        );
     }
 
     // ---------- targeted unit tests ----------
@@ -2954,7 +3100,9 @@ mod tests {
         // Goes through the same `attr` parser, so it is a valid compare LHS.
         let q = parse("SELECT @objectId FROM C WHERE @inbounds > 0").unwrap();
         match q.where_.as_ref().unwrap() {
-            Predicate::Compare { lhs, .. } => assert_eq!(lhs.as_attr().expect("Expr::Attr"), &Attr::Inbounds),
+            Predicate::Compare { lhs, .. } => {
+                assert_eq!(lhs.as_attr().expect("Expr::Attr"), &Attr::Inbounds)
+            }
             other => panic!("expected compare on @inbounds, got {other:?}"),
         }
     }
@@ -2962,7 +3110,9 @@ mod tests {
     fn outbounds_usable_in_where() {
         let q = parse("SELECT @objectId FROM C WHERE @outbounds != 0").unwrap();
         match q.where_.as_ref().unwrap() {
-            Predicate::Compare { lhs, .. } => assert_eq!(lhs.as_attr().expect("Expr::Attr"), &Attr::Outbounds),
+            Predicate::Compare { lhs, .. } => {
+                assert_eq!(lhs.as_attr().expect("Expr::Attr"), &Attr::Outbounds)
+            }
             other => panic!("expected compare on @outbounds, got {other:?}"),
         }
     }
@@ -3969,7 +4119,13 @@ mod tests {
         let q = parse("SELECT COUNT(*) AS n FROM java.lang.String").unwrap();
         assert_eq!(q.select_aliases[0].as_deref(), Some("n"));
         assert!(
-            matches!(&q.select[0], SelectItem::Aggregate { func: AggFunc::Count, .. }),
+            matches!(
+                &q.select[0],
+                SelectItem::Aggregate {
+                    func: AggFunc::Count,
+                    ..
+                }
+            ),
             "select must be COUNT(*)"
         );
     }
@@ -4011,9 +4167,10 @@ mod tests {
     /// Alias combined with ORDER BY.
     #[test]
     fn alias_combined_with_order_by() {
-        let q =
-            parse("SELECT @usedHeapSize AS bytes FROM java.lang.String ORDER BY @usedHeapSize DESC")
-                .unwrap();
+        let q = parse(
+            "SELECT @usedHeapSize AS bytes FROM java.lang.String ORDER BY @usedHeapSize DESC",
+        )
+        .unwrap();
         assert_eq!(q.select_aliases[0].as_deref(), Some("bytes"));
         assert!(q.order_by.is_some());
     }
@@ -4021,10 +4178,7 @@ mod tests {
     /// Alias after a `path(a,b)` item.
     #[test]
     fn alias_on_path_item() {
-        let q = parse(
-            "SELECT path(s, java.lang.Object) AS p FROM java.lang.String s",
-        )
-        .unwrap();
+        let q = parse("SELECT path(s, java.lang.Object) AS p FROM java.lang.String s").unwrap();
         assert_eq!(q.select_aliases[0].as_deref(), Some("p"));
         assert!(matches!(&q.select[0], SelectItem::Path { .. }));
     }
@@ -4161,17 +4315,13 @@ mod tests {
     /// 7. Leading AS RETAINED SET + OBJECTS before select list.
     #[test]
     fn leading_as_retained_set_objects() {
-        let q =
-            parse("SELECT AS RETAINED SET OBJECTS s FROM java.lang.String s").unwrap();
+        let q = parse("SELECT AS RETAINED SET OBJECTS s FROM java.lang.String s").unwrap();
         assert!(
             q.retained_set,
             "retained_set must be true with leading AS RETAINED SET OBJECTS"
         );
         // bare alias `s` rewrites to Star after the SW-1 fix
-        assert_eq!(
-            q.select,
-            vec![SelectItem::Star],
-        );
+        assert_eq!(q.select, vec![SelectItem::Star],);
     }
 
     /// 8. Case-insensitive: `select objects s from java.lang.String s` parses.
@@ -4179,10 +4329,7 @@ mod tests {
     fn select_objects_case_insensitive() {
         let q = parse("select objects s from java.lang.String s").unwrap();
         // bare alias `s` rewrites to Star after the SW-1 fix
-        assert_eq!(
-            q.select,
-            vec![SelectItem::Star],
-        );
+        assert_eq!(q.select, vec![SelectItem::Star],);
     }
 
     /// 9. Leading + trailing both present: SELECT AS RETAINED SET s AS RETAINED SET FROM ...
@@ -4206,7 +4353,10 @@ mod tests {
         assert!(
             matches!(
                 &q.select[0],
-                SelectItem::Aggregate { func: AggFunc::Count, .. }
+                SelectItem::Aggregate {
+                    func: AggFunc::Count,
+                    ..
+                }
             ),
             "COUNT(*) after OBJECTS must still parse as aggregate"
         );
@@ -4226,10 +4376,7 @@ mod tests {
         assert!(q.distinct, "distinct must be true");
         assert!(q.retained_set, "retained_set must be true");
         // bare alias `s` rewrites to Star after the SW-1 fix
-        assert_eq!(
-            q.select,
-            vec![SelectItem::Star],
-        );
+        assert_eq!(q.select, vec![SelectItem::Star],);
     }
 
     /// 13. SELECT AS RETAINED SET DISTINCT (wrong order) — pin reject behaviour.
@@ -4263,9 +4410,19 @@ mod tests {
         let q = parse_one("SELECT @usedHeapSize + @length * 2 FROM C");
         match &q.select[0] {
             SelectItem::Expr(e) => match e.as_ref() {
-                Expr::Binary { op: ArithOp::Add, lhs, rhs } => {
+                Expr::Binary {
+                    op: ArithOp::Add,
+                    lhs,
+                    rhs,
+                } => {
                     assert!(matches!(lhs.as_ref(), Expr::Attr(_)));
-                    assert!(matches!(rhs.as_ref(), Expr::Binary { op: ArithOp::Mul, .. }));
+                    assert!(matches!(
+                        rhs.as_ref(),
+                        Expr::Binary {
+                            op: ArithOp::Mul,
+                            ..
+                        }
+                    ));
                 }
                 other => panic!("expected Add root, got {other:?}"),
             },
@@ -4277,7 +4434,13 @@ mod tests {
     fn arithmetic_parens_override_precedence() {
         let q = parse_one("SELECT (@usedHeapSize + @length) * 2 FROM C");
         match &q.select[0] {
-            SelectItem::Expr(e) => assert!(matches!(e.as_ref(), Expr::Binary { op: ArithOp::Mul, .. })),
+            SelectItem::Expr(e) => assert!(matches!(
+                e.as_ref(),
+                Expr::Binary {
+                    op: ArithOp::Mul,
+                    ..
+                }
+            )),
             other => panic!("got {other:?}"),
         }
     }
@@ -4286,7 +4449,13 @@ mod tests {
     fn unary_minus_on_attr_parses() {
         let q = parse_one("SELECT -@usedHeapSize FROM C");
         match &q.select[0] {
-            SelectItem::Expr(e) => assert!(matches!(e.as_ref(), Expr::Unary { op: UnaryOp::Neg, .. })),
+            SelectItem::Expr(e) => assert!(matches!(
+                e.as_ref(),
+                Expr::Unary {
+                    op: UnaryOp::Neg,
+                    ..
+                }
+            )),
             other => panic!("got {other:?}"),
         }
     }
@@ -4307,9 +4476,25 @@ mod tests {
     fn where_arithmetic_both_sides() {
         let q = parse_one("SELECT * FROM C WHERE @usedHeapSize / 8 > @length + 1");
         match q.where_.unwrap() {
-            Predicate::Compare { lhs, op: CompareOp::Gt, rhs } => {
-                assert!(matches!(lhs, Expr::Binary { op: ArithOp::Div, .. }));
-                assert!(matches!(rhs, Expr::Binary { op: ArithOp::Add, .. }));
+            Predicate::Compare {
+                lhs,
+                op: CompareOp::Gt,
+                rhs,
+            } => {
+                assert!(matches!(
+                    lhs,
+                    Expr::Binary {
+                        op: ArithOp::Div,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    rhs,
+                    Expr::Binary {
+                        op: ArithOp::Add,
+                        ..
+                    }
+                ));
             }
             other => panic!("got {other:?}"),
         }
@@ -4319,7 +4504,11 @@ mod tests {
     fn where_plain_compare_folds_to_leaf_exprs() {
         let q = parse_one("SELECT * FROM C WHERE @usedHeapSize > 100");
         match q.where_.unwrap() {
-            Predicate::Compare { lhs, op: CompareOp::Gt, rhs } => {
+            Predicate::Compare {
+                lhs,
+                op: CompareOp::Gt,
+                rhs,
+            } => {
                 assert_eq!(lhs, Expr::Attr(Attr::UsedHeapSize));
                 assert_eq!(rhs, Expr::Lit(Value::Int(100)));
             }
@@ -4340,7 +4529,10 @@ mod tests {
     fn like_rhs_must_be_string_literal() {
         let err = super::parse("SELECT * FROM C WHERE name LIKE @a + 1").unwrap_err();
         let msg = format!("{err:?}");
-        assert!(msg.to_lowercase().contains("like"), "error should mention LIKE: {msg}");
+        assert!(
+            msg.to_lowercase().contains("like"),
+            "error should mention LIKE: {msg}"
+        );
     }
 
     // ============================================================
@@ -4366,7 +4558,10 @@ mod tests {
     fn bare_alias_in_count_arg_rewrites_to_star() {
         let q = parse_one("SELECT COUNT(s) FROM java.lang.String s");
         match &q.select[0] {
-            SelectItem::Aggregate { func: AggFunc::Count, arg } => {
+            SelectItem::Aggregate {
+                func: AggFunc::Count,
+                arg,
+            } => {
                 assert_eq!(
                     arg.as_ref(),
                     &SelectItem::Star,
@@ -4423,7 +4618,11 @@ mod tests {
     fn bare_alias_mixed_columns_only_alias_rewrites() {
         let q = parse_one("SELECT s, @usedHeapSize FROM java.lang.String s");
         assert_eq!(q.select.len(), 2, "must have 2 columns");
-        assert_eq!(q.select[0], SelectItem::Star, "first column (alias) must be Star");
+        assert_eq!(
+            q.select[0],
+            SelectItem::Star,
+            "first column (alias) must be Star"
+        );
         assert_eq!(
             q.select[1],
             SelectItem::Attr(Attr::UsedHeapSize),
@@ -4436,7 +4635,10 @@ mod tests {
     fn bare_alias_in_sum_arg_rewrites_to_star() {
         let q = parse_one("SELECT SUM(s) FROM java.lang.String s");
         match &q.select[0] {
-            SelectItem::Aggregate { func: AggFunc::Sum, arg } => {
+            SelectItem::Aggregate {
+                func: AggFunc::Sum,
+                arg,
+            } => {
                 assert_eq!(
                     arg.as_ref(),
                     &SelectItem::Star,
@@ -4541,8 +4743,10 @@ mod tests {
     #[test]
     fn parse_at_name_attribute() {
         assert!(super::parse("SELECT @name FROM java.lang.Thread").is_ok());
-        assert!(super::parse(r#"SELECT * FROM java.lang.Thread WHERE @name = "java.lang.Thread""#)
-            .is_ok());
+        assert!(
+            super::parse(r#"SELECT * FROM java.lang.Thread WHERE @name = "java.lang.Thread""#)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -4578,7 +4782,11 @@ mod tests {
         let q = super::parse("SELECT s.getName() FROM java.lang.Thread s").unwrap();
         match &q.select[0] {
             SelectItem::Expr(e) => match e.as_ref() {
-                Expr::Method { receiver, name, args } => {
+                Expr::Method {
+                    receiver,
+                    name,
+                    args,
+                } => {
                     assert!(
                         matches!(receiver.as_ref(), Expr::Attr(Attr::Field(f)) if f == "s"),
                         "expected Attr::Field(\"s\"), got {receiver:?}"
@@ -4595,7 +4803,11 @@ mod tests {
         let q = super::parse("SELECT a.get(0) FROM java.util.ArrayList a").unwrap();
         match &q.select[0] {
             SelectItem::Expr(e) => match e.as_ref() {
-                Expr::Method { receiver, name, args } => {
+                Expr::Method {
+                    receiver,
+                    name,
+                    args,
+                } => {
                     assert!(
                         matches!(receiver.as_ref(), Expr::Attr(Attr::Field(f)) if f == "a"),
                         "expected Attr::Field(\"a\"), got {receiver:?}"
@@ -4701,8 +4913,11 @@ mod tests {
     #[test]
     fn typo_keyword_suggests_correction() {
         let e = parse("SELCT x FROM C").unwrap_err();
-        assert!(e.0.to_lowercase().contains("did you mean") && e.0.contains("SELECT"),
-            "expected a SELECT suggestion, got: {:?}", e.0);
+        assert!(
+            e.0.to_lowercase().contains("did you mean") && e.0.contains("SELECT"),
+            "expected a SELECT suggestion, got: {:?}",
+            e.0
+        );
     }
 
     #[test]
@@ -4715,8 +4930,14 @@ mod tests {
 
     #[test]
     fn did_you_mean_finds_near_keyword() {
-        assert_eq!(did_you_mean("SELCT", KEYWORDS.iter().copied()), Some("SELECT".to_string()));
-        assert_eq!(did_you_mean("FRM", KEYWORDS.iter().copied()), Some("FROM".to_string()));
+        assert_eq!(
+            did_you_mean("SELCT", KEYWORDS.iter().copied()),
+            Some("SELECT".to_string())
+        );
+        assert_eq!(
+            did_you_mean("FRM", KEYWORDS.iter().copied()),
+            Some("FROM".to_string())
+        );
     }
 
     #[test]
@@ -4731,7 +4952,11 @@ mod tests {
         // spurious keyword suggestion appended.
         let e = parse("SELECT x FROM").unwrap_err();
         // "FROM" with nothing after -> unexpected end of input; found is None, no suggestion.
-        assert!(!e.0.contains("did you mean"), "no spurious suggestion: {:?}", e.0);
+        assert!(
+            !e.0.contains("did you mean"),
+            "no spurious suggestion: {:?}",
+            e.0
+        );
     }
 
     // ============================================================
@@ -4779,9 +5004,7 @@ mod tests {
         // (If you prefer to reject in the parser, that's fine too, but then
         //  update the test accordingly and make sure the error message mentions HAVING.)
         // For now: assert it at least doesn't panic.
-        let result = super::parse(
-            "SELECT COUNT(*) FROM java.lang.Thread HAVING COUNT(*) > 5",
-        );
+        let result = super::parse("SELECT COUNT(*) FROM java.lang.Thread HAVING COUNT(*) > 5");
         // Either Ok (parser accepts, planner validates) or Err with "HAVING" in message
         match result {
             Ok(q) => assert!(q.having.is_some()),
@@ -4846,37 +5069,36 @@ mod tests {
 
     #[test]
     fn parse_coalesce() {
-        let q = super::parse(
-            "SELECT COALESCE(@usedHeapSize, 0) FROM java.lang.String",
-        ).unwrap();
+        let q = super::parse("SELECT COALESCE(@usedHeapSize, 0) FROM java.lang.String").unwrap();
         assert!(
             matches!(&q.select[0], crate::query::ast::SelectItem::Expr(e)
                 if matches!(e.as_ref(), crate::query::ast::Expr::Coalesce(args) if args.len() == 2)),
-            "got: {:?}", q.select[0]
+            "got: {:?}",
+            q.select[0]
         );
     }
 
     #[test]
     fn parse_nullif() {
-        let q = super::parse(
-            "SELECT NULLIF(@usedHeapSize, 0) FROM java.lang.String",
-        ).unwrap();
+        let q = super::parse("SELECT NULLIF(@usedHeapSize, 0) FROM java.lang.String").unwrap();
         assert!(
             matches!(&q.select[0], crate::query::ast::SelectItem::Expr(e)
                 if matches!(e.as_ref(), crate::query::ast::Expr::NullIf { .. })),
-            "got: {:?}", q.select[0]
+            "got: {:?}",
+            q.select[0]
         );
     }
 
     #[test]
     fn parse_between() {
-        let q = super::parse(
-            "SELECT * FROM java.lang.String WHERE @usedHeapSize BETWEEN 10 AND 100",
-        ).unwrap();
+        let q =
+            super::parse("SELECT * FROM java.lang.String WHERE @usedHeapSize BETWEEN 10 AND 100")
+                .unwrap();
         assert!(q.where_.is_some());
         assert!(
             matches!(&q.where_, Some(crate::query::ast::Predicate::And(_, _))),
-            "BETWEEN should desugar to And, got: {:?}", q.where_
+            "BETWEEN should desugar to And, got: {:?}",
+            q.where_
         );
     }
 
@@ -4884,10 +5106,12 @@ mod tests {
     fn parse_not_between() {
         let q = super::parse(
             "SELECT * FROM java.lang.String WHERE @usedHeapSize NOT BETWEEN 10 AND 100",
-        ).unwrap();
+        )
+        .unwrap();
         assert!(
             matches!(&q.where_, Some(crate::query::ast::Predicate::Or(_, _))),
-            "NOT BETWEEN should desugar to Or(Lt, Gt), got: {:?}", q.where_
+            "NOT BETWEEN should desugar to Or(Lt, Gt), got: {:?}",
+            q.where_
         );
     }
 
@@ -4896,15 +5120,28 @@ mod tests {
         use crate::query::ast::{CompareOp, Expr, Predicate, Value};
         let q = super::parse(
             "SELECT * FROM java.lang.String s WHERE @usedHeapSize NOT BETWEEN 10 AND 100",
-        ).unwrap();
+        )
+        .unwrap();
         // NOT BETWEEN lo AND hi => Or(Lt(subj, lo), Gt(subj, hi))
         if let Some(Predicate::Or(lhs, rhs)) = &q.where_ {
             assert!(
-                matches!(lhs.as_ref(), Predicate::Compare { op: CompareOp::Lt, .. }),
+                matches!(
+                    lhs.as_ref(),
+                    Predicate::Compare {
+                        op: CompareOp::Lt,
+                        ..
+                    }
+                ),
                 "left branch should be Lt, got: {lhs:?}"
             );
             assert!(
-                matches!(rhs.as_ref(), Predicate::Compare { op: CompareOp::Gt, .. }),
+                matches!(
+                    rhs.as_ref(),
+                    Predicate::Compare {
+                        op: CompareOp::Gt,
+                        ..
+                    }
+                ),
                 "right branch should be Gt, got: {rhs:?}"
             );
         } else {
@@ -4916,34 +5153,57 @@ mod tests {
     fn coalesce_zero_args_errors() {
         let err = super::parse("SELECT COALESCE() FROM java.lang.String")
             .expect_err("zero-arg COALESCE must error");
-        assert!(err.0.contains("COALESCE") || err.0.to_lowercase().contains("coalesce"),
-                "error must mention COALESCE, got: {}", err.0);
+        assert!(
+            err.0.contains("COALESCE") || err.0.to_lowercase().contains("coalesce"),
+            "error must mention COALESCE, got: {}",
+            err.0
+        );
     }
 
     #[test]
     fn parse_in_value_list() {
-        use crate::query::ast::{CompareOp, Predicate, Value, Expr};
-        let q = super::parse(r#"SELECT * FROM java.lang.String s WHERE toString(s) IN ("MONDAY", "TUESDAY")"#).unwrap();
+        use crate::query::ast::{CompareOp, Expr, Predicate, Value};
+        let q = super::parse(
+            r#"SELECT * FROM java.lang.String s WHERE toString(s) IN ("MONDAY", "TUESDAY")"#,
+        )
+        .unwrap();
         // Should desugar to OR chain of = compares
         assert!(
             matches!(&q.where_, Some(Predicate::Or(_, _))),
-            "IN list should desugar to OR chain, got: {:?}", q.where_
+            "IN list should desugar to OR chain, got: {:?}",
+            q.where_
         );
         // Two-element list → exactly one Or node
         if let Some(Predicate::Or(left, right)) = &q.where_ {
-            assert!(matches!(left.as_ref(), Predicate::Compare { op: CompareOp::Eq, .. }));
-            assert!(matches!(right.as_ref(), Predicate::Compare { op: CompareOp::Eq, .. }));
+            assert!(matches!(
+                left.as_ref(),
+                Predicate::Compare {
+                    op: CompareOp::Eq,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                right.as_ref(),
+                Predicate::Compare {
+                    op: CompareOp::Eq,
+                    ..
+                }
+            ));
         }
     }
 
     #[test]
     fn parse_not_in_value_list() {
         use crate::query::ast::Predicate;
-        let q = super::parse(r#"SELECT * FROM java.lang.String s WHERE toString(s) NOT IN ("MONDAY", "TUESDAY")"#).unwrap();
+        let q = super::parse(
+            r#"SELECT * FROM java.lang.String s WHERE toString(s) NOT IN ("MONDAY", "TUESDAY")"#,
+        )
+        .unwrap();
         // NOT IN desugars to AND chain of != compares
         assert!(
             matches!(&q.where_, Some(Predicate::And(_, _))),
-            "NOT IN list should desugar to AND chain, got: {:?}", q.where_
+            "NOT IN list should desugar to AND chain, got: {:?}",
+            q.where_
         );
     }
 
@@ -4952,10 +5212,15 @@ mod tests {
         let q = super::parse(
             "SELECT COUNT(*) FROM java.lang.String \
              WHERE EXISTS (SELECT * FROM java.lang.Thread)",
-        ).unwrap();
+        )
+        .unwrap();
         assert!(
-            matches!(&q.where_, Some(crate::query::ast::Predicate::Exists { negated: false, .. })),
-            "got: {:?}", q.where_
+            matches!(
+                &q.where_,
+                Some(crate::query::ast::Predicate::Exists { negated: false, .. })
+            ),
+            "got: {:?}",
+            q.where_
         );
     }
 
@@ -4964,26 +5229,40 @@ mod tests {
         let q = super::parse(
             "SELECT COUNT(*) FROM java.lang.String \
              WHERE NOT EXISTS (SELECT * FROM java.lang.Thread)",
-        ).unwrap();
+        )
+        .unwrap();
         assert!(
-            matches!(&q.where_, Some(crate::query::ast::Predicate::Exists { negated: true, .. })),
-            "got: {:?}", q.where_
+            matches!(
+                &q.where_,
+                Some(crate::query::ast::Predicate::Exists { negated: true, .. })
+            ),
+            "got: {:?}",
+            q.where_
         );
     }
 
     #[test]
     fn parse_is_null_and_is_not_null() {
-        use crate::query::ast::{CompareOp, Predicate, Value, Expr};
+        use crate::query::ast::{CompareOp, Expr, Predicate, Value};
         let q = super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NULL").unwrap();
         match &q.where_ {
-            Some(Predicate::Compare { op: CompareOp::Eq, rhs, .. }) => {
+            Some(Predicate::Compare {
+                op: CompareOp::Eq,
+                rhs,
+                ..
+            }) => {
                 assert_eq!(rhs, &Expr::Lit(Value::Null), "IS NULL rhs must be null");
             }
             other => panic!("IS NULL should desugar to = null, got: {other:?}"),
         }
-        let q2 = super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NOT NULL").unwrap();
+        let q2 =
+            super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NOT NULL").unwrap();
         match &q2.where_ {
-            Some(Predicate::Compare { op: CompareOp::Ne, rhs, .. }) => {
+            Some(Predicate::Compare {
+                op: CompareOp::Ne,
+                rhs,
+                ..
+            }) => {
                 assert_eq!(rhs, &Expr::Lit(Value::Null), "IS NOT NULL rhs must be null");
             }
             other => panic!("IS NOT NULL should desugar to != null, got: {other:?}"),
@@ -4996,7 +5275,8 @@ mod tests {
             "SELECT @displayName FROM java.lang.Thread \
              INTERSECT \
              SELECT @displayName FROM java.lang.String",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(q.intersect_branches.len(), 1);
         assert!(q.except_branches.is_empty());
         assert!(q.union_branches.is_empty());
@@ -5008,7 +5288,8 @@ mod tests {
             "SELECT @displayName FROM java.lang.Thread \
              EXCEPT \
              SELECT @displayName FROM java.lang.String",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(q.except_branches.len(), 1);
         assert!(q.intersect_branches.is_empty());
         assert!(q.union_branches.is_empty());
@@ -5020,10 +5301,12 @@ mod tests {
             "SELECT @displayName FROM java.lang.Thread \
              INTERSECT SELECT @displayName FROM java.lang.String \
              EXCEPT SELECT @displayName FROM java.lang.Object",
-        ).expect_err("mixing INTERSECT and EXCEPT must error");
+        )
+        .expect_err("mixing INTERSECT and EXCEPT must error");
         assert!(
             err.0.to_lowercase().contains("intersect") || err.0.to_lowercase().contains("except"),
-            "error must mention INTERSECT or EXCEPT, got: {}", err.0
+            "error must mention INTERSECT or EXCEPT, got: {}",
+            err.0
         );
     }
 
@@ -5032,9 +5315,10 @@ mod tests {
         let q = super::parse("SELECT s.value[0] FROM java.lang.String s").unwrap();
         let item = &q.select[0];
         assert!(
-            matches!(item, crate::query::ast::SelectItem::Attr(
-                crate::query::ast::Attr::ArrayIndex { .. }
-            )),
+            matches!(
+                item,
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::ArrayIndex { .. })
+            ),
             "expected ArrayIndex, got: {item:?}"
         );
     }
@@ -5044,9 +5328,10 @@ mod tests {
         let q = super::parse("SELECT s.value[1:3] FROM java.lang.String s").unwrap();
         let item = &q.select[0];
         assert!(
-            matches!(item, crate::query::ast::SelectItem::Attr(
-                crate::query::ast::Attr::ArraySlice { .. }
-            )),
+            matches!(
+                item,
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::ArraySlice { .. })
+            ),
             "expected ArraySlice, got: {item:?}"
         );
     }
@@ -5056,9 +5341,13 @@ mod tests {
         let q = super::parse("SELECT s.value[:3] FROM java.lang.String s").unwrap();
         let item = &q.select[0];
         assert!(
-            matches!(item, crate::query::ast::SelectItem::Attr(
-                crate::query::ast::Attr::ArraySlice { start: None, .. }
-            )),
+            matches!(
+                item,
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::ArraySlice {
+                    start: None,
+                    ..
+                })
+            ),
             "expected open-start slice, got: {item:?}"
         );
     }
@@ -5068,9 +5357,13 @@ mod tests {
         let q = super::parse("SELECT s.value[2:] FROM java.lang.String s").unwrap();
         let item = &q.select[0];
         assert!(
-            matches!(item, crate::query::ast::SelectItem::Attr(
-                crate::query::ast::Attr::ArraySlice { end: None, .. }
-            )),
+            matches!(
+                item,
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::ArraySlice {
+                    end: None,
+                    ..
+                })
+            ),
             "expected open-end slice, got: {item:?}"
         );
     }
@@ -5079,6 +5372,9 @@ mod tests {
     fn parse_error_uses_source_chars_not_debug_names() {
         let err = parse_or_report("[SELCT * FROM java.lang.String").unwrap_err();
         assert!(err.contains('['), "expected '[' in error, got: {err}");
-        assert!(!err.contains("LBracket"), "expected no 'LBracket' in error, got: {err}");
+        assert!(
+            !err.contains("LBracket"),
+            "expected no 'LBracket' in error, got: {err}"
+        );
     }
 }

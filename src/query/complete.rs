@@ -23,19 +23,39 @@ pub struct Completion {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn kw(v: &str) -> Completion {
-    Completion { value: v.to_string(), display: v.to_string(), group: Some("keyword".to_string()) }
+    Completion {
+        value: v.to_string(),
+        display: v.to_string(),
+        group: Some("keyword".to_string()),
+    }
 }
 fn func(v: &str) -> Completion {
-    Completion { value: v.to_string(), display: v.to_string(), group: Some("function".to_string()) }
+    Completion {
+        value: v.to_string(),
+        display: v.to_string(),
+        group: Some("function".to_string()),
+    }
 }
 fn agg(v: &str) -> Completion {
-    Completion { value: v.to_string(), display: v.to_string(), group: Some("aggregate".to_string()) }
+    Completion {
+        value: v.to_string(),
+        display: v.to_string(),
+        group: Some("aggregate".to_string()),
+    }
 }
 fn attr(v: &str) -> Completion {
-    Completion { value: v.to_string(), display: v.to_string(), group: Some("attribute".to_string()) }
+    Completion {
+        value: v.to_string(),
+        display: v.to_string(),
+        group: Some("attribute".to_string()),
+    }
 }
 fn class(v: &str) -> Completion {
-    Completion { value: v.to_string(), display: v.to_string(), group: Some("class".to_string()) }
+    Completion {
+        value: v.to_string(),
+        display: v.to_string(),
+        group: Some("class".to_string()),
+    }
 }
 
 /// Split `prefix` into uppercase "tokens" for context detection.
@@ -106,7 +126,7 @@ pub fn complete(
         last == "FROM" || last == "INSTANCEOF"
     };
 
-    if in_class_pos || (n > 1 && toks[n-1] == "INSTANCEOF" && toks[n-2] == "FROM") {
+    if in_class_pos || (n > 1 && toks[n - 1] == "INSTANCEOF" && toks[n - 2] == "FROM") {
         let lower = typed.to_ascii_lowercase();
         let mut res: Vec<Completion> = class_names
             .iter()
@@ -114,21 +134,26 @@ pub fn complete(
             .map(|c| class(c))
             .collect();
         // Also offer INSTANCEOF after FROM (if not already typed)
-        if toks.last().map(|s| s.as_str()) == Some("FROM") && "INSTANCEOF".to_ascii_lowercase().starts_with(&typed.to_ascii_lowercase()) {
+        if toks.last().map(|s| s.as_str()) == Some("FROM")
+            && "INSTANCEOF"
+                .to_ascii_lowercase()
+                .starts_with(&typed.to_ascii_lowercase())
+        {
             res.insert(0, kw("INSTANCEOF"));
         }
         dedup(res)
     }
-
     // ── @attribute prefix ─────────────────────────────────────────────────────
     else if typed.starts_with('@') {
         ATTRIBUTES
             .iter()
-            .filter(|a| a.to_ascii_lowercase().starts_with(&typed.to_ascii_lowercase()))
+            .filter(|a| {
+                a.to_ascii_lowercase()
+                    .starts_with(&typed.to_ascii_lowercase())
+            })
             .map(|a| attr(a))
             .collect()
     }
-
     // ── Partial keyword / function typed ─────────────────────────────────────
     else if !typed.is_empty() {
         let lower = typed.to_ascii_lowercase();
@@ -168,7 +193,6 @@ pub fn complete(
         }
         dedup(res)
     }
-
     // ── Cursor after a space with no partial word ─────────────────────────────
     else {
         // typed is empty — context-driven suggestions
@@ -189,9 +213,11 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
     match last {
         // After SELECT or DISTINCT — offer expression starters
         "SELECT" | "DISTINCT" => {
-            let mut res = vec![
-                Completion { value: "*".to_string(), display: "*".to_string(), group: Some("operator".to_string()) },
-            ];
+            let mut res = vec![Completion {
+                value: "*".to_string(),
+                display: "*".to_string(),
+                group: Some("operator".to_string()),
+            }];
             res.extend(AGG_FUNCS.iter().map(|f| agg(f)));
             res.extend(FUNCS.iter().map(|f| func(f)));
             res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
@@ -219,8 +245,8 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
         }
 
         // After ORDER BY is `BY` — but we track them separately
-        "BY" if n >= 2 && (toks[n-2] == "ORDER" || toks[n-2] == "GROUP") => {
-            if toks[n-2] == "ORDER" {
+        "BY" if n >= 2 && (toks[n - 2] == "ORDER" || toks[n - 2] == "GROUP") => {
+            if toks[n - 2] == "ORDER" {
                 let mut res = vec![];
                 res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
                 res.extend(FUNCS.iter().map(|f| func(f)));
@@ -255,7 +281,7 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
         }
 
         // After AS <alias> — clause keywords
-        _ if n >= 2 && toks[n-2] == "AS" => clause_starters(),
+        _ if n >= 2 && toks[n - 2] == "AS" => clause_starters(),
 
         // After a class name or alias — offer WHERE / ORDER BY / GROUP BY / LIMIT / UNION / AS
         _ => clause_starters(),
@@ -308,9 +334,15 @@ mod tests {
     #[test]
     fn empty_line_suggests_select() {
         let cs = complete("", 0, &classes(), &[]);
-        assert!(vals(&cs).contains(&"SELECT"), "should suggest SELECT on empty input");
+        assert!(
+            vals(&cs).contains(&"SELECT"),
+            "should suggest SELECT on empty input"
+        );
         // Should NOT suggest class names on empty input
-        assert!(!vals(&cs).contains(&"java.lang.String"), "no classes on empty input");
+        assert!(
+            !vals(&cs).contains(&"java.lang.String"),
+            "no classes on empty input"
+        );
     }
 
     #[test]
@@ -318,7 +350,10 @@ mod tests {
         let cs = complete("SEL", 3, &classes(), &[]);
         let v = vals(&cs);
         assert!(v.contains(&"SELECT"), "SEL → SELECT");
-        assert!(!v.contains(&"java.lang.String"), "no classes for partial kw");
+        assert!(
+            !v.contains(&"java.lang.String"),
+            "no classes for partial kw"
+        );
     }
 
     #[test]
@@ -337,14 +372,23 @@ mod tests {
         assert!(v.contains(&"java.util.ArrayList"), "FROM space → ArrayList");
         assert!(!v.contains(&"SELECT"), "FROM space must NOT include SELECT");
         assert!(!v.contains(&"WHERE"), "FROM space must NOT include WHERE");
-        assert!(!v.contains(&"ORDER BY"), "FROM space must NOT include ORDER BY");
-        assert!(!v.contains(&"GROUP BY"), "FROM space must NOT include GROUP BY");
+        assert!(
+            !v.contains(&"ORDER BY"),
+            "FROM space must NOT include ORDER BY"
+        );
+        assert!(
+            !v.contains(&"GROUP BY"),
+            "FROM space must NOT include GROUP BY"
+        );
     }
 
     #[test]
     fn from_space_also_suggests_instanceof() {
         let cs = complete("SELECT * FROM ", 14, &classes(), &[]);
-        assert!(vals(&cs).contains(&"INSTANCEOF"), "FROM space should suggest INSTANCEOF");
+        assert!(
+            vals(&cs).contains(&"INSTANCEOF"),
+            "FROM space should suggest INSTANCEOF"
+        );
     }
 
     #[test]
@@ -352,22 +396,34 @@ mod tests {
         let cs = complete("SELECT * FROM java.lang.", 23, &classes(), &[]);
         let v = vals(&cs);
         assert!(v.contains(&"java.lang.String"), "partial class prefix");
-        assert!(v.contains(&"java.lang.Thread"), "partial class prefix thread");
-        assert!(!v.contains(&"java.util.ArrayList"), "unrelated class filtered out");
+        assert!(
+            v.contains(&"java.lang.Thread"),
+            "partial class prefix thread"
+        );
+        assert!(
+            !v.contains(&"java.util.ArrayList"),
+            "unrelated class filtered out"
+        );
     }
 
     #[test]
     fn from_partial_class_case_insensitive() {
         let cs = complete("SELECT * FROM JAVA.LANG.", 23, &classes(), &[]);
         let v = vals(&cs);
-        assert!(v.contains(&"java.lang.String"), "case-insensitive class match");
+        assert!(
+            v.contains(&"java.lang.String"),
+            "case-insensitive class match"
+        );
     }
 
     #[test]
     fn instanceof_space_suggests_classes() {
         let cs = complete("SELECT * FROM INSTANCEOF ", 25, &classes(), &[]);
         let v = vals(&cs);
-        assert!(v.contains(&"java.util.ArrayList"), "INSTANCEOF space → ArrayList");
+        assert!(
+            v.contains(&"java.util.ArrayList"),
+            "INSTANCEOF space → ArrayList"
+        );
         assert!(!v.contains(&"SELECT"), "no SELECT after INSTANCEOF");
         assert!(!v.contains(&"INSTANCEOF"), "no INSTANCEOF after INSTANCEOF");
     }
@@ -377,8 +433,14 @@ mod tests {
         let cs = complete("SELECT * FROM INSTANCEOF java.util.", 34, &classes(), &[]);
         let v = vals(&cs);
         assert!(v.contains(&"java.util.ArrayList"), "FROM INSTANCEOF prefix");
-        assert!(v.contains(&"java.util.HashMap"), "FROM INSTANCEOF prefix HashMap");
-        assert!(!v.contains(&"java.lang.String"), "non-matching class filtered");
+        assert!(
+            v.contains(&"java.util.HashMap"),
+            "FROM INSTANCEOF prefix HashMap"
+        );
+        assert!(
+            !v.contains(&"java.lang.String"),
+            "non-matching class filtered"
+        );
     }
 
     // ── SELECT position ───────────────────────────────────────────────────────
@@ -390,7 +452,10 @@ mod tests {
         assert!(v.contains(&"*"), "SELECT space → *");
         assert!(v.contains(&"COUNT"), "SELECT space → COUNT");
         assert!(v.contains(&"classof"), "SELECT space → classof");
-        assert!(v.contains(&"@objectAddress"), "SELECT space → @objectAddress");
+        assert!(
+            v.contains(&"@objectAddress"),
+            "SELECT space → @objectAddress"
+        );
         // Should NOT suggest class names or clause keywords
         assert!(!v.contains(&"FROM"), "no FROM in select position");
         assert!(!v.contains(&"WHERE"), "no WHERE in select position");
@@ -412,7 +477,10 @@ mod tests {
         let v = vals(&cs);
         assert!(v.contains(&"@objectAddress"), "@obj → @objectAddress");
         assert!(v.contains(&"@objectId"), "@obj → @objectId");
-        assert!(!v.contains(&"@usedHeapSize"), "@obj does not match @usedHeapSize");
+        assert!(
+            !v.contains(&"@usedHeapSize"),
+            "@obj does not match @usedHeapSize"
+        );
     }
 
     #[test]
@@ -438,7 +506,10 @@ mod tests {
         let line = "SELECT * FROM java.lang.String s WHERE ";
         let cs = complete(line, line.len(), &classes(), &[]);
         let v = vals(&cs);
-        assert!(!v.contains(&"java.lang.String"), "no classes after WHERE space");
+        assert!(
+            !v.contains(&"java.lang.String"),
+            "no classes after WHERE space"
+        );
         assert!(!v.contains(&"SELECT"), "no SELECT after WHERE");
     }
 
@@ -485,7 +556,10 @@ mod tests {
         let cs = complete(line, line.len(), &classes(), &[]);
         let v = vals(&cs);
         assert!(v.contains(&"@usedHeapSize"), "ORDER BY → attributes");
-        assert!(!v.contains(&"java.lang.String"), "no classes after ORDER BY");
+        assert!(
+            !v.contains(&"java.lang.String"),
+            "no classes after ORDER BY"
+        );
     }
 
     // ── Clause starters after class / alias ──────────────────────────────────
@@ -515,14 +589,23 @@ mod tests {
     fn run_prefix_with_all_queries() {
         let cs = complete("/run ", 5, &[], &[]);
         assert_eq!(cs.len(), 20, "20 named queries total");
-        assert!(cs.iter().all(|c| c.group.is_some()), "all /run completions have a group");
+        assert!(
+            cs.iter().all(|c| c.group.is_some()),
+            "all /run completions have a group"
+        );
     }
 
     #[test]
     fn run_prefix_filters() {
         let cs = complete("/run top", 8, &[], &[]);
-        assert!(cs.iter().any(|c| c.value.starts_with("top-")), "top-* filtered");
-        assert!(cs.iter().all(|c| c.value.starts_with("top")), "only top-* in results");
+        assert!(
+            cs.iter().any(|c| c.value.starts_with("top-")),
+            "top-* filtered"
+        );
+        assert!(
+            cs.iter().all(|c| c.value.starts_with("top")),
+            "only top-* in results"
+        );
     }
 
     // ── Partial keyword matching ───────────────────────────────────────────────
@@ -575,7 +658,10 @@ mod tests {
         let cs = complete("SELECT * FROM ja", 16, &classes(), &[]);
         let v = vals(&cs);
         assert!(v.contains(&"java.lang.String"), "ja → java.lang.String");
-        assert!(v.contains(&"java.util.ArrayList"), "ja → java.util.ArrayList");
+        assert!(
+            v.contains(&"java.util.ArrayList"),
+            "ja → java.util.ArrayList"
+        );
     }
 
     #[test]
@@ -585,7 +671,10 @@ mod tests {
         let v = vals(&cs);
         // 'j' starts with 'j' so only classes starting with j should appear
         // But since len < 2 we should suppress them
-        assert!(!v.contains(&"java.util.HashMap"), "single char in select → no class flood");
+        assert!(
+            !v.contains(&"java.util.HashMap"),
+            "single char in select → no class flood"
+        );
     }
 
     // ── No double keywords pollution ──────────────────────────────────────────
@@ -601,7 +690,10 @@ mod tests {
     #[test]
     fn no_classes_after_select() {
         let cs = complete("SELECT ", 7, &classes(), &[]);
-        assert!(!vals(&cs).contains(&"java.lang.String"), "no classes after SELECT");
+        assert!(
+            !vals(&cs).contains(&"java.lang.String"),
+            "no classes after SELECT"
+        );
     }
 
     // ── Groups are assigned correctly ─────────────────────────────────────────
@@ -609,16 +701,28 @@ mod tests {
     #[test]
     fn from_completions_have_class_group() {
         let cs = complete("SELECT * FROM ", 14, &classes(), &[]);
-        let class_comps: Vec<_> = cs.iter().filter(|c| c.value == "java.lang.String").collect();
+        let class_comps: Vec<_> = cs
+            .iter()
+            .filter(|c| c.value == "java.lang.String")
+            .collect();
         assert!(!class_comps.is_empty(), "java.lang.String in completions");
-        assert_eq!(class_comps[0].group.as_deref(), Some("class"), "group=class");
+        assert_eq!(
+            class_comps[0].group.as_deref(),
+            Some("class"),
+            "group=class"
+        );
     }
 
     #[test]
     fn attribute_completions_have_attr_group() {
         let cs = complete("SELECT @obj", 11, &classes(), &[]);
         for c in &cs {
-            assert_eq!(c.group.as_deref(), Some("attribute"), "attr group for {}", c.value);
+            assert_eq!(
+                c.group.as_deref(),
+                Some("attribute"),
+                "attr group for {}",
+                c.value
+            );
         }
     }
 

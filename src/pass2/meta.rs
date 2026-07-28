@@ -252,7 +252,14 @@ where
             };
             let ctx_off = obj_off("contextClassLoader");
             let holder_off = obj_off("holder");
-            (name_off, daemon_off, priority_off, status_off, ctx_off, holder_off)
+            (
+                name_off,
+                daemon_off,
+                priority_off,
+                status_off,
+                ctx_off,
+                holder_off,
+            )
         });
         let (name_off, daemon_off, priority_off, status_off, ctx_off, holder_off) = offs;
         if let Some(off) = name_off {
@@ -263,14 +270,20 @@ where
                 }
             }
         }
-        let is_daemon = daemon_off.and_then(|o| blob.get(o)).map(|&b| b != 0).unwrap_or(false);
+        let is_daemon = daemon_off
+            .and_then(|o| blob.get(o))
+            .map(|&b| b != 0)
+            .unwrap_or(false);
         let priority = priority_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
         let thread_status = status_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
         let context_loader_addr = ctx_off
             .filter(|&o| o + obj_ref_width <= blob.len())
             .map(|o| read_ref(&blob[o..], obj_ref_width))
             .unwrap_or(0);
-        thread_to_scalars.insert(addr, (is_daemon, priority, thread_status, context_loader_addr));
+        thread_to_scalars.insert(
+            addr,
+            (is_daemon, priority, thread_status, context_loader_addr),
+        );
         // Record the holder addr only when the scalars are NOT directly on Thread
         // (i.e. the FieldHolder layout), so the extra work is skipped for JDK 8-16.
         if priority_off.is_none() && daemon_off.is_none() && status_off.is_none() {
@@ -302,8 +315,11 @@ where
         thread_to_name_addr.values().copied().collect();
     let wanted_holders: std::collections::HashSet<u64> =
         thread_to_holder.values().copied().collect();
-    let wanted_inst_r2: std::collections::HashSet<u64> =
-        wanted_strings.iter().chain(wanted_holders.iter()).copied().collect();
+    let wanted_inst_r2: std::collections::HashSet<u64> = wanted_strings
+        .iter()
+        .chain(wanted_holders.iter())
+        .copied()
+        .collect();
 
     let mut string_to_arr: HashMap<u64, (u64, u8)> = HashMap::new();
     let mut holder_scalars: HashMap<u64, (bool, i32, i32)> = HashMap::new();
@@ -388,7 +404,10 @@ where
                         };
                         (daemon_off, int_off("priority"), int_off("threadStatus"))
                     });
-                let is_daemon = daemon_off.and_then(|o| blob.get(o)).map(|&b| b != 0).unwrap_or(false);
+                let is_daemon = daemon_off
+                    .and_then(|o| blob.get(o))
+                    .map(|&b| b != 0)
+                    .unwrap_or(false);
                 let priority = priority_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
                 let thread_status = status_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
                 holder_scalars.insert(addr, (is_daemon, priority, thread_status));
@@ -620,15 +639,36 @@ where
     let mut chained_addrs: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for (&_addr, &(class_id, ref blob)) in &all_entry_blobs {
         let offs = entry_off_cache.entry(class_id).or_insert_with(|| {
-            let key_off = match field_offset(class_id, "key", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+            let key_off = match field_offset(
+                class_id,
+                "key",
+                "java/util/Hashtable$Entry",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
                 Some((o, HprofType::Object)) => o as usize,
                 _ => return None,
             };
-            let value_off = match field_offset(class_id, "value", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+            let value_off = match field_offset(
+                class_id,
+                "value",
+                "java/util/Hashtable$Entry",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
                 Some((o, HprofType::Object)) => o as usize,
                 _ => return None,
             };
-            let next_off = match field_offset(class_id, "next", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+            let next_off = match field_offset(
+                class_id,
+                "next",
+                "java/util/Hashtable$Entry",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
                 Some((o, HprofType::Object)) => o as usize,
                 _ => return None,
             };
@@ -658,15 +698,36 @@ where
         chained_addrs.clear();
         for (&_addr, &(class_id, ref blob)) in &more_blobs {
             let offs = entry_off_cache.entry(class_id).or_insert_with(|| {
-                let key_off = match field_offset(class_id, "key", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+                let key_off = match field_offset(
+                    class_id,
+                    "key",
+                    "java/util/Hashtable$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                ) {
                     Some((o, HprofType::Object)) => o as usize,
                     _ => return None,
                 };
-                let value_off = match field_offset(class_id, "value", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+                let value_off = match field_offset(
+                    class_id,
+                    "value",
+                    "java/util/Hashtable$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                ) {
                     Some((o, HprofType::Object)) => o as usize,
                     _ => return None,
                 };
-                let next_off = match field_offset(class_id, "next", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+                let next_off = match field_offset(
+                    class_id,
+                    "next",
+                    "java/util/Hashtable$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                ) {
                     Some((o, HprofType::Object)) => o as usize,
                     _ => return None,
                 };
@@ -708,8 +769,12 @@ where
     // ── Round 3: String instances + backing PRIM_ARRAYs in ONE pass ──────────
     let mut wanted_strings: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for &(k, v) in key_val.values() {
-        if k != 0 { wanted_strings.insert(k); }
-        if v != 0 { wanted_strings.insert(v); }
+        if k != 0 {
+            wanted_strings.insert(k);
+        }
+        if v != 0 {
+            wanted_strings.insert(v);
+        }
     }
 
     // Collect String blobs to derive array addrs, then collect arrays in same call
@@ -729,11 +794,25 @@ where
     let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
     for (&addr, &(class_id, ref blob)) in &str_blobs {
         let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
-            let value_off = match field_offset(class_id, "value", "java/lang/String", class_map, strings, obj_ref_width) {
+            let value_off = match field_offset(
+                class_id,
+                "value",
+                "java/lang/String",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
                 Some((off, HprofType::Object)) => off as usize,
                 _ => return None,
             };
-            let coder_off = match field_offset(class_id, "coder", "java/lang/String", class_map, strings, obj_ref_width) {
+            let coder_off = match field_offset(
+                class_id,
+                "coder",
+                "java/lang/String",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
                 Some((off, HprofType::Byte)) => Some(off as usize),
                 _ => None,
             };
@@ -766,15 +845,21 @@ where
 
     // ── Decode ────────────────────────────────────────────────────────────────
     let decode = |str_addr: u64| -> Option<String> {
-        if str_addr == 0 { return None; }
+        if str_addr == 0 {
+            return None;
+        }
         let &(arr_addr, coder) = string_to_arr.get(&str_addr)?;
         let bytes = arr_blobs.get(&arr_addr)?;
         Some(decode_java_string(bytes, coder))
     };
     let mut pairs: Vec<(String, String)> = Vec::new();
     for &(k, v) in key_val.values() {
-        let (Some(key), Some(value)) = (decode(k), decode(v)) else { continue; };
-        if key.is_empty() { continue; }
+        let (Some(key), Some(value)) = (decode(k), decode(v)) else {
+            continue;
+        };
+        if key.is_empty() {
+            continue;
+        }
         pairs.push((key, value));
     }
     pairs.sort();

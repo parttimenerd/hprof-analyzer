@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 
 use crate::md::{Align, Table};
-use crate::report::{self, Report};
 use crate::opts::OutputFormat;
+use crate::report::{self, Report};
 
 /// Cap on the number of rows shown in the growth-leaders and new-classes
 /// lists. Suspects are uncapped (there are only ever a handful).
@@ -217,10 +217,10 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
     // Growth leaders: sorted by (peak_retained − first retained) desc (peak-vs-baseline),
     // so a class that spiked to a high then reclaimed is still ranked by its spike height.
     // Only classes with peak > first (any growth at any point) are included.
-    let first_retained_for = |row: &SeriesClassRow| -> u64 { row.retained.first().copied().unwrap_or(0) };
-    let peak_delta = |row: &SeriesClassRow| -> i64 {
-        row.peak_retained as i64 - first_retained_for(row) as i64
-    };
+    let first_retained_for =
+        |row: &SeriesClassRow| -> u64 { row.retained.first().copied().unwrap_or(0) };
+    let peak_delta =
+        |row: &SeriesClassRow| -> i64 { row.peak_retained as i64 - first_retained_for(row) as i64 };
     let mut growth_leaders: Vec<SeriesClassRow> = all_rows
         .iter()
         .filter(|c| peak_delta(c) > 0)
@@ -512,9 +512,10 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         fmt_delta_bytes(d.gross_shrink_retained)
     ));
     // Combined gross-churn line (§37.2): total bytes that churned direction.
-    let churn = d.gross_growth_retained.unsigned_abs().saturating_add(
-        d.gross_shrink_retained.unsigned_abs()
-    ) as i64;
+    let churn = d
+        .gross_growth_retained
+        .unsigned_abs()
+        .saturating_add(d.gross_shrink_retained.unsigned_abs()) as i64;
     out.push_str(&format!(
         "- **Gross Retained churn (growth + reclaimed, r1→rN):** {}\n",
         fmt_delta_bytes(churn)
@@ -647,7 +648,7 @@ pub fn run(paths: &[String], format: OutputFormat) -> io::Result<String> {
 mod tests {
     use super::*;
     use crate::report::{
-        HistRow, LeakSuspects, PackageNode, Suspect, SystemOverview, TopConsumers, SCHEMA_VERSION,
+        HistRow, LeakSuspects, PackageNode, SCHEMA_VERSION, Suspect, SystemOverview, TopConsumers,
     };
 
     fn hist(name: &str, inst: u64, sh: u64, ret: u64) -> HistRow {
@@ -923,10 +924,11 @@ mod tests {
         assert_eq!(s.growth_leaders[1].delta_retained, 200);
         assert_eq!(s.growth_leaders[1].delta_instances, 2);
         assert_eq!(s.growth_leaders[1].retained, vec![100, 300]);
-        assert!(!s
-            .growth_leaders
-            .iter()
-            .any(|c| c.pretty_class == "Shrank" || c.pretty_class == "Removed"));
+        assert!(
+            !s.growth_leaders
+                .iter()
+                .any(|c| c.pretty_class == "Shrank" || c.pretty_class == "Removed")
+        );
 
         // New class: NewClass, retained [0, 400].
         assert_eq!(s.new_classes.len(), 1);

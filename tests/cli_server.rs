@@ -88,10 +88,7 @@ fn curl_post(port: u16, path: &str, body: &str) -> (u32, String) {
 fn parse_curl_output(raw: &str) -> (u32, String) {
     // The last non-empty line is the status code written by `-w "\n%{http_code}"`.
     let mut lines: Vec<&str> = raw.lines().collect();
-    let status: u32 = lines
-        .pop()
-        .and_then(|l| l.trim().parse().ok())
-        .unwrap_or(0);
+    let status: u32 = lines.pop().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
     let body = lines.join("\n");
     (status, body)
 }
@@ -137,7 +134,10 @@ fn server_analyze_returns_started() {
     let (status, body) = curl_post(port, "/analyze", "");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from POST /analyze, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from POST /analyze, got {status}"
+    );
     let recognised = body.contains("started")
         || body.contains("already_running")
         || body.contains("already_done");
@@ -203,7 +203,10 @@ fn server_report_overview_json() {
     let (status, body) = curl_get(port, "/report/overview");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from /report/overview, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from /report/overview, got {status}"
+    );
     assert!(
         body.trim().starts_with('{'),
         "/report/overview should return a JSON object, got: {}",
@@ -242,7 +245,10 @@ fn server_report_leaks_json() {
     let (status, body) = curl_get(port, "/report/leaks");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from /report/leaks, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from /report/leaks, got {status}"
+    );
     assert!(
         body.trim().starts_with('{'),
         "/report/leaks should return a JSON object, got: {}",
@@ -265,7 +271,10 @@ fn server_report_top_json() {
     let (status, body) = curl_get(port, "/report/top");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from /report/top, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from /report/top, got {status}"
+    );
     assert!(
         body.trim().starts_with('{'),
         "/report/top should return a JSON object, got: {}",
@@ -283,7 +292,10 @@ fn server_report_threads_json() {
     let (status, body) = curl_get(port, "/report/threads");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from /report/threads, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from /report/threads, got {status}"
+    );
     assert!(
         body.trim().starts_with('{'),
         "/report/threads should return a JSON object, got: {}",
@@ -344,7 +356,10 @@ fn server_wrong_method_405() {
     let (status, body) = curl_request(port, "GET", "/analyze");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 405, "expected HTTP 405 for GET /analyze, got {status}: {body}");
+    assert_eq!(
+        status, 405,
+        "expected HTTP 405 for GET /analyze, got {status}: {body}"
+    );
     assert!(
         body.contains("\"kind\"") || body.contains("method"),
         "405 body should describe the error, got: {body}"
@@ -359,7 +374,10 @@ fn server_report_post_is_405() {
     let (status, _body) = curl_post(port, "/report", "");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 405, "expected HTTP 405 for POST /report, got {status}");
+    assert_eq!(
+        status, 405,
+        "expected HTTP 405 for POST /report, got {status}"
+    );
 }
 
 /// GET /report/bogus (unknown section) must return 404 even after analysis.
@@ -400,7 +418,10 @@ fn server_oql_syntax_error_400() {
     let (status, body) = curl_post(port, "/", "THIS IS NOT VALID OQL AT ALL !!!!");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 400, "expected HTTP 400 for bad OQL, got {status}: {body}");
+    assert_eq!(
+        status, 400,
+        "expected HTTP 400 for bad OQL, got {status}: {body}"
+    );
     assert!(
         body.contains("error") || body.contains("Error"),
         "400 response should describe the parse error, got: {body}"
@@ -415,7 +436,10 @@ fn server_oql_query_alias_works() {
     let (status, body) = curl_post(port, "/query", "SELECT COUNT(*) FROM java.lang.String");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from POST /query, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from POST /query, got {status}"
+    );
     assert!(
         body.contains("\"rows\"") || body.contains("\"columns\""),
         "POST /query should return QueryResult shape, got: {}",
@@ -428,11 +452,13 @@ fn server_oql_query_alias_works() {
 fn server_stream_endpoint_works() {
     let Some(hprof) = philosophers() else { return };
     let (mut child, port) = start_server(&hprof);
-    let (status, body) =
-        curl_post(port, "/stream", "SELECT COUNT(*) FROM java.lang.String");
+    let (status, body) = curl_post(port, "/stream", "SELECT COUNT(*) FROM java.lang.String");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from POST /stream, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from POST /stream, got {status}"
+    );
     // First line of NDJSON should be a JSON object (meta or result row).
     let first_line = body.lines().next().unwrap_or("");
     assert!(
@@ -453,7 +479,10 @@ fn server_report_full_md() {
     let (status, body) = curl_get(port, "/report?format=md");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from /report?format=md, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from /report?format=md, got {status}"
+    );
     assert!(
         body.contains("##") || body.starts_with('#'),
         "/report?format=md should contain Markdown headings, got: {}",
@@ -497,7 +526,10 @@ fn server_oql_group_by_order_by() {
     );
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from GROUP BY query, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from GROUP BY query, got {status}"
+    );
     // The result JSON must have rows and the first row must contain a displayName
     // (a Java class name always contains ".") and a positive count.
     assert!(
@@ -520,7 +552,10 @@ fn server_oql_where_predicate() {
     );
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from WHERE query, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from WHERE query, got {status}"
+    );
     assert!(
         body.contains("\"rows\""),
         "WHERE query should have rows field, got: {}",
@@ -547,7 +582,10 @@ fn server_oql_union() {
     );
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from UNION query, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from UNION query, got {status}"
+    );
     assert!(
         body.contains("\"rows\""),
         "UNION response should contain 'rows', got: {}",
@@ -560,11 +598,13 @@ fn server_oql_union() {
 fn server_oql_aggregate_sum() {
     let Some(hprof) = philosophers() else { return };
     let (mut child, port) = start_server(&hprof);
-    let (status, body) =
-        curl_post(port, "/", "SELECT SUM(@usedHeapSize) FROM java.lang.String");
+    let (status, body) = curl_post(port, "/", "SELECT SUM(@usedHeapSize) FROM java.lang.String");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from SUM query, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from SUM query, got {status}"
+    );
     assert!(
         body.contains("\"rows\""),
         "SUM response should contain 'rows', got: {}",
@@ -578,11 +618,17 @@ fn server_oql_distinct() {
     let Some(hprof) = philosophers() else { return };
     let (mut child, port) = start_server(&hprof);
     // All Thread instances have the same @displayName: one distinct row expected.
-    let (status, body) =
-        curl_post(port, "/", "SELECT DISTINCT @displayName FROM java.lang.Thread");
+    let (status, body) = curl_post(
+        port,
+        "/",
+        "SELECT DISTINCT @displayName FROM java.lang.Thread",
+    );
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected HTTP 200 from DISTINCT query, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from DISTINCT query, got {status}"
+    );
     assert!(
         body.contains("\"rows\""),
         "DISTINCT response should contain 'rows', got: {}",
@@ -621,7 +667,10 @@ fn server_report_leaks_limit() {
     let (status, body) = curl_get(port, "/report/leaks?limit=2");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "expected 200 from /report/leaks?limit=2, got {status}");
+    assert_eq!(
+        status, 200,
+        "expected 200 from /report/leaks?limit=2, got {status}"
+    );
     assert!(
         body.contains("\"suspects\""),
         "response should have suspects field: {}",
@@ -698,10 +747,15 @@ fn server_oql_json_body() {
     let url = format!("http://127.0.0.1:{port}/");
     let out = std::process::Command::new("curl")
         .args([
-            "-s", "-w", "\n%{http_code}",
-            "-X", "POST",
-            "-H", "Content-Type: application/json",
-            "-d", r#"{"query":"SELECT COUNT(*) FROM java.lang.String"}"#,
+            "-s",
+            "-w",
+            "\n%{http_code}",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            r#"{"query":"SELECT COUNT(*) FROM java.lang.String"}"#,
             &url,
         ])
         .output()
@@ -712,7 +766,10 @@ fn server_oql_json_body() {
     let body = lines.join("\n");
     child.kill().ok();
     child.wait().ok();
-    assert_eq!(status, 200, "JSON body POST / should return 200, got {status}: {body}");
+    assert_eq!(
+        status, 200,
+        "JSON body POST / should return 200, got {status}: {body}"
+    );
     assert!(
         body.contains("\"rows\"") || body.contains("\"columns\""),
         "JSON body OQL response should contain QueryResult fields, got: {}",

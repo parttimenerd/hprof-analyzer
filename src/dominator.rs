@@ -503,7 +503,7 @@ mod tests {
     fn recovers_from_corrupt_block_offset() {
         use crate::pass2::INB_BLOCK;
         let n = INB_BLOCK * 3 + 5; // spans 4 blocks
-                                   // Forward chain vroot->0->1->...->n-1
+        // Forward chain vroot->0->1->...->n-1
         let mut fwd_off = vec![0u32; n + 1];
         let mut fwd_tgt_raw = Vec::new();
         for i in 0..n {

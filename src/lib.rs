@@ -40,16 +40,14 @@ pub fn render_report_html(source_name: &str, report_json: &str) -> String {
     use base64::Engine as _;
     use std::io::Write as _;
 
-    static BUNDLE_DEFLATED: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/bundle.deflate"));
+    static BUNDLE_DEFLATED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bundle.deflate"));
 
     fn b64(bytes: &[u8]) -> String {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
     fn deflate_b64(bytes: &[u8]) -> String {
-        let mut enc = flate2::write::DeflateEncoder::new(
-            Vec::new(), flate2::Compression::new(9));
+        let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(9));
         enc.write_all(bytes).expect("deflate write");
         b64(&enc.finish().expect("deflate finish"))
     }
@@ -58,7 +56,9 @@ pub fn render_report_html(source_name: &str, report_json: &str) -> String {
     let bundle_b64 = b64(BUNDLE_DEFLATED);
 
     let title = source_name
-        .replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
 
     format!(
         r#"<!DOCTYPE html>
@@ -141,7 +141,15 @@ fn analyze_to_report_inner(
         _refwalk_csr,
         _string_values,
         _string_values_truncated,
-    ) = pass2::Pass2::build(&source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(
+        &source,
+        p1,
+        compress,
+        opts,
+        &[],
+        &mut no_in_sets,
+        &mut no_exists_bools,
+    )?;
     progress("pass2", 1.0);
 
     inbound.compress_id_map(compress)?;

@@ -173,7 +173,11 @@ fn mat_phase2_outputs_emitted() {
     {
         let path = out_dir.join("dump_.index");
         let bytes = std::fs::read(&path).expect("dump_.index not emitted");
-        assert!(bytes.len() >= 4, "dump_.index too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() >= 4,
+            "dump_.index too small: {} bytes",
+            bytes.len()
+        );
         assert_eq!(
             &bytes[..4],
             &[0xAC, 0xED, 0x00, 0x05],
@@ -257,11 +261,9 @@ fn find_mat_binary() -> Option<std::path::PathBuf> {
         eprintln!("MAT_BINARY={p} not found, trying auto-detect");
     }
     let candidates: Vec<std::path::PathBuf> = {
-        let mut v = vec![
-            std::path::PathBuf::from(
-                "/Applications/MemoryAnalyzer.app/Contents/MacOS/MemoryAnalyzer",
-            ),
-        ];
+        let mut v = vec![std::path::PathBuf::from(
+            "/Applications/MemoryAnalyzer.app/Contents/MacOS/MemoryAnalyzer",
+        )];
         if let Some(home) = std::env::var_os("HOME") {
             v.push(
                 std::path::Path::new(&home)
@@ -321,12 +323,14 @@ fn run_mat_cold(mat_bin: &Path, hprof: &Path, report_spec: &str) -> std::time::D
 
 /// Run Eclipse MAT with pre-built index files (warm load). Touches all index
 /// files so they are newer than the hprof before invoking MAT.
-fn run_mat_warm(mat_bin: &Path, hprof: &Path, out_dir: &Path, report_spec: &str) -> std::time::Duration {
+fn run_mat_warm(
+    mat_bin: &Path,
+    hprof: &Path,
+    out_dir: &Path,
+    report_spec: &str,
+) -> std::time::Duration {
     // Touch all index files so MAT's freshness check passes.
-    for entry in std::fs::read_dir(out_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-    {
+    for entry in std::fs::read_dir(out_dir).unwrap().filter_map(|e| e.ok()) {
         let _ = std::fs::File::options()
             .write(true)
             .open(entry.path())
@@ -490,12 +494,7 @@ fn mat_multi_fixture_equivalence() {
     let hprof_files: Vec<_> = std::fs::read_dir(fixture_dir)
         .expect("read tests/fixtures")
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "hprof")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "hprof").unwrap_or(false))
         .map(|e| e.path())
         .collect();
 
@@ -609,7 +608,10 @@ fn mat_multi_fixture_equivalence() {
         );
     }
 
-    assert!(all_pass, "byte-identical assertions failed for idx/o2hprof on some fixtures");
+    assert!(
+        all_pass,
+        "byte-identical assertions failed for idx/o2hprof on some fixtures"
+    );
 }
 
 /// Verify the large real-world dump produces correct MAT caches and that MAT
@@ -680,8 +682,7 @@ fn mat_large_dump_equivalence() {
         let fname = format!("{stem}.{kind}.index");
         let ours_path = out_dir.join(&fname);
         let ref_path = ref_dir.join(&fname);
-        let ours = std::fs::read(&ours_path)
-            .unwrap_or_else(|e| panic!("{kind} not emitted: {e}"));
+        let ours = std::fs::read(&ours_path).unwrap_or_else(|e| panic!("{kind} not emitted: {e}"));
         let ref_bytes = match std::fs::read(&ref_path) {
             Ok(b) => b,
             Err(e) => {
@@ -732,7 +733,10 @@ fn mat_large_dump_equivalence() {
         }
     }
 
-    assert!(all_pass, "byte-identical check failed for large dump idx/o2hprof");
+    assert!(
+        all_pass,
+        "byte-identical check failed for large dump idx/o2hprof"
+    );
 
     // --- MAT warm-load speedup ---
     // Build a warm dir: symlink the hprof, copy our caches, touch them.
@@ -756,7 +760,10 @@ fn mat_large_dump_equivalence() {
     std::thread::sleep(std::time::Duration::from_secs(1));
     for entry in std::fs::read_dir(&warm_dir).unwrap().filter_map(|e| e.ok()) {
         let p = entry.path();
-        if p.extension().map(|e| e == "index" || e == "threads").unwrap_or(false) {
+        if p.extension()
+            .map(|e| e == "index" || e == "threads")
+            .unwrap_or(false)
+        {
             std::fs::File::options()
                 .write(true)
                 .open(&p)
@@ -766,16 +773,19 @@ fn mat_large_dump_equivalence() {
     }
 
     eprintln!("Timing MAT warm load with our caches...");
-    let warm_elapsed = run_mat_warm(&mat_bin, &warm_hprof, &warm_dir, "org.eclipse.mat.api:suspects");
+    let warm_elapsed = run_mat_warm(
+        &mat_bin,
+        &warm_hprof,
+        &warm_dir,
+        "org.eclipse.mat.api:suspects",
+    );
     eprintln!("  MAT warm (ours): {:.1}s", warm_elapsed.as_secs_f64());
 
     // The documented MAT cold-parse baseline for this dump is ~27 minutes.
     // We assert warm is under 5 minutes (conservative: expect ~7s from vscode-scale testing).
     const COLD_BASELINE_SECS: f64 = 27.0 * 60.0; // 27:16 per README
     let speedup = COLD_BASELINE_SECS / warm_elapsed.as_secs_f64();
-    eprintln!(
-        "  Speedup vs cold baseline ({COLD_BASELINE_SECS:.0}s): {speedup:.1}×"
-    );
+    eprintln!("  Speedup vs cold baseline ({COLD_BASELINE_SECS:.0}s): {speedup:.1}×");
     assert!(
         warm_elapsed.as_secs() < 5 * 60,
         "MAT warm load took {:.1}s — expected under 5 minutes with pre-built caches",

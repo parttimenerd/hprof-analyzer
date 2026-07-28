@@ -39,7 +39,10 @@ fn run_repl(hprof: &str, stdin: &str) -> (bool, String) {
         .write_all(stdin.as_bytes())
         .unwrap();
     let out = child.wait_with_output().unwrap();
-    (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
 }
 
 /// `!plan` shows the banner and a plan explanation without scanning the heap,
@@ -47,17 +50,20 @@ fn run_repl(hprof: &str, stdin: &str) -> (bool, String) {
 #[test]
 fn repl_plan_then_quit() {
     let Some(hprof) = philosophers() else { return };
-    let (ok, stdout) = run_repl(
-        &hprof,
-        "!plan SELECT * FROM java.lang.String\n!quit\n",
-    );
+    let (ok, stdout) = run_repl(&hprof, "!plan SELECT * FROM java.lang.String\n!quit\n");
     assert!(ok, "REPL should exit 0:\n{stdout}");
     assert!(
         stdout.contains("hprof-analyzer OQL REPL"),
         "banner missing:\n{stdout}"
     );
-    assert!(stdout.contains("stage:"), "plan explanation missing:\n{stdout}");
-    assert!(stdout.contains("needs (armed):"), "plan needs missing:\n{stdout}");
+    assert!(
+        stdout.contains("stage:"),
+        "plan explanation missing:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("needs (armed):"),
+        "plan needs missing:\n{stdout}"
+    );
 }
 
 /// A bad query keeps the REPL alive (prints an error and reprompts, still exit
@@ -67,18 +73,24 @@ fn repl_bad_query_stays_alive() {
     let Some(hprof) = philosophers() else { return };
     let (ok, stdout) = run_repl(&hprof, "SELCT * FROM C\n!quit\n");
     assert!(ok, "REPL should survive a bad query and exit 0:\n{stdout}");
-    assert!(stdout.contains("error:"), "expected an error line:\n{stdout}");
+    assert!(
+        stdout.contains("error:"),
+        "expected an error line:\n{stdout}"
+    );
 }
 
 /// An actual query line runs the full pipeline and prints a result row.
 #[test]
 fn repl_runs_real_query() {
     let Some(hprof) = philosophers() else { return };
-    let (ok, stdout) = run_repl(
-        &hprof,
-        "SELECT COUNT(*) FROM java.lang.String\n!quit\n",
-    );
+    let (ok, stdout) = run_repl(&hprof, "SELECT COUNT(*) FROM java.lang.String\n!quit\n");
     assert!(ok, "REPL should exit 0:\n{stdout}");
-    assert!(stdout.contains("COUNT(*)"), "missing COUNT header:\n{stdout}");
-    assert!(stdout.contains("1 row"), "missing row-count line:\n{stdout}");
+    assert!(
+        stdout.contains("COUNT(*)"),
+        "missing COUNT header:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("1 row"),
+        "missing row-count line:\n{stdout}"
+    );
 }

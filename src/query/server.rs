@@ -106,18 +106,41 @@ pub fn run_query_json(
                     Err(e) => return internal_error(e),
                 }
             }
-            match cache.as_ref().filter(|c| c.reachable_only == reachable_only) {
-                Some(c) => crate::query::run::run_resident_with_retained(c, &[(q, plan)], reachable_only, ret),
+            match cache
+                .as_ref()
+                .filter(|c| c.reachable_only == reachable_only)
+            {
+                Some(c) => crate::query::run::run_resident_with_retained(
+                    c,
+                    &[(q, plan)],
+                    reachable_only,
+                    ret,
+                ),
                 None => {
                     // Cache was rebuilt with wrong reachable_only; fall through to full pipeline.
-                    let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
-                    let opts = crate::opts::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::opts::AnalyzeOptions::default() };
-                    crate::run_oql::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
+                    let (flat, union_groups) =
+                        crate::query::run::expand_union_queries(&[(q, plan)]);
+                    let opts = crate::opts::AnalyzeOptions {
+                        reachable_only,
+                        query_path_depth: path_depth,
+                        ..crate::opts::AnalyzeOptions::default()
+                    };
+                    crate::run_oql::run_oql_escalated(
+                        path,
+                        &flat,
+                        &union_groups,
+                        reachable_only,
+                        &opts,
+                    )
                 }
             }
         } else {
             let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
-            let opts = crate::opts::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::opts::AnalyzeOptions::default() };
+            let opts = crate::opts::AnalyzeOptions {
+                reachable_only,
+                query_path_depth: path_depth,
+                ..crate::opts::AnalyzeOptions::default()
+            };
             crate::run_oql::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
         }
     } else {
@@ -349,7 +372,10 @@ impl ServerState {
         let this = Arc::clone(self);
         std::thread::spawn(move || {
             let reachable_only = this.reachable_only.load(Ordering::Relaxed);
-            match ReplCache::build(&crate::source::HprofSource::from(this.path.as_str()), reachable_only) {
+            match ReplCache::build(
+                &crate::source::HprofSource::from(this.path.as_str()),
+                reachable_only,
+            ) {
                 Ok(c) => {
                     let mut guard = this.cache.lock().unwrap_or_else(|e| e.into_inner());
                     // Only store if not already built (a concurrent request may
@@ -399,7 +425,10 @@ impl ServerState {
                 None => return,
             };
             let opts = crate::opts::AnalyzeOptions::default();
-            match crate::analyze_to_report_with_retained(&crate::source::HprofSource::from(this.path.as_str()), &opts) {
+            match crate::analyze_to_report_with_retained(
+                &crate::source::HprofSource::from(this.path.as_str()),
+                &opts,
+            ) {
                 Ok((_report, retained)) => {
                     this.set_full_analysis_with_retained(Arc::new(retained));
                 }
@@ -419,7 +448,10 @@ impl ServerState {
             1 => serde_json::json!({ "status": "analyzing" }),
             2 => serde_json::json!({ "status": "ready" }),
             3 => {
-                let err = self.analysis_error.read().ok()
+                let err = self
+                    .analysis_error
+                    .read()
+                    .ok()
                     .and_then(|g| g.clone())
                     .unwrap_or_default();
                 serde_json::json!({ "status": "failed", "error": err })
@@ -443,10 +475,15 @@ impl ServerState {
                 let oql = match extract_oql(body) {
                     Ok(oql) => oql,
                     Err(message) => {
-                        return (400, serde_json::json!({
-                            "ok": false,
-                            "error": { "kind": "request", "message": message }
-                        }).to_string(), "application/json");
+                        return (
+                            400,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": { "kind": "request", "message": message }
+                            })
+                            .to_string(),
+                            "application/json",
+                        );
                     }
                 };
                 // Recover a poisoned lock rather than propagating the panic:
@@ -457,13 +494,23 @@ impl ServerState {
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let prebuilt = self.lookup_plan(&oql);
                 let v = run_query_json(
-                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt, self.retained_data.get(),
+                    &self.path,
+                    &oql,
+                    self.path_depth,
+                    self.reachable_only.load(Ordering::Relaxed),
+                    &mut guard,
+                    prebuilt,
+                    self.retained_data.get(),
                 );
                 if v["ok"] == serde_json::json!(true) {
                     // Cache the plan on success so subsequent identical queries skip parse+plan.
                     self.store_plan(&oql);
                 }
-                let status = if v["ok"] == serde_json::json!(true) { 200 } else { 400 };
+                let status = if v["ok"] == serde_json::json!(true) {
+                    200
+                } else {
+                    400
+                };
                 (status, v.to_string(), "application/json")
             }
             ("POST", "/stream") => {
@@ -477,7 +524,13 @@ impl ServerState {
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let prebuilt = self.lookup_plan(&oql);
                 let (status, body) = run_query_ndjson_prebuilt(
-                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt, self.retained_data.get(),
+                    &self.path,
+                    &oql,
+                    self.path_depth,
+                    self.reachable_only.load(Ordering::Relaxed),
+                    &mut guard,
+                    prebuilt,
+                    self.retained_data.get(),
                 );
                 (status, body, "application/x-ndjson")
             }
@@ -485,10 +538,15 @@ impl ServerState {
                 let oql = match extract_oql(body) {
                     Ok(oql) => oql,
                     Err(message) => {
-                        return (400, serde_json::json!({
-                            "ok": false,
-                            "error": { "kind": "request", "message": message }
-                        }).to_string(), "application/json");
+                        return (
+                            400,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": { "kind": "request", "message": message }
+                            })
+                            .to_string(),
+                            "application/json",
+                        );
                     }
                 };
                 match crate::query::parse::parse_or_report(&oql) {
@@ -499,17 +557,32 @@ impl ServerState {
                                 &q,
                                 &crate::query::optimize::SchemaStats::default(),
                             );
-                            (200, serde_json::json!({ "ok": true, "plan": plan.explain() }).to_string(), "application/json")
+                            (
+                                200,
+                                serde_json::json!({ "ok": true, "plan": plan.explain() })
+                                    .to_string(),
+                                "application/json",
+                            )
                         }
-                        Err(e) => (400, serde_json::json!({
-                            "ok": false,
-                            "error": { "kind": "plan", "message": e.0 }
-                        }).to_string(), "application/json"),
+                        Err(e) => (
+                            400,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": { "kind": "plan", "message": e.0 }
+                            })
+                            .to_string(),
+                            "application/json",
+                        ),
                     },
-                    Err(report) => (400, serde_json::json!({
-                        "ok": false,
-                        "error": { "kind": "parse", "message": report }
-                    }).to_string(), "application/json"),
+                    Err(report) => (
+                        400,
+                        serde_json::json!({
+                            "ok": false,
+                            "error": { "kind": "parse", "message": report }
+                        })
+                        .to_string(),
+                        "application/json",
+                    ),
                 }
             }
             ("GET", "/help") => {
@@ -525,13 +598,15 @@ impl ServerState {
             ("GET", "/named-queries") => {
                 let arr: serde_json::Value = crate::named_queries::NAMED_QUERIES
                     .iter()
-                    .map(|nq| serde_json::json!({
-                        "name": nq.name,
-                        "display": nq.display,
-                        "group": nq.group,
-                        "needs_retained": nq.needs_retained,
-                        "oql": nq.oql,
-                    }))
+                    .map(|nq| {
+                        serde_json::json!({
+                            "name": nq.name,
+                            "display": nq.display,
+                            "group": nq.group,
+                            "needs_retained": nq.needs_retained,
+                            "oql": nq.oql,
+                        })
+                    })
                     .collect();
                 (200, arr.to_string(), "application/json")
             }
@@ -541,17 +616,37 @@ impl ServerState {
                 (202, self.status_json().to_string(), "application/json")
             }
             // Known path, unsupported method -> 405 (not 404).
-            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") | (_, "/named-queries") | (_, "/status") | (_, "/analyze") | (_, "/plan") | (_, "/explain") => (405, serde_json::json!({
-                "ok": false,
-                "error": {
-                    "kind": "method",
-                    "message": format!("method {method} not allowed on {path}")
-                }
-            }).to_string(), "application/json"),
-            _ => (404, serde_json::json!({
-                "ok": false,
-                "error": { "kind": "route", "message": format!("no route {method} {path}") }
-            }).to_string(), "application/json"),
+            (_, "/")
+            | (_, "/query")
+            | (_, "/stream")
+            | (_, "/help")
+            | (_, "/schema")
+            | (_, "/version")
+            | (_, "/named-queries")
+            | (_, "/status")
+            | (_, "/analyze")
+            | (_, "/plan")
+            | (_, "/explain") => (
+                405,
+                serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "kind": "method",
+                        "message": format!("method {method} not allowed on {path}")
+                    }
+                })
+                .to_string(),
+                "application/json",
+            ),
+            _ => (
+                404,
+                serde_json::json!({
+                    "ok": false,
+                    "error": { "kind": "route", "message": format!("no route {method} {path}") }
+                })
+                .to_string(),
+                "application/json",
+            ),
         }
     }
 
@@ -560,7 +655,12 @@ impl ServerState {
     /// JSON error instead of killing the worker thread — one bad request must
     /// never shrink the pool or take the server down. On success this is exactly
     /// `route`.
-    pub fn route_guarded(&self, method: &str, url: &str, body: &str) -> (u16, String, &'static str) {
+    pub fn route_guarded(
+        &self,
+        method: &str,
+        url: &str,
+        body: &str,
+    ) -> (u16, String, &'static str) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.route(method, url, body)
         }));
@@ -629,7 +729,15 @@ fn run_query_ndjson_prebuilt(
     prebuilt: Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)>,
     retained: Option<&Arc<Vec<u64>>>,
 ) -> (u16, String) {
-    let v = run_query_json(path, text, path_depth, reachable_only, cache, prebuilt, retained);
+    let v = run_query_json(
+        path,
+        text,
+        path_depth,
+        reachable_only,
+        cache,
+        prebuilt,
+        retained,
+    );
     if v["ok"] != serde_json::json!(true) {
         let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
         return (400, format!("{line}\n"));
@@ -667,9 +775,7 @@ fn extract_oql(body: &str) -> Result<String, String> {
     let trimmed = body.trim();
     let oql = if trimmed.starts_with('{') {
         let v: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
-            format!(
-                "malformed JSON body ({e}) - send a raw OQL string, or {{\"query\":\"<OQL>\"}}"
-            )
+            format!("malformed JSON body ({e}) - send a raw OQL string, or {{\"query\":\"<OQL>\"}}")
         })?;
         match v.get("query") {
             Some(serde_json::Value::String(q)) => q.clone(),
@@ -716,7 +822,9 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
     state.prewarm();
     let server = Arc::new(server);
 
-    let n_workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let n_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let mut handles = Vec::with_capacity(n_workers);
     for _ in 0..n_workers {
         let server = Arc::clone(&server);
@@ -736,9 +844,21 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
                 // OPTIONS preflight for browser CORS
                 if method == "OPTIONS" {
                     let resp = Response::empty(204)
-                        .with_header("Access-Control-Allow-Origin: *".parse::<tiny_http::Header>().unwrap())
-                        .with_header("Access-Control-Allow-Methods: GET, POST, OPTIONS".parse::<tiny_http::Header>().unwrap())
-                        .with_header("Access-Control-Allow-Headers: Content-Type".parse::<tiny_http::Header>().unwrap());
+                        .with_header(
+                            "Access-Control-Allow-Origin: *"
+                                .parse::<tiny_http::Header>()
+                                .unwrap(),
+                        )
+                        .with_header(
+                            "Access-Control-Allow-Methods: GET, POST, OPTIONS"
+                                .parse::<tiny_http::Header>()
+                                .unwrap(),
+                        )
+                        .with_header(
+                            "Access-Control-Allow-Headers: Content-Type"
+                                .parse::<tiny_http::Header>()
+                                .unwrap(),
+                        );
                     let _ = request.respond(resp);
                     continue;
                 }
@@ -746,9 +866,15 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
                 let resp = Response::from_string(json)
                     .with_status_code(status)
                     .with_header(
-                        format!("Content-Type: {ctype}").parse::<tiny_http::Header>().unwrap(),
+                        format!("Content-Type: {ctype}")
+                            .parse::<tiny_http::Header>()
+                            .unwrap(),
                     )
-                    .with_header("Access-Control-Allow-Origin: *".parse::<tiny_http::Header>().unwrap());
+                    .with_header(
+                        "Access-Control-Allow-Origin: *"
+                            .parse::<tiny_http::Header>()
+                            .unwrap(),
+                    );
                 let _ = request.respond(resp);
             }
         }));
@@ -767,10 +893,24 @@ mod tests {
     #[test]
     fn ok_query_returns_queryresult_json() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None, None);
+        let v = run_query_json(
+            FIXTURE,
+            "SELECT @objectAddress FROM java.lang.Thread",
+            5,
+            true,
+            &mut cache,
+            None,
+            None,
+        );
         assert_eq!(v["ok"], serde_json::json!(true), "success flag, got: {v}");
-        assert!(v["result"]["row_count"].as_u64().unwrap() > 0, "expected some rows, got: {v}");
-        assert!(v["result"]["columns"].is_array(), "columns present, got: {v}");
+        assert!(
+            v["result"]["row_count"].as_u64().unwrap() > 0,
+            "expected some rows, got: {v}"
+        );
+        assert!(
+            v["result"]["columns"].is_array(),
+            "columns present, got: {v}"
+        );
     }
 
     #[test]
@@ -778,34 +918,90 @@ mod tests {
         let mut cache = None;
         let v = run_query_json(FIXTURE, "SELCT bogus", 5, true, &mut cache, None, None);
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
-        assert_eq!(v["error"]["kind"], serde_json::json!("parse"), "parse kind, got: {v}");
-        assert!(!v["error"]["message"].as_str().unwrap().is_empty(), "plain message present, got: {v}");
-        assert!(v["error"]["report"].as_str().map_or(false, |s| !s.is_empty()), "ariadne report present, got: {v}");
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("parse"),
+            "parse kind, got: {v}"
+        );
+        assert!(
+            !v["error"]["message"].as_str().unwrap().is_empty(),
+            "plain message present, got: {v}"
+        );
+        assert!(
+            v["error"]["report"]
+                .as_str()
+                .map_or(false, |s| !s.is_empty()),
+            "ariadne report present, got: {v}"
+        );
     }
 
     #[test]
     fn plan_error_returns_structured_json() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT s.nope() FROM java.lang.String s", 5, true, &mut cache, None, None);
+        let v = run_query_json(
+            FIXTURE,
+            "SELECT s.nope() FROM java.lang.String s",
+            5,
+            true,
+            &mut cache,
+            None,
+            None,
+        );
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
-        assert_eq!(v["error"]["kind"], serde_json::json!("plan"), "plan kind, got: {v}");
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("plan"),
+            "plan kind, got: {v}"
+        );
     }
 
     #[test]
     fn help_json_lists_language_reference() {
         let v = help_json(FIXTURE);
-        assert!(v["keywords"].as_array().unwrap().iter().any(|k| k == "SELECT"), "SELECT listed, got: {v}");
-        assert!(v["attributes"].as_array().unwrap().iter().any(|a| a == "@objectAddress"), "attr listed, got: {v}");
-        assert!(v["functions"].as_array().unwrap().iter().any(|f| f == "classof"), "func listed, got: {v}");
-        assert!(v["aggregates"].as_array().unwrap().iter().any(|a| a == "COUNT"), "agg listed, got: {v}");
-        assert!(v["methods"].as_array().unwrap().iter().any(|m| m == "size"), "method listed, got: {v}");
+        assert!(
+            v["keywords"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|k| k == "SELECT"),
+            "SELECT listed, got: {v}"
+        );
+        assert!(
+            v["attributes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a == "@objectAddress"),
+            "attr listed, got: {v}"
+        );
+        assert!(
+            v["functions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f == "classof"),
+            "func listed, got: {v}"
+        );
+        assert!(
+            v["aggregates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a == "COUNT"),
+            "agg listed, got: {v}"
+        );
+        assert!(
+            v["methods"].as_array().unwrap().iter().any(|m| m == "size"),
+            "method listed, got: {v}"
+        );
         assert!(v["classes"].is_array(), "classes array present, got: {v}");
     }
 
     #[test]
     fn handle_post_roundtrips_json() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body, _ctype) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
+        let (status, body, _ctype) =
+            state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
         assert_eq!(status, 200, "ok status, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true), "expected ok, got: {v}");
@@ -814,7 +1010,11 @@ mod tests {
     #[test]
     fn handle_post_json_body_extracts_query() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body, _ctype) = state.route("POST", "/", r#"{"query":"SELECT @objectAddress FROM java.lang.Thread"}"#);
+        let (status, body, _ctype) = state.route(
+            "POST",
+            "/",
+            r#"{"query":"SELECT @objectAddress FROM java.lang.Thread"}"#,
+        );
         assert_eq!(status, 200, "ok status, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true), "expected ok, got: {v}");
@@ -826,15 +1026,30 @@ mod tests {
         let (status, body, _ctype) = state.route("POST", "/", "SELCT bad");
         assert_eq!(status, 400, "bad query -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
+        assert_eq!(
+            v["ok"],
+            serde_json::json!(false),
+            "expected failure, got: {v}"
+        );
     }
 
     #[test]
     fn parse_error_message_includes_suggestion() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELCT x FROM java.lang.Thread", 5, true, &mut cache, None, None);
+        let v = run_query_json(
+            FIXTURE,
+            "SELCT x FROM java.lang.Thread",
+            5,
+            true,
+            &mut cache,
+            None,
+            None,
+        );
         assert_eq!(v["error"]["kind"], serde_json::json!("parse"));
-        assert!(v["error"]["message"].as_str().unwrap().contains("SELECT"), "suggestion in message: {v}");
+        assert!(
+            v["error"]["message"].as_str().unwrap().contains("SELECT"),
+            "suggestion in message: {v}"
+        );
     }
 
     #[test]
@@ -845,10 +1060,21 @@ mod tests {
         let (status, body, _ctype) = state.route("POST", "/", r#"{"query": "#);
         assert_eq!(status, 400, "malformed JSON -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
-        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        assert_eq!(
+            v["ok"],
+            serde_json::json!(false),
+            "expected failure, got: {v}"
+        );
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("request"),
+            "kind=request, got: {v}"
+        );
         let msg = v["error"]["message"].as_str().unwrap_or_default();
-        assert!(msg.contains("malformed JSON"), "clear message, got: {msg:?}");
+        assert!(
+            msg.contains("malformed JSON"),
+            "clear message, got: {msg:?}"
+        );
     }
 
     #[test]
@@ -857,10 +1083,21 @@ mod tests {
         let (status, body, _ctype) = state.route("POST", "/", r#"{"foo":"bar"}"#);
         assert_eq!(status, 400, "missing query key -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
-        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        assert_eq!(
+            v["ok"],
+            serde_json::json!(false),
+            "expected failure, got: {v}"
+        );
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("request"),
+            "kind=request, got: {v}"
+        );
         let msg = v["error"]["message"].as_str().unwrap_or_default();
-        assert!(msg.contains("'query'"), "mentions the query field, got: {msg:?}");
+        assert!(
+            msg.contains("'query'"),
+            "mentions the query field, got: {msg:?}"
+        );
     }
 
     #[test]
@@ -869,9 +1106,16 @@ mod tests {
         let (status, body, _ctype) = state.route("POST", "/", r#"{"query": 42}"#);
         assert_eq!(status, 400, "non-string query -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("request"),
+            "kind=request, got: {v}"
+        );
         let msg = v["error"]["message"].as_str().unwrap_or_default();
-        assert!(msg.contains("must be a string"), "clear message, got: {msg:?}");
+        assert!(
+            msg.contains("must be a string"),
+            "clear message, got: {msg:?}"
+        );
     }
 
     #[test]
@@ -882,9 +1126,17 @@ mod tests {
         let big = "X".repeat(MAX_OQL_LEN + 1024);
         let (status, body, _ctype) = state.route("POST", "/", &big);
         assert_eq!(status, 400, "oversized -> 400");
-        assert!(body.len() < 512, "error response stays small ({} bytes)", body.len());
+        assert!(
+            body.len() < 512,
+            "error response stays small ({} bytes)",
+            body.len()
+        );
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("request"),
+            "kind=request, got: {v}"
+        );
         let msg = v["error"]["message"].as_str().unwrap_or_default();
         assert!(msg.contains("too long"), "clear message, got: {msg:?}");
     }
@@ -912,9 +1164,11 @@ mod tests {
         // route() on valid input, so verify the guard mechanism itself: a
         // panicking closure run under the same catch_unwind produces the 500
         // shape. This mirrors route_guarded's body exactly.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> (u16, String, &'static str) {
-            panic!("boom");
-        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || -> (u16, String, &'static str) {
+                panic!("boom");
+            },
+        ));
         assert!(result.is_err(), "catch_unwind traps the panic");
         // And a poisoned mutex is recovered (no cascade). Poison the cache lock,
         // then confirm a subsequent request still succeeds.
@@ -925,8 +1179,12 @@ mod tests {
         }));
         assert!(state.cache.is_poisoned(), "lock is now poisoned");
         // route() recovers the poisoned guard via unwrap_or_else(into_inner).
-        let (status, body, _ctype) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
-        assert_eq!(status, 200, "poisoned lock recovered, query still runs: {body}");
+        let (status, body, _ctype) =
+            state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
+        assert_eq!(
+            status, 200,
+            "poisoned lock recovered, query still runs: {body}"
+        );
     }
 
     #[test]
@@ -952,7 +1210,11 @@ mod tests {
         let (status, body, _ctype) = state.route("PUT", "/", "");
         assert_eq!(status, 405, "known path, wrong method -> 405, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["error"]["kind"], serde_json::json!("method"), "kind=method, got: {v}");
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("method"),
+            "kind=method, got: {v}"
+        );
         // GET on the POST-only /query path is likewise 405.
         let (status, _, _) = state.route("GET", "/query", "");
         assert_eq!(status, 405, "GET /query -> 405");
@@ -961,9 +1223,21 @@ mod tests {
     #[test]
     fn version_endpoint_lists_all_routes() {
         let v = version_json();
-        let paths: Vec<&str> = v["endpoints"].as_array().unwrap().iter()
-            .map(|e| e["path"].as_str().unwrap()).collect();
-        for p in ["/", "/query", "/stream", "/help", "/schema", "/version", "/named-queries"] {
+        let paths: Vec<&str> = v["endpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["path"].as_str().unwrap())
+            .collect();
+        for p in [
+            "/",
+            "/query",
+            "/stream",
+            "/help",
+            "/schema",
+            "/version",
+            "/named-queries",
+        ] {
             assert!(paths.contains(&p), "endpoint catalog missing {p}: {v}");
         }
     }
@@ -972,16 +1246,30 @@ mod tests {
     fn schema_json_describes_query_result_fields() {
         let s = schema_json().to_string();
         // The schema must mention the core result fields so codegen/validation works.
-        assert!(s.contains("rows") && s.contains("columns") && s.contains("row_count"),
-            "schema missing core fields: {}", &s[..s.len().min(300)]);
+        assert!(
+            s.contains("rows") && s.contains("columns") && s.contains("row_count"),
+            "schema missing core fields: {}",
+            &s[..s.len().min(300)]
+        );
     }
 
     #[test]
     fn ok_query_reports_elapsed_ms() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None, None);
+        let v = run_query_json(
+            FIXTURE,
+            "SELECT @objectAddress FROM java.lang.Thread",
+            5,
+            true,
+            &mut cache,
+            None,
+            None,
+        );
         assert_eq!(v["ok"], serde_json::json!(true), "ok: {v}");
-        assert!(v["result"]["elapsed_ms"].is_u64(), "elapsed_ms present & numeric: {v}");
+        assert!(
+            v["result"]["elapsed_ms"].is_u64(),
+            "elapsed_ms present & numeric: {v}"
+        );
     }
 
     #[test]
@@ -1015,7 +1303,8 @@ mod tests {
         let mut stream = TcpStream::connect(addr).expect("connect");
         let req = format!(
             "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            oql.len(), oql
+            oql.len(),
+            oql
         );
         stream.write_all(req.as_bytes()).expect("write");
         let mut resp = String::new();
@@ -1025,7 +1314,11 @@ mod tests {
         let body = resp.split("\r\n\r\n").nth(1).unwrap_or("");
         let v: serde_json::Value = serde_json::from_str(body)
             .unwrap_or_else(|e| panic!("resp body not JSON ({e}); full response:\n{resp}"));
-        assert_eq!(v["ok"], serde_json::json!(true), "socket round-trip ok, got: {v}");
+        assert_eq!(
+            v["ok"],
+            serde_json::json!(true),
+            "socket round-trip ok, got: {v}"
+        );
     }
 
     #[test]
@@ -1052,8 +1345,10 @@ mod tests {
         let mut v2: serde_json::Value = serde_json::from_str(&b2).unwrap();
         v1["result"]["elapsed_ms"] = serde_json::Value::Null;
         v2["result"]["elapsed_ms"] = serde_json::Value::Null;
-        assert_eq!(v1["result"]["row_count"], v2["result"]["row_count"],
-            "cached plan must produce same row count");
+        assert_eq!(
+            v1["result"]["row_count"], v2["result"]["row_count"],
+            "cached plan must produce same row count"
+        );
     }
 
     #[test]
@@ -1079,7 +1374,8 @@ mod tests {
         use crate::query::run::ReplCache;
 
         // Build a ReplCache to find `n` (object count) and populate retained.
-        let cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false).expect("ReplCache::build");
+        let cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false)
+            .expect("ReplCache::build");
         let n = cache.n;
         // Give every object a fake retained size of 42 bytes.
         let retained: Vec<u64> = vec![42u64; n];
@@ -1088,8 +1384,20 @@ mod tests {
         let mut cache_slot: Option<ReplCache> = None;
         // Query: aggregate @retainedHeapSize (needs retained, no dominators/edges).
         let oql = "SELECT SUM(@retainedHeapSize) FROM java.lang.Thread";
-        let v = run_query_json(FIXTURE, oql, 5, false, &mut cache_slot, None, Some(&retained_arc));
-        assert_eq!(v["ok"], serde_json::json!(true), "fast path must succeed: {v}");
+        let v = run_query_json(
+            FIXTURE,
+            oql,
+            5,
+            false,
+            &mut cache_slot,
+            None,
+            Some(&retained_arc),
+        );
+        assert_eq!(
+            v["ok"],
+            serde_json::json!(true),
+            "fast path must succeed: {v}"
+        );
         // The result must be a number (SUM of fake 42-byte retained sizes).
         let rows = v["result"]["rows"].as_array().expect("rows array");
         assert!(!rows.is_empty(), "SUM must produce a row: {v}");
@@ -1098,11 +1406,12 @@ mod tests {
     #[test]
     fn retained_data_fast_path_matches_run_resident_with_retained() {
         // Cross-check: run_query_json with retained == run_resident_with_retained directly.
-        use crate::query::run::{run_resident_with_retained, ReplCache};
         use crate::query::parse::parse;
         use crate::query::plan::plan_query;
+        use crate::query::run::{ReplCache, run_resident_with_retained};
 
-        let mut cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false).expect("ReplCache::build");
+        let mut cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false)
+            .expect("ReplCache::build");
         let n = cache.n;
         let retained: Vec<u64> = (0..n as u64).map(|i| i * 8 + 16).collect();
         let retained_arc = std::sync::Arc::new(retained.clone());
@@ -1117,7 +1426,15 @@ mod tests {
 
         // Via run_query_json (fast path)
         let mut cache_slot: Option<ReplCache> = None;
-        let v = run_query_json(FIXTURE, oql, 5, false, &mut cache_slot, None, Some(&retained_arc));
+        let v = run_query_json(
+            FIXTURE,
+            oql,
+            5,
+            false,
+            &mut cache_slot,
+            None,
+            Some(&retained_arc),
+        );
         assert_eq!(v["ok"], serde_json::json!(true), "fast path ok: {v}");
 
         let fast_rows = &v["result"]["row_count"];

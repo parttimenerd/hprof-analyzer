@@ -334,14 +334,19 @@ mod mat_oracle {
                     compare_superset(&addr_set(&run_ours_all(&hprof, oql)), &addr_set(&mat_out))
                 }
                 // Exact uses the reachable-only default: ours == MAT.
-                Cmp::Exact => {
-                    compare_exact(&addr_set(&run_ours_reachable(&hprof, oql)), &addr_set(&mat_out))
-                }
+                Cmp::Exact => compare_exact(
+                    &addr_set(&run_ours_reachable(&hprof, oql)),
+                    &addr_set(&mat_out),
+                ),
             };
             if let Err(e) = res {
                 failures.push(format!("[{label}] {e}"));
             }
         }
-        assert!(failures.is_empty(), "oracle divergences:\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "oracle divergences:\n{}",
+            failures.join("\n")
+        );
     }
 }

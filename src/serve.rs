@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use tiny_http::{Response, Server};
 
+use crate::AnalyzeOptions;
 use crate::query::server::ServerState as OqlState;
 use crate::report::Report;
-use crate::AnalyzeOptions;
 
 /// The full analysis pipeline state — transitions once through the cycle.
 pub enum AnalysisState {
@@ -58,7 +58,10 @@ impl ServeState {
             let path = self.path.clone();
             let opts = self.opts.clone();
             std::thread::spawn(move || {
-                let result = crate::analyze_to_report_with_retained(&crate::source::HprofSource::from(path.as_str()), &opts);
+                let result = crate::analyze_to_report_with_retained(
+                    &crate::source::HprofSource::from(path.as_str()),
+                    &opts,
+                );
                 let mut g = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                 match result {
                     Ok((r, retained_vec)) => {
@@ -108,8 +111,8 @@ impl ServeState {
         let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match *guard {
             AnalysisState::NotStarted => serde_json::json!({"status": "not_started"}),
-            AnalysisState::Running    => serde_json::json!({"status": "analyzing"}),
-            AnalysisState::Done(_)    => serde_json::json!({"status": "ready"}),
+            AnalysisState::Running => serde_json::json!({"status": "analyzing"}),
+            AnalysisState::Done(_) => serde_json::json!({"status": "ready"}),
             AnalysisState::Failed(ref e) => serde_json::json!({"status": "failed", "error": e}),
         }
     }
@@ -324,8 +327,8 @@ pub fn version_json() -> serde_json::Value {
 
 pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()> {
     let addr = format!("127.0.0.1:{port}");
-    let server = Server::http(&addr)
-        .map_err(|e| io::Error::other(format!("bind {addr} failed: {e}")))?;
+    let server =
+        Server::http(&addr).map_err(|e| io::Error::other(format!("bind {addr} failed: {e}")))?;
     let bound = server.server_addr();
 
     println!("hprof-analyzer server listening on http://{bound}");
@@ -532,8 +535,7 @@ mod tests {
     #[test]
     fn oql_still_works_via_server() {
         let s = make_state();
-        let (status, body, _) =
-            s.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
+        let (status, body, _) = s.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
         assert_eq!(status, 200, "body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], true, "oql failed: {v}");

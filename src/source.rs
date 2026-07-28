@@ -121,7 +121,10 @@ mod tests {
     #[test]
     fn bytes_len_returns_data_len() {
         let data: Arc<Vec<u8>> = Arc::new(vec![1u8, 2, 3, 4, 5]);
-        let s = HprofSource::Bytes { data, name: "x.hprof".to_string() };
+        let s = HprofSource::Bytes {
+            data,
+            name: "x.hprof".to_string(),
+        };
         assert_eq!(s.len().unwrap(), 5);
     }
 }

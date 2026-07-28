@@ -7,15 +7,15 @@
 //! pass1+pass2 (keeping tables resident across queries is out of scope for the
 //! foundation slice).
 
-use std::io::{self, BufRead, IsTerminal, Write};
 use std::cell::RefCell;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use reedline::{
     ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
-    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, SearchDirection, SearchQuery, Signal,
-    Span, Suggestion, default_emacs_keybindings,
+    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, SearchDirection, SearchQuery, Signal, Span,
+    Suggestion, default_emacs_keybindings,
 };
 
 use crate::query::model::{QueryResult, QueryValue};
@@ -36,14 +36,21 @@ enum Ctx {
     /// `dot_prefix` is everything up to and including the last `.` (used to
     /// reconstruct the full replacement value); `seg_start` is the byte offset in
     /// the original line where the segment after the last dot begins.
-    FieldName { dot_prefix: String, seg_start: usize },
+    FieldName {
+        dot_prefix: String,
+        seg_start: usize,
+    },
     /// After `<alias>.` when the token is a single-hop (exactly one dot, alias is
     /// the immediate token before the dot). Offers method names first (with
     /// class-aware priority when `receiver_class` is known), then field names, so
     /// completion is a superset of the old FieldName case. Multi-hop paths
     /// (`x.parent.`) keep `FieldName` because type inference through hops is out of
     /// scope.
-    Method { dot_prefix: String, seg_start: usize, receiver_class: Option<String> },
+    Method {
+        dot_prefix: String,
+        seg_start: usize,
+        receiver_class: Option<String>,
+    },
     /// After the literal word `AS` (in the select list): offer `RETAINED`.
     AfterAs,
     /// After `AS RETAINED`: offer `SET`.
@@ -94,10 +101,17 @@ fn classify_at_with_full(
                     } else {
                         extract_receiver_class_from_full(text_for_from, alias)
                     };
-                    return Ctx::Method { dot_prefix, seg_start, receiver_class };
+                    return Ctx::Method {
+                        dot_prefix,
+                        seg_start,
+                        receiver_class,
+                    };
                 }
             }
-            return Ctx::FieldName { dot_prefix, seg_start };
+            return Ctx::FieldName {
+                dot_prefix,
+                seg_start,
+            };
         }
         // Dot at the end of `before` means the delimiter scan consumed it.
         if before.ends_with('.') {
@@ -114,9 +128,16 @@ fn classify_at_with_full(
                 let alias = prefix_without_dot;
                 let text_for_from = full_line.unwrap_or(before);
                 let receiver_class = extract_receiver_class_from_full(text_for_from, alias);
-                return Ctx::Method { dot_prefix, seg_start, receiver_class };
+                return Ctx::Method {
+                    dot_prefix,
+                    seg_start,
+                    receiver_class,
+                };
             }
-            return Ctx::FieldName { dot_prefix, seg_start: line_offset + before.len() };
+            return Ctx::FieldName {
+                dot_prefix,
+                seg_start: line_offset + before.len(),
+            };
         }
     }
     base_ctx
@@ -220,9 +241,7 @@ fn methods_ordered_for_class(receiver_class: Option<&str>) -> Vec<&'static str> 
                 || cls_lower.ends_with("hashtable")
             {
                 &["size", "getKey", "getValue"]
-            } else if cls_lower.contains("set")
-                || cls_lower.ends_with("hashset")
-            {
+            } else if cls_lower.contains("set") || cls_lower.ends_with("hashset") {
                 &["size"]
             } else {
                 &[]
@@ -372,8 +391,7 @@ fn prefix_range(sorted_lower: &[String], prefix: &str) -> std::ops::Range<usize>
     let start = sorted_lower.partition_point(|s| s.as_str() < prefix);
     // Upper bound: first index (from start) that does NOT start with prefix.
     // Everything in [start, end) starts with prefix because the slice is sorted.
-    let end = start
-        + sorted_lower[start..].partition_point(|s| s.starts_with(prefix));
+    let end = start + sorted_lower[start..].partition_point(|s| s.starts_with(prefix));
     start..end
 }
 
@@ -451,14 +469,22 @@ impl OqlCompleter {
     ) -> Vec<Suggestion> {
         let range = prefix_range(lower, seg_lower);
         let mut idxs: Vec<usize> = range.collect();
-        idxs.sort_by(|&a, &b| names[a].len().cmp(&names[b].len()).then_with(|| names[a].cmp(&names[b])));
+        idxs.sort_by(|&a, &b| {
+            names[a]
+                .len()
+                .cmp(&names[b].len())
+                .then_with(|| names[a].cmp(&names[b]))
+        });
         idxs.into_iter()
             .map(|i| Suggestion {
                 value: format!("{dot_prefix}{}", names[i]),
                 description: None,
                 style: None,
                 extra: None,
-                span: Span { start: span_start, end: pos },
+                span: Span {
+                    start: span_start,
+                    end: pos,
+                },
                 append_whitespace: true,
             })
             .collect()
@@ -535,10 +561,7 @@ fn viz_directive_suggestions(upto: &str, pos: usize) -> Option<Vec<Suggestion>> 
     }
 
     // The fragment being typed is the trailing whitespace-delimited word.
-    let delim_pos = upto
-        .rfind(char::is_whitespace)
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let delim_pos = upto.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
     let frag = &upto[delim_pos..];
     let lower = frag.to_ascii_lowercase();
 
@@ -572,7 +595,10 @@ fn viz_directive_suggestions(upto: &str, pos: usize) -> Option<Vec<Suggestion>> 
             description: None,
             style: None,
             extra: None,
-            span: Span { start: delim_pos, end: pos },
+            span: Span {
+                start: delim_pos,
+                end: pos,
+            },
             append_whitespace: false,
         })
         .collect();
@@ -591,14 +617,48 @@ impl Completer for OqlCompleter {
         if let Some(partial) = upto.strip_prefix('!') {
             if !partial.contains(char::is_whitespace) {
                 const META_CMDS: &[&str] = &[
-                    "help", "quit", "q", "exit",
-                    "plan", "explain",
-                    "classes", "fields",
-                    "reachable", "all", "mode",
-                    "width", "set", "count", "last", "save", "export",
-                    "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
-                    "top", "head", "tail", "select", "drop", "rename", "wc", "row", "undo", "cols", "columns",
-                    "describe", "obj", "history",
+                    "help",
+                    "quit",
+                    "q",
+                    "exit",
+                    "plan",
+                    "explain",
+                    "classes",
+                    "fields",
+                    "reachable",
+                    "all",
+                    "mode",
+                    "width",
+                    "set",
+                    "count",
+                    "last",
+                    "save",
+                    "export",
+                    "filter",
+                    "grep",
+                    "not",
+                    "exclude",
+                    "sample",
+                    "distinct",
+                    "dedup",
+                    "sort",
+                    "stats",
+                    "unique",
+                    "pivot",
+                    "top",
+                    "head",
+                    "tail",
+                    "select",
+                    "drop",
+                    "rename",
+                    "wc",
+                    "row",
+                    "undo",
+                    "cols",
+                    "columns",
+                    "describe",
+                    "obj",
+                    "history",
                     "run",
                 ];
                 let lower = partial.to_ascii_lowercase();
@@ -618,12 +678,28 @@ impl Completer for OqlCompleter {
         }
         // `!<cmd> <arg>` — complete column names from last result for manipulation commands.
         if upto.starts_with('!') && upto.contains(char::is_whitespace) {
-            let (verb, rest) = upto[1..].split_once(char::is_whitespace).unwrap_or(("", ""));
+            let (verb, rest) = upto[1..]
+                .split_once(char::is_whitespace)
+                .unwrap_or(("", ""));
             let rest = rest.trim_start();
             let needs_col = matches!(
                 verb,
-                "sort" | "filter" | "grep" | "not" | "exclude" | "stats" | "unique" | "pivot"
-                | "select" | "drop" | "rename" | "sample" | "top" | "head" | "tail" | "wc"
+                "sort"
+                    | "filter"
+                    | "grep"
+                    | "not"
+                    | "exclude"
+                    | "stats"
+                    | "unique"
+                    | "pivot"
+                    | "select"
+                    | "drop"
+                    | "rename"
+                    | "sample"
+                    | "top"
+                    | "head"
+                    | "tail"
+                    | "wc"
             );
             if needs_col {
                 if let Ok(cols) = self.last_cols.lock() {
@@ -670,7 +746,9 @@ impl Completer for OqlCompleter {
         // `!describe <class>`, `!classes <pattern>`, `!fields <pattern>` —
         // complete against the known class or field names.
         if upto.starts_with('!') && upto.contains(char::is_whitespace) {
-            let (verb, partial_raw) = upto[1..].split_once(char::is_whitespace).unwrap_or(("", ""));
+            let (verb, partial_raw) = upto[1..]
+                .split_once(char::is_whitespace)
+                .unwrap_or(("", ""));
             let partial_raw = partial_raw.trim_start();
             if matches!(verb, "describe" | "classes") && !partial_raw.is_empty() {
                 let lower = partial_raw.to_ascii_lowercase();
@@ -683,7 +761,9 @@ impl Completer for OqlCompleter {
                     name_start,
                     pos,
                 );
-                if !out.is_empty() { return out; }
+                if !out.is_empty() {
+                    return out;
+                }
             }
             if verb == "fields" && !partial_raw.is_empty() {
                 let lower = partial_raw.to_ascii_lowercase();
@@ -696,7 +776,9 @@ impl Completer for OqlCompleter {
                     name_start,
                     pos,
                 );
-                if !out.is_empty() { return out; }
+                if !out.is_empty() {
+                    return out;
+                }
             }
         }
         // `!run <name>` — complete named query names.
@@ -736,7 +818,11 @@ impl Completer for OqlCompleter {
             if parts.len() <= 1 {
                 let partial = parts.first().copied().unwrap_or("").to_ascii_lowercase();
                 let keys = ["limit", "bytes", "color", "null"];
-                let matches: Vec<_> = keys.iter().filter(|k| k.starts_with(partial.as_str())).copied().collect();
+                let matches: Vec<_> = keys
+                    .iter()
+                    .filter(|k| k.starts_with(partial.as_str()))
+                    .copied()
+                    .collect();
                 if !matches.is_empty() {
                     return matches.iter().map(|k| build(k)).collect();
                 }
@@ -748,25 +834,37 @@ impl Completer for OqlCompleter {
                     "color" | "colour" => &["on", "off"],
                     _ => &[],
                 };
-                let matches: Vec<_> = vals.iter().filter(|v| v.starts_with(partial.as_str())).copied().collect();
+                let matches: Vec<_> = vals
+                    .iter()
+                    .filter(|v| v.starts_with(partial.as_str()))
+                    .copied()
+                    .collect();
                 if !matches.is_empty() {
-                    return matches.iter().map(|v| build(&format!("{key} {v}"))).collect();
+                    return matches
+                        .iter()
+                        .map(|v| build(&format!("{key} {v}")))
+                        .collect();
                 }
             }
         }
         // Delegate /run completion to the WASM-safe free function.
         if upto.starts_with("/run ") {
-            return crate::query::complete::complete(upto, pos, &self.class_names, &self.field_names)
-                .into_iter()
-                .map(|c| Suggestion {
-                    value: c.value,
-                    description: Some(c.display),
-                    style: None,
-                    extra: c.group.map(|g| vec![g]),
-                    span: Span { start: 5, end: pos },
-                    append_whitespace: true,
-                })
-                .collect();
+            return crate::query::complete::complete(
+                upto,
+                pos,
+                &self.class_names,
+                &self.field_names,
+            )
+            .into_iter()
+            .map(|c| Suggestion {
+                value: c.value,
+                description: Some(c.display),
+                style: None,
+                extra: c.group.map(|g| vec![g]),
+                span: Span { start: 5, end: pos },
+                append_whitespace: true,
+            })
+            .collect();
         }
         // Delimit the fragment on whitespace, '(' and ',' so `SELECT a,b` and
         // `COUNT(x` complete their trailing word.
@@ -806,7 +904,10 @@ impl Completer for OqlCompleter {
                             description: hint_for("OBJECTS"),
                             style: None,
                             extra: None,
-                            span: Span { start: delim_pos, end: pos },
+                            span: Span {
+                                start: delim_pos,
+                                end: pos,
+                            },
                             append_whitespace: true,
                         },
                     );
@@ -832,9 +933,16 @@ impl Completer for OqlCompleter {
                 let cands = KEYWORDS.iter().copied().chain(RESERVED.iter().copied());
                 Self::suggestions(cands, &lower, delim_pos, pos)
             }
-            Ctx::FieldName { dot_prefix, seg_start } => {
+            Ctx::FieldName {
+                dot_prefix,
+                seg_start,
+            } => {
                 // Segment after the last dot is the partial field name.
-                let seg = if seg_start <= pos { &line[seg_start..pos] } else { "" };
+                let seg = if seg_start <= pos {
+                    &line[seg_start..pos]
+                } else {
+                    ""
+                };
                 let seg_lower = seg.to_ascii_lowercase();
                 // Binary-search the sorted field names; value is dot_prefix + name.
                 Self::ranged_suggestions(
@@ -846,9 +954,17 @@ impl Completer for OqlCompleter {
                     pos,
                 )
             }
-            Ctx::Method { dot_prefix, seg_start, receiver_class } => {
+            Ctx::Method {
+                dot_prefix,
+                seg_start,
+                receiver_class,
+            } => {
                 // Segment after the dot is the partial method/field name being typed.
-                let seg = if seg_start <= pos { &line[seg_start..pos] } else { "" };
+                let seg = if seg_start <= pos {
+                    &line[seg_start..pos]
+                } else {
+                    ""
+                };
                 let seg_lower = seg.to_ascii_lowercase();
                 // Offer methods (class-aware ordering, with hints) then field names.
                 // Both are prefixed by dot_prefix so the replacement value is correct.
@@ -861,7 +977,10 @@ impl Completer for OqlCompleter {
                         description: method_hint(m),
                         style: None,
                         extra: None,
-                        span: Span { start: delim_pos, end: pos },
+                        span: Span {
+                            start: delim_pos,
+                            end: pos,
+                        },
                         append_whitespace: true,
                     })
                     .collect();
@@ -874,7 +993,10 @@ impl Completer for OqlCompleter {
                     delim_pos,
                     pos,
                 );
-                method_suggestions.into_iter().chain(field_suggestions).collect()
+                method_suggestions
+                    .into_iter()
+                    .chain(field_suggestions)
+                    .collect()
             }
             Ctx::AfterAs => {
                 // After `AS` in the select list, only `RETAINED` is useful.
@@ -898,7 +1020,11 @@ pub fn build_editor(
     field_names: Vec<String>,
     last_cols: Arc<Mutex<Vec<String>>>,
 ) -> Reedline {
-    let completer = Box::new(OqlCompleter::new_with_cols(class_names, field_names, last_cols));
+    let completer = Box::new(OqlCompleter::new_with_cols(
+        class_names,
+        field_names,
+        last_cols,
+    ));
     let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
 
     let mut keybindings = default_emacs_keybindings();
@@ -953,7 +1079,11 @@ pub(crate) fn harvest_names(path: &str) -> (Vec<String>, Vec<String>) {
             let mut field_names: Vec<String> = p
                 .class_map
                 .values()
-                .flat_map(|ci| ci.fields.iter().filter_map(|(nid, _)| p.strings.get(nid).cloned()))
+                .flat_map(|ci| {
+                    ci.fields
+                        .iter()
+                        .filter_map(|(nid, _)| p.strings.get(nid).cloned())
+                })
                 .collect();
             field_names.sort_unstable();
             field_names.dedup();
@@ -982,7 +1112,12 @@ struct ReplSettings {
 
 impl Default for ReplSettings {
     fn default() -> Self {
-        Self { row_limit: 0, bytes_raw: false, null_str: "null".to_string(), color: true }
+        Self {
+            row_limit: 0,
+            bytes_raw: false,
+            null_str: "null".to_string(),
+            color: true,
+        }
     }
 }
 
@@ -1018,19 +1153,36 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut last_query: Option<String> = None;
     let mut last_result: Option<QueryResult> = None;
     let mut prev_result: Option<QueryResult> = None; // single-level undo
-    let mut current_row: usize = 0;                   // 0-based cursor for !row next/prev
+    let mut current_row: usize = 0; // 0-based cursor for !row next/prev
     let mut cache: Option<crate::query::run::ReplCache> = None;
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cb, cc, cd, cg, ce, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[32m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "", "", "") };
+    let (cb, cc, cd, cg, ce, cr) = if color {
+        (
+            "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[32m", "\x1b[31m", "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
     let hist_count = history_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.lines().count())
         .unwrap_or(0);
-    let hist_note = if hist_count > 0 { format!("  ·  {} history entries", fmt_int(hist_count as i64)) } else { String::new() };
+    let hist_note = if hist_count > 0 {
+        format!("  ·  {} history entries", fmt_int(hist_count as i64))
+    } else {
+        String::new()
+    };
     writeln!(stdout, "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}")?;
-    writeln!(stdout, "{cd} └─ {} classes, {} field names{hist_note}  ·  !help for commands  ·  !quit to exit{cr}",
-        fmt_int(names_for_meta.0.len() as i64), fmt_int(names_for_meta.1.len() as i64))?;
-    writeln!(stdout, "{cd}    Tab = complete  ·  Ctrl+R = history search  ·  mode: reachable-only (MAT parity){cr}\n")?;
+    writeln!(
+        stdout,
+        "{cd} └─ {} classes, {} field names{hist_note}  ·  !help for commands  ·  !quit to exit{cr}",
+        fmt_int(names_for_meta.0.len() as i64),
+        fmt_int(names_for_meta.1.len() as i64)
+    )?;
+    writeln!(
+        stdout,
+        "{cd}    Tab = complete  ·  Ctrl+R = history search  ·  mode: reachable-only (MAT parity){cr}\n"
+    )?;
     let mut buffer_lines: Vec<String> = Vec::new();
 
     // When stdin is not a TTY (e.g. piped in tests), skip reedline entirely and
@@ -1100,35 +1252,82 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "count" => {
                             if rest.is_empty() {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+                                let (cg, cr) = if color {
+                                    ("\x1b[32m", "\x1b[0m")
+                                } else {
+                                    ("", "")
+                                };
                                 match &last_result {
-                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
+                                    None => {
+                                        warn_out("(no result — run a query first)", &mut stdout)?
+                                    }
                                     Some(res) => {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
-                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                                        writeln!(
+                                            stdout,
+                                            "{cg}{}{cr} row{} × {cg}{}{cr} col{}",
+                                            fmt_int(rows as i64),
+                                            if rows == 1 { "" } else { "s" },
+                                            cols,
+                                            if cols == 1 { "" } else { "s" }
+                                        )?;
                                     }
                                 }
                             } else {
                                 let is_cls = is_class_name_arg(rest);
                                 let wrapped = wrap_count(rest);
-                                match run_one(path, &wrapped, path_depth, reachable_only, &mut cache, &mut stdout) {
+                                match run_one(
+                                    path,
+                                    &wrapped,
+                                    path_depth,
+                                    reachable_only,
+                                    &mut cache,
+                                    &mut stdout,
+                                ) {
                                     Ok(res) if is_cls && res.error.is_none() => {
-                                        let n = res.rows.first().and_then(|r| r.first())
-                                            .and_then(|v| if let QueryValue::Int(n) = v { Some(*n) } else { None });
+                                        let n = res.rows.first().and_then(|r| r.first()).and_then(
+                                            |v| {
+                                                if let QueryValue::Int(n) = v {
+                                                    Some(*n)
+                                                } else {
+                                                    None
+                                                }
+                                            },
+                                        );
                                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                        let (cg, cc, cr) = if color { ("\x1b[32m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
-                                        if let Some(n) = n {
-                                            writeln!(stdout, "{cg}{}{cr} instance{} of {cc}{}{cr}", fmt_int(n), if n == 1 { "" } else { "s" }, rest.trim())?;
+                                        let (cg, cc, cr) = if color {
+                                            ("\x1b[32m", "\x1b[36m", "\x1b[0m")
                                         } else {
-                                            print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                            ("", "", "")
+                                        };
+                                        if let Some(n) = n {
+                                            writeln!(
+                                                stdout,
+                                                "{cg}{}{cr} instance{} of {cc}{}{cr}",
+                                                fmt_int(n),
+                                                if n == 1 { "" } else { "s" },
+                                                rest.trim()
+                                            )?;
+                                        } else {
+                                            print_result(
+                                                &res,
+                                                std::time::Duration::ZERO,
+                                                max_width,
+                                                &mut stdout,
+                                            )?;
                                         }
                                         last_query = Some(wrapped);
                                         last_result = Some(res);
                                         prev_result = None;
                                     }
                                     Ok(res) => {
-                                        print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        print_result(
+                                            &res,
+                                            std::time::Duration::ZERO,
+                                            max_width,
+                                            &mut stdout,
+                                        )?;
                                         last_query = Some(wrapped);
                                         last_result = Some(res);
                                         prev_result = None;
@@ -1147,8 +1346,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 Some(q) => {
                                     let q = q.clone();
                                     if let Some(res) = run_and_print(
-                                        path, &q, path_depth, reachable_only, max_width,
-                                        &mut cache, &mut stdout,
+                                        path,
+                                        &q,
+                                        path_depth,
+                                        reachable_only,
+                                        max_width,
+                                        &mut cache,
+                                        &mut stdout,
                                     )? {
                                         last_result = Some(res);
                                         prev_result = None;
@@ -1163,23 +1367,56 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 None => warn_out("(no result — run a query first)", &mut stdout)?,
                                 Some(res) => {
                                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                    let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+                                    let (cg, cr) = if color {
+                                        ("\x1b[32m", "\x1b[0m")
+                                    } else {
+                                        ("", "")
+                                    };
                                     if rest.is_empty() {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
-                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                                        writeln!(
+                                            stdout,
+                                            "{cg}{}{cr} row{} × {cg}{}{cr} col{}",
+                                            fmt_int(rows as i64),
+                                            if rows == 1 { "" } else { "s" },
+                                            cols,
+                                            if cols == 1 { "" } else { "s" }
+                                        )?;
                                     } else {
                                         match resolve_col(rest, &res.columns) {
                                             None => {
-                                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                                writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", rest, names.join(", "))?;
+                                                let names: Vec<&str> = res
+                                                    .columns
+                                                    .iter()
+                                                    .map(|c| c.name.as_str())
+                                                    .collect();
+                                                writeln!(
+                                                    stdout,
+                                                    "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                                    rest,
+                                                    names.join(", ")
+                                                )?;
                                             }
                                             Some(ci) => {
                                                 let total = res.rows.len();
-                                                let non_null = res.rows.iter()
-                                                    .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
+                                                let non_null = res
+                                                    .rows
+                                                    .iter()
+                                                    .filter(|row| {
+                                                        !matches!(
+                                                            row.get(ci),
+                                                            Some(QueryValue::Null) | None
+                                                        )
+                                                    })
                                                     .count();
-                                                writeln!(stdout, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", fmt_int(non_null as i64), fmt_int(total as i64), res.columns[ci].name)?;
+                                                writeln!(
+                                                    stdout,
+                                                    "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}",
+                                                    fmt_int(non_null as i64),
+                                                    fmt_int(total as i64),
+                                                    res.columns[ci].name
+                                                )?;
                                             }
                                         }
                                     }
@@ -1193,9 +1430,23 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 None => warn_out("(nothing to undo)", &mut stdout)?,
                                 Some(prev) => {
                                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                    let (cg, cd, cr) = if color { ("\x1b[32m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
-                                    writeln!(stdout, "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}", fmt_int(prev.rows.len() as i64), if prev.rows.len() == 1 { "" } else { "s" })?;
-                                    print_result(&prev, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                    let (cg, cd, cr) = if color {
+                                        ("\x1b[32m", "\x1b[2m", "\x1b[0m")
+                                    } else {
+                                        ("", "", "")
+                                    };
+                                    writeln!(
+                                        stdout,
+                                        "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}",
+                                        fmt_int(prev.rows.len() as i64),
+                                        if prev.rows.len() == 1 { "" } else { "s" }
+                                    )?;
+                                    print_result(
+                                        &prev,
+                                        std::time::Duration::ZERO,
+                                        max_width,
+                                        &mut stdout,
+                                    )?;
                                     last_result = Some(prev);
                                 }
                             }
@@ -1210,10 +1461,19 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "save" => {
                             let last_query_before = last_query.clone();
                             handle_save(
-                                rest, path, path_depth, reachable_only, max_width,
-                                &mut last_query, &mut last_result, &mut cache, &mut stdout,
+                                rest,
+                                path,
+                                path_depth,
+                                reachable_only,
+                                max_width,
+                                &mut last_query,
+                                &mut last_result,
+                                &mut cache,
+                                &mut stdout,
                             )?;
-                            if last_query != last_query_before { prev_result = None; }
+                            if last_query != last_query_before {
+                                prev_result = None;
+                            }
                             stdout.flush()?;
                             continue;
                         }
@@ -1225,33 +1485,48 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "filter" | "grep" => {
                             let before_len = last_result.as_ref().map(|r| r.rows.len());
                             let saved_prev = prev_result.clone();
-                            if !rest.is_empty() { prev_result = last_result.clone(); }
+                            if !rest.is_empty() {
+                                prev_result = last_result.clone();
+                            }
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                                prev_result = saved_prev;
+                            }
                             stdout.flush()?;
                             continue;
                         }
                         "not" | "exclude" => {
                             let before_len = last_result.as_ref().map(|r| r.rows.len());
                             let saved_prev = prev_result.clone();
-                            if !rest.is_empty() { prev_result = last_result.clone(); }
+                            if !rest.is_empty() {
+                                prev_result = last_result.clone();
+                            }
                             handle_filter_not(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                                prev_result = saved_prev;
+                            }
                             stdout.flush()?;
                             continue;
                         }
                         "distinct" | "dedup" => {
                             let before_len = last_result.as_ref().map(|r| r.rows.len());
                             let saved_prev = prev_result.clone();
-                            if before_len.is_some() { prev_result = last_result.clone(); }
+                            if before_len.is_some() {
+                                prev_result = last_result.clone();
+                            }
                             handle_distinct(&mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                                prev_result = saved_prev;
+                            }
                             stdout.flush()?;
                             continue;
                         }
                         "sample" => {
-                            let valid_arg = rest.trim().is_empty() || rest.trim().parse::<usize>().map(|n| n > 0).unwrap_or(false);
-                            if valid_arg { prev_result = last_result.clone(); }
+                            let valid_arg = rest.trim().is_empty()
+                                || rest.trim().parse::<usize>().map(|n| n > 0).unwrap_or(false);
+                            if valid_arg {
+                                prev_result = last_result.clone();
+                            }
                             handle_sample(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
@@ -1259,9 +1534,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "sort" => {
                             let before_note = last_result.as_ref().and_then(|r| r.note.clone());
                             let saved_prev = prev_result.clone();
-                            if !rest.is_empty() { prev_result = last_result.clone(); }
+                            if !rest.is_empty() {
+                                prev_result = last_result.clone();
+                            }
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { prev_result = saved_prev; }
+                            if last_result.as_ref().and_then(|r| r.note.clone()) == before_note {
+                                prev_result = saved_prev;
+                            }
                             stdout.flush()?;
                             continue;
                         }
@@ -1276,34 +1555,61 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "pivot" => {
-                            let before_sig = last_result.as_ref().map(|r| (r.rows.len(), r.columns.len()));
+                            let before_sig = last_result
+                                .as_ref()
+                                .map(|r| (r.rows.len(), r.columns.len()));
                             let saved_prev = prev_result.clone();
-                            if !rest.is_empty() { prev_result = last_result.clone(); }
+                            if !rest.is_empty() {
+                                prev_result = last_result.clone();
+                            }
                             handle_pivot(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { prev_result = saved_prev; }
+                            if last_result
+                                .as_ref()
+                                .map(|r| (r.rows.len(), r.columns.len()))
+                                == before_sig
+                            {
+                                prev_result = saved_prev;
+                            }
                             stdout.flush()?;
                             continue;
                         }
                         "top" | "head" => {
-                            let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                            let n = if rest.trim().is_empty() {
+                                10
+                            } else {
+                                rest.trim().parse::<usize>().unwrap_or(0)
+                            };
                             if n > 0 {
                                 let before_len = last_result.as_ref().map(|r| r.rows.len());
                                 let saved_prev = prev_result.clone();
                                 prev_result = last_result.clone();
                                 match last_result.as_mut() {
-                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
+                                    None => {
+                                        warn_out("(no result — run a query first)", &mut stdout)?
+                                    }
                                     Some(res) => {
                                         let total = res.rows.len();
                                         let shown = n.min(total);
                                         res.rows.truncate(shown);
                                         res.row_count = shown as u64;
                                         if shown < total {
-                                            res.note = Some(format!("top {} of {}", fmt_int(shown as i64), fmt_int(total as i64)));
+                                            res.note = Some(format!(
+                                                "top {} of {}",
+                                                fmt_int(shown as i64),
+                                                fmt_int(total as i64)
+                                            ));
                                         }
-                                        print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        print_result(
+                                            res,
+                                            std::time::Duration::ZERO,
+                                            max_width,
+                                            &mut stdout,
+                                        )?;
                                     }
                                 }
-                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
+                                if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                                    prev_result = saved_prev;
+                                }
                             } else {
                                 writeln!(stdout, "{cd}usage: !top [N]  (default 10){cr}")?;
                             }
@@ -1311,25 +1617,42 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "tail" => {
-                            let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                            let n = if rest.trim().is_empty() {
+                                10
+                            } else {
+                                rest.trim().parse::<usize>().unwrap_or(0)
+                            };
                             if n > 0 {
                                 let before_len = last_result.as_ref().map(|r| r.rows.len());
                                 let saved_prev = prev_result.clone();
                                 prev_result = last_result.clone();
                                 match last_result.as_mut() {
-                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
+                                    None => {
+                                        warn_out("(no result — run a query first)", &mut stdout)?
+                                    }
                                     Some(res) => {
                                         let total = res.rows.len();
                                         let skip = total.saturating_sub(n);
                                         res.rows = res.rows.split_off(skip);
                                         res.row_count = res.rows.len() as u64;
                                         if skip > 0 {
-                                            res.note = Some(format!("last {} of {}", fmt_int(res.rows.len() as i64), fmt_int(total as i64)));
+                                            res.note = Some(format!(
+                                                "last {} of {}",
+                                                fmt_int(res.rows.len() as i64),
+                                                fmt_int(total as i64)
+                                            ));
                                         }
-                                        print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        print_result(
+                                            res,
+                                            std::time::Duration::ZERO,
+                                            max_width,
+                                            &mut stdout,
+                                        )?;
                                     }
                                 }
-                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
+                                if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                                    prev_result = saved_prev;
+                                }
                             } else {
                                 writeln!(stdout, "{cd}usage: !tail [N]  (default 10){cr}")?;
                             }
@@ -1341,14 +1664,24 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             if col_args.is_empty() {
                                 match &last_result {
                                     Some(res) if !res.columns.is_empty() => {
-                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "{cd}usage: !select <col1> [col2 ...]  — available: {}{cr}", names.join(", "))?;
+                                        let names: Vec<&str> =
+                                            res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(
+                                            stdout,
+                                            "{cd}usage: !select <col1> [col2 ...]  — available: {}{cr}",
+                                            names.join(", ")
+                                        )?;
                                     }
-                                    _ => writeln!(stdout, "{cd}usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3){cr}")?,
+                                    _ => writeln!(
+                                        stdout,
+                                        "{cd}usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3){cr}"
+                                    )?,
                                 }
                             } else {
                                 match &last_result {
-                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
+                                    None => {
+                                        warn_out("(no result — run a query first)", &mut stdout)?
+                                    }
                                     Some(res) => {
                                         let mut indices: Vec<usize> = Vec::new();
                                         let mut ok = true;
@@ -1356,8 +1689,17 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                             match expand_col_spec(arg, &res.columns) {
                                                 Ok(v) => indices.extend(v),
                                                 Err(_) => {
-                                                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                                    writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", arg, names.join(", "))?;
+                                                    let names: Vec<&str> = res
+                                                        .columns
+                                                        .iter()
+                                                        .map(|c| c.name.as_str())
+                                                        .collect();
+                                                    writeln!(
+                                                        stdout,
+                                                        "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                                        arg,
+                                                        names.join(", ")
+                                                    )?;
                                                     ok = false;
                                                     break;
                                                 }
@@ -1365,9 +1707,19 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         }
                                         if ok {
                                             use crate::query::model::QueryColumn;
-                                            let new_cols: Vec<QueryColumn> = indices.iter().map(|&i| res.columns[i].clone()).collect();
-                                            let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
-                                                .map(|row| indices.iter().map(|&i| row[i].clone()).collect())
+                                            let new_cols: Vec<QueryColumn> = indices
+                                                .iter()
+                                                .map(|&i| res.columns[i].clone())
+                                                .collect();
+                                            let new_rows: Vec<Vec<QueryValue>> = res
+                                                .rows
+                                                .iter()
+                                                .map(|row| {
+                                                    indices
+                                                        .iter()
+                                                        .map(|&i| row[i].clone())
+                                                        .collect()
+                                                })
                                                 .collect();
                                             let projected = QueryResult {
                                                 columns: new_cols,
@@ -1381,10 +1733,20 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 viz: None,
                                                 elapsed_ms: None,
                                             };
-                                            print_result(&projected, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                            print_result(
+                                                &projected,
+                                                std::time::Duration::ZERO,
+                                                max_width,
+                                                &mut stdout,
+                                            )?;
                                             let cols_changed = indices.len() != res.columns.len()
-                                                || indices.iter().enumerate().any(|(i, &ci)| ci != i);
-                                            if cols_changed { prev_result = last_result.clone(); }
+                                                || indices
+                                                    .iter()
+                                                    .enumerate()
+                                                    .any(|(i, &ci)| ci != i);
+                                            if cols_changed {
+                                                prev_result = last_result.clone();
+                                            }
                                             last_result = Some(projected);
                                         }
                                     }
@@ -1397,7 +1759,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             let before = last_result.clone();
                             let before_cols = before.as_ref().map(|r| r.columns.len());
                             handle_drop(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.columns.len()) != before_cols { prev_result = before; }
+                            if last_result.as_ref().map(|r| r.columns.len()) != before_cols {
+                                prev_result = before;
+                            }
                             stdout.flush()?;
                             continue;
                         }
@@ -1407,17 +1771,36 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 print_named_queries_help(&mut stdout)?;
                             } else {
                                 let last_oql_before = last_query.clone();
-                                dispatch_run(rest, path, path_depth, reachable_only, max_width,
-                                    &mut last_query, &mut last_result, &mut cache, &mut stdout)?;
+                                dispatch_run(
+                                    rest,
+                                    path,
+                                    path_depth,
+                                    reachable_only,
+                                    max_width,
+                                    &mut last_query,
+                                    &mut last_result,
+                                    &mut cache,
+                                    &mut stdout,
+                                )?;
                                 // Clear undo slot when dispatch_run ran a new query —
                                 // same rule as inline OQL: fresh result resets undo.
-                                if last_query != last_oql_before { prev_result = None; }
+                                if last_query != last_oql_before {
+                                    prev_result = None;
+                                }
                             }
                             stdout.flush()?;
                             continue;
                         }
                         "describe" => {
-                            handle_describe(rest.trim(), path, path_depth, reachable_only, &mut cache, &names_for_meta.0, &mut stdout)?;
+                            handle_describe(
+                                rest.trim(),
+                                path,
+                                path_depth,
+                                reachable_only,
+                                &mut cache,
+                                &names_for_meta.0,
+                                &mut stdout,
+                            )?;
                             stdout.flush()?;
                             continue;
                         }
@@ -1426,26 +1809,55 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 None => warn_out("(no result — run a query first)", &mut stdout)?,
                                 Some(res) => {
                                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                    let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
-                                    let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                    let (cc, cd, cr) = if color {
+                                        ("\x1b[36m", "\x1b[2m", "\x1b[0m")
+                                    } else {
+                                        ("", "", "")
+                                    };
+                                    let fields: Vec<&str> =
+                                        res.columns.iter().map(|c| c.name.as_str()).collect();
                                     let idx_w = fields.len().to_string().len();
                                     let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
                                     let total = res.rows.len();
                                     for (i, f) in fields.iter().enumerate() {
                                         let type_tag = infer_col_type(i, &res.rows);
-                                        let non_null = res.rows.iter().filter(|row| !matches!(row.get(i), Some(QueryValue::Null) | None)).count();
+                                        let non_null = res
+                                            .rows
+                                            .iter()
+                                            .filter(|row| {
+                                                !matches!(row.get(i), Some(QueryValue::Null) | None)
+                                            })
+                                            .count();
                                         let fill = if total > 0 {
-                                            format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
-                                        } else { String::new() };
+                                            format!(
+                                                "  {}/{} ({:.0}%)",
+                                                non_null,
+                                                total,
+                                                non_null as f64 / total as f64 * 100.0
+                                            )
+                                        } else {
+                                            String::new()
+                                        };
                                         let all_null = total > 0 && non_null == 0;
                                         let (name_color, suffix) = if all_null && color {
                                             ("\x1b[2;33m", format!("  \x1b[33m(all null){cr}"))
                                         } else {
                                             (cc, String::new())
                                         };
-                                        writeln!(stdout, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
+                                        writeln!(
+                                            stdout,
+                                            "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}",
+                                            i + 1,
+                                            type_tag,
+                                            fill
+                                        )?;
                                     }
-                                    writeln!(stdout, "{cd}({} column{}){cr}", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                                    writeln!(
+                                        stdout,
+                                        "{cd}({} column{}){cr}",
+                                        fields.len(),
+                                        if fields.len() == 1 { "" } else { "s" }
+                                    )?;
                                 }
                             }
                             stdout.flush()?;
@@ -1455,28 +1867,52 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             let arg = rest.trim();
                             if arg == "clear" {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+                                let (cg, cr) = if color {
+                                    ("\x1b[32m", "\x1b[0m")
+                                } else {
+                                    ("", "")
+                                };
                                 let _ = line_editor.history_mut().clear();
                                 writeln!(stdout, "{cg}\u{2713} history cleared{cr}")?;
                             } else {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
+                                let (cd, cc, cr) = if color {
+                                    ("\x1b[2m", "\x1b[36m", "\x1b[0m")
+                                } else {
+                                    ("", "", "")
+                                };
                                 let n: usize = arg.parse().unwrap_or(20);
                                 let entries = line_editor
                                     .history()
-                                    .search(SearchQuery::everything(SearchDirection::Backward, None))
+                                    .search(SearchQuery::everything(
+                                        SearchDirection::Backward,
+                                        None,
+                                    ))
                                     .unwrap_or_default();
                                 let shown = entries.iter().take(n).collect::<Vec<_>>();
                                 for (i, item) in shown.iter().enumerate() {
-                                    writeln!(stdout, "  {cd}{:>3}{cr}  {cc}!{}{cr}  {}", i + 1, i + 1, item.command_line)?;
+                                    writeln!(
+                                        stdout,
+                                        "  {cd}{:>3}{cr}  {cc}!{}{cr}  {}",
+                                        i + 1,
+                                        i + 1,
+                                        item.command_line
+                                    )?;
                                 }
                                 if entries.is_empty() {
                                     warn_out("(no history yet)", &mut stdout)?;
                                 } else {
                                     if entries.len() > n {
-                                        writeln!(stdout, "{cd}  … {} more — !history N to show more{cr}", entries.len() - n)?;
+                                        writeln!(
+                                            stdout,
+                                            "{cd}  … {} more — !history N to show more{cr}",
+                                            entries.len() - n
+                                        )?;
                                     }
-                                    writeln!(stdout, "{cd}  Use !N to re-run entry N  (1 = most recent){cr}")?;
+                                    writeln!(
+                                        stdout,
+                                        "{cd}  Use !N to re-run entry N  (1 = most recent){cr}"
+                                    )?;
                                 }
                             }
                             stdout.flush()?;
@@ -1484,23 +1920,41 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "rename" => {
                             let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
-                            if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty() {
+                            if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty()
+                            {
                                 match &last_result {
                                     Some(res) if !res.columns.is_empty() => {
-                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "{cd}usage: !rename <col> <newname>  — available: {}{cr}", names.join(", "))?;
+                                        let names: Vec<&str> =
+                                            res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(
+                                            stdout,
+                                            "{cd}usage: !rename <col> <newname>  — available: {}{cr}",
+                                            names.join(", ")
+                                        )?;
                                     }
-                                    _ => writeln!(stdout, "{cd}usage: !rename <col> <newname>{cr}")?,
+                                    _ => {
+                                        writeln!(stdout, "{cd}usage: !rename <col> <newname>{cr}")?
+                                    }
                                 }
                             } else {
                                 let old = parts[0];
                                 let new = parts[1].trim();
-                                let col_idx = last_result.as_ref().and_then(|res| resolve_col(old, &res.columns));
+                                let col_idx = last_result
+                                    .as_ref()
+                                    .and_then(|res| resolve_col(old, &res.columns));
                                 match (last_result.as_mut(), col_idx) {
-                                    (None, _) => warn_out("(no result — run a query first)", &mut stdout)?,
+                                    (None, _) => {
+                                        warn_out("(no result — run a query first)", &mut stdout)?
+                                    }
                                     (Some(res), None) => {
-                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", old, names.join(", "))?;
+                                        let names: Vec<&str> =
+                                            res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(
+                                            stdout,
+                                            "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                            old,
+                                            names.join(", ")
+                                        )?;
                                     }
                                     (Some(res), Some(ci)) => {
                                         prev_result = Some(QueryResult {
@@ -1517,7 +1971,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         });
                                         let col_old = res.columns[ci].name.clone();
                                         res.columns[ci].name = new.to_string();
-                                        writeln!(stdout, "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", col_old, new)?;
+                                        writeln!(
+                                            stdout,
+                                            "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}",
+                                            col_old, new
+                                        )?;
                                     }
                                 }
                             }
@@ -1526,40 +1984,91 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "obj" => {
                             let arg = rest.trim();
-                            let parsed = arg.split_once('#')
+                            let parsed = arg
+                                .split_once('#')
                                 .map(|(c, n)| (c.trim(), n.trim()))
-                                .or_else(|| arg.split_once(char::is_whitespace).map(|(c, n)| (c.trim(), n.trim())));
+                                .or_else(|| {
+                                    arg.split_once(char::is_whitespace)
+                                        .map(|(c, n)| (c.trim(), n.trim()))
+                                });
                             match parsed {
                                 None | Some(("", _)) | Some((_, "")) => {
-                                    writeln!(stdout, "{cd}usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42{cr}")?;
+                                    writeln!(
+                                        stdout,
+                                        "{cd}usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42{cr}"
+                                    )?;
                                 }
                                 Some((cls, idx)) => {
-                                    let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
+                                    let q =
+                                        format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
                                     let mut dev_null: Vec<u8> = Vec::new();
-                                    match run_one(path, &q, path_depth, reachable_only, &mut cache, &mut dev_null) {
+                                    match run_one(
+                                        path,
+                                        &q,
+                                        path_depth,
+                                        reachable_only,
+                                        &mut cache,
+                                        &mut dev_null,
+                                    ) {
                                         Ok(res) => {
                                             if res.rows.len() == 1 {
                                                 prev_result = last_result.clone();
-                                                let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
-                                                let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+                                                let bytes_raw =
+                                                    SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
+                                                let key_w = res
+                                                    .columns
+                                                    .iter()
+                                                    .map(|c| c.name.len())
+                                                    .max()
+                                                    .unwrap_or(8);
                                                 let idx_w = res.columns.len().to_string().len();
-                                                writeln!(stdout, "{cb}\u{2500}\u{2500} {cls}#{idx} \u{2500}\u{2500}{cr}")?;
-                                                for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
+                                                writeln!(
+                                                    stdout,
+                                                    "{cb}\u{2500}\u{2500} {cls}#{idx} \u{2500}\u{2500}{cr}"
+                                                )?;
+                                                for (i, (col, val)) in res
+                                                    .columns
+                                                    .iter()
+                                                    .zip(res.rows[0].iter())
+                                                    .enumerate()
+                                                {
                                                     let val_str = fmt_value_for_col(val, &col.name);
                                                     let (vp, vs) = if color {
-                                                        let p = cell_color_prefix(val, &col.name, bytes_raw);
-                                                        (p, if p.is_empty() { "" } else { "\x1b[0m" })
+                                                        let p = cell_color_prefix(
+                                                            val, &col.name, bytes_raw,
+                                                        );
+                                                        (
+                                                            p,
+                                                            if p.is_empty() {
+                                                                ""
+                                                            } else {
+                                                                "\x1b[0m"
+                                                            },
+                                                        )
                                                     } else {
                                                         ("", "")
                                                     };
-                                                    writeln!(stdout, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
+                                                    writeln!(
+                                                        stdout,
+                                                        "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}",
+                                                        i + 1,
+                                                        col.name
+                                                    )?;
                                                 }
                                                 last_result = Some(res);
                                             } else if res.rows.is_empty() {
-                                                warn_out(&format!("(no object {cls}#{idx} found)"), &mut stdout)?;
+                                                warn_out(
+                                                    &format!("(no object {cls}#{idx} found)"),
+                                                    &mut stdout,
+                                                )?;
                                             } else {
                                                 prev_result = last_result.clone();
-                                                print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                                print_result(
+                                                    &res,
+                                                    std::time::Duration::ZERO,
+                                                    max_width,
+                                                    &mut stdout,
+                                                )?;
                                                 last_result = Some(res);
                                             }
                                         }
@@ -1575,18 +2084,30 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             if let Ok(n) = verb.parse::<usize>() {
                                 let entries = line_editor
                                     .history()
-                                    .search(SearchQuery::everything(SearchDirection::Backward, None))
+                                    .search(SearchQuery::everything(
+                                        SearchDirection::Backward,
+                                        None,
+                                    ))
                                     .unwrap_or_default();
                                 if n == 0 || n > entries.len() {
-                                    writeln!(stdout, "{ce}no history entry {n}{cr}  {cd}(have {}){cr}", entries.len())?;
+                                    writeln!(
+                                        stdout,
+                                        "{ce}no history entry {n}{cr}  {cd}(have {}){cr}",
+                                        entries.len()
+                                    )?;
                                 } else {
                                     // entries[0] = most recent (Backward direction)
                                     let q = entries[n - 1].command_line.clone();
                                     writeln!(stdout, "\x1b[2m{q}\x1b[0m")?;
                                     stdout.flush()?;
                                     if let Some(res) = run_and_print(
-                                        path, &q, path_depth, reachable_only, max_width,
-                                        &mut cache, &mut stdout,
+                                        path,
+                                        &q,
+                                        path_depth,
+                                        reachable_only,
+                                        max_width,
+                                        &mut cache,
+                                        &mut stdout,
                                     )? {
                                         last_query = Some(q);
                                         last_result = Some(res);
@@ -1599,8 +2120,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             }
                         }
                     }
-                    if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
-                    {
+                    if handle_meta(
+                        cmd,
+                        path_depth,
+                        &mut reachable_only,
+                        &names_for_meta,
+                        &mut stdout,
+                    )? {
                         break;
                     }
                     stdout.flush()?;
@@ -1613,9 +2139,15 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     }
                     let query = buffer_lines.join("\n");
                     buffer_lines.clear();
-                    if let Some(res) =
-                        run_and_print(path, &query, path_depth, reachable_only, max_width, &mut cache, &mut stdout)?
-                    {
+                    if let Some(res) = run_and_print(
+                        path,
+                        &query,
+                        path_depth,
+                        reachable_only,
+                        max_width,
+                        &mut cache,
+                        &mut stdout,
+                    )? {
                         last_query = Some(query);
                         last_result = Some(res);
                         prev_result = None;
@@ -1632,7 +2164,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     let query = query.trim();
                     if !query.is_empty() {
                         if let Some(res) = run_and_print(
-                            path, query, path_depth, reachable_only, max_width, &mut cache, &mut stdout,
+                            path,
+                            query,
+                            path_depth,
+                            reachable_only,
+                            max_width,
+                            &mut cache,
+                            &mut stdout,
                         )? {
                             last_query = Some(query.to_string());
                             last_result = Some(res);
@@ -1646,9 +2184,15 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                 // Single self-contained line (no pending buffer, no `;`): run it
                 // immediately so the common one-line case needs no terminator.
                 if buffer_lines.is_empty() {
-                    if let Some(res) =
-                        run_and_print(path, t, path_depth, reachable_only, max_width, &mut cache, &mut stdout)?
-                    {
+                    if let Some(res) = run_and_print(
+                        path,
+                        t,
+                        path_depth,
+                        reachable_only,
+                        max_width,
+                        &mut cache,
+                        &mut stdout,
+                    )? {
                         last_query = Some(t.to_string());
                         last_result = Some(res);
                         prev_result = None;
@@ -1688,12 +2232,28 @@ fn run_repl_line(
     out: &mut impl Write,
 ) -> io::Result<bool> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cb, cc, cd, cg, ce, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[32m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "", "", "") };
+    let (cb, cc, cd, cg, ce, cr) = if color {
+        (
+            "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[32m", "\x1b[31m", "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
     let t = line.trim();
     // /run <name> — dispatch a named query
     if buffer_lines.is_empty() && t.starts_with("/run") {
         let rest = t[4..].trim();
-        return dispatch_run(rest, path, path_depth, *reachable_only, *max_width, last_query, last_result, cache, out);
+        return dispatch_run(
+            rest,
+            path,
+            path_depth,
+            *reachable_only,
+            *max_width,
+            last_query,
+            last_result,
+            cache,
+            out,
+        );
     }
     // /help — list named queries
     if buffer_lines.is_empty() && t == "/help" {
@@ -1725,7 +2285,14 @@ fn run_repl_line(
                         Some(res) => {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
-                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                            writeln!(
+                                out,
+                                "{cg}{}{cr} row{} × {cg}{}{cr} col{}",
+                                fmt_int(rows as i64),
+                                if rows == 1 { "" } else { "s" },
+                                cols,
+                                if cols == 1 { "" } else { "s" }
+                            )?;
                         }
                     }
                 } else {
@@ -1733,10 +2300,21 @@ fn run_repl_line(
                     let wrapped = wrap_count(rest);
                     match run_one(path, &wrapped, path_depth, *reachable_only, cache, out) {
                         Ok(res) if is_cls && res.error.is_none() => {
-                            let n = res.rows.first().and_then(|r| r.first())
-                                .and_then(|v| if let QueryValue::Int(n) = v { Some(*n) } else { None });
+                            let n = res.rows.first().and_then(|r| r.first()).and_then(|v| {
+                                if let QueryValue::Int(n) = v {
+                                    Some(*n)
+                                } else {
+                                    None
+                                }
+                            });
                             if let Some(n) = n {
-                                writeln!(out, "{cg}{}{cr} instance{} of {cc}{}{cr}", fmt_int(n), if n == 1 { "" } else { "s" }, rest.trim())?;
+                                writeln!(
+                                    out,
+                                    "{cg}{}{cr} instance{} of {cc}{}{cr}",
+                                    fmt_int(n),
+                                    if n == 1 { "" } else { "s" },
+                                    rest.trim()
+                                )?;
                             } else {
                                 print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
                             }
@@ -1763,7 +2341,13 @@ fn run_repl_line(
                     None => warn_out("(no previous query to re-run)", out)?,
                     Some(q) => {
                         if let Some(res) = run_and_print(
-                            path, &q, path_depth, *reachable_only, *max_width, cache, out,
+                            path,
+                            &q,
+                            path_depth,
+                            *reachable_only,
+                            *max_width,
+                            cache,
+                            out,
                         )? {
                             *last_result = Some(res);
                             *prev_result = None;
@@ -1780,19 +2364,42 @@ fn run_repl_line(
                         if rest.is_empty() {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
-                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                            writeln!(
+                                out,
+                                "{cg}{}{cr} row{} × {cg}{}{cr} col{}",
+                                fmt_int(rows as i64),
+                                if rows == 1 { "" } else { "s" },
+                                cols,
+                                if cols == 1 { "" } else { "s" }
+                            )?;
                         } else {
                             match resolve_col(rest, &res.columns) {
                                 None => {
-                                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", rest, names.join(", "))?;
+                                    let names: Vec<&str> =
+                                        res.columns.iter().map(|c| c.name.as_str()).collect();
+                                    writeln!(
+                                        out,
+                                        "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                        rest,
+                                        names.join(", ")
+                                    )?;
                                 }
                                 Some(ci) => {
                                     let total = res.rows.len();
-                                    let non_null = res.rows.iter()
-                                        .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
+                                    let non_null = res
+                                        .rows
+                                        .iter()
+                                        .filter(|row| {
+                                            !matches!(row.get(ci), Some(QueryValue::Null) | None)
+                                        })
                                         .count();
-                                    writeln!(out, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", fmt_int(non_null as i64), fmt_int(total as i64), res.columns[ci].name)?;
+                                    writeln!(
+                                        out,
+                                        "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}",
+                                        fmt_int(non_null as i64),
+                                        fmt_int(total as i64),
+                                        res.columns[ci].name
+                                    )?;
                                 }
                             }
                         }
@@ -1809,10 +2416,19 @@ fn run_repl_line(
             "save" => {
                 let last_query_before = last_query.clone();
                 handle_save(
-                    rest, path, path_depth, *reachable_only, *max_width,
-                    last_query, last_result, cache, out,
+                    rest,
+                    path,
+                    path_depth,
+                    *reachable_only,
+                    *max_width,
+                    last_query,
+                    last_result,
+                    cache,
+                    out,
                 )?;
-                if *last_query != last_query_before { *prev_result = None; }
+                if *last_query != last_query_before {
+                    *prev_result = None;
+                }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1824,33 +2440,48 @@ fn run_repl_line(
             "filter" | "grep" => {
                 let before_len = last_result.as_ref().map(|r| r.rows.len());
                 let saved_prev = prev_result.clone();
-                if !rest.is_empty() { *prev_result = last_result.clone(); }
+                if !rest.is_empty() {
+                    *prev_result = last_result.clone();
+                }
                 handle_filter(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                    *prev_result = saved_prev;
+                }
                 out.flush()?;
                 return Ok(false);
             }
             "not" | "exclude" => {
                 let before_len = last_result.as_ref().map(|r| r.rows.len());
                 let saved_prev = prev_result.clone();
-                if !rest.is_empty() { *prev_result = last_result.clone(); }
+                if !rest.is_empty() {
+                    *prev_result = last_result.clone();
+                }
                 handle_filter_not(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                    *prev_result = saved_prev;
+                }
                 out.flush()?;
                 return Ok(false);
             }
             "distinct" | "dedup" => {
                 let before_len = last_result.as_ref().map(|r| r.rows.len());
                 let saved_prev = prev_result.clone();
-                if before_len.is_some() { *prev_result = last_result.clone(); }
+                if before_len.is_some() {
+                    *prev_result = last_result.clone();
+                }
                 handle_distinct(last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                    *prev_result = saved_prev;
+                }
                 out.flush()?;
                 return Ok(false);
             }
             "sample" => {
-                let valid_arg = rest.trim().is_empty() || rest.trim().parse::<usize>().map(|n| n > 0).unwrap_or(false);
-                if valid_arg { *prev_result = last_result.clone(); }
+                let valid_arg = rest.trim().is_empty()
+                    || rest.trim().parse::<usize>().map(|n| n > 0).unwrap_or(false);
+                if valid_arg {
+                    *prev_result = last_result.clone();
+                }
                 handle_sample(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
@@ -1858,9 +2489,13 @@ fn run_repl_line(
             "sort" => {
                 let before_note = last_result.as_ref().and_then(|r| r.note.clone());
                 let saved_prev = prev_result.clone();
-                if !rest.is_empty() { *prev_result = last_result.clone(); }
+                if !rest.is_empty() {
+                    *prev_result = last_result.clone();
+                }
                 handle_sort(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { *prev_result = saved_prev; }
+                if last_result.as_ref().and_then(|r| r.note.clone()) == before_note {
+                    *prev_result = saved_prev;
+                }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1875,16 +2510,30 @@ fn run_repl_line(
                 return Ok(false);
             }
             "pivot" => {
-                let before_sig = last_result.as_ref().map(|r| (r.rows.len(), r.columns.len()));
+                let before_sig = last_result
+                    .as_ref()
+                    .map(|r| (r.rows.len(), r.columns.len()));
                 let saved_prev = prev_result.clone();
-                if !rest.is_empty() { *prev_result = last_result.clone(); }
+                if !rest.is_empty() {
+                    *prev_result = last_result.clone();
+                }
                 handle_pivot(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { *prev_result = saved_prev; }
+                if last_result
+                    .as_ref()
+                    .map(|r| (r.rows.len(), r.columns.len()))
+                    == before_sig
+                {
+                    *prev_result = saved_prev;
+                }
                 out.flush()?;
                 return Ok(false);
             }
             "top" | "head" => {
-                let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                let n = if rest.trim().is_empty() {
+                    10
+                } else {
+                    rest.trim().parse::<usize>().unwrap_or(0)
+                };
                 if n > 0 {
                     let before_len = last_result.as_ref().map(|r| r.rows.len());
                     let saved_prev = prev_result.clone();
@@ -1897,12 +2546,18 @@ fn run_repl_line(
                             res.rows.truncate(shown);
                             res.row_count = shown as u64;
                             if shown < total {
-                                res.note = Some(format!("top {} of {}", fmt_int(shown as i64), fmt_int(total as i64)));
+                                res.note = Some(format!(
+                                    "top {} of {}",
+                                    fmt_int(shown as i64),
+                                    fmt_int(total as i64)
+                                ));
                             }
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
-                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
+                    if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                        *prev_result = saved_prev;
+                    }
                 } else {
                     writeln!(out, "{cd}usage: !top [N]  (default 10){cr}")?;
                 }
@@ -1910,7 +2565,11 @@ fn run_repl_line(
                 return Ok(false);
             }
             "tail" => {
-                let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                let n = if rest.trim().is_empty() {
+                    10
+                } else {
+                    rest.trim().parse::<usize>().unwrap_or(0)
+                };
                 if n > 0 {
                     let before_len = last_result.as_ref().map(|r| r.rows.len());
                     let saved_prev = prev_result.clone();
@@ -1923,12 +2582,18 @@ fn run_repl_line(
                             res.rows = res.rows.split_off(skip);
                             res.row_count = res.rows.len() as u64;
                             if skip > 0 {
-                                res.note = Some(format!("last {} of {}", fmt_int(res.rows.len() as i64), fmt_int(total as i64)));
+                                res.note = Some(format!(
+                                    "last {} of {}",
+                                    fmt_int(res.rows.len() as i64),
+                                    fmt_int(total as i64)
+                                ));
                             }
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
-                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
+                    if last_result.as_ref().map(|r| r.rows.len()) == before_len {
+                        *prev_result = saved_prev;
+                    }
                 } else {
                     writeln!(out, "{cd}usage: !tail [N]  (default 10){cr}")?;
                 }
@@ -1940,8 +2605,17 @@ fn run_repl_line(
                     None => warn_out("(nothing to undo)", out)?,
                     Some(prev) => {
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        let (cg, cd, cr) = if color { ("\x1b[32m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
-                        writeln!(out, "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}", fmt_int(prev.rows.len() as i64), if prev.rows.len() == 1 { "" } else { "s" })?;
+                        let (cg, cd, cr) = if color {
+                            ("\x1b[32m", "\x1b[2m", "\x1b[0m")
+                        } else {
+                            ("", "", "")
+                        };
+                        writeln!(
+                            out,
+                            "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}",
+                            fmt_int(prev.rows.len() as i64),
+                            if prev.rows.len() == 1 { "" } else { "s" }
+                        )?;
                         print_result(&prev, std::time::Duration::ZERO, *max_width, out)?;
                         *last_result = Some(prev);
                     }
@@ -1955,10 +2629,18 @@ fn run_repl_line(
                 if col_args.is_empty() {
                     match last_result.as_ref() {
                         Some(res) if !res.columns.is_empty() => {
-                            let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "{cd}usage: !select <col1> [col2 ...]  — available: {}{cr}", names.join(", "))?;
+                            let names: Vec<&str> =
+                                res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(
+                                out,
+                                "{cd}usage: !select <col1> [col2 ...]  — available: {}{cr}",
+                                names.join(", ")
+                            )?;
                         }
-                        _ => warn_out("usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)", out)?,
+                        _ => warn_out(
+                            "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)",
+                            out,
+                        )?,
                     }
                 } else {
                     match last_result {
@@ -1970,8 +2652,14 @@ fn run_repl_line(
                                 match expand_col_spec(arg, &res.columns) {
                                     Ok(v) => indices.extend(v),
                                     Err(_) => {
-                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", arg, names.join(", "))?;
+                                        let names: Vec<&str> =
+                                            res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(
+                                            out,
+                                            "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                            arg,
+                                            names.join(", ")
+                                        )?;
                                         ok = false;
                                         break;
                                     }
@@ -1979,8 +2667,11 @@ fn run_repl_line(
                             }
                             if ok {
                                 use crate::query::model::QueryColumn;
-                                let new_cols: Vec<QueryColumn> = indices.iter().map(|&i| res.columns[i].clone()).collect();
-                                let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                                let new_cols: Vec<QueryColumn> =
+                                    indices.iter().map(|&i| res.columns[i].clone()).collect();
+                                let new_rows: Vec<Vec<QueryValue>> = res
+                                    .rows
+                                    .iter()
                                     .map(|row| indices.iter().map(|&i| row[i].clone()).collect())
                                     .collect();
                                 let projected = QueryResult {
@@ -1995,10 +2686,17 @@ fn run_repl_line(
                                     viz: None,
                                     elapsed_ms: None,
                                 };
-                                print_result(&projected, std::time::Duration::ZERO, *max_width, out)?;
+                                print_result(
+                                    &projected,
+                                    std::time::Duration::ZERO,
+                                    *max_width,
+                                    out,
+                                )?;
                                 let cols_changed = indices.len() != res.columns.len()
                                     || indices.iter().enumerate().any(|(i, &ci)| ci != i);
-                                if cols_changed { *prev_result = last_result.clone(); }
+                                if cols_changed {
+                                    *prev_result = last_result.clone();
+                                }
                                 *last_result = Some(projected);
                             }
                         }
@@ -2011,7 +2709,9 @@ fn run_repl_line(
                 let before = last_result.clone();
                 let before_cols = before.as_ref().map(|r| r.columns.len());
                 handle_drop(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.columns.len()) != before_cols { *prev_result = before; }
+                if last_result.as_ref().map(|r| r.columns.len()) != before_cols {
+                    *prev_result = before;
+                }
                 out.flush()?;
                 return Ok(false);
             }
@@ -2020,9 +2720,20 @@ fn run_repl_line(
                     print_named_queries_help(out)?;
                 } else {
                     let oql_before = last_query.clone();
-                    dispatch_run(rest, path, path_depth, *reachable_only, *max_width,
-                        last_query, last_result, cache, out)?;
-                    if *last_query != oql_before { *prev_result = None; }
+                    dispatch_run(
+                        rest,
+                        path,
+                        path_depth,
+                        *reachable_only,
+                        *max_width,
+                        last_query,
+                        last_result,
+                        cache,
+                        out,
+                    )?;
+                    if *last_query != oql_before {
+                        *prev_result = None;
+                    }
                 }
                 out.flush()?;
                 return Ok(false);
@@ -2032,8 +2743,13 @@ fn run_repl_line(
                 if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty() {
                     match last_result.as_ref() {
                         Some(res) if !res.columns.is_empty() => {
-                            let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "{cd}usage: !rename <col> <newname>  — available: {}{cr}", names.join(", "))?;
+                            let names: Vec<&str> =
+                                res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(
+                                out,
+                                "{cd}usage: !rename <col> <newname>  — available: {}{cr}",
+                                names.join(", ")
+                            )?;
                         }
                         _ => warn_out("usage: !rename <col> <newname>", out)?,
                     }
@@ -2042,38 +2758,54 @@ fn run_repl_line(
                     let new = parts[1].trim();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
-                        Some(res) => {
-                            match resolve_col(old, &res.columns) {
-                                None => {
-                                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", old, names.join(", "))?;
-                                }
-                                Some(ci) => {
-                                    *prev_result = Some(QueryResult {
-                                        columns: res.columns.clone(),
-                                        rows: res.rows.clone(),
-                                        row_count: res.row_count,
-                                        truncated: res.truncated,
-                                        note: res.note.clone(),
-                                        error: res.error.clone(),
-                                        name: res.name.clone(),
-                                        oql: res.oql.clone(),
-                                        viz: res.viz.clone(),
-                                        elapsed_ms: res.elapsed_ms,
-                                    });
-                                    let prev = res.columns[ci].name.clone();
-                                    res.columns[ci].name = new.to_string();
-                                    writeln!(out, "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
-                                }
+                        Some(res) => match resolve_col(old, &res.columns) {
+                            None => {
+                                let names: Vec<&str> =
+                                    res.columns.iter().map(|c| c.name.as_str()).collect();
+                                writeln!(
+                                    out,
+                                    "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                    old,
+                                    names.join(", ")
+                                )?;
                             }
-                        }
+                            Some(ci) => {
+                                *prev_result = Some(QueryResult {
+                                    columns: res.columns.clone(),
+                                    rows: res.rows.clone(),
+                                    row_count: res.row_count,
+                                    truncated: res.truncated,
+                                    note: res.note.clone(),
+                                    error: res.error.clone(),
+                                    name: res.name.clone(),
+                                    oql: res.oql.clone(),
+                                    viz: res.viz.clone(),
+                                    elapsed_ms: res.elapsed_ms,
+                                });
+                                let prev = res.columns[ci].name.clone();
+                                res.columns[ci].name = new.to_string();
+                                writeln!(
+                                    out,
+                                    "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}",
+                                    prev, new
+                                )?;
+                            }
+                        },
                     }
                 }
                 out.flush()?;
                 return Ok(false);
             }
             "describe" => {
-                handle_describe(rest.trim(), path, path_depth, *reachable_only, cache, &names_for_meta.0, out)?;
+                handle_describe(
+                    rest.trim(),
+                    path,
+                    path_depth,
+                    *reachable_only,
+                    cache,
+                    &names_for_meta.0,
+                    out,
+                )?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2081,25 +2813,48 @@ fn run_repl_line(
                 match last_result {
                     None => warn_out("(no result — run a query first)", out)?,
                     Some(res) => {
-                        let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                        let fields: Vec<&str> =
+                            res.columns.iter().map(|c| c.name.as_str()).collect();
                         let idx_w = fields.len().to_string().len();
                         let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
                         let total = res.rows.len();
                         for (i, f) in fields.iter().enumerate() {
                             let type_tag = infer_col_type(i, &res.rows);
-                            let non_null = res.rows.iter().filter(|row| !matches!(row.get(i), Some(QueryValue::Null) | None)).count();
+                            let non_null = res
+                                .rows
+                                .iter()
+                                .filter(|row| !matches!(row.get(i), Some(QueryValue::Null) | None))
+                                .count();
                             let fill = if total > 0 {
-                                format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
-                            } else { String::new() };
+                                format!(
+                                    "  {}/{} ({:.0}%)",
+                                    non_null,
+                                    total,
+                                    non_null as f64 / total as f64 * 100.0
+                                )
+                            } else {
+                                String::new()
+                            };
                             let all_null = total > 0 && non_null == 0;
                             let (name_color, suffix) = if all_null && color {
                                 ("\x1b[2;33m", format!("  \x1b[33m(all null){cr}"))
                             } else {
                                 (cc, String::new())
                             };
-                            writeln!(out, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
+                            writeln!(
+                                out,
+                                "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}",
+                                i + 1,
+                                type_tag,
+                                fill
+                            )?;
                         }
-                        writeln!(out, "{cd}({} column{}){cr}", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                        writeln!(
+                            out,
+                            "{cd}({} column{}){cr}",
+                            fields.len(),
+                            if fields.len() == 1 { "" } else { "s" }
+                        )?;
                     }
                 }
                 out.flush()?;
@@ -2108,12 +2863,19 @@ fn run_repl_line(
             "obj" => {
                 // !obj <Class>#<idx>  or  !obj <Class> <idx>
                 let arg = rest.trim();
-                let parsed = arg.split_once('#')
+                let parsed = arg
+                    .split_once('#')
                     .map(|(c, n)| (c.trim(), n.trim()))
-                    .or_else(|| arg.split_once(char::is_whitespace).map(|(c, n)| (c.trim(), n.trim())));
+                    .or_else(|| {
+                        arg.split_once(char::is_whitespace)
+                            .map(|(c, n)| (c.trim(), n.trim()))
+                    });
                 match parsed {
                     None | Some(("", _)) | Some((_, "")) => {
-                        writeln!(out, "{cd}usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42{cr}")?;
+                        writeln!(
+                            out,
+                            "{cd}usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42{cr}"
+                        )?;
                     }
                     Some((cls, idx)) => {
                         let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
@@ -2123,10 +2885,16 @@ fn run_repl_line(
                                 if res.rows.len() == 1 {
                                     *prev_result = last_result.clone();
                                     let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
-                                    let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+                                    let key_w =
+                                        res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                     let idx_w = res.columns.len().to_string().len();
-                                    writeln!(out, "{cb}\u{2500}\u{2500} {cls}#{idx} \u{2500}\u{2500}{cr}")?;
-                                    for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
+                                    writeln!(
+                                        out,
+                                        "{cb}\u{2500}\u{2500} {cls}#{idx} \u{2500}\u{2500}{cr}"
+                                    )?;
+                                    for (i, (col, val)) in
+                                        res.columns.iter().zip(res.rows[0].iter()).enumerate()
+                                    {
                                         let val_str = fmt_value_for_col(val, &col.name);
                                         let (vp, vs) = if color {
                                             let p = cell_color_prefix(val, &col.name, bytes_raw);
@@ -2134,7 +2902,12 @@ fn run_repl_line(
                                         } else {
                                             ("", "")
                                         };
-                                        writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
+                                        writeln!(
+                                            out,
+                                            "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}",
+                                            i + 1,
+                                            col.name
+                                        )?;
                                     }
                                     *last_result = Some(res);
                                 } else if res.rows.is_empty() {
@@ -2162,9 +2935,15 @@ fn run_repl_line(
         if !buffer_lines.is_empty() {
             let query = buffer_lines.join("\n");
             buffer_lines.clear();
-            if let Some(res) =
-                run_and_print(path, &query, path_depth, *reachable_only, *max_width, cache, out)?
-            {
+            if let Some(res) = run_and_print(
+                path,
+                &query,
+                path_depth,
+                *reachable_only,
+                *max_width,
+                cache,
+                out,
+            )? {
                 *last_query = Some(query);
                 *last_result = Some(res);
                 *prev_result = None;
@@ -2180,7 +2959,13 @@ fn run_repl_line(
         let query_str = query.trim().to_string();
         if !query_str.is_empty() {
             if let Some(res) = run_and_print(
-                path, &query_str, path_depth, *reachable_only, *max_width, cache, out,
+                path,
+                &query_str,
+                path_depth,
+                *reachable_only,
+                *max_width,
+                cache,
+                out,
             )? {
                 *last_query = Some(query_str);
                 *last_result = Some(res);
@@ -2226,7 +3011,11 @@ fn run_and_print(
         }
         Err(e) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (ce, cr) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
+            let (ce, cr) = if color {
+                ("\x1b[31m", "\x1b[0m")
+            } else {
+                ("", "")
+            };
             writeln!(out, "{ce}error: {e}{cr}")?;
             Ok(None)
         }
@@ -2244,7 +3033,9 @@ fn dispatch_run(
     cache: &mut Option<crate::query::run::ReplCache>,
     out: &mut impl Write,
 ) -> io::Result<bool> {
-    let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
+    let nq = crate::named_queries::NAMED_QUERIES
+        .iter()
+        .find(|q| q.name == name);
     match nq {
         None => {
             let name_lower = name.to_ascii_lowercase();
@@ -2255,7 +3046,11 @@ fn dispatch_run(
                 .take(3)
                 .collect();
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+            let (cd, ce, cr) = if color {
+                ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+            } else {
+                ("", "", "")
+            };
             writeln!(out, "{ce}error: unknown query name {:?}{cr}", name)?;
             if !candidates.is_empty() {
                 writeln!(out, "{cd}  did you mean: {}{cr}", candidates.join(", "))?;
@@ -2265,9 +3060,21 @@ fn dispatch_run(
         }
         Some(nq) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+            let (cd, cr) = if color {
+                ("\x1b[2m", "\x1b[0m")
+            } else {
+                ("", "")
+            };
             writeln!(out, "{cd}↳ {}{cr}", nq.oql)?;
-            if let Some(res) = run_and_print(path, nq.oql, path_depth, reachable_only, max_width, cache, out)? {
+            if let Some(res) = run_and_print(
+                path,
+                nq.oql,
+                path_depth,
+                reachable_only,
+                max_width,
+                cache,
+                out,
+            )? {
                 *last_query = Some(nq.oql.to_string());
                 *last_result = Some(res);
             }
@@ -2307,10 +3114,21 @@ fn print_named_queries_help(out: &mut impl Write) -> io::Result<()> {
 /// argument is rejected with a usage line (state left unchanged).
 fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cb, cd, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cb, cd, cg, cr) = if color {
+        ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
     if rest.is_empty() {
-        let cur = if *max_width == 0 { "unlimited".to_string() } else { max_width.to_string() };
-        writeln!(out, "cell width: {cg}{cur}{cr}  {cd}(use `!width N`, or `!width 0` for unlimited){cr}")?;
+        let cur = if *max_width == 0 {
+            "unlimited".to_string()
+        } else {
+            max_width.to_string()
+        };
+        writeln!(
+            out,
+            "cell width: {cg}{cur}{cr}  {cd}(use `!width N`, or `!width 0` for unlimited){cr}"
+        )?;
         return Ok(());
     }
     match rest.parse::<usize>() {
@@ -2322,7 +3140,10 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
                 writeln!(out, "{cg}\u{2713} cell width: {n}{cr}")?;
             }
         }
-        Err(_) => warn_out("usage: !width <N>  (N is a non-negative integer; 0 = unlimited)", out)?,
+        Err(_) => warn_out(
+            "usage: !width <N>  (N is a non-negative integer; 0 = unlimited)",
+            out,
+        )?,
     }
     Ok(())
 }
@@ -2334,22 +3155,53 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
 /// `!set bytes raw|human` — show byte-size columns as raw integers or human-readable.
 /// `!set color on|off` — toggle ANSI colour in table hints.
 /// `!set null <str>` — string shown for null values.
-fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, out: &mut impl Write) -> io::Result<()> {
+fn handle_set(
+    rest: &str,
+    last_result: Option<&QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cb, cd, ce, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "", "") };
+    let (cb, cd, ce, cg, cr) = if color {
+        ("\x1b[1m", "\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
     if rest.is_empty() {
         let (limit, bytes_raw, null_str, _color) = SESSION_SETTINGS.with(|s| {
             let s = s.borrow();
             (s.row_limit, s.bytes_raw, s.null_str.clone(), s.color)
         });
-        let limit_str = if limit == 0 { "unlimited".to_string() } else { limit.to_string() };
+        let limit_str = if limit == 0 {
+            "unlimited".to_string()
+        } else {
+            limit.to_string()
+        };
         let cg_val = if color { "\x1b[32m" } else { "" };
         writeln!(out, "{cb}Current settings:{cr}")?;
-        writeln!(out, "  {cb}limit{cr}  {cg_val}{limit_str:<12}{cr}  {cd}(rows displayed; 0 = no cap){cr}")?;
-        writeln!(out, "  {cb}bytes{cr}  {cg_val}{:<12}{cr}  {cd}(raw = show numbers, human = 4.3 KiB){cr}", if bytes_raw { "raw" } else { "human" })?;
-        writeln!(out, "  {cb}color{cr}  {cg_val}{:<12}{cr}  {cd}(ANSI colours in table cells){cr}", if color { "on" } else { "off" })?;
-        writeln!(out, "  {cb}null{cr}   {cg_val}{:<12}{cr}  {cd}(null display string){cr}", format!("\"{}\"", null_str))?;
-        writeln!(out, "{cd}usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>{cr}")?;
+        writeln!(
+            out,
+            "  {cb}limit{cr}  {cg_val}{limit_str:<12}{cr}  {cd}(rows displayed; 0 = no cap){cr}"
+        )?;
+        writeln!(
+            out,
+            "  {cb}bytes{cr}  {cg_val}{:<12}{cr}  {cd}(raw = show numbers, human = 4.3 KiB){cr}",
+            if bytes_raw { "raw" } else { "human" }
+        )?;
+        writeln!(
+            out,
+            "  {cb}color{cr}  {cg_val}{:<12}{cr}  {cd}(ANSI colours in table cells){cr}",
+            if color { "on" } else { "off" }
+        )?;
+        writeln!(
+            out,
+            "  {cb}null{cr}   {cg_val}{:<12}{cr}  {cd}(null display string){cr}",
+            format!("\"{}\"", null_str)
+        )?;
+        writeln!(
+            out,
+            "{cd}usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>{cr}"
+        )?;
         return Ok(());
     }
     let (key, val) = match rest.split_once(char::is_whitespace) {
@@ -2360,14 +3212,30 @@ fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, o
         "limit" => {
             if val.is_empty() || val == "?" {
                 let cur = SESSION_SETTINGS.with(|s| s.borrow().row_limit);
-                writeln!(out, "{cd}limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited){cr}", if cur == 0 { "unlimited".to_string() } else { cur.to_string() })?;
+                writeln!(
+                    out,
+                    "{cd}limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited){cr}",
+                    if cur == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        cur.to_string()
+                    }
+                )?;
             } else if val == "0" || val == "unlimited" || val == "none" {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
                 writeln!(out, "{cg}\u{2713} row limit: unlimited{cr}")?;
                 if let Some(res) = last_result {
                     print_result(res, std::time::Duration::ZERO, max_width, out)?;
-                    let cd2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[2m" } else { "" };
-                    let cr2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[0m" } else { "" };
+                    let cd2 = if SESSION_SETTINGS.with(|s| s.borrow().color) {
+                        "\x1b[2m"
+                    } else {
+                        ""
+                    };
+                    let cr2 = if SESSION_SETTINGS.with(|s| s.borrow().color) {
+                        "\x1b[0m"
+                    } else {
+                        ""
+                    };
                     writeln!(out, "{cd2}{} rows{cr2}", fmt_int(res.rows.len() as i64))?;
                 }
             } else {
@@ -2377,12 +3245,23 @@ fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, o
                         writeln!(out, "{cg}\u{2713} row limit: {n}{cr}")?;
                         if let Some(res) = last_result {
                             print_result(res, std::time::Duration::ZERO, max_width, out)?;
-                            let cd2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[2m" } else { "" };
-                            let cr2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[0m" } else { "" };
+                            let cd2 = if SESSION_SETTINGS.with(|s| s.borrow().color) {
+                                "\x1b[2m"
+                            } else {
+                                ""
+                            };
+                            let cr2 = if SESSION_SETTINGS.with(|s| s.borrow().color) {
+                                "\x1b[0m"
+                            } else {
+                                ""
+                            };
                             writeln!(out, "{cd2}{} rows{cr2}", fmt_int(res.rows.len() as i64))?;
                         }
                     }
-                    _ => warn_out("usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)", out)?,
+                    _ => warn_out(
+                        "usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)",
+                        out,
+                    )?,
                 }
             }
         }
@@ -2421,14 +3300,21 @@ fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, o
             _ => warn_out("usage: !set color on|off", out)?,
         },
         "null" => {
-            let s = if val.is_empty() { "null".to_string() } else { val.to_string() };
+            let s = if val.is_empty() {
+                "null".to_string()
+            } else {
+                val.to_string()
+            };
             writeln!(out, "{cg}\u{2713} null: \"{s}\"{cr}")?;
             SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
             if let Some(res) = last_result {
                 print_result(res, std::time::Duration::ZERO, max_width, out)?;
             }
         }
-        _ => writeln!(out, "{ce}unknown setting: {key}{cr}  {cd}(options: limit, bytes, color, null){cr}")?,
+        _ => writeln!(
+            out,
+            "{ce}unknown setting: {key}{cr}  {cd}(options: limit, bytes, color, null){cr}"
+        )?,
     }
     Ok(())
 }
@@ -2474,13 +3360,20 @@ fn handle_save(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cg, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cd, ce, cg, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
     let (file, inline_oql) = match rest.split_once(char::is_whitespace) {
         Some((f, q)) => (f.trim(), q.trim()),
         None => (rest.trim(), ""),
     };
     if file.is_empty() {
-        writeln!(out, "{cd}usage: !save <file> [oql]  (with no oql, saves the last result){cr}")?;
+        writeln!(
+            out,
+            "{cd}usage: !save <file> [oql]  (with no oql, saves the last result){cr}"
+        )?;
         return Ok(());
     }
     // Resolve which result to save: run the inline query if given, else reuse the
@@ -2501,11 +3394,14 @@ fn handle_save(
         }
     }
     let Some(res) = last_result.as_ref() else {
-        warn_out("(nothing to save \u{2014} run a query first, or use `!save <file> <oql>`)", out)?;
+        warn_out(
+            "(nothing to save \u{2014} run a query first, or use `!save <file> <oql>`)",
+            out,
+        )?;
         return Ok(());
     };
     let use_json = file.ends_with(".json");
-    let use_tsv  = file.ends_with(".tsv");
+    let use_tsv = file.ends_with(".tsv");
     let content: String = if use_json {
         result_to_json(res)
     } else if use_tsv {
@@ -2513,7 +3409,13 @@ fn handle_save(
     } else {
         result_to_csv(res)
     };
-    let fmt = if use_json { "JSON" } else if use_tsv { "TSV" } else { "CSV" };
+    let fmt = if use_json {
+        "JSON"
+    } else if use_tsv {
+        "TSV"
+    } else {
+        "CSV"
+    };
     match std::fs::write(file, content.as_bytes()) {
         Ok(()) => writeln!(
             out,
@@ -2545,10 +3447,20 @@ fn handle_filter(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if pattern.is_empty() {
-        writeln!(out, "{cd}usage: !filter <pattern>          — case-insensitive substring; /regex/ for regex{cr}")?;
-        writeln!(out, "{cd}       !filter @<col> <pattern>  — filter by specific column{cr}")?;
+        writeln!(
+            out,
+            "{cd}usage: !filter <pattern>          — case-insensitive substring; /regex/ for regex{cr}"
+        )?;
+        writeln!(
+            out,
+            "{cd}       !filter @<col> <pattern>  — filter by specific column{cr}"
+        )?;
         return Ok(());
     }
     match last_result {
@@ -2562,14 +3474,23 @@ fn handle_filter(
                         match resolve_col(col, &res.columns) {
                             Some(ci) => (Some(ci), pat.trim()),
                             None => {
-                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col, names.join(", "))?;
+                                let names: Vec<&str> =
+                                    res.columns.iter().map(|c| c.name.as_str()).collect();
+                                writeln!(
+                                    out,
+                                    "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                    col,
+                                    names.join(", ")
+                                )?;
                                 return Ok(());
                             }
                         }
                     }
                     _ => {
-                        writeln!(out, "{cd}usage: !filter @<col> <pattern>  — e.g. !filter @className String{cr}")?;
+                        writeln!(
+                            out,
+                            "{cd}usage: !filter @<col> <pattern>  — e.g. !filter @className String{cr}"
+                        )?;
                         return Ok(());
                     }
                 }
@@ -2600,7 +3521,11 @@ fn handle_filter(
             } else {
                 None
             };
-            let pat_lower = if re_opt.is_none() { actual_pattern.to_ascii_lowercase() } else { String::new() };
+            let pat_lower = if re_opt.is_none() {
+                actual_pattern.to_ascii_lowercase()
+            } else {
+                String::new()
+            };
             let filtered_rows: Vec<Vec<QueryValue>> = res
                 .rows
                 .iter()
@@ -2613,8 +3538,14 @@ fn handle_filter(
                         }
                     };
                     match col_filter_idx {
-                        Some(ci) => row.get(ci).map(|v| matches(v, &res.columns[ci].name)).unwrap_or(false),
-                        None => row.iter().enumerate().any(|(i, v)| matches(v, &res.columns[i].name)),
+                        Some(ci) => row
+                            .get(ci)
+                            .map(|v| matches(v, &res.columns[ci].name))
+                            .unwrap_or(false),
+                        None => row
+                            .iter()
+                            .enumerate()
+                            .any(|(i, v)| matches(v, &res.columns[i].name)),
                     }
                 })
                 .cloned()
@@ -2627,7 +3558,12 @@ fn handle_filter(
                 writeln!(out, "{cy}(no rows match {pattern:?}){cr2}")?;
                 return Ok(());
             }
-            let note = format!("{} of {} rows match {:?}", fmt_int(filtered_count as i64), fmt_int(total as i64), pattern);
+            let note = format!(
+                "{} of {} rows match {:?}",
+                fmt_int(filtered_count as i64),
+                fmt_int(total as i64),
+                pattern
+            );
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
@@ -2656,10 +3592,20 @@ fn handle_filter_not(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if pattern.is_empty() {
-        writeln!(out, "{cd}usage: !not <pattern>          — exclude rows matching pattern/regex (inverse of !filter){cr}")?;
-        writeln!(out, "{cd}       !not @<col> <pattern>  — exclude by specific column{cr}")?;
+        writeln!(
+            out,
+            "{cd}usage: !not <pattern>          — exclude rows matching pattern/regex (inverse of !filter){cr}"
+        )?;
+        writeln!(
+            out,
+            "{cd}       !not @<col> <pattern>  — exclude by specific column{cr}"
+        )?;
         return Ok(());
     }
     match last_result {
@@ -2673,8 +3619,14 @@ fn handle_filter_not(
                         match resolve_col(col, &res.columns) {
                             Some(ci) => (Some(ci), pat.trim()),
                             None => {
-                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col, names.join(", "))?;
+                                let names: Vec<&str> =
+                                    res.columns.iter().map(|c| c.name.as_str()).collect();
+                                writeln!(
+                                    out,
+                                    "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                    col,
+                                    names.join(", ")
+                                )?;
                                 return Ok(());
                             }
                         }
@@ -2692,14 +3644,29 @@ fn handle_filter_not(
                 if end > 0 {
                     let inner = &actual_pattern[1..end];
                     let flags = &actual_pattern[end + 1..];
-                    let flagged = if flags.contains('i') { format!("(?i){inner}") } else { inner.to_string() };
+                    let flagged = if flags.contains('i') {
+                        format!("(?i){inner}")
+                    } else {
+                        inner.to_string()
+                    };
                     match regex::Regex::new(&flagged) {
                         Ok(re) => Some(re),
-                        Err(e) => { writeln!(out, "{ce}invalid regex: {e}{cr}")?; return Ok(()); }
+                        Err(e) => {
+                            writeln!(out, "{ce}invalid regex: {e}{cr}")?;
+                            return Ok(());
+                        }
                     }
-                } else { None }
-            } else { None };
-            let pat_lower = if re_opt.is_none() { actual_pattern.to_ascii_lowercase() } else { String::new() };
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let pat_lower = if re_opt.is_none() {
+                actual_pattern.to_ascii_lowercase()
+            } else {
+                String::new()
+            };
             let matches = |v: &QueryValue, col_name: &str| {
                 let s = fmt_value_for_col(v, col_name);
                 match &re_opt {
@@ -2707,10 +3674,18 @@ fn handle_filter_not(
                     None => s.to_ascii_lowercase().contains(&pat_lower),
                 }
             };
-            let filtered_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+            let filtered_rows: Vec<Vec<QueryValue>> = res
+                .rows
+                .iter()
                 .filter(|row| match col_filter_idx {
-                    Some(ci) => !row.get(ci).map(|v| matches(v, &res.columns[ci].name)).unwrap_or(false),
-                    None => !row.iter().enumerate().any(|(i, v)| matches(v, &res.columns[i].name)),
+                    Some(ci) => !row
+                        .get(ci)
+                        .map(|v| matches(v, &res.columns[ci].name))
+                        .unwrap_or(false),
+                    None => !row
+                        .iter()
+                        .enumerate()
+                        .any(|(i, v)| matches(v, &res.columns[i].name)),
                 })
                 .cloned()
                 .collect();
@@ -2720,10 +3695,18 @@ fn handle_filter_not(
             if excluded == 0 {
                 let cy = if color { "\x1b[33m" } else { "" };
                 let cr2 = if color { "\x1b[0m" } else { "" };
-                writeln!(out, "{cy}(no rows match {actual_pattern:?} — nothing excluded){cr2}")?;
+                writeln!(
+                    out,
+                    "{cy}(no rows match {actual_pattern:?} — nothing excluded){cr2}"
+                )?;
                 return Ok(());
             }
-            let note = format!("{} of {} rows excluded {:?}", fmt_int(excluded as i64), fmt_int(total as i64), actual_pattern);
+            let note = format!(
+                "{} of {} rows excluded {:?}",
+                fmt_int(excluded as i64),
+                fmt_int(total as i64),
+                actual_pattern
+            );
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
@@ -2778,13 +3761,18 @@ fn handle_sample(
                 indices.swap(i, j);
             }
             indices[..k].sort_unstable();
-            let sampled: Vec<Vec<QueryValue>> = indices[..k].iter().map(|&i| res.rows[i].clone()).collect();
+            let sampled: Vec<Vec<QueryValue>> =
+                indices[..k].iter().map(|&i| res.rows[i].clone()).collect();
             let sampled_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: sampled,
                 row_count: k as u64,
                 truncated: false,
-                note: Some(format!("random sample of {}/{}", fmt_int(k as i64), fmt_int(total as i64))),
+                note: Some(format!(
+                    "random sample of {}/{}",
+                    fmt_int(k as i64),
+                    fmt_int(total as i64)
+                )),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
@@ -2809,7 +3797,9 @@ fn handle_distinct(
         Some(res) => {
             use std::collections::HashSet;
             let mut seen: HashSet<Vec<String>> = HashSet::new();
-            let kept: Vec<Vec<QueryValue>> = res.rows.iter()
+            let kept: Vec<Vec<QueryValue>> = res
+                .rows
+                .iter()
                 .filter(|row| {
                     let key: Vec<String> = row.iter().map(|v| fmt_value(v)).collect();
                     seen.insert(key)
@@ -2823,7 +3813,13 @@ fn handle_distinct(
                 rows: kept,
                 row_count: kept_n,
                 truncated: false,
-                note: Some(format!("{} unique row{} ({} duplicate{} removed)", fmt_int(kept_n as i64), if kept_n == 1 { "" } else { "s" }, fmt_int(removed as i64), if removed == 1 { "" } else { "s" })),
+                note: Some(format!(
+                    "{} unique row{} ({} duplicate{} removed)",
+                    fmt_int(kept_n as i64),
+                    if kept_n == 1 { "" } else { "s" },
+                    fmt_int(removed as i64),
+                    if removed == 1 { "" } else { "s" }
+                )),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
@@ -2899,14 +3895,25 @@ fn handle_sort(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if args.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "{cd}usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)  — available: {}{cr}", names.join(", "))?;
+                writeln!(
+                    out,
+                    "{cd}usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)  — available: {}{cr}",
+                    names.join(", ")
+                )?;
             }
-            _ => warn_out("usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)", out)?,
+            _ => warn_out(
+                "usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)",
+                out,
+            )?,
         }
         return Ok(());
     }
@@ -2919,26 +3926,39 @@ fn handle_sort(
                 let mut ok = true;
                 for spec in args.split(',') {
                     let spec = spec.trim();
-                    if spec.is_empty() { continue; }
+                    if spec.is_empty() {
+                        continue;
+                    }
                     // Support "-col" as shorthand for "col desc"
                     let (col_spec, parts_desc) = if spec.starts_with('-') && spec.len() > 1 {
                         (&spec[1..], true)
                     } else {
                         let parts: Vec<&str> = spec.splitn(2, char::is_whitespace).collect();
-                        let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
+                        let desc = parts
+                            .get(1)
+                            .map(|s| s.trim().eq_ignore_ascii_case("desc"))
+                            .unwrap_or(false);
                         (parts[0], desc)
                     };
                     match resolve_col(col_spec, &res.columns) {
                         None => {
-                            let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col_spec, names.join(", "))?;
+                            let names: Vec<&str> =
+                                res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(
+                                out,
+                                "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                                col_spec,
+                                names.join(", ")
+                            )?;
                             ok = false;
                             break;
                         }
                         Some(ci) => v.push((ci, parts_desc)),
                     }
                 }
-                if !ok { return Ok(()); }
+                if !ok {
+                    return Ok(());
+                }
                 v
             };
             if specs.is_empty() {
@@ -2951,22 +3971,42 @@ fn handle_sort(
                     // Nulls always sort last regardless of direction
                     let a_null = matches!(a[ci], QueryValue::Null);
                     let b_null = matches!(b[ci], QueryValue::Null);
-                    if a_null && b_null { continue; }
-                    if a_null { return std::cmp::Ordering::Greater; }
-                    if b_null { return std::cmp::Ordering::Less; }
+                    if a_null && b_null {
+                        continue;
+                    }
+                    if a_null {
+                        return std::cmp::Ordering::Greater;
+                    }
+                    if b_null {
+                        return std::cmp::Ordering::Less;
+                    }
                     let av = fmt_value(&a[ci]);
                     let bv = fmt_value(&b[ci]);
-                    let cmp = match (av.replace(',', "").parse::<f64>(), bv.replace(',', "").parse::<f64>()) {
-                        (Ok(an), Ok(bn)) => an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal),
+                    let cmp = match (
+                        av.replace(',', "").parse::<f64>(),
+                        bv.replace(',', "").parse::<f64>(),
+                    ) {
+                        (Ok(an), Ok(bn)) => {
+                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
+                        }
                         _ => av.cmp(&bv),
                     };
                     let cmp = if desc { cmp.reverse() } else { cmp };
-                    if cmp != std::cmp::Ordering::Equal { return cmp; }
+                    if cmp != std::cmp::Ordering::Equal {
+                        return cmp;
+                    }
                 }
                 std::cmp::Ordering::Equal
             });
-            let sort_label: Vec<String> = specs.iter()
-                .map(|&(ci, desc)| format!("{} {}", res.columns[ci].name, if desc { "desc" } else { "asc" }))
+            let sort_label: Vec<String> = specs
+                .iter()
+                .map(|&(ci, desc)| {
+                    format!(
+                        "{} {}",
+                        res.columns[ci].name,
+                        if desc { "desc" } else { "asc" }
+                    )
+                })
                 .collect();
             let note = format!("sorted by {}", sort_label.join(", "));
             let sorted_res = QueryResult {
@@ -2998,10 +4038,20 @@ fn handle_stats(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if col_arg.is_empty() {
         match last_result {
-            None => { writeln!(out, "{cd}usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum){cr}")?; return Ok(()); }
+            None => {
+                writeln!(
+                    out,
+                    "{cd}usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum){cr}"
+                )?;
+                return Ok(());
+            }
             Some(res) if !res.columns.is_empty() => {
                 // Auto-select if exactly one numeric column; if multiple, show all
                 let numeric_cols: Vec<usize> = (0..res.columns.len())
@@ -3015,7 +4065,8 @@ fn handle_stats(
                 }
                 if numeric_cols.len() > 1 {
                     // Show stats for every numeric column
-                    let names: Vec<String> = numeric_cols.iter()
+                    let names: Vec<String> = numeric_cols
+                        .iter()
                         .map(|&i| res.columns[i].name.clone())
                         .collect();
                     drop(numeric_cols);
@@ -3025,9 +4076,16 @@ fn handle_stats(
                     return Ok(());
                 }
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "{cd}usage: !stats <col>  — no numeric columns found  available: {}{cr}", names.join(", "))?;
+                writeln!(
+                    out,
+                    "{cd}usage: !stats <col>  — no numeric columns found  available: {}{cr}",
+                    names.join(", ")
+                )?;
             }
-            _ => warn_out("usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)", out)?,
+            _ => warn_out(
+                "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)",
+                out,
+            )?,
         }
         return Ok(());
     }
@@ -3038,20 +4096,30 @@ fn handle_stats(
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col_arg, names.join(", "))?;
+                    writeln!(
+                        out,
+                        "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                        col_arg,
+                        names.join(", ")
+                    )?;
                 }
                 Some(ci) => {
                     let col_name = &res.columns[ci].name;
                     let total = res.rows.len();
-                    let mut vals: Vec<f64> = res.rows.iter().filter_map(|row| {
-                        match &row[ci] {
+                    let mut vals: Vec<f64> = res
+                        .rows
+                        .iter()
+                        .filter_map(|row| match &row[ci] {
                             QueryValue::Int(i) => Some(*i as f64),
                             QueryValue::Float(f) => Some(*f),
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     if vals.is_empty() {
-                        warn_out(&format!("(no numeric values in column {:?})", col_name), out)?;
+                        warn_out(
+                            &format!("(no numeric values in column {:?})", col_name),
+                            out,
+                        )?;
                     } else {
                         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         let n = vals.len();
@@ -3062,7 +4130,9 @@ fn handle_stats(
                         let p90 = vals[n * 90 / 100];
                         let p99 = vals[n * 99 / 100];
                         let col_lower = col_name.to_ascii_lowercase();
-                        let is_bytes_col = col_lower.ends_with("bytes") || col_lower.ends_with("_size") || col_lower.ends_with("heap_size");
+                        let is_bytes_col = col_lower.ends_with("bytes")
+                            || col_lower.ends_with("_size")
+                            || col_lower.ends_with("heap_size");
                         let fv = |v: f64| -> String {
                             if is_bytes_col && v >= 0.0 {
                                 return fmt_bytes(v as u64);
@@ -3074,13 +4144,30 @@ fn handle_stats(
                             }
                         };
                         let null_note = if null_count > 0 {
-                            if color { format!("  \x1b[2m({} null)\x1b[0m", fmt_int(null_count as i64)) } else { format!("  ({} null)", fmt_int(null_count as i64)) }
-                        } else { String::new() };
-                        let variance: f64 = vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
+                            if color {
+                                format!("  \x1b[2m({} null)\x1b[0m", fmt_int(null_count as i64))
+                            } else {
+                                format!("  ({} null)", fmt_int(null_count as i64))
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let variance: f64 =
+                            vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
                         let stddev = variance.sqrt();
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        let (cb, cv, cs, cd, cr) = if color { ("\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
-                        writeln!(out, "{cb}{}{cr}  {cd}({} non-null values){cr}{}", col_name, fmt_int(n as i64), null_note)?;
+                        let (cb, cv, cs, cd, cr) = if color {
+                            ("\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[2m", "\x1b[0m")
+                        } else {
+                            ("", "", "", "", "")
+                        };
+                        writeln!(
+                            out,
+                            "{cb}{}{cr}  {cd}({} non-null values){cr}{}",
+                            col_name,
+                            fmt_int(n as i64),
+                            null_note
+                        )?;
                         writeln!(out, "  min    {cv}{}{cr}", fv(vals[0]))?;
                         writeln!(out, "  max    {cv}{}{cr}", fv(vals[n - 1]))?;
                         writeln!(out, "  mean   {cv}{}{cr}", fv(mean))?;
@@ -3108,7 +4195,14 @@ fn handle_stats(
                                     let bar_len = if max_b > 0 { b * BAR_MAX / max_b } else { 0 };
                                     let bar: String = "█".repeat(bar_len);
                                     let bucket_lo = lo + i as f64 * range / NBUCKETS as f64;
-                                    writeln!(out, "  {cd}{:>8}{cr}  {cv}{:<bar_w$}{cr}  {cd}{}{cr}", fv(bucket_lo), bar, b, bar_w = BAR_MAX)?;
+                                    writeln!(
+                                        out,
+                                        "  {cd}{:>8}{cr}  {cv}{:<bar_w$}{cr}  {cd}{}{cr}",
+                                        fv(bucket_lo),
+                                        bar,
+                                        b,
+                                        bar_w = BAR_MAX
+                                    )?;
                                 }
                             }
                         }
@@ -3132,15 +4226,33 @@ fn handle_describe(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if cls.is_empty() {
         writeln!(out, "{cd}usage: !describe <ClassName>{cr}")?;
         return Ok(());
     }
     // Run SELECT * LIMIT 1 silently to get field names + sample values for type inference.
     let mut dev_null: Vec<u8> = Vec::new();
-    let fields_res = run_one(path, &format!("SELECT * FROM {cls} LIMIT 1"), path_depth, reachable_only, cache, &mut dev_null);
-    let count_res = run_one(path, &format!("SELECT COUNT(*) FROM INSTANCEOF {cls}"), path_depth, reachable_only, cache, &mut dev_null);
+    let fields_res = run_one(
+        path,
+        &format!("SELECT * FROM {cls} LIMIT 1"),
+        path_depth,
+        reachable_only,
+        cache,
+        &mut dev_null,
+    );
+    let count_res = run_one(
+        path,
+        &format!("SELECT COUNT(*) FROM INSTANCEOF {cls}"),
+        path_depth,
+        reachable_only,
+        cache,
+        &mut dev_null,
+    );
     match fields_res {
         Err(e) => {
             writeln!(out, "{ce}error: {e}{cr}")?;
@@ -3165,7 +4277,10 @@ fn handle_describe(
                         .collect();
                 }
                 if !sugg.is_empty() {
-                    let names: Vec<&str> = sugg.iter().map(|c| c.rsplit('.').next().unwrap_or(c)).collect();
+                    let names: Vec<&str> = sugg
+                        .iter()
+                        .map(|c| c.rsplit('.').next().unwrap_or(c))
+                        .collect();
                     writeln!(out, "{cd}similar: {}{cr}", names.join(", "))?;
                 }
             }
@@ -3173,14 +4288,20 @@ fn handle_describe(
         }
         Ok(res) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (cb, cc, cd, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
+            let (cb, cc, cd, cr) = if color {
+                ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m")
+            } else {
+                ("", "", "", "")
+            };
             let count_str = match &count_res {
-                Ok(cr_) => {
-                    match cr_.rows.first().and_then(|r| r.first()) {
-                        Some(QueryValue::Int(n)) => format!("  {cd}({} instance{}){cr}", fmt_int(*n), if *n == 1 { "" } else { "s" }),
-                        _ => String::new(),
-                    }
-                }
+                Ok(cr_) => match cr_.rows.first().and_then(|r| r.first()) {
+                    Some(QueryValue::Int(n)) => format!(
+                        "  {cd}({} instance{}){cr}",
+                        fmt_int(*n),
+                        if *n == 1 { "" } else { "s" }
+                    ),
+                    _ => String::new(),
+                },
                 Err(_) => String::new(),
             };
             let idx_w = res.columns.len().to_string().len();
@@ -3188,9 +4309,20 @@ fn handle_describe(
             writeln!(out, "Fields of {cb}{}{cr}{}", cls, count_str)?;
             for (i, col) in res.columns.iter().enumerate() {
                 let type_tag = infer_col_type(i, &res.rows);
-                writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<col_w$}{cr}  {cd}{}{cr}", i + 1, col.name, type_tag)?;
+                writeln!(
+                    out,
+                    "  {cd}{:>idx_w$}{cr}  {cc}{:<col_w$}{cr}  {cd}{}{cr}",
+                    i + 1,
+                    col.name,
+                    type_tag
+                )?;
             }
-            writeln!(out, "{cd}({} field{}){cr}", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
+            writeln!(
+                out,
+                "{cd}({} field{}){cr}",
+                res.columns.len(),
+                if res.columns.len() == 1 { "" } else { "s" }
+            )?;
         }
     }
     Ok(())
@@ -3205,14 +4337,25 @@ fn handle_drop(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if col_arg.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "{cd}usage: !drop <col1> [col2 ...]  — available: {}{cr}", names.join(", "))?;
+                writeln!(
+                    out,
+                    "{cd}usage: !drop <col1> [col2 ...]  — available: {}{cr}",
+                    names.join(", ")
+                )?;
             }
-            _ => warn_out("usage: !drop <col1> [col2 ...]  — remove columns from last result", out)?,
+            _ => warn_out(
+                "usage: !drop <col1> [col2 ...]  — remove columns from last result",
+                out,
+            )?,
         }
         return Ok(());
     }
@@ -3224,10 +4367,18 @@ fn handle_drop(
             let mut ok = true;
             for arg in &col_args {
                 match expand_col_spec(arg, &res.columns) {
-                    Ok(v) => { drop_set.extend(v); }
+                    Ok(v) => {
+                        drop_set.extend(v);
+                    }
                     Err(_) => {
-                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                        writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", arg, names.join(", "))?;
+                        let names: Vec<&str> =
+                            res.columns.iter().map(|c| c.name.as_str()).collect();
+                        writeln!(
+                            out,
+                            "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                            arg,
+                            names.join(", ")
+                        )?;
                         ok = false;
                         break;
                     }
@@ -3239,9 +4390,14 @@ fn handle_drop(
                     return Ok(());
                 }
                 use crate::query::model::QueryColumn;
-                let keep: Vec<usize> = (0..res.columns.len()).filter(|i| !drop_set.contains(i)).collect();
-                let new_cols: Vec<QueryColumn> = keep.iter().map(|&i| res.columns[i].clone()).collect();
-                let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                let keep: Vec<usize> = (0..res.columns.len())
+                    .filter(|i| !drop_set.contains(i))
+                    .collect();
+                let new_cols: Vec<QueryColumn> =
+                    keep.iter().map(|&i| res.columns[i].clone()).collect();
+                let new_rows: Vec<Vec<QueryValue>> = res
+                    .rows
+                    .iter()
                     .map(|row| keep.iter().map(|&i| row[i].clone()).collect())
                     .collect();
                 let projected = QueryResult {
@@ -3272,14 +4428,25 @@ fn handle_unique(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr_outer) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr_outer) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if col_arg.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "{cd}usage: !unique <col> [N]  — available: {}{cr_outer}", names.join(", "))?;
+                writeln!(
+                    out,
+                    "{cd}usage: !unique <col> [N]  — available: {}{cr_outer}",
+                    names.join(", ")
+                )?;
             }
-            _ => warn_out("usage: !unique <col> [N]  — distinct value counts, optional top N", out)?,
+            _ => warn_out(
+                "usage: !unique <col> [N]  — distinct value counts, optional top N",
+                out,
+            )?,
         }
         return Ok(());
     }
@@ -3302,15 +4469,26 @@ fn handle_unique(
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "{ce}column {:?} not found{cr_outer}  {cd}available: {}{cr_outer}", col_spec, names.join(", "))?;
+                    writeln!(
+                        out,
+                        "{ce}column {:?} not found{cr_outer}  {cd}available: {}{cr_outer}",
+                        col_spec,
+                        names.join(", ")
+                    )?;
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
-                    let (cb, cd, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
+                    let (cb, cd, cg, cr) = if color {
+                        ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m")
+                    } else {
+                        ("", "", "", "")
+                    };
                     let col_name = &res.columns[ci].name;
                     let mut counts: HashMap<String, usize> = HashMap::new();
                     for row in &res.rows {
-                        *counts.entry(fmt_value_for_col(&row[ci], col_name)).or_insert(0) += 1;
+                        *counts
+                            .entry(fmt_value_for_col(&row[ci], col_name))
+                            .or_insert(0) += 1;
                     }
                     let total_distinct = counts.len();
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
@@ -3322,25 +4500,61 @@ fn handle_unique(
                     let max_cnt = entries.first().map(|(_, c)| *c).unwrap_or(1);
                     let cnt_w = fmt_int(max_cnt as i64).len().max(5);
                     let pct_w = 6usize; // "100.0%"
-                    let val_w = entries.iter().map(|(v, _)| v.len()).max().unwrap_or(0).max(col_name.len());
+                    let val_w = entries
+                        .iter()
+                        .map(|(v, _)| v.len())
+                        .max()
+                        .unwrap_or(0)
+                        .max(col_name.len());
                     const BAR_W: usize = 20;
-                    let hdr = format!("{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  bar", col_name, "count", "%");
+                    let hdr = format!(
+                        "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  bar",
+                        col_name, "count", "%"
+                    );
                     writeln!(out, "{cb}{hdr}{cr}")?;
-                    writeln!(out, "{cd}{}{cr}", "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6))?;
+                    writeln!(
+                        out,
+                        "{cd}{}{cr}",
+                        "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6)
+                    )?;
                     for (val, cnt) in entries {
-                        let filled = if max_cnt > 0 { (cnt * BAR_W) / max_cnt } else { 0 };
+                        let filled = if max_cnt > 0 {
+                            (cnt * BAR_W) / max_cnt
+                        } else {
+                            0
+                        };
                         let bar: String = "█".repeat(filled) + &"░".repeat(BAR_W - filled);
                         let pct = if total > 0 {
                             format!("{:.1}%", *cnt as f64 / total as f64 * 100.0)
                         } else {
                             "—".to_string()
                         };
-                        writeln!(out, "{:<val_w$}  {cg}{:>cnt_w$}{cr}  {cd}{:>pct_w$}{cr}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
+                        writeln!(
+                            out,
+                            "{:<val_w$}  {cg}{:>cnt_w$}{cr}  {cd}{:>pct_w$}{cr}  {cd}{}{cr}",
+                            val,
+                            fmt_int(*cnt as i64),
+                            pct,
+                            bar
+                        )?;
                     }
                     if shown < total_distinct {
-                        writeln!(out, "{cd}({} of {} distinct values, top {} shown  ·  {} total rows){cr}", fmt_int(shown as i64), fmt_int(total_distinct as i64), show_n, fmt_int(total as i64))?;
+                        writeln!(
+                            out,
+                            "{cd}({} of {} distinct values, top {} shown  ·  {} total rows){cr}",
+                            fmt_int(shown as i64),
+                            fmt_int(total_distinct as i64),
+                            show_n,
+                            fmt_int(total as i64)
+                        )?;
                     } else {
-                        writeln!(out, "{cd}({} distinct value{} in {} rows){cr}", fmt_int(total_distinct as i64), if total_distinct == 1 { "" } else { "s" }, fmt_int(total as i64))?;
+                        writeln!(
+                            out,
+                            "{cd}({} distinct value{} in {} rows){cr}",
+                            fmt_int(total_distinct as i64),
+                            if total_distinct == 1 { "" } else { "s" },
+                            fmt_int(total as i64)
+                        )?;
                     }
                 }
             }
@@ -3359,14 +4573,25 @@ fn handle_pivot(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     if col_arg.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "{cd}usage: !pivot <col> [N]  — available: {}{cr}", names.join(", "))?;
+                writeln!(
+                    out,
+                    "{cd}usage: !pivot <col> [N]  — available: {}{cr}",
+                    names.join(", ")
+                )?;
             }
-            _ => warn_out("usage: !pivot <col> [N]  — group by column, produce (value, count) table", out)?,
+            _ => warn_out(
+                "usage: !pivot <col> [N]  — group by column, produce (value, count) table",
+                out,
+            )?,
         }
         return Ok(());
     }
@@ -3389,15 +4614,22 @@ fn handle_pivot(
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col_spec, names.join(", "))?;
+                    writeln!(
+                        out,
+                        "{ce}column {:?} not found{cr}  {cd}available: {}{cr}",
+                        col_spec,
+                        names.join(", ")
+                    )?;
                 }
                 Some(ci) => {
-                    use std::collections::HashMap;
                     use crate::query::model::QueryColumn;
+                    use std::collections::HashMap;
                     let col_name = res.columns[ci].name.clone();
                     let mut counts: HashMap<String, usize> = HashMap::new();
                     for row in &res.rows {
-                        *counts.entry(fmt_value_for_col(&row[ci], &col_name)).or_insert(0) += 1;
+                        *counts
+                            .entry(fmt_value_for_col(&row[ci], &col_name))
+                            .or_insert(0) += 1;
                     }
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
                     entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -3407,21 +4639,26 @@ fn handle_pivot(
                     }
                     let rows: Vec<Vec<QueryValue>> = entries
                         .iter()
-                        .map(|(v, c)| vec![
-                            QueryValue::Str(v.clone()),
-                            QueryValue::Int(*c as i64),
-                        ])
+                        .map(|(v, c)| vec![QueryValue::Str(v.clone()), QueryValue::Int(*c as i64)])
                         .collect();
                     let n = rows.len();
                     let note = if top_n.is_some() && n < total_groups {
-                        Some(format!("top {} of {} groups", fmt_int(n as i64), fmt_int(total_groups as i64)))
+                        Some(format!(
+                            "top {} of {} groups",
+                            fmt_int(n as i64),
+                            fmt_int(total_groups as i64)
+                        ))
                     } else {
                         None
                     };
                     let pivoted = QueryResult {
                         columns: vec![
-                            QueryColumn { name: col_name.clone() },
-                            QueryColumn { name: "count".to_string() },
+                            QueryColumn {
+                                name: col_name.clone(),
+                            },
+                            QueryColumn {
+                                name: "count".to_string(),
+                            },
                         ],
                         rows: rows.clone(),
                         row_count: n as u64,
@@ -3451,7 +4688,11 @@ fn handle_export(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cg, cd, ce, cr) = if color { ("\x1b[32m", "\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cg, cd, ce, cr) = if color {
+        ("\x1b[32m", "\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
     let Some(res) = last_result else {
         warn_out("(no result — run a query first)", out)?;
         return Ok(());
@@ -3466,17 +4707,27 @@ fn handle_export(
         (fmt_str, file_arg)
     };
     let content: String = match fmt_str.as_str() {
-        "csv"  => result_to_csv(res),
-        "tsv"  => result_to_tsv(res),
+        "csv" => result_to_csv(res),
+        "tsv" => result_to_tsv(res),
         "json" => result_to_json(res),
-        other  => {
-            writeln!(out, "{ce}unknown format {:?} — use csv, tsv, or json{cr}", other)?;
+        other => {
+            writeln!(
+                out,
+                "{ce}unknown format {:?} — use csv, tsv, or json{cr}",
+                other
+            )?;
             return Ok(());
         }
     };
     if let Some(path) = file_arg {
         match std::fs::write(path, &content) {
-            Ok(()) => writeln!(out, "{cg}\u{2713} {} row{} written to {cd}{:?}{cr}", fmt_int(res.rows.len() as i64), if res.rows.len() == 1 { "" } else { "s" }, path)?,
+            Ok(()) => writeln!(
+                out,
+                "{cg}\u{2713} {} row{} written to {cd}{:?}{cr}",
+                fmt_int(res.rows.len() as i64),
+                if res.rows.len() == 1 { "" } else { "s" },
+                path
+            )?,
             Err(e) => writeln!(out, "{ce}error: could not write {:?}: {e}{cr}", path)?,
         }
     } else {
@@ -3494,7 +4745,11 @@ fn handle_row(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, cc, ce, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cd, cc, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[36m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
     let Some(res) = last_result else {
         warn_out("(no result — run a query first)", out)?;
         return Ok(());
@@ -3506,38 +4761,75 @@ fn handle_row(
     let n_rows = res.rows.len();
     let arg = arg.trim();
     let idx: usize = match arg {
-        "" | "first" => { *current_row = 0; 1 }
-        "next" | "+" => { *current_row = (*current_row + 1).min(n_rows - 1); *current_row + 1 }
-        "prev" | "-" => { *current_row = current_row.saturating_sub(1); *current_row + 1 }
-        "last"       => { *current_row = n_rows - 1; n_rows }
-        other => {
-            match other.parse::<usize>() {
-                Ok(n) if n >= 1 && n <= n_rows => { *current_row = n - 1; n }
-                Ok(n) => {
-                    writeln!(out, "{ce}row {n} out of range{cr}  {cd}result has {} rows{cr}", fmt_int(n_rows as i64))?;
-                    return Ok(());
-                }
-                Err(_) => {
-                    writeln!(out, "{cd}usage: !row [N|first|last|next|prev]  — show row as key=value pairs{cr}")?;
-                    return Ok(());
-                }
-            }
+        "" | "first" => {
+            *current_row = 0;
+            1
         }
+        "next" | "+" => {
+            *current_row = (*current_row + 1).min(n_rows - 1);
+            *current_row + 1
+        }
+        "prev" | "-" => {
+            *current_row = current_row.saturating_sub(1);
+            *current_row + 1
+        }
+        "last" => {
+            *current_row = n_rows - 1;
+            n_rows
+        }
+        other => match other.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= n_rows => {
+                *current_row = n - 1;
+                n
+            }
+            Ok(n) => {
+                writeln!(
+                    out,
+                    "{ce}row {n} out of range{cr}  {cd}result has {} rows{cr}",
+                    fmt_int(n_rows as i64)
+                )?;
+                return Ok(());
+            }
+            Err(_) => {
+                writeln!(
+                    out,
+                    "{cd}usage: !row [N|first|last|next|prev]  — show row as key=value pairs{cr}"
+                )?;
+                return Ok(());
+            }
+        },
     };
     let row = &res.rows[idx - 1];
     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
     let idx_w = res.columns.len().to_string().len();
-    let nav = if n_rows > 1 { format!("  {cd}(use !row next / !row prev to navigate){cr}") } else { String::new() };
-    writeln!(out, "{cd}── row {idx} of {} ──{cr}{nav}", fmt_int(n_rows as i64))?;
+    let nav = if n_rows > 1 {
+        format!("  {cd}(use !row next / !row prev to navigate){cr}")
+    } else {
+        String::new()
+    };
+    writeln!(
+        out,
+        "{cd}── row {idx} of {} ──{cr}{nav}",
+        fmt_int(n_rows as i64)
+    )?;
     for (i, (col, val)) in res.columns.iter().zip(row.iter()).enumerate() {
         let val_str = fmt_value_for_col(val, &col.name);
         let (vp, vs) = if color {
-            let p = cell_color_prefix(val, &col.name, SESSION_SETTINGS.with(|s| s.borrow().bytes_raw));
+            let p = cell_color_prefix(
+                val,
+                &col.name,
+                SESSION_SETTINGS.with(|s| s.borrow().bytes_raw),
+            );
             (p, if p.is_empty() { "" } else { "\x1b[0m" })
         } else {
             ("", "")
         };
-        writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
+        writeln!(
+            out,
+            "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}",
+            i + 1,
+            col.name
+        )?;
     }
     Ok(())
 }
@@ -3557,12 +4849,18 @@ fn print_oql_ref(out: &mut impl Write) -> io::Result<()> {
         let col_w = items.iter().map(|s| s.len()).max().unwrap_or(8) + 2;
         let cols = (76usize).saturating_div(col_w.max(1)).max(1);
         for chunk in items.chunks(cols) {
-            let row: String = chunk.iter().map(|s| format!("    {cc}{s}{cr}{}", " ".repeat(col_w - s.len()))).collect();
+            let row: String = chunk
+                .iter()
+                .map(|s| format!("    {cc}{s}{cr}{}", " ".repeat(col_w - s.len())))
+                .collect();
             writeln!(out, "{}", row.trim_end())?;
         }
         Ok(())
     };
-    writeln!(out, "{cb}OQL Language Reference{cr}  {cd}(!help for REPL commands){cr}")?;
+    writeln!(
+        out,
+        "{cb}OQL Language Reference{cr}  {cd}(!help for REPL commands){cr}"
+    )?;
     let all_keywords: Vec<&str> = KEYWORDS.iter().chain(RESERVED.iter()).copied().collect();
     print_cols("Keywords", &all_keywords, out)?;
     print_cols("Aggregate functions", AGG_FUNCS, out)?;
@@ -3571,11 +4869,26 @@ fn print_oql_ref(out: &mut impl Write) -> io::Result<()> {
     print_cols("Attributes  (@ prefix)", ATTRIBUTES, out)?;
     writeln!(out, "\n  {cy}Syntax examples{cr}")?;
     writeln!(out, "    {cd}SELECT * FROM java.lang.String{cr}")?;
-    writeln!(out, "    {cd}SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100{cr}")?;
-    writeln!(out, "    {cd}SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s){cr}")?;
-    writeln!(out, "    {cd}SELECT * FROM INSTANCEOF java.util.Collection{cr}")?;
-    writeln!(out, "    {cd}SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC{cr}")?;
-    writeln!(out, "\n  {cd}Tip: use !describe <ClassName> to see available fields{cr}")?;
+    writeln!(
+        out,
+        "    {cd}SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100{cr}"
+    )?;
+    writeln!(
+        out,
+        "    {cd}SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s){cr}"
+    )?;
+    writeln!(
+        out,
+        "    {cd}SELECT * FROM INSTANCEOF java.util.Collection{cr}"
+    )?;
+    writeln!(
+        out,
+        "    {cd}SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC{cr}"
+    )?;
+    writeln!(
+        out,
+        "\n  {cd}Tip: use !describe <ClassName> to see available fields{cr}"
+    )?;
     Ok(())
 }
 
@@ -3591,7 +4904,11 @@ fn handle_meta(
     out: &mut impl Write,
 ) -> io::Result<bool> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+    let (cd, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
     let (verb, rest) = match cmd.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (cmd, ""),
@@ -3604,63 +4921,124 @@ fn handle_meta(
                 return Ok(false);
             }
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (ch, cc, cd, cr) = if color { ("\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
-            macro_rules! h { ($title:literal) => { writeln!(out, "\n{ch}{}{cr}", $title)?; }; }
-            macro_rules! c { ($cmd:literal, $desc:literal) => {
-                writeln!(out, "  {cc}{:<28}{cr} {}", $cmd, $desc)?;
-            }; }
-            writeln!(out, "\x1b[1mOQL REPL commands\x1b[0m  {cd}(prefix: !, e.g. !help oql for language reference){cr}")?;
+            let (ch, cc, cd, cr) = if color {
+                ("\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m")
+            } else {
+                ("", "", "", "")
+            };
+            macro_rules! h {
+                ($title:literal) => {
+                    writeln!(out, "\n{ch}{}{cr}", $title)?;
+                };
+            }
+            macro_rules! c {
+                ($cmd:literal, $desc:literal) => {
+                    writeln!(out, "  {cc}{:<28}{cr} {}", $cmd, $desc)?;
+                };
+            }
+            writeln!(
+                out,
+                "\x1b[1mOQL REPL commands\x1b[0m  {cd}(prefix: !, e.g. !help oql for language reference){cr}"
+            )?;
             h!("Heap exploration");
-            c!("!classes [pat]",         "list class names (substring-filtered)");
-            c!("!fields [pat]",          "list instance field names");
-            c!("!describe <class>",      "show fields and types of a class");
-            c!("!obj <class>#<idx>",     "inspect a specific object (by dense index)");
-            c!("!reachable",             "show only GC-reachable objects (default; MAT parity)");
-            c!("!all",                   "include unreachable objects (raw heap scan)");
-            c!("!mode",                  "show current reachability mode");
+            c!("!classes [pat]", "list class names (substring-filtered)");
+            c!("!fields [pat]", "list instance field names");
+            c!("!describe <class>", "show fields and types of a class");
+            c!(
+                "!obj <class>#<idx>",
+                "inspect a specific object (by dense index)"
+            );
+            c!(
+                "!reachable",
+                "show only GC-reachable objects (default; MAT parity)"
+            );
+            c!("!all", "include unreachable objects (raw heap scan)");
+            c!("!mode", "show current reachability mode");
             h!("Running queries");
-            c!("<oql>",                  "run a query (end with `;` or a blank line)");
-            c!("!last",                  "re-run the previous query");
-            c!("!count [<oql>]",         "row count of last result, or count <oql>");
-            c!("!plan [--raw] <oql>",    "show execution plan without scanning");
+            c!("<oql>", "run a query (end with `;` or a blank line)");
+            c!("!last", "re-run the previous query");
+            c!("!count [<oql>]", "row count of last result, or count <oql>");
+            c!(
+                "!plan [--raw] <oql>",
+                "show execution plan without scanning"
+            );
             c!("!explain [--raw] <oql>", "alias for !plan");
-            c!("!run [<name>]",          "run a named query (no arg = list all)");
+            c!("!run [<name>]", "run a named query (no arg = list all)");
             h!("Inspecting results");
-            c!("!wc [col]",              "shape (rows × cols); col arg = non-null count");
-            c!("!row [N|first|last|next|prev]", "show a row as key=value pairs");
-            c!("!cols",                  "list columns with type and fill rate");
-            c!("!stats [col]",           "numeric summary: min/max/mean/stddev/p50/p90/p99/sum");
-            c!("!history [N]",           "show last N queries; !N to re-run");
+            c!("!wc [col]", "shape (rows × cols); col arg = non-null count");
+            c!(
+                "!row [N|first|last|next|prev]",
+                "show a row as key=value pairs"
+            );
+            c!("!cols", "list columns with type and fill rate");
+            c!(
+                "!stats [col]",
+                "numeric summary: min/max/mean/stddev/p50/p90/p99/sum"
+            );
+            c!("!history [N]", "show last N queries; !N to re-run");
             h!("Shaping results");
-            c!("!filter <pat>",          "keep rows matching substring or /regex/ (/i = case-insensitive)");
-            c!("!filter @<col> <pat>",   "filter on a specific column (alias: !grep)");
-            c!("!not <pat>",             "exclude matching rows (inverse of !filter)");
-            c!("!sort <col> [desc]",     "sort by column; - prefix for desc (e.g. !sort -size,name)");
-            c!("!select <col>…",         "keep only named columns");
-            c!("!drop <col>…",           "remove columns (inverse of !select)");
-            c!("!rename <old> <new>",    "rename a column");
-            c!("!distinct",              "remove duplicate rows (alias: !dedup)");
-            c!("!sample [N]",            "N randomly sampled rows (default 10)");
-            c!("!top [N] / !head [N]",   "first N rows (default 10)");
-            c!("!tail [N]",              "last N rows (default 10)");
-            c!("!unique <col> [N]",      "distinct value counts, top N by frequency");
-            c!("!pivot <col> [N]",       "group by column → (value, count) table");
-            c!("!undo",                  "restore result before last shaping command");
+            c!(
+                "!filter <pat>",
+                "keep rows matching substring or /regex/ (/i = case-insensitive)"
+            );
+            c!(
+                "!filter @<col> <pat>",
+                "filter on a specific column (alias: !grep)"
+            );
+            c!("!not <pat>", "exclude matching rows (inverse of !filter)");
+            c!(
+                "!sort <col> [desc]",
+                "sort by column; - prefix for desc (e.g. !sort -size,name)"
+            );
+            c!("!select <col>…", "keep only named columns");
+            c!("!drop <col>…", "remove columns (inverse of !select)");
+            c!("!rename <old> <new>", "rename a column");
+            c!("!distinct", "remove duplicate rows (alias: !dedup)");
+            c!("!sample [N]", "N randomly sampled rows (default 10)");
+            c!("!top [N] / !head [N]", "first N rows (default 10)");
+            c!("!tail [N]", "last N rows (default 10)");
+            c!(
+                "!unique <col> [N]",
+                "distinct value counts, top N by frequency"
+            );
+            c!("!pivot <col> [N]", "group by column → (value, count) table");
+            c!("!undo", "restore result before last shaping command");
             h!("Exporting");
-            c!("!save <file> [oql]",     "write CSV/TSV/JSON to file (format by extension)");
-            c!("!export [csv|tsv|json] [file]", "print or save result (default: csv to stdout)");
+            c!(
+                "!save <file> [oql]",
+                "write CSV/TSV/JSON to file (format by extension)"
+            );
+            c!(
+                "!export [csv|tsv|json] [file]",
+                "print or save result (default: csv to stdout)"
+            );
             h!("Display settings  (!set with no args shows current values)");
-            c!("!set limit <N>",         "cap rows displayed (0 = unlimited, default unlimited)");
-            c!("!set bytes raw|human",   "byte-size columns: numbers or 4.3 KiB (default human)");
-            c!("!set color on|off",      "ANSI colours in table cells (default on)");
-            c!("!set null <str>",        "null display string (default \"null\")");
-            c!("!width [N]",             "cap cell display width (0 = unlimited)");
+            c!(
+                "!set limit <N>",
+                "cap rows displayed (0 = unlimited, default unlimited)"
+            );
+            c!(
+                "!set bytes raw|human",
+                "byte-size columns: numbers or 4.3 KiB (default human)"
+            );
+            c!(
+                "!set color on|off",
+                "ANSI colours in table cells (default on)"
+            );
+            c!("!set null <str>", "null display string (default \"null\")");
+            c!("!width [N]", "cap cell display width (0 = unlimited)");
             h!("Session");
-            c!("!help",                  "show this help");
-            c!("!help oql",              "OQL language reference (keywords, functions, syntax)");
-            c!("!quit",                  "exit");
+            c!("!help", "show this help");
+            c!(
+                "!help oql",
+                "OQL language reference (keywords, functions, syntax)"
+            );
+            c!("!quit", "exit");
             writeln!(out)?;
-            writeln!(out, "  {cd}OQL queries may span multiple lines; end with `;` or a blank line.{cr}")?;
+            writeln!(
+                out,
+                "  {cd}OQL queries may span multiple lines; end with `;` or a blank line.{cr}"
+            )?;
         }
         "classes" | "fields" => {
             let (list, kind, kind_plural) = if verb == "classes" {
@@ -3669,11 +5047,17 @@ fn handle_meta(
                 (&names.1, "field", "fields")
             };
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
+            let (cc, cd, cr) = if color {
+                ("\x1b[36m", "\x1b[2m", "\x1b[0m")
+            } else {
+                ("", "", "")
+            };
             let prefix_lower = rest.to_ascii_lowercase();
             let matches: Vec<&String> = list
                 .iter()
-                .filter(|n| prefix_lower.is_empty() || n.to_ascii_lowercase().contains(&prefix_lower))
+                .filter(|n| {
+                    prefix_lower.is_empty() || n.to_ascii_lowercase().contains(&prefix_lower)
+                })
                 .collect();
             if matches.is_empty() {
                 if rest.is_empty() {
@@ -3689,7 +5073,10 @@ fn handle_meta(
                 let col_w = shown.iter().map(|n| n.len()).max().unwrap_or(10) + 2;
                 let cols = (80usize).saturating_div(col_w.max(1)).max(1);
                 for chunk in shown.chunks(cols) {
-                    let row: String = chunk.iter().map(|n| format!("  {cc}{}{cr}{}", n, " ".repeat(col_w - n.len()))).collect();
+                    let row: String = chunk
+                        .iter()
+                        .map(|n| format!("  {cc}{}{cr}{}", n, " ".repeat(col_w - n.len())))
+                        .collect();
                     writeln!(out, "{}", row.trim_end())?;
                 }
                 if matches.len() > CAP {
@@ -3699,19 +5086,29 @@ fn handle_meta(
                         fmt_int((matches.len() - CAP) as i64)
                     )?;
                 }
-                let label = if matches.len() == 1 { kind } else { kind_plural };
+                let label = if matches.len() == 1 {
+                    kind
+                } else {
+                    kind_plural
+                };
                 writeln!(out, "{cd}({} {label}){cr}", fmt_int(matches.len() as i64))?;
             }
         }
         "reachable" | "reachable-only" => {
             *reachable_only = true;
             let cg = if color { "\x1b[32m" } else { "" };
-            writeln!(out, "{cg}\u{2713}{cr} mode: {cg}reachable-only{cr}  {cd}(GC-reachable objects, MAT parity){cr}")?;
+            writeln!(
+                out,
+                "{cg}\u{2713}{cr} mode: {cg}reachable-only{cr}  {cd}(GC-reachable objects, MAT parity){cr}"
+            )?;
         }
         "all" => {
             *reachable_only = false;
             let cg = if color { "\x1b[32m" } else { "" };
-            writeln!(out, "{cg}\u{2713}{cr} mode: {cg}all{cr}  {cd}(raw-heap scan, includes unreachable objects){cr}")?;
+            writeln!(
+                out,
+                "{cg}\u{2713}{cr} mode: {cg}all{cr}  {cd}(raw-heap scan, includes unreachable objects){cr}"
+            )?;
         }
         "mode" => {
             let (mode_val, hint) = if *reachable_only {
@@ -3757,19 +5154,59 @@ fn handle_meta(
             let cy = if color { "\x1b[33m" } else { "" };
             // Offer did-you-mean for close matches
             const CMDS: &[&str] = &[
-                "help", "h", "quit", "q", "exit",
-                "classes", "fields", "describe", "obj",
-                "count", "wc", "last", "cols", "columns", "history", "row", "plan", "explain",
-                "filter", "not", "sort", "select", "drop", "rename", "distinct", "dedup",
-                "sample", "top", "head", "tail", "unique", "pivot", "stats", "undo",
-                "run", "width", "set", "save", "export", "rename",
-                "reachable", "all", "mode",
+                "help",
+                "h",
+                "quit",
+                "q",
+                "exit",
+                "classes",
+                "fields",
+                "describe",
+                "obj",
+                "count",
+                "wc",
+                "last",
+                "cols",
+                "columns",
+                "history",
+                "row",
+                "plan",
+                "explain",
+                "filter",
+                "not",
+                "sort",
+                "select",
+                "drop",
+                "rename",
+                "distinct",
+                "dedup",
+                "sample",
+                "top",
+                "head",
+                "tail",
+                "unique",
+                "pivot",
+                "stats",
+                "undo",
+                "run",
+                "width",
+                "set",
+                "save",
+                "export",
+                "rename",
+                "reachable",
+                "all",
+                "mode",
             ];
             let lower = other.to_ascii_lowercase();
-            let candidates: Vec<&str> = CMDS.iter().copied()
+            let candidates: Vec<&str> = CMDS
+                .iter()
+                .copied()
                 .filter(|&c| {
                     let cl = c.to_ascii_lowercase();
-                    cl.starts_with(&lower[..lower.len().min(2)]) || lower.contains(&cl) || cl.contains(&lower)
+                    cl.starts_with(&lower[..lower.len().min(2)])
+                        || lower.contains(&cl)
+                        || cl.contains(&lower)
                 })
                 .take(3)
                 .collect();
@@ -3786,7 +5223,10 @@ fn handle_meta(
 /// subqueries, and its FROM (and every UNION branch's FROM) is a non-array class.
 /// Array-class FROM is excluded: `run_resident_only` can't reconstruct per-array
 /// class names without a real scan (v1 limitation), so those stay on the scan path.
-pub(crate) fn cache_eligible(q: &crate::query::ast::Query, plan: &crate::query::plan::QueryPlan) -> bool {
+pub(crate) fn cache_eligible(
+    q: &crate::query::ast::Query,
+    plan: &crate::query::plan::QueryPlan,
+) -> bool {
     fn is_array_name(n: &str) -> bool {
         n.starts_with('[') || n.ends_with("[]")
     }
@@ -3949,7 +5389,11 @@ fn print_result(
 ) -> io::Result<()> {
     if let Some(err) = &res.error {
         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-        let (ce, cr) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
+        let (ce, cr) = if color {
+            ("\x1b[31m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
         writeln!(out, "{ce}error: {err}{cr}")?;
         return Ok(());
     }
@@ -3958,13 +5402,27 @@ fn print_result(
         (s.row_limit, s.color, s.bytes_raw)
     });
     if res.rows.is_empty() && !res.columns.is_empty() {
-        let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+        let (cd, cr) = if color {
+            ("\x1b[2m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
         writeln!(out, "{cd}(no rows){cr}")?;
         let elapsed_ms = elapsed.as_millis();
         if color {
-            let time_color = if elapsed_ms > 1000 { "\x1b[31m" } else if elapsed_ms > 300 { "\x1b[33m" } else { "\x1b[2m" };
+            let time_color = if elapsed_ms > 1000 {
+                "\x1b[31m"
+            } else if elapsed_ms > 300 {
+                "\x1b[33m"
+            } else {
+                "\x1b[2m"
+            };
             let ts = fmt_time_hms();
-            writeln!(out, "{time_color}0 rows, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m", fmt_elapsed(elapsed))?;
+            writeln!(
+                out,
+                "{time_color}0 rows, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m",
+                fmt_elapsed(elapsed)
+            )?;
         } else {
             writeln!(out, "(0 rows, {})", fmt_elapsed(elapsed))?;
         }
@@ -3982,10 +5440,13 @@ fn print_result(
     let raw_body: Vec<Vec<String>> = display_rows
         .iter()
         .map(|row| {
-            row.iter().enumerate().map(|(i, v)| {
-                let col_name = res.columns.get(i).map(|c| c.name.as_str()).unwrap_or("");
-                fmt_value_for_col(v, col_name)
-            }).collect()
+            row.iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let col_name = res.columns.get(i).map(|c| c.name.as_str()).unwrap_or("");
+                    fmt_value_for_col(v, col_name)
+                })
+                .collect()
         })
         .collect();
     let ncols = raw_headers.len();
@@ -4000,7 +5461,11 @@ fn print_result(
     }
     // Budget = terminal width minus separator overhead and row-number gutter.
     let show_row_nums = raw_body.len() >= 2;
-    let row_num_w = if show_row_nums { raw_body.len().to_string().len() } else { 0 };
+    let row_num_w = if show_row_nums {
+        raw_body.len().to_string().len()
+    } else {
+        0
+    };
     let gutter_w = if show_row_nums { row_num_w + 2 } else { 0 };
     let sep_overhead = if ncols > 1 { 3 * (ncols - 1) } else { 0 };
     let budget = if max_width > 0 && max_width > gutter_w + sep_overhead {
@@ -4019,9 +5484,10 @@ fn print_result(
     let body: Vec<Vec<String>> = raw_body
         .iter()
         .map(|row| {
-            row.iter().enumerate().map(|(i, cell)| {
-                truncate_cell(cell, col_caps[i])
-            }).collect()
+            row.iter()
+                .enumerate()
+                .map(|(i, cell)| truncate_cell(cell, col_caps[i]))
+                .collect()
         })
         .collect();
     // Per-column display width = max over header + all cells.
@@ -4038,7 +5504,11 @@ fn print_result(
         .map(|i| matches!(infer_col_type(i, &res.rows), "int" | "float"))
         .collect();
     // Render header and separator; bold/dim header when color is on
-    let gutter_pad = if show_row_nums { " ".repeat(row_num_w + 2) } else { String::new() };
+    let gutter_pad = if show_row_nums {
+        " ".repeat(row_num_w + 2)
+    } else {
+        String::new()
+    };
     if color {
         let mut hdr_buf: Vec<u8> = Vec::new();
         write_row(&headers, &widths, &numeric, &mut hdr_buf)?;
@@ -4052,9 +5522,13 @@ fn print_result(
         let sep_trimmed = sep_str.trim_end_matches('\n');
         writeln!(out, "{gutter_pad}\x1b[2m{sep_trimmed}\x1b[0m")?;
     } else {
-        if show_row_nums { write!(out, "{gutter_pad}")?; }
+        if show_row_nums {
+            write!(out, "{gutter_pad}")?;
+        }
         write_row(&headers, &widths, &numeric, out)?;
-        if show_row_nums { write!(out, "{gutter_pad}")?; }
+        if show_row_nums {
+            write!(out, "{gutter_pad}")?;
+        }
         let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
         write_row(&sep, &widths, &vec![false; ncols], out)?;
     }
@@ -4064,7 +5538,15 @@ fn print_result(
         }
         if color {
             let src_row = display_rows.get(ri).map(|r| r.as_slice()).unwrap_or(&[]);
-            write_row_colored(row, src_row, res.columns.as_slice(), bytes_raw, &widths, &numeric, out)?;
+            write_row_colored(
+                row,
+                src_row,
+                res.columns.as_slice(),
+                bytes_raw,
+                &widths,
+                &numeric,
+                out,
+            )?;
         } else {
             write_row(row, &widths, &numeric, out)?;
         }
@@ -4073,28 +5555,60 @@ fn print_result(
     let cd2 = if color { "\x1b[2m" } else { "" };
     let cr2 = if color { "\x1b[0m" } else { "" };
     if capped {
-        writeln!(out, "{cy}-- showing {} of {} rows (use `!set limit 0` or `!set limit N` to change) --{cr2}", fmt_int(row_limit as i64), fmt_int(res.rows.len() as i64))?;
+        writeln!(
+            out,
+            "{cy}-- showing {} of {} rows (use `!set limit 0` or `!set limit N` to change) --{cr2}",
+            fmt_int(row_limit as i64),
+            fmt_int(res.rows.len() as i64)
+        )?;
     }
     if let Some(note) = &res.note {
         writeln!(out, "{cy}-- {note} --{cr2}")?;
     }
     if res.truncated {
-        writeln!(out, "{cy}-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --{cr2}", fmt_int(res.row_count as i64))?;
+        writeln!(
+            out,
+            "{cy}-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --{cr2}",
+            fmt_int(res.row_count as i64)
+        )?;
     }
     if color {
         let elapsed_ms = elapsed.as_millis();
-        let time_color = if elapsed_ms > 1000 { "\x1b[31m" } else if elapsed_ms > 300 { "\x1b[33m" } else { "\x1b[2m" };
+        let time_color = if elapsed_ms > 1000 {
+            "\x1b[31m"
+        } else if elapsed_ms > 300 {
+            "\x1b[33m"
+        } else {
+            "\x1b[2m"
+        };
         let ts = fmt_time_hms();
-        writeln!(out, "{time_color}{} row{}, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m", fmt_int(res.row_count as i64), if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
+        writeln!(
+            out,
+            "{time_color}{} row{}, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m",
+            fmt_int(res.row_count as i64),
+            if res.row_count == 1 { "" } else { "s" },
+            fmt_elapsed(elapsed)
+        )?;
     } else {
-        writeln!(out, "({} row{}, {})", fmt_int(res.row_count as i64), if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
+        writeln!(
+            out,
+            "({} row{}, {})",
+            fmt_int(res.row_count as i64),
+            if res.row_count == 1 { "" } else { "s" },
+            fmt_elapsed(elapsed)
+        )?;
     }
     if body.len() > 20 {
-        let has_numeric = res.columns.iter().enumerate().any(|(i, _)| {
-            matches!(infer_col_type(i, &res.rows), "int" | "float")
-        });
+        let has_numeric = res
+            .columns
+            .iter()
+            .enumerate()
+            .any(|(i, _)| matches!(infer_col_type(i, &res.rows), "int" | "float"));
         let stat_hint = if has_numeric { "  !stats <col>" } else { "" };
-        writeln!(out, "{cd2}  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]{cr2}")?;
+        writeln!(
+            out,
+            "{cd2}  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]{cr2}"
+        )?;
     }
     Ok(())
 }
@@ -4131,12 +5645,22 @@ fn write_row(
 fn cell_color_prefix(v: &QueryValue, col_name: &str, bytes_raw: bool) -> &'static str {
     match v {
         QueryValue::Null => "\x1b[2m",
-        QueryValue::Bool(b) => if *b { "\x1b[32m" } else { "\x1b[31m" },
+        QueryValue::Bool(b) => {
+            if *b {
+                "\x1b[32m"
+            } else {
+                "\x1b[31m"
+            }
+        }
         QueryValue::Int(_) => {
             let lower = col_name.to_ascii_lowercase();
             if lower.contains("address") || lower.contains("addr") || lower.contains("ptr") {
                 "\x1b[35m" // magenta for addresses
-            } else if !bytes_raw && (lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size")) {
+            } else if !bytes_raw
+                && (lower.ends_with("bytes")
+                    || lower.ends_with("_size")
+                    || lower.ends_with("heap_size"))
+            {
                 "\x1b[33m" // yellow for byte-size columns
             } else {
                 "\x1b[32m" // green for integers
@@ -4168,8 +5692,15 @@ fn write_row_colored(
         }
         let w = widths.get(i).copied().unwrap_or(0);
         let pad = w.saturating_sub(cell.chars().count());
-        let prefix = src_row.get(i)
-            .map(|v| cell_color_prefix(v, columns.get(i).map(|c| c.name.as_str()).unwrap_or(""), bytes_raw))
+        let prefix = src_row
+            .get(i)
+            .map(|v| {
+                cell_color_prefix(
+                    v,
+                    columns.get(i).map(|c| c.name.as_str()).unwrap_or(""),
+                    bytes_raw,
+                )
+            })
             .unwrap_or("");
         let suffix = if prefix.is_empty() { "" } else { "\x1b[0m" };
         let align_right = right_align.get(i).copied().unwrap_or(false);
@@ -4270,7 +5801,9 @@ fn fmt_time_hms() -> String {
     {
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
         let t = secs as libc::time_t;
-        unsafe { libc::localtime_r(&t, &mut tm); }
+        unsafe {
+            libc::localtime_r(&t, &mut tm);
+        }
         return format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
     }
     #[cfg(not(unix))]
@@ -4307,7 +5840,8 @@ fn fmt_value_for_col(v: &QueryValue, col_name: &str) -> String {
         if lower.contains("address") || lower.contains("addr") || lower.contains("ptr") {
             return format!("0x{:016X}", *i as u64);
         }
-        let is_bytes_col = lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size");
+        let is_bytes_col =
+            lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size");
         if is_bytes_col && *i >= 0 {
             let raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
             if !raw {
@@ -4370,11 +5904,18 @@ fn result_to_csv(res: &QueryResult) -> String {
 
 fn result_to_tsv(res: &QueryResult) -> String {
     let mut s = String::new();
-    let header: Vec<String> = res.columns.iter().map(|c| c.name.replace('\t', " ")).collect();
+    let header: Vec<String> = res
+        .columns
+        .iter()
+        .map(|c| c.name.replace('\t', " "))
+        .collect();
     s.push_str(&header.join("\t"));
     s.push('\n');
     for row in &res.rows {
-        let cells: Vec<String> = row.iter().map(|v| fmt_value(v).replace('\t', " ")).collect();
+        let cells: Vec<String> = row
+            .iter()
+            .map(|v| fmt_value(v).replace('\t', " "))
+            .collect();
         s.push_str(&cells.join("\t"));
         s.push('\n');
     }
@@ -4387,7 +5928,9 @@ fn result_to_json(res: &QueryResult) -> String {
     for (ri, row) in res.rows.iter().enumerate() {
         out.push_str("  {");
         for (i, val) in row.iter().enumerate() {
-            if i > 0 { out.push(','); }
+            if i > 0 {
+                out.push(',');
+            }
             out.push('"');
             out.push_str(&cols[i].replace('"', "\\\""));
             out.push_str("\":");
@@ -4397,12 +5940,18 @@ fn result_to_json(res: &QueryResult) -> String {
                 out.push_str(&s.replace(',', ""));
             } else {
                 out.push('"');
-                out.push_str(&s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"));
+                out.push_str(
+                    &s.replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n"),
+                );
                 out.push('"');
             }
         }
         out.push('}');
-        if ri + 1 < res.rows.len() { out.push(','); }
+        if ri + 1 < res.rows.len() {
+            out.push(',');
+        }
         out.push('\n');
     }
     out.push(']');
@@ -4589,7 +6138,10 @@ mod tests {
         assert!(out.contains("!classes"), "help missing !classes: {out}");
         assert!(out.contains("!fields"), "help missing !fields: {out}");
         // Multi-line note must be advertised too.
-        assert!(out.contains("multiple lines"), "help missing multi-line note: {out}");
+        assert!(
+            out.contains("multiple lines"),
+            "help missing multi-line note: {out}"
+        );
     }
 
     #[test]
@@ -4604,12 +6156,24 @@ mod tests {
 
     #[test]
     fn classes_prefix_filters_case_insensitively() {
-        let n = names(&["java.lang.String", "java.util.HashMap", "com.acme.Foo"], &[]);
+        let n = names(
+            &["java.lang.String", "java.util.HashMap", "com.acme.Foo"],
+            &[],
+        );
         let (_, out, _) = meta_out_mode_names("classes JAVA.UTIL", true, &n);
         assert!(out.contains("java.util.HashMap"), "got: {out}");
-        assert!(!out.contains("java.lang.String"), "String should be filtered out: {out}");
-        assert!(!out.contains("com.acme.Foo"), "Foo should be filtered out: {out}");
-        assert!(out.contains("(1 class)"), "singular count footer missing: {out}");
+        assert!(
+            !out.contains("java.lang.String"),
+            "String should be filtered out: {out}"
+        );
+        assert!(
+            !out.contains("com.acme.Foo"),
+            "Foo should be filtered out: {out}"
+        );
+        assert!(
+            out.contains("(1 class)"),
+            "singular count footer missing: {out}"
+        );
     }
 
     #[test]
@@ -4673,7 +6237,10 @@ mod tests {
         print_result(&res, std::time::Duration::from_millis(3), 0, &mut buf).unwrap();
         SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
         let out = String::from_utf8(buf).unwrap();
-        assert!(out.contains("(1 row, 3.0ms)"), "elapsed footer wrong: {out}");
+        assert!(
+            out.contains("(1 row, 3.0ms)"),
+            "elapsed footer wrong: {out}"
+        );
     }
 
     #[test]
@@ -4691,7 +6258,10 @@ mod tests {
             elapsed_ms: None,
         };
         let out = print_to_string(&res);
-        assert!(out.contains("-- chart downgraded to table"), "note missing: {out}");
+        assert!(
+            out.contains("-- chart downgraded to table"),
+            "note missing: {out}"
+        );
     }
 
     fn print_to_string(res: &QueryResult) -> String {
@@ -4818,7 +6388,9 @@ mod tests {
             oql: "SELECT id, name FROM C".into(),
             columns: vec![
                 QueryColumn { name: "id".into() },
-                QueryColumn { name: "name".into() },
+                QueryColumn {
+                    name: "name".into(),
+                },
             ],
             rows: vec![
                 vec![QueryValue::Int(1), QueryValue::Str("alice".into())],
@@ -4833,9 +6405,15 @@ mod tests {
         };
         let out = print_to_string(&res);
         // "1,000" is 5 chars wide (widest in col 0); "id" right-aligned to 5.
-        assert!(out.contains("   id | name"), "header not right-aligned:\n{out}");
+        assert!(
+            out.contains("   id | name"),
+            "header not right-aligned:\n{out}"
+        );
         // Numeric col 0 is right-aligned: "1" gets 4 leading spaces to fill width 5.
-        assert!(out.contains("    1 | alice"), "row1 not right-aligned:\n{out}");
+        assert!(
+            out.contains("    1 | alice"),
+            "row1 not right-aligned:\n{out}"
+        );
         // Widest row: "1,000" right-aligned at width 5 — no leading pad needed.
         assert!(out.contains("1,000 | bob"), "row2 not aligned:\n{out}");
     }
@@ -4860,7 +6438,11 @@ mod tests {
         let out = print_to_string(&res);
         // No trailing spaces on any printed row (last column is unpadded).
         for line in out.lines() {
-            assert_eq!(line, line.trim_end(), "trailing whitespace on line: {line:?}");
+            assert_eq!(
+                line,
+                line.trim_end(),
+                "trailing whitespace on line: {line:?}"
+            );
         }
     }
 
@@ -4884,7 +6466,11 @@ mod tests {
         // Multibyte chars must not be split mid-codepoint.
         let s = "αβγδεζη"; // 7 Greek letters, 2 bytes each
         let t = truncate_cell(s, 4);
-        assert_eq!(t.chars().count(), 4, "should keep 3 chars + ellipsis: {t:?}");
+        assert_eq!(
+            t.chars().count(),
+            4,
+            "should keep 3 chars + ellipsis: {t:?}"
+        );
         assert!(t.ends_with('…'), "should end with ellipsis: {t:?}");
     }
 
@@ -4938,13 +6524,14 @@ mod tests {
             name: "q".into(),
             oql: "q".into(),
             columns: vec![
-                QueryColumn { name: "value".into() },
-                QueryColumn { name: "bytes".into() },
+                QueryColumn {
+                    name: "value".into(),
+                },
+                QueryColumn {
+                    name: "bytes".into(),
+                },
             ],
-            rows: vec![vec![
-                QueryValue::Str(wide.clone()),
-                QueryValue::Int(12345),
-            ]],
+            rows: vec![vec![QueryValue::Str(wide.clone()), QueryValue::Int(12345)]],
             row_count: 1,
             truncated: false,
             error: None,
@@ -4956,7 +6543,10 @@ mod tests {
         print_result(&res, std::time::Duration::ZERO, 40, &mut buf).unwrap();
         let out = String::from_utf8(buf).unwrap();
         // The numeric value must appear in the output (formatted as KiB for a bytes column).
-        assert!(out.contains("KiB") || out.contains("12345"), "numeric column disappeared:\n{out}");
+        assert!(
+            out.contains("KiB") || out.contains("12345"),
+            "numeric column disappeared:\n{out}"
+        );
         // The wide string must be truncated.
         assert!(out.contains('…'), "wide string not truncated:\n{out}");
     }
@@ -4979,7 +6569,10 @@ mod tests {
         print_result(&res, std::time::Duration::from_millis(0), 6, &mut buf).unwrap();
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("aaaaa…"), "wide cell not truncated:\n{out}");
-        assert!(!out.contains("aaaaaaa"), "cell should be cut to 6 chars:\n{out}");
+        assert!(
+            !out.contains("aaaaaaa"),
+            "cell should be cut to 6 chars:\n{out}"
+        );
     }
 
     #[test]
@@ -5003,7 +6596,9 @@ mod tests {
             oql: "SELECT id, note FROM C".into(),
             columns: vec![
                 QueryColumn { name: "id".into() },
-                QueryColumn { name: "note".into() },
+                QueryColumn {
+                    name: "note".into(),
+                },
             ],
             rows: vec![
                 vec![QueryValue::Int(1), QueryValue::Str("has, comma".into())],
@@ -5021,8 +6616,7 @@ mod tests {
         };
         let csv = result_to_csv(&res);
         assert_eq!(
-            csv,
-            "id,note\n1,\"has, comma\"\n2,aaaaaaaaaaaaaaaaaaaa\n",
+            csv, "id,note\n1,\"has, comma\"\n2,aaaaaaaaaaaaaaaaaaaa\n",
             "csv mismatch:\n{csv}"
         );
     }
@@ -5101,10 +6695,15 @@ mod tests {
             name: "t".into(),
             oql: "SELECT v FROM T".into(),
             columns: vec![crate::query::model::QueryColumn { name: "v".into() }],
-            rows: vals.into_iter().map(|v| vec![match v {
-                Some(n) => QueryValue::Int(n),
-                None => QueryValue::Null,
-            }]).collect(),
+            rows: vals
+                .into_iter()
+                .map(|v| {
+                    vec![match v {
+                        Some(n) => QueryValue::Int(n),
+                        None => QueryValue::Null,
+                    }]
+                })
+                .collect(),
             row_count: 0,
             truncated: false,
             error: None,
@@ -5116,28 +6715,54 @@ mod tests {
 
     #[test]
     fn sort_nulls_last_ascending() {
-        let mut result = Some(make_sort_result(vec![None, Some(3), None, Some(1), Some(2)]));
+        let mut result = Some(make_sort_result(vec![
+            None,
+            Some(3),
+            None,
+            Some(1),
+            Some(2),
+        ]));
         let mut buf = Vec::new();
         handle_sort("v", &mut result, 0, &mut buf).unwrap();
         let rows = &result.unwrap().rows;
-        let vals: Vec<Option<i64>> = rows.iter().map(|r| match &r[0] {
-            QueryValue::Int(n) => Some(*n),
-            _ => None,
-        }).collect();
-        assert_eq!(vals, vec![Some(1), Some(2), Some(3), None, None], "nulls must sort last asc: {vals:?}");
+        let vals: Vec<Option<i64>> = rows
+            .iter()
+            .map(|r| match &r[0] {
+                QueryValue::Int(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            vals,
+            vec![Some(1), Some(2), Some(3), None, None],
+            "nulls must sort last asc: {vals:?}"
+        );
     }
 
     #[test]
     fn sort_nulls_last_descending() {
-        let mut result = Some(make_sort_result(vec![None, Some(3), None, Some(1), Some(2)]));
+        let mut result = Some(make_sort_result(vec![
+            None,
+            Some(3),
+            None,
+            Some(1),
+            Some(2),
+        ]));
         let mut buf = Vec::new();
         handle_sort("-v", &mut result, 0, &mut buf).unwrap();
         let rows = &result.unwrap().rows;
-        let vals: Vec<Option<i64>> = rows.iter().map(|r| match &r[0] {
-            QueryValue::Int(n) => Some(*n),
-            _ => None,
-        }).collect();
-        assert_eq!(vals, vec![Some(3), Some(2), Some(1), None, None], "nulls must sort last desc: {vals:?}");
+        let vals: Vec<Option<i64>> = rows
+            .iter()
+            .map(|r| match &r[0] {
+                QueryValue::Int(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            vals,
+            vec![Some(3), Some(2), Some(1), None, None],
+            "nulls must sort last desc: {vals:?}"
+        );
     }
 
     #[test]
@@ -5149,9 +6774,15 @@ mod tests {
         SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
         let out = String::from_utf8_lossy(&buf);
         // Confirm header (row limit confirmation) and table both appear
-        assert!(out.contains("row limit: 2"), "expected limit confirm: {out}");
+        assert!(
+            out.contains("row limit: 2"),
+            "expected limit confirm: {out}"
+        );
         // Column "v" appears in the re-render (with or without ANSI codes)
-        assert!(out.contains('\n') && out.len() > 30, "expected re-rendered table: {out}");
+        assert!(
+            out.contains('\n') && out.len() > 30,
+            "expected re-rendered table: {out}"
+        );
     }
 
     // --- reedline completer + editor construction ---
@@ -5193,12 +6824,19 @@ mod tests {
     fn completer_new_sorts_unsorted_input() {
         // new() must sort so binary search is valid even if the caller didn't.
         let mut c = OqlCompleter::new(
-            vec!["z.Zzz".to_string(), "a.Aaa".to_string(), "m.Mmm".to_string()],
+            vec![
+                "z.Zzz".to_string(),
+                "a.Aaa".to_string(),
+                "m.Mmm".to_string(),
+            ],
             Vec::new(),
         );
         // Prefix "a." must find a.Aaa via binary search despite unsorted input.
         let v = values(&c.complete("SELECT * FROM a.", 16));
-        assert!(v.contains(&"a.Aaa".to_string()), "sorted binary search failed: {v:?}");
+        assert!(
+            v.contains(&"a.Aaa".to_string()),
+            "sorted binary search failed: {v:?}"
+        );
         // And "m." finds only m.Mmm.
         let v2 = values(&c.complete("SELECT * FROM m.", 16));
         assert_eq!(v2, vec!["m.Mmm".to_string()], "got {v2:?}");
@@ -5219,14 +6857,13 @@ mod tests {
     #[test]
     fn suggestions_rank_shorter_first() {
         // From a set sharing the "s" prefix, shorter candidates come first.
-        let s = OqlCompleter::suggestions(
-            ["su", "sum", "summary", "s"].into_iter(),
-            "s",
-            0,
-            1,
-        );
+        let s = OqlCompleter::suggestions(["su", "sum", "summary", "s"].into_iter(), "s", 0, 1);
         let v = values(&s);
-        assert_eq!(v, vec!["s", "su", "sum", "summary"], "shorter-first ranking: {v:?}");
+        assert_eq!(
+            v,
+            vec!["s", "su", "sum", "summary"],
+            "shorter-first ranking: {v:?}"
+        );
     }
 
     #[test]
@@ -5257,9 +6894,15 @@ mod tests {
     fn attribute_suggestions_carry_hints() {
         let mut c = completer(&[]);
         let s = c.complete("SELECT @retainedHeapS", 21);
-        let hit = s.iter().find(|sg| sg.value == "@retainedHeapSize").expect("attr present");
+        let hit = s
+            .iter()
+            .find(|sg| sg.value == "@retainedHeapSize")
+            .expect("attr present");
         assert!(
-            hit.description.as_deref().unwrap_or("").contains("retained"),
+            hit.description
+                .as_deref()
+                .unwrap_or("")
+                .contains("retained"),
             "attribute must carry a description hint: {:?}",
             hit.description
         );
@@ -5269,7 +6912,10 @@ mod tests {
     fn keyword_objects_carries_hint_in_class_position() {
         let mut c = completer(&["com.acme.Foo"]);
         let s = c.complete("SELECT * FROM O", 15);
-        let hit = s.iter().find(|sg| sg.value == "OBJECTS").expect("OBJECTS offered");
+        let hit = s
+            .iter()
+            .find(|sg| sg.value == "OBJECTS")
+            .expect("OBJECTS offered");
         assert!(hit.description.is_some(), "OBJECTS must carry a hint");
     }
 
@@ -5277,7 +6923,10 @@ mod tests {
     fn method_suggestions_carry_hints() {
         let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
         let s = c.complete("SELECT i.intV FROM java.lang.Integer i", 13);
-        let hit = s.iter().find(|sg| sg.value == "i.intValue").expect("intValue offered");
+        let hit = s
+            .iter()
+            .find(|sg| sg.value == "i.intValue")
+            .expect("intValue offered");
         assert!(
             hit.description.as_deref().unwrap_or("").contains("integer"),
             "method must carry a hint: {:?}",
@@ -5290,10 +6939,16 @@ mod tests {
         // Class/field names get no synthetic hint (only grammar candidates do).
         let mut c = completer_with_fields(&["com.acme.Foo"], &["myField"]);
         let cs = c.complete("SELECT * FROM com.", 18);
-        assert!(cs.iter().all(|s| s.description.is_none()), "class names must have no hint");
+        assert!(
+            cs.iter().all(|s| s.description.is_none()),
+            "class names must have no hint"
+        );
         let fs = c.complete("SELECT s.myF", 12);
         let field = fs.iter().find(|s| s.value == "s.myField");
-        assert!(field.is_some_and(|s| s.description.is_none()), "field names must have no hint");
+        assert!(
+            field.is_some_and(|s| s.description.is_none()),
+            "field names must have no hint"
+        );
     }
 
     // ---------- classify() ----------
@@ -5551,7 +7206,10 @@ mod tests {
         );
         // s.name (the field) must still be offered.
         let v = values(&s);
-        assert!(v.contains(&"s.name".to_string()), "s.name must be offered: {v:?}");
+        assert!(
+            v.contains(&"s.name".to_string()),
+            "s.name must be offered: {v:?}"
+        );
     }
 
     #[test]
@@ -5655,10 +7313,16 @@ mod tests {
         let mut c = completer(&["com.acme.Foo"]);
         // With a fragment that matches both "OBJECTS" and nothing from the class list.
         let v = values(&c.complete("SELECT * FROM O", 15));
-        assert!(v.contains(&"OBJECTS".to_string()), "expected OBJECTS in {v:?}");
+        assert!(
+            v.contains(&"OBJECTS".to_string()),
+            "expected OBJECTS in {v:?}"
+        );
         // With a fragment matching a class name prefix.
         let v2 = values(&c.complete("SELECT * FROM co", 16));
-        assert!(v2.contains(&"com.acme.Foo".to_string()), "expected class name in {v2:?}");
+        assert!(
+            v2.contains(&"com.acme.Foo".to_string()),
+            "expected class name in {v2:?}"
+        );
     }
 
     #[test]
@@ -5796,7 +7460,10 @@ mod tests {
         let sugg = c.complete(line, line.len());
         assert_eq!(sugg.len(), 1);
         assert_eq!(sugg[0].value, "value=");
-        assert!(!sugg[0].append_whitespace, "arg key must not append a space");
+        assert!(
+            !sugg[0].append_whitespace,
+            "arg key must not append a space"
+        );
     }
 
     #[test]
@@ -5822,7 +7489,10 @@ mod tests {
         let mut c = completer(&[]);
         let line = "-- @viz histogram label=na";
         let v = values(&c.complete(line, line.len()));
-        assert!(v.is_empty(), "column-name fragment must not complete: {v:?}");
+        assert!(
+            v.is_empty(),
+            "column-name fragment must not complete: {v:?}"
+        );
     }
 
     #[test]
@@ -5832,7 +7502,10 @@ mod tests {
         let mut c = completer(&[]);
         let line = "-- hello wor";
         let v = values(&c.complete(line, line.len()));
-        assert!(!v.contains(&"histogram".to_string()), "must not offer kinds: {v:?}");
+        assert!(
+            !v.contains(&"histogram".to_string()),
+            "must not offer kinds: {v:?}"
+        );
     }
 
     #[test]
@@ -5842,7 +7515,10 @@ mod tests {
         let line = "SELECT * FROM java.";
         let v = values(&c.complete(line, line.len()));
         assert!(v.contains(&"java.lang.String".to_string()), "got {v:?}");
-        assert!(!v.contains(&"histogram".to_string()), "must not leak kinds: {v:?}");
+        assert!(
+            !v.contains(&"histogram".to_string()),
+            "must not leak kinds: {v:?}"
+        );
     }
 
     // ===== Wave H: Ctx::Method completion tests =====
@@ -5879,7 +7555,13 @@ mod tests {
         // @GCRoots, @GCRootInfo, @info, @valueArray, @referenceArray must be in
         // ATTRIBUTES so they auto-complete for free in Attr position.
         use crate::query::parse::ATTRIBUTES;
-        for attr in ["@GCRoots", "@GCRootInfo", "@info", "@valueArray", "@referenceArray"] {
+        for attr in [
+            "@GCRoots",
+            "@GCRootInfo",
+            "@info",
+            "@valueArray",
+            "@referenceArray",
+        ] {
             assert!(
                 ATTRIBUTES.contains(&attr),
                 "parse::ATTRIBUTES must contain '{attr}'"
@@ -5933,11 +7615,17 @@ mod tests {
         let line = "SELECT i. FROM java.lang.Integer i WHERE @size > 0";
         let v = values(&c.complete(line, 9));
         // intValue must be in the suggestions (proves Method ctx was used, not just Attr).
-        assert!(v.contains(&"i.intValue".to_string()), "intValue missing: {v:?}");
+        assert!(
+            v.contains(&"i.intValue".to_string()),
+            "intValue missing: {v:?}"
+        );
         // And intValue must come before getName (class-aware priority).
         let pos_int = v.iter().position(|x| x == "i.intValue").unwrap();
         let pos_name = v.iter().position(|x| x == "i.getName").unwrap();
-        assert!(pos_int < pos_name, "intValue must precede getName for Integer: {v:?}");
+        assert!(
+            pos_int < pos_name,
+            "intValue must precede getName for Integer: {v:?}"
+        );
     }
 
     #[test]
@@ -5945,7 +7633,13 @@ mod tests {
         // Without a FROM clause we can't resolve the receiver → Ctx::Method { receiver_class: None }.
         let ctx = classify("SELECT s.", "");
         assert!(
-            matches!(ctx, Ctx::Method { receiver_class: None, .. }),
+            matches!(
+                ctx,
+                Ctx::Method {
+                    receiver_class: None,
+                    ..
+                }
+            ),
             "expected Ctx::Method {{ receiver_class: None }}, got {ctx:?}"
         );
     }
@@ -5978,7 +7672,10 @@ mod tests {
         let mut c = completer_with_fields(&[], &["name"]);
         let v = values(&c.complete("SELECT s.", 9));
         for m in METHODS.iter() {
-            assert!(v.contains(&format!("s.{m}")), "missing method s.{m} in {v:?}");
+            assert!(
+                v.contains(&format!("s.{m}")),
+                "missing method s.{m} in {v:?}"
+            );
         }
     }
 
@@ -5987,9 +7684,18 @@ mod tests {
         // Ctx::Method must also offer field names (superset of old FieldName).
         let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
         let v = values(&c.complete("SELECT s.", 9));
-        assert!(v.contains(&"s.name".to_string()), "field 'name' missing: {v:?}");
-        assert!(v.contains(&"s.parent".to_string()), "field 'parent' missing: {v:?}");
-        assert!(v.contains(&"s.value".to_string()), "field 'value' missing: {v:?}");
+        assert!(
+            v.contains(&"s.name".to_string()),
+            "field 'name' missing: {v:?}"
+        );
+        assert!(
+            v.contains(&"s.parent".to_string()),
+            "field 'parent' missing: {v:?}"
+        );
+        assert!(
+            v.contains(&"s.value".to_string()),
+            "field 'value' missing: {v:?}"
+        );
     }
 
     #[test]
@@ -6009,7 +7715,10 @@ mod tests {
         let mut c = completer_with_fields(&[], &["name", "num"]);
         let v = values(&c.complete("SELECT s.si", 11));
         assert!(v.contains(&"s.size".to_string()), "expected s.size: {v:?}");
-        assert!(!v.contains(&"s.intValue".to_string()), "'intValue' must not match 'si': {v:?}");
+        assert!(
+            !v.contains(&"s.intValue".to_string()),
+            "'intValue' must not match 'si': {v:?}"
+        );
     }
 
     #[test]
@@ -6034,7 +7743,10 @@ mod tests {
         let mut c = completer_with_fields(&["java.util.ArrayList"], &[]);
         let line = "SELECT a. FROM java.util.ArrayList a WHERE ";
         let v = values(&c.complete(line, 9));
-        assert!(v.contains(&"a.size".to_string()), "size missing for ArrayList: {v:?}");
+        assert!(
+            v.contains(&"a.size".to_string()),
+            "size missing for ArrayList: {v:?}"
+        );
         assert!(
             !v.contains(&"a.get".to_string()),
             "get must NOT be offered (not in METHODS): {v:?}"
@@ -6057,12 +7769,24 @@ mod tests {
         let line = "SELECT m. FROM java.util.HashMap m WHERE ";
         let v = values(&c.complete(line, 9));
         for method in ["m.size", "m.getKey", "m.getValue"] {
-            assert!(v.contains(&method.to_string()), "{method} missing for HashMap: {v:?}");
+            assert!(
+                v.contains(&method.to_string()),
+                "{method} missing for HashMap: {v:?}"
+            );
         }
-        assert!(!v.contains(&"m.get".to_string()), "get must NOT be in results: {v:?}");
+        assert!(
+            !v.contains(&"m.get".to_string()),
+            "get must NOT be in results: {v:?}"
+        );
         let pos_size = v.iter().position(|x| x == "m.size").unwrap();
-        let pos_name = v.iter().position(|x| x == "m.getName").unwrap_or(usize::MAX);
-        assert!(pos_size < pos_name, "size should be before getName for HashMap: {v:?}");
+        let pos_name = v
+            .iter()
+            .position(|x| x == "m.getName")
+            .unwrap_or(usize::MAX);
+        assert!(
+            pos_size < pos_name,
+            "size should be before getName for HashMap: {v:?}"
+        );
     }
 
     #[test]
@@ -6088,7 +7812,10 @@ mod tests {
         let v = values(&c.complete(line, 9));
         let pos_len = v.iter().position(|x| x == "s.length");
         let pos_cont = v.iter().position(|x| x == "s.contains");
-        let pos_name = v.iter().position(|x| x == "s.getName").unwrap_or(usize::MAX);
+        let pos_name = v
+            .iter()
+            .position(|x| x == "s.getName")
+            .unwrap_or(usize::MAX);
         assert!(pos_len.is_some(), "length missing for String: {v:?}");
         assert!(pos_cont.is_some(), "contains missing for String: {v:?}");
         assert!(
@@ -6105,10 +7832,16 @@ mod tests {
         // No FROM clause: receiver_class = None.
         let v = values(&c.complete("SELECT s.", 9));
         for m in METHODS.iter() {
-            assert!(v.contains(&format!("s.{m}")), "method {m} missing (unknown receiver): {v:?}");
+            assert!(
+                v.contains(&format!("s.{m}")),
+                "method {m} missing (unknown receiver): {v:?}"
+            );
         }
         // getName is in METHODS and must appear.
-        assert!(v.contains(&"s.getName".to_string()), "getName must be offered: {v:?}");
+        assert!(
+            v.contains(&"s.getName".to_string()),
+            "getName must be offered: {v:?}"
+        );
     }
 
     #[test]
@@ -6149,7 +7882,10 @@ mod tests {
         );
         assert!(result.is_ok(), "run_repl_line returned error: {:?}", result);
         let output = String::from_utf8_lossy(&out);
-        assert!(output.contains("↳"), "expected OQL echo (↳) in output:\n{output}");
+        assert!(
+            output.contains("↳"),
+            "expected OQL echo (↳) in output:\n{output}"
+        );
     }
 
     #[test]
@@ -6177,13 +7913,19 @@ mod tests {
         );
         assert!(result.is_ok());
         let output = String::from_utf8_lossy(&out);
-        assert!(output.contains("unknown query"), "expected error for unknown name:\n{output}");
+        assert!(
+            output.contains("unknown query"),
+            "expected error for unknown name:\n{output}"
+        );
     }
 
     // ---------- resolve_col ----------
 
     fn make_columns(names: &[&str]) -> Vec<crate::query::model::QueryColumn> {
-        names.iter().map(|&n| crate::query::model::QueryColumn { name: n.into() }).collect()
+        names
+            .iter()
+            .map(|&n| crate::query::model::QueryColumn { name: n.into() })
+            .collect()
     }
 
     #[test]
@@ -6217,17 +7959,29 @@ mod tests {
 
     #[test]
     fn sort_completion_strips_dash_prefix() {
-        let cols = Arc::new(Mutex::new(vec!["retainedHeap".to_string(), "className".to_string()]));
+        let cols = Arc::new(Mutex::new(vec![
+            "retainedHeap".to_string(),
+            "className".to_string(),
+        ]));
         let mut c = OqlCompleter::new_with_cols(vec![], vec![], Arc::clone(&cols));
         // `!sort -r<Tab>` should complete to `!sort -retainedHeap`
         let v = values(&c.complete("!sort -r", 8));
-        assert!(v.contains(&"!sort -retainedHeap".to_string()), "dash-prefix sort: {v:?}");
+        assert!(
+            v.contains(&"!sort -retainedHeap".to_string()),
+            "dash-prefix sort: {v:?}"
+        );
         // `!sort r<Tab>` (no dash) still works
         let v2 = values(&c.complete("!sort r", 7));
-        assert!(v2.contains(&"!sort retainedHeap".to_string()), "no-dash sort: {v2:?}");
+        assert!(
+            v2.contains(&"!sort retainedHeap".to_string()),
+            "no-dash sort: {v2:?}"
+        );
         // `!sort className,-r<Tab>` multi-column with dash
         let v3 = values(&c.complete("!sort className,-r", 18));
-        assert!(v3.contains(&"!sort className,-retainedHeap".to_string()), "multi-col dash sort: {v3:?}");
+        assert!(
+            v3.contains(&"!sort className,-retainedHeap".to_string()),
+            "multi-col dash sort: {v3:?}"
+        );
     }
 
     #[test]
@@ -6252,55 +8006,104 @@ mod tests {
         let line = "!run ";
         let v = values(&c.complete(line, line.len()));
         let total = crate::named_queries::NAMED_QUERIES.len();
-        assert_eq!(v.len(), total, "!run <space> should offer all {total} named queries, got {}", v.len());
+        assert_eq!(
+            v.len(),
+            total,
+            "!run <space> should offer all {total} named queries, got {}",
+            v.len()
+        );
     }
 
     #[test]
     fn describe_completion_suggests_class_names() {
-        let mut c = completer(&["java.lang.String", "java.lang.StringBuilder", "java.util.HashMap"]);
+        let mut c = completer(&[
+            "java.lang.String",
+            "java.lang.StringBuilder",
+            "java.util.HashMap",
+        ]);
         let line = "!describe java.lang";
         let sugg = c.complete(line, line.len());
         let v = values(&sugg);
-        assert!(!v.is_empty(), "!describe java.lang should suggest class names: {v:?}");
-        assert!(v.contains(&"java.lang.String".to_string()), "String missing: {v:?}");
-        assert!(v.contains(&"java.lang.StringBuilder".to_string()), "StringBuilder missing: {v:?}");
-        assert!(!v.contains(&"java.util.HashMap".to_string()), "HashMap should not match java.lang: {v:?}");
+        assert!(
+            !v.is_empty(),
+            "!describe java.lang should suggest class names: {v:?}"
+        );
+        assert!(
+            v.contains(&"java.lang.String".to_string()),
+            "String missing: {v:?}"
+        );
+        assert!(
+            v.contains(&"java.lang.StringBuilder".to_string()),
+            "StringBuilder missing: {v:?}"
+        );
+        assert!(
+            !v.contains(&"java.util.HashMap".to_string()),
+            "HashMap should not match java.lang: {v:?}"
+        );
         // Span start must point to the class-name portion, not the whole line.
         let span_start = sugg[0].span.start;
-        assert_eq!(&line[span_start..], "java.lang", "span should cover just the partial class name");
+        assert_eq!(
+            &line[span_start..],
+            "java.lang",
+            "span should cover just the partial class name"
+        );
     }
 
     #[test]
     fn filter_matches_formatted_bytes_column() {
         use crate::query::model::QueryColumn;
         let res = QueryResult {
-            name: "t".into(), oql: "".into(),
-            columns: vec![QueryColumn { name: "retained_heap_size".into() }],
+            name: "t".into(),
+            oql: "".into(),
+            columns: vec![QueryColumn {
+                name: "retained_heap_size".into(),
+            }],
             rows: vec![
                 vec![QueryValue::Int(4_300)],     // ~4.2 KiB
                 vec![QueryValue::Int(2_000_000)], // ~1.9 MiB
             ],
-            row_count: 2, truncated: false, error: None, note: None, viz: None, elapsed_ms: None,
+            row_count: 2,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+            elapsed_ms: None,
         };
-        SESSION_SETTINGS.with(|s| { s.borrow_mut().color = false; s.borrow_mut().bytes_raw = false; });
+        SESSION_SETTINGS.with(|s| {
+            s.borrow_mut().color = false;
+            s.borrow_mut().bytes_raw = false;
+        });
         let mut result = Some(res);
         let mut buf = Vec::new();
         handle_filter("KiB", &mut result, 120, &mut buf).unwrap();
-        SESSION_SETTINGS.with(|s| { s.borrow_mut().color = true; s.borrow_mut().bytes_raw = false; });
+        SESSION_SETTINGS.with(|s| {
+            s.borrow_mut().color = true;
+            s.borrow_mut().bytes_raw = false;
+        });
         // 4300 bytes formats as "4.2 KiB"; pattern "KiB" should match it
         let kept = result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
-        assert_eq!(kept, 1, "KiB filter should keep the ~4 KiB row; buf={}", String::from_utf8_lossy(&buf));
+        assert_eq!(
+            kept,
+            1,
+            "KiB filter should keep the ~4 KiB row; buf={}",
+            String::from_utf8_lossy(&buf)
+        );
     }
 
     // ---------- undo slot correctness ----------
 
     fn make_result(rows: usize) -> QueryResult {
         QueryResult {
-            name: "t".into(), oql: "SELECT v FROM T".into(),
+            name: "t".into(),
+            oql: "SELECT v FROM T".into(),
             columns: vec![crate::query::model::QueryColumn { name: "v".into() }],
             rows: (0..rows as i64).map(|i| vec![QueryValue::Int(i)]).collect(),
             row_count: rows as u64,
-            truncated: false, error: None, note: None, viz: None, elapsed_ms: None,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+            elapsed_ms: None,
         }
     }
 
@@ -6354,7 +8157,11 @@ mod tests {
             &mut out,
         );
         // After a fresh query, prev_r must be None
-        assert!(prev_r.is_none(), "undo slot must be cleared after fresh OQL query, but was {:?}", prev_r.as_ref().map(|r| r.rows.len()));
+        assert!(
+            prev_r.is_none(),
+            "undo slot must be cleared after fresh OQL query, but was {:?}",
+            prev_r.as_ref().map(|r| r.rows.len())
+        );
     }
 
     #[test]
@@ -6378,17 +8185,31 @@ mod tests {
         {
             use crate::query::model::QueryColumn;
             let mut all_match = Some(QueryResult {
-                name: "t".into(), oql: "".into(),
+                name: "t".into(),
+                oql: "".into(),
                 columns: vec![QueryColumn { name: "v".into() }],
-                rows: vec![vec![QueryValue::Int(1)], vec![QueryValue::Int(2)], vec![QueryValue::Int(3)]],
-                row_count: 3, truncated: false, error: None, note: Some("sorted by v asc".into()), viz: None, elapsed_ms: None,
+                rows: vec![
+                    vec![QueryValue::Int(1)],
+                    vec![QueryValue::Int(2)],
+                    vec![QueryValue::Int(3)],
+                ],
+                row_count: 3,
+                truncated: false,
+                error: None,
+                note: Some("sorted by v asc".into()),
+                viz: None,
+                elapsed_ms: None,
             });
             let before_count = all_match.as_ref().map(|r| r.rows.len());
             let saved = prev_r.clone();
-            if true { prev_r = all_match.clone(); }
+            if true {
+                prev_r = all_match.clone();
+            }
             // filter with /.*/ matches all rows
             handle_filter("/./", &mut all_match, 120, &mut vec![]).unwrap();
-            if all_match.as_ref().map(|r| r.rows.len()) == before_count { prev_r = saved; }
+            if all_match.as_ref().map(|r| r.rows.len()) == before_count {
+                prev_r = saved;
+            }
             last_r = all_match;
         }
 
@@ -6423,7 +8244,10 @@ mod tests {
             &mut out,
         );
         // !count with arg runs a fresh query → undo slot cleared
-        assert!(prev_r.is_none(), "undo slot must be cleared after !count <class>");
+        assert!(
+            prev_r.is_none(),
+            "undo slot must be cleared after !count <class>"
+        );
         SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
     }
 }

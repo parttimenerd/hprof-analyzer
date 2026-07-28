@@ -662,7 +662,10 @@ fn parse_mat_docs(docs: &[HtmlDoc]) -> MatReport {
         } else if n == "index.html" || n == "index.htm" {
             // The index could belong to any of the three report types. Detect
             // by content and run whichever parsers find data.
-            if doc.html.contains("Suspect #") || doc.html.contains("Problem Suspect") || doc.html.contains("class=\"important\"") {
+            if doc.html.contains("Suspect #")
+                || doc.html.contains("Problem Suspect")
+                || doc.html.contains("class=\"important\"")
+            {
                 parse_leak_suspects(&doc.html, &mut rep);
             }
             if doc.html.contains("Top Components") {

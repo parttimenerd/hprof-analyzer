@@ -133,9 +133,15 @@ fn parity_all_fixtures() {
         }
     }
     if regen {
-        eprintln!("parity: regenerated {regenned} of {ran} present fixtures ({} total)", FIXTURES.len());
+        eprintln!(
+            "parity: regenerated {regenned} of {ran} present fixtures ({} total)",
+            FIXTURES.len()
+        );
     } else {
-        assert!(failures.is_empty(), "parity mismatch for: {failures:?}\n\nRegenerate with: REGEN_FIXTURES=1 cargo test --release parity");
+        assert!(
+            failures.is_empty(),
+            "parity mismatch for: {failures:?}\n\nRegenerate with: REGEN_FIXTURES=1 cargo test --release parity"
+        );
         eprintln!("parity: ran {ran} of {} fixtures", FIXTURES.len());
     }
 }

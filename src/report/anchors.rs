@@ -211,7 +211,13 @@ mod tests {
             slugify("Container Attribution (Class#field)"),
             "container-attribution-classfield"
         );
-        assert_eq!(slugify("Duplicate Strings (approximate)"), "duplicate-strings-approximate");
-        assert_eq!(slugify("Dominator-Depth Distribution"), "dominator-depth-distribution");
+        assert_eq!(
+            slugify("Duplicate Strings (approximate)"),
+            "duplicate-strings-approximate"
+        );
+        assert_eq!(
+            slugify("Dominator-Depth Distribution"),
+            "dominator-depth-distribution"
+        );
     }
 }

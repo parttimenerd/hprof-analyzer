@@ -1039,7 +1039,8 @@ pub struct WasteSummary {
 /// One collection-kind's aggregate stats. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]pub struct CollectionKindStat {
+)]
+pub struct CollectionKindStat {
     pub kind: String,        // "list"/"map"/"set"/"deque"/"queue"/"tree"
     pub count: u64,          // number of collections of this kind (with a readable size)
     pub total_elements: u64, // sum of sizes

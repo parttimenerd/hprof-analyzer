@@ -240,8 +240,7 @@ mod tests {
     #[test]
     fn reorder_sorts_cheap_first() {
         // Build a plan whose where_terms are deliberately in worst-first order.
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
             scalar_conjunct("c", PredCost::Str),
@@ -279,8 +278,7 @@ mod tests {
     /// and verify reorder_predicates preserves that order.
     #[test]
     fn reorder_is_stable_within_cost_class() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.where_terms = vec![
             scalar_conjunct("first", PredCost::Scalar),
             scalar_conjunct("second", PredCost::Scalar),
@@ -319,8 +317,7 @@ mod tests {
     /// it once (idempotent).
     #[test]
     fn reorder_is_idempotent() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
             scalar_conjunct("c", PredCost::Str),
@@ -399,8 +396,7 @@ mod tests {
     /// set scan_limit to the same value as limit.
     #[test]
     fn limit_pushed_to_scan_when_safe() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit,
@@ -413,8 +409,10 @@ mod tests {
     /// order_sensitive. Either condition alone blocks pushdown; this tests both.
     #[test]
     fn limit_not_pushed_with_order_by() {
-        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10")
-                .unwrap());
+        let mut plan = pq(&parse(
+            "SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10",
+        )
+        .unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit, None,
@@ -428,8 +426,10 @@ mod tests {
     /// isolation (no late_ops are present).
     #[test]
     fn limit_not_pushed_with_scalar_order_by() {
-        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10")
-                .unwrap());
+        let mut plan = pq(&parse(
+            "SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10",
+        )
+        .unwrap());
         // Verify precondition: no late ops (so order_sensitive is the ONLY blocker).
         assert!(
             plan.late_ops.is_empty(),
@@ -450,8 +450,7 @@ mod tests {
     /// A query with no LIMIT produces no scan_limit regardless.
     #[test]
     fn no_limit_means_no_scan_limit() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit, None,
@@ -490,8 +489,7 @@ mod tests {
     /// unchanged (idempotent).
     #[test]
     fn pushdown_is_idempotent() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(plan.scan_limit, Some(10), "first call must set scan_limit");
         pushdown_limit(&mut plan);
@@ -576,8 +574,7 @@ mod tests {
     #[test]
     fn dead_retained_need_eliminated() {
         // Build a plan that has no late ops, then manually arm needs.retained.
-        let mut plan =
-            pq(&parse("SELECT @usedHeapSize FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @usedHeapSize FROM java.lang.String").unwrap());
         // Ensure no late ops (precondition).
         plan.late_ops.clear();
         plan.needs.retained = true; // stale: no referent late op
@@ -592,8 +589,7 @@ mod tests {
     /// `JoinRetained` late op — `eliminate_dead_needs` must PRESERVE `needs.retained`.
     #[test]
     fn live_retained_need_preserved() {
-        let mut plan =
-            pq(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap());
         // Confirm precondition: the planner armed JoinRetained and needs.retained.
         assert!(
             plan.late_ops
@@ -652,8 +648,7 @@ mod tests {
     /// calling it once (idempotent).
     #[test]
     fn eliminate_is_idempotent() {
-        let mut plan =
-            pq(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap());
         eliminate_dead_needs(&mut plan);
         let needs_after_first = plan.needs.clone();
         eliminate_dead_needs(&mut plan);
@@ -820,8 +815,7 @@ mod tests {
     /// `narrow_carry`.
     #[test]
     fn narrow_carry_indexonly_is_noop() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         assert!(
             matches!(plan.carry, CarryLayout::IndexOnly),
             "precondition: default carry is IndexOnly"
@@ -837,8 +831,7 @@ mod tests {
     /// scalar data, so `narrow_carry` must downgrade it to `IndexOnly`.
     #[test]
     fn narrow_carry_empty_scalars_downgrades() {
-        let mut plan =
-            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.carry = CarryLayout::IndexPlusScalars { widths: vec![] };
         narrow_carry(&mut plan);
         assert!(

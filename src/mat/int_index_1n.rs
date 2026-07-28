@@ -147,16 +147,21 @@ pub fn write_sorted<W: Write>(mut w: W, entries: &[Vec<i32>]) -> io::Result<W> {
     Ok(w)
 }
 
-
 /// Wraps a `Write` and counts the total bytes written through it.
 struct CountingWriter<W: Write> {
     inner: W,
     count: u64,
 }
 impl<W: Write> CountingWriter<W> {
-    fn new(w: W) -> Self { Self { inner: w, count: 0 } }
-    fn bytes_written(&self) -> u64 { self.count }
-    fn into_inner(self) -> W { self.inner }
+    fn new(w: W) -> Self {
+        Self { inner: w, count: 0 }
+    }
+    fn bytes_written(&self) -> u64 {
+        self.count
+    }
+    fn into_inner(self) -> W {
+        self.inner
+    }
 }
 impl<W: Write> Write for CountingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -164,7 +169,9 @@ impl<W: Write> Write for CountingWriter<W> {
         self.count += n as u64;
         Ok(n)
     }
-    fn flush(&mut self) -> io::Result<()> { self.inner.flush() }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// Low-memory streaming variant of [`write_sorted`]: streams body pages directly
@@ -191,7 +198,10 @@ where
         if pos >= (1i64 << 32) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {}", header.len()),
+                format!(
+                    "header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {}",
+                    header.len()
+                ),
             ));
         }
         header.push(pos as i32);
@@ -245,8 +255,7 @@ where
     //   0        = hole (header[i] == 0)
     //   delta+1  = filled entry, delta = header_val - prev_header_val (delta ≥ 1)
     let hdr_out: Vec<u8> = Vec::new();
-    let mut hdr_enc = zstd::stream::write::Encoder::new(hdr_out, 3)
-        .map_err(io::Error::other)?;
+    let mut hdr_enc = zstd::stream::write::Encoder::new(hdr_out, 3).map_err(io::Error::other)?;
     let mut total_entries: usize = 0;
     let mut prev_pos: i64 = 0; // last non-zero header position emitted
 
@@ -256,7 +265,9 @@ where
         if pos >= (1i64 << 32) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {total_entries}"),
+                format!(
+                    "header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {total_entries}"
+                ),
             ));
         }
         {
@@ -264,7 +275,9 @@ where
             let body_size_ref = &mut body_size;
             let had_ref = &mut had_values;
             f(&mut |v: i32| {
-                if !*had_ref { *had_ref = true; }
+                if !*had_ref {
+                    *had_ref = true;
+                }
                 body_ref.push(v)?;
                 *body_size_ref += 1;
                 Ok(())
@@ -277,7 +290,9 @@ where
         } else {
             0
         };
-        hdr_enc.write_all(&encoded.to_le_bytes()).map_err(io::Error::other)?;
+        hdr_enc
+            .write_all(&encoded.to_le_bytes())
+            .map_err(io::Error::other)?;
         total_entries += 1;
     }
     let hdr_blob = hdr_enc.finish().map_err(io::Error::other)?;
@@ -296,31 +311,45 @@ where
     let mut running_pos: i64 = 0;
     loop {
         let n = decoder.read(&mut buf).map_err(io::Error::other)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         let mut i = 0usize;
         // Complete any partial i32 from the previous read.
         while carry_len > 0 && i < n {
-            carry[carry_len] = buf[i]; carry_len += 1; i += 1;
+            carry[carry_len] = buf[i];
+            carry_len += 1;
+            i += 1;
             if carry_len == 4 {
                 let encoded = i32::from_le_bytes(carry);
-                let hval = if encoded == 0 { 0 } else {
+                let hval = if encoded == 0 {
+                    0
+                } else {
                     running_pos += (encoded - 1) as i64;
                     running_pos as i32
                 };
                 hdr.push(hval)?;
-                written += 1; carry_len = 0;
+                written += 1;
+                carry_len = 0;
             }
         }
         while i + 4 <= n {
-            let encoded = i32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]);
-            let hval = if encoded == 0 { 0 } else {
+            let encoded = i32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
+            let hval = if encoded == 0 {
+                0
+            } else {
                 running_pos += (encoded - 1) as i64;
                 running_pos as i32
             };
             hdr.push(hval)?;
-            written += 1; i += 4;
+            written += 1;
+            i += 4;
         }
-        while i < n { carry[carry_len] = buf[i]; carry_len += 1; i += 1; }
+        while i < n {
+            carry[carry_len] = buf[i];
+            carry_len += 1;
+            i += 1;
+        }
     }
     debug_assert_eq!(carry_len, 0);
     debug_assert_eq!(written, total_entries);
@@ -346,8 +375,13 @@ where
         let values = entry.as_ref();
         let pos = body_size;
         if pos >= (1i64 << 32) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                format!("header2 path not implemented; pos {pos} at entry {}", header.len())));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "header2 path not implemented; pos {pos} at entry {}",
+                    header.len()
+                ),
+            ));
         }
         header.push(pos as i32);
         body.push(values.len() as i32)?;
@@ -369,7 +403,6 @@ where
     w.write_all(&divider.to_be_bytes())?;
     Ok(w)
 }
-
 
 /// Shared final flush: write body bytes, the header index (opened at `divider`),
 /// then the trailing divider i64. Only the plain-int header path is supported;
@@ -411,7 +444,7 @@ fn write_1n_tail<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mat::codec::{decode_int, compress_int};
+    use crate::mat::codec::{compress_int, decode_int};
     use crate::mat::int_index::PAGE_SIZE_INT;
 
     /// Parse an IntIndexStreamer footer located at the end of `region`.
@@ -428,9 +461,7 @@ mod tests {
         let mut page_starts = Vec::with_capacity(entries);
         for i in 0..entries {
             let off = footer_start + i * 8;
-            page_starts.push(i64::from_be_bytes(
-                region[off..off + 8].try_into().unwrap(),
-            ));
+            page_starts.push(i64::from_be_bytes(region[off..off + 8].try_into().unwrap()));
         }
         (pages, page_size, value_count, page_starts)
     }
@@ -523,12 +554,7 @@ mod tests {
 
     #[test]
     fn unsorted_roundtrip_small() {
-        let entries: Vec<Vec<i32>> = vec![
-            vec![7, 8, 9],
-            vec![],
-            vec![42],
-            vec![1, 2, 3, 4, 5],
-        ];
+        let entries: Vec<Vec<i32>> = vec![vec![7, 8, 9], vec![], vec![42], vec![1, 2, 3, 4, 5]];
         let file = write_unsorted(Vec::new(), &entries).unwrap();
 
         // Trailing divider.
@@ -631,7 +657,10 @@ mod tests {
         assert_eq!(hsize as usize, 3);
         let hstarts_local: Vec<i64> = hstarts.iter().map(|&s| s - divider).collect();
         let hdr_vals = decode_int_region(hdr_region, 0, hpages, hpsize, hsize, &hstarts_local);
-        assert!(hdr_vals.iter().all(|&v| v == 0), "all-empty headers must be 0: {hdr_vals:?}");
+        assert!(
+            hdr_vals.iter().all(|&v| v == 0),
+            "all-empty headers must be 0: {hdr_vals:?}"
+        );
 
         // Re-emit must be deterministic.
         let again = write_sorted(Vec::new(), &entries).unwrap();
@@ -652,7 +681,10 @@ mod tests {
         // 3 length ints emitted (each = 0).
         assert_eq!(bsize, 3, "unsorted all-empty body has 3 length-0 ints");
         let body_vals = decode_int_region(&file, 0, bpages, bpsize, bsize, &bstarts);
-        assert!(body_vals.iter().all(|&v| v == 0), "all length ints must be 0");
+        assert!(
+            body_vals.iter().all(|&v| v == 0),
+            "all length ints must be 0"
+        );
 
         // Reconstruct.
         let hdr_region = &file[divider as usize..n - 8];
@@ -692,14 +724,7 @@ mod tests {
     #[test]
     fn sorted_mixed_empty_and_nonempty() {
         // Interleaved empty/non-empty — exercises hole detection in header.
-        let entries: Vec<Vec<i32>> = vec![
-            vec![],
-            vec![1, 2, 3],
-            vec![],
-            vec![],
-            vec![99],
-            vec![],
-        ];
+        let entries: Vec<Vec<i32>> = vec![vec![], vec![1, 2, 3], vec![], vec![], vec![99], vec![]];
         let file = write_sorted(Vec::new(), &entries).unwrap();
         let (_, _, recon) = decode_sorted_file(&file);
         assert_eq!(recon, entries, "sorted mixed roundtrip");
@@ -709,13 +734,7 @@ mod tests {
 
     #[test]
     fn unsorted_mixed_empty_and_nonempty() {
-        let entries: Vec<Vec<i32>> = vec![
-            vec![5, 6],
-            vec![],
-            vec![7],
-            vec![],
-            vec![8, 9, 10],
-        ];
+        let entries: Vec<Vec<i32>> = vec![vec![5, 6], vec![], vec![7], vec![], vec![8, 9, 10]];
         let file = write_unsorted(Vec::new(), &entries).unwrap();
         let (_, _, recon) = decode_unsorted_file(&file);
         assert_eq!(recon, entries, "unsorted mixed roundtrip");

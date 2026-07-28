@@ -299,10 +299,8 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             if ex.plan().needs.ref_walk {
                 per_query_hops.push(crate::query::refwalk::refwalk_field_names(ex.query()));
                 per_query_tails.push(crate::query::refwalk::refwalk_tail_field_names(ex.query()));
-                needs_length_tail |=
-                    crate::query::refwalk::refwalk_has_length_tail(ex.query());
-                needs_address_tail |=
-                    crate::query::refwalk::refwalk_has_address_tail(ex.query());
+                needs_length_tail |= crate::query::refwalk::refwalk_has_length_tail(ex.query());
+                needs_address_tail |= crate::query::refwalk::refwalk_has_address_tail(ex.query());
             }
         }
         if per_query_hops.is_empty() {
@@ -723,22 +721,24 @@ pub(crate) fn resume_with_string_values(
         // builds no retained/dominator/edge structures, so an entry that ALSO needs
         // those must fall to the error path — otherwise its retained/dominator/edge
         // columns would silently project Null instead of erroring actionably.
-        let needs_only_refwalk = entry.plan.needs.ref_walk
-            && !entry.plan.needs.retained
-            && !entry.plan.needs.dominator_children
-            && !entry.plan.late_ops.iter().any(|op| {
-                matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
-            });
+        let needs_only_refwalk =
+            entry.plan.needs.ref_walk
+                && !entry.plan.needs.retained
+                && !entry.plan.needs.dominator_children
+                && !entry.plan.late_ops.iter().any(|op| {
+                    matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+                });
         // An array-index/slice entry needs P2 resolution (returning Null for all
         // ArrayIndex/ArraySlice columns in this release). Route through run_entry_pub
         // when array_index is the entry's sole late need (no retained/dominator/edge).
-        let needs_only_array_index = entry.plan.needs.array_index
-            && !entry.plan.needs.ref_walk
-            && !entry.plan.needs.retained
-            && !entry.plan.needs.dominator_children
-            && !entry.plan.late_ops.iter().any(|op| {
-                matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
-            });
+        let needs_only_array_index =
+            entry.plan.needs.array_index
+                && !entry.plan.needs.ref_walk
+                && !entry.plan.needs.retained
+                && !entry.plan.needs.dominator_children
+                && !entry.plan.late_ops.iter().any(|op| {
+                    matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+                });
         let is_refwalk = needs_only_refwalk;
         let is_array_index = needs_only_array_index;
         if is_string_only || is_refwalk || is_array_index {
@@ -833,7 +833,12 @@ pub fn run_resident_only(
                 && plan.finalize_at == crate::query::plan::Phase::P3)
         {
             use crate::query::carry::Carry;
-            SingleScanExecutor::new_carry(q, plan, &resolver, Carry::index_only(crate::query::carry::DEFAULT_CARRY_CAP))
+            SingleScanExecutor::new_carry(
+                q,
+                plan,
+                &resolver,
+                Carry::index_only(crate::query::carry::DEFAULT_CARRY_CAP),
+            )
         } else {
             SingleScanExecutor::new(q, plan, &resolver)
         };
@@ -869,16 +874,16 @@ pub fn run_resident_only(
         std::collections::HashMap::new()
     };
     let addr_vec = if needs_sv
-        || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1)
+        || flat
+            .iter()
+            .any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1)
     {
         id_map_to_addrs(&cache.p1.id_map)
     } else {
         Vec::new()
     };
-    let flat_results = resume_with_string_values(
-        state, &flat, sv, None, dfn,
-        &addr_vec, Some(&cache.shallow),
-    );
+    let flat_results =
+        resume_with_string_values(state, &flat, sv, None, dfn, &addr_vec, Some(&cache.shallow));
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -908,7 +913,12 @@ pub fn run_resident_with_retained(
                 && plan.finalize_at == crate::query::plan::Phase::P3)
         {
             use crate::query::carry::Carry;
-            SingleScanExecutor::new_carry(q, plan, &resolver, Carry::index_only(crate::query::carry::DEFAULT_CARRY_CAP))
+            SingleScanExecutor::new_carry(
+                q,
+                plan,
+                &resolver,
+                Carry::index_only(crate::query::carry::DEFAULT_CARRY_CAP),
+            )
         } else {
             SingleScanExecutor::new(q, plan, &resolver)
         };
@@ -922,7 +932,11 @@ pub fn run_resident_with_retained(
         }
     }
     let state = driver.finish_state();
-    let dfn: Option<&[u32]> = if reachable_only { cache.dfn.as_deref() } else { None };
+    let dfn: Option<&[u32]> = if reachable_only {
+        cache.dfn.as_deref()
+    } else {
+        None
+    };
     // toString(s) needs real String values — blobs are empty in resident path.
     let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
     let sv = if needs_sv {
@@ -931,15 +945,24 @@ pub fn run_resident_with_retained(
         std::collections::HashMap::new()
     };
     let addr_vec = if needs_sv
-        || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1)
+        || flat
+            .iter()
+            .any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1)
     {
         id_map_to_addrs(&cache.p1.id_map)
     } else {
         Vec::new()
     };
     let flat_results = resume_with_retained(
-        state, &flat, retained, &cache.shallow, dfn, sv, &addr_vec,
-        &cache.class_idx, &cache.class_names,
+        state,
+        &flat,
+        retained,
+        &cache.shallow,
+        dfn,
+        sv,
+        &addr_vec,
+        &cache.class_idx,
+        &cache.class_names,
     );
     Ok(collapse_union_results(flat_results, &groups))
 }
@@ -962,7 +985,7 @@ fn resume_with_retained(
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{
-        self, IdMap, LateCtx, EMPTY_GC_ROOT_TAGS, EMPTY_REFWALK_TAILS,
+        self, EMPTY_GC_ROOT_TAGS, EMPTY_REFWALK_TAILS, IdMap, LateCtx,
     };
 
     let row_src_by_slot = state.take_row_src_by_slot();
@@ -1003,14 +1026,19 @@ fn resume_with_retained(
     let mut other_slots: Vec<usize> = Vec::new();
 
     for entry in pending {
-        let is_retained_only = entry.plan.needs.retained
-            && !entry.plan.needs.dominator_children
-            && !entry.plan.needs.ref_walk
-            && !entry.plan.late_ops.iter().any(|op| {
-                matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
-            });
+        let is_retained_only =
+            entry.plan.needs.retained
+                && !entry.plan.needs.dominator_children
+                && !entry.plan.needs.ref_walk
+                && !entry.plan.late_ops.iter().any(|op| {
+                    matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+                });
         let is_string_only = !entry.plan.late_ops.is_empty()
-            && entry.plan.late_ops.iter().all(|op| matches!(op, StageOp::ResolveStringValues));
+            && entry
+                .plan
+                .late_ops
+                .iter()
+                .all(|op| matches!(op, StageOp::ResolveStringValues));
         if is_retained_only || is_string_only {
             let q = &flat[entry.slot].0;
             let r = stage_runner::run_entry_pub(&entry, q, &ctx);
@@ -1065,8 +1093,14 @@ pub fn run_single_dump(
         let p1 = crate::pass1::Pass1::run(&source, false)?;
         let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
         let needs_addr = needs_sv
-            || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
-        let addr_vec = if needs_addr { id_map_to_addrs(&p1.id_map) } else { Vec::new() };
+            || flat
+                .iter()
+                .any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
+        let addr_vec = if needs_addr {
+            id_map_to_addrs(&p1.id_map)
+        } else {
+            Vec::new()
+        };
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
         let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
@@ -1189,7 +1223,10 @@ pub fn run_single_dump(
                 // EXISTS: inner produced ≥1 row → true (before negation).
                 let had_rows = res.row_count > 0;
                 let result = if *negated { !had_rows } else { had_rows };
-                exists_bools_by_slot.entry(meta.outer_slot).or_default().push(result);
+                exists_bools_by_slot
+                    .entry(meta.outer_slot)
+                    .or_default()
+                    .push(result);
             }
         }
     }
@@ -1199,8 +1236,14 @@ pub fn run_single_dump(
     let p1_outer = crate::pass1::Pass1::run(&source_outer, false)?;
     let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
     let needs_addr = needs_sv
-        || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
-    let outer_addr_vec = if needs_addr { id_map_to_addrs(&p1_outer.id_map) } else { Vec::new() };
+        || flat
+            .iter()
+            .any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
+    let outer_addr_vec = if needs_addr {
+        id_map_to_addrs(&p1_outer.id_map)
+    } else {
+        Vec::new()
+    };
     let (outer_g, .., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
         crate::pass2::Pass2::build(
             &source_outer,
@@ -1277,11 +1320,15 @@ pub fn run_single_dump(
 /// joined by object identity) or an IN-predicate membership set (on some LHS).
 enum SubqueryRole {
     From,
-    In { lhs: crate::query::ast::Attr },
+    In {
+        lhs: crate::query::ast::Attr,
+    },
     /// EXISTS/NOT EXISTS: the bool result is computed from inner row count;
     /// `negated` is already encoded in the planned `ExistsSubplan` but we also
     /// carry it here so the materialization loop doesn't need to re-check.
-    Exists { negated: bool },
+    Exists {
+        negated: bool,
+    },
 }
 
 /// One inner subquery to run in the earlier pass, tagged with the outer flat-
@@ -1324,7 +1371,9 @@ fn collect_subquery_inners(flat: &[(Query, QueryPlan)]) -> Vec<SubqueryInner> {
         for esp in &plan.exists_subplans {
             out.push(SubqueryInner {
                 outer_slot: slot,
-                role: SubqueryRole::Exists { negated: esp.negated },
+                role: SubqueryRole::Exists {
+                    negated: esp.negated,
+                },
                 inner: esp.inner.clone(),
                 plan: esp.plan.clone(),
             });
@@ -1547,9 +1596,10 @@ pub fn expand_union_queries(
             // Capture the head query's ORDER BY so collapse can globally re-sort
             // the concatenated UNION result — each branch is pre-sorted but the
             // merged result is not.
-            order_by: q.order_by.as_ref().map(|ob| {
-                (crate::query::execute::attr_name(&ob.key), ob.dir.clone())
-            }),
+            order_by: q
+                .order_by
+                .as_ref()
+                .map(|ob| (crate::query::execute::attr_name(&ob.key), ob.dir.clone())),
         });
     }
     (flat, groups)
@@ -1629,12 +1679,15 @@ pub fn collapse_union_results(
         // INTERSECT: drain each INTERSECT branch result and intersect row-sets.
         // Uses the same Debug-key dedup strategy as stable_dedup for row equality.
         for _ in 0..g.intersect_count {
-            let right = it.next().expect("flat results shorter than groups describe (intersect)");
+            let right = it
+                .next()
+                .expect("flat results shorter than groups describe (intersect)");
             // Build a set of right-side row keys.
-            let right_set: HashSet<String> = right.rows.iter()
-                .map(|row| format!("{row:?}"))
-                .collect();
-            result.rows.retain(|row| right_set.contains(&format!("{row:?}")));
+            let right_set: HashSet<String> =
+                right.rows.iter().map(|row| format!("{row:?}")).collect();
+            result
+                .rows
+                .retain(|row| right_set.contains(&format!("{row:?}")));
             result.truncated |= right.truncated;
         }
         // Dedup the intersect result (INTERSECT has DISTINCT semantics).
@@ -1644,11 +1697,14 @@ pub fn collapse_union_results(
 
         // EXCEPT: drain each EXCEPT branch result and subtract row-sets.
         for _ in 0..g.except_count {
-            let right = it.next().expect("flat results shorter than groups describe (except)");
-            let right_set: HashSet<String> = right.rows.iter()
-                .map(|row| format!("{row:?}"))
-                .collect();
-            result.rows.retain(|row| !right_set.contains(&format!("{row:?}")));
+            let right = it
+                .next()
+                .expect("flat results shorter than groups describe (except)");
+            let right_set: HashSet<String> =
+                right.rows.iter().map(|row| format!("{row:?}")).collect();
+            result
+                .rows
+                .retain(|row| !right_set.contains(&format!("{row:?}")));
             result.truncated |= right.truncated;
         }
         // Dedup the except result (EXCEPT has DISTINCT semantics).
@@ -1722,7 +1778,10 @@ pub struct ReplCache {
 }
 
 impl ReplCache {
-    pub fn build(source: &crate::source::HprofSource, reachable_only: bool) -> std::io::Result<ReplCache> {
+    pub fn build(
+        source: &crate::source::HprofSource,
+        reachable_only: bool,
+    ) -> std::io::Result<ReplCache> {
         Self::build_with_progress(source, reachable_only, &mut |_, _| {})
     }
 
@@ -1762,19 +1821,16 @@ impl ReplCache {
         // g.shallow / g.class_idx are emptied during build (compressed). Restore.
         let shallow: Vec<u32> = shallow_c.restore()?;
         let class_idx: Vec<u32> = class_idx_c.restore()?;
-        let class_names: Vec<String> = g.class_names.iter()
+        let class_names: Vec<String> = g
+            .class_names
+            .iter()
             .map(|n| crate::report::format::pretty_class_name(n))
             .collect();
         let class_ids = p1_owned.class_ids.clone();
         let dfn = if reachable_only {
             Some(
-                crate::rpo_dfs::rpo_dfs(
-                    g.n,
-                    &g.gc_root_indices,
-                    &g.fwd_offsets,
-                    &g.fwd_targets,
-                )
-                .dfn,
+                crate::rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets)
+                    .dfn,
             )
         } else {
             None
@@ -1798,10 +1854,8 @@ impl ReplCache {
     /// Used by the resident-only query path when `toString(s)` is requested
     /// (that path uses empty blobs so can't capture `value` field pointers
     /// from the cache; this re-scans the file once on demand).
-    pub fn build_string_values(
-        &self,
-    ) -> std::io::Result<std::collections::HashMap<u32, String>> {
-        use crate::query::stringvals::{StringCapture, STRING_VALUES_CAP};
+    pub fn build_string_values(&self) -> std::io::Result<std::collections::HashMap<u32, String>> {
+        use crate::query::stringvals::{STRING_VALUES_CAP, StringCapture};
         use crate::types::HprofType;
 
         let resolver = LiveResolver::new(
@@ -1980,15 +2034,26 @@ mod tests {
 
     #[test]
     fn repl_cache_builds_from_fixture() {
-        let cache = ReplCache::build(&crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"), true)
-            .expect("cache build");
+        let cache = ReplCache::build(
+            &crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"),
+            true,
+        )
+        .expect("cache build");
         assert!(cache.n > 0, "some objects");
         assert_eq!(cache.shallow.len(), cache.n, "shallow covers all objects");
-        assert_eq!(cache.class_ids.len(), cache.n, "class_ids covers all objects");
+        assert_eq!(
+            cache.class_ids.len(),
+            cache.n,
+            "class_ids covers all objects"
+        );
         assert!(cache.dfn.is_some(), "reachable-only build computes dfn");
 
         // --all build: no dfn.
-        let raw = ReplCache::build(&crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"), false).expect("raw");
+        let raw = ReplCache::build(
+            &crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"),
+            false,
+        )
+        .expect("raw");
         assert!(raw.dfn.is_none(), "raw build has no dfn");
     }
 
@@ -2001,17 +2066,29 @@ mod tests {
         let oql = "SELECT toString(s) FROM java.lang.String s LIMIT 10";
         let (q, plan) = parse_plan_opt(oql);
 
-        assert!(plan.needs.string_values, "plan must need string_values for this query");
+        assert!(
+            plan.needs.string_values,
+            "plan must need string_values for this query"
+        );
         let sv = cache.build_string_values().expect("build_string_values");
-        assert!(!sv.is_empty(), "build_string_values must return a non-empty map");
+        assert!(
+            !sv.is_empty(),
+            "build_string_values must return a non-empty map"
+        );
 
         let results = run_resident_only(&cache, &[(q, plan)], true).expect("run");
         let result = &results[0];
         // At least some strings must be non-null (not every String has a value array, but most do).
-        let non_null = result.rows.iter().filter(|row| {
-            row.iter().any(|v| !matches!(v, QueryValue::Null))
-        }).count();
-        assert!(non_null > 0, "expected at least some non-null toString values, got 0 out of {}", result.row_count);
+        let non_null = result
+            .rows
+            .iter()
+            .filter(|row| row.iter().any(|v| !matches!(v, QueryValue::Null)))
+            .count();
+        assert!(
+            non_null > 0,
+            "expected at least some non-null toString values, got 0 out of {}",
+            result.row_count
+        );
     }
 
     #[test]
@@ -2028,18 +2105,28 @@ mod tests {
         assert!(plan.needs.retained, "must need retained");
 
         let retained = {
-            let (_report, ret) = crate::analyze_to_report_with_retained(&source, &crate::AnalyzeOptions::default())
-                .expect("analyze");
+            let (_report, ret) =
+                crate::analyze_to_report_with_retained(&source, &crate::AnalyzeOptions::default())
+                    .expect("analyze");
             ret
         };
-        let results = run_resident_with_retained(&cache, &[(q, plan)], true, &retained).expect("run");
+        let results =
+            run_resident_with_retained(&cache, &[(q, plan)], true, &retained).expect("run");
         let result = &results[0];
 
-        assert!(result.error.is_none(), "unexpected error: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "unexpected error: {:?}",
+            result.error
+        );
         assert!(result.row_count > 0, "expected rows");
 
         // All @retainedHeapSize values must be non-null and non-zero.
-        let bytes_col = result.columns.iter().position(|c| c.name == "bytes").expect("bytes column");
+        let bytes_col = result
+            .columns
+            .iter()
+            .position(|c| c.name == "bytes")
+            .expect("bytes column");
         for row in &result.rows {
             let v = &row[bytes_col];
             assert!(!matches!(v, QueryValue::Null), "bytes must not be null");
@@ -2049,9 +2136,17 @@ mod tests {
         }
 
         // Rows must be sorted descending by bytes.
-        let vals: Vec<i64> = result.rows.iter().map(|r| {
-            if let QueryValue::Int(n) = r[bytes_col] { n } else { 0 }
-        }).collect();
+        let vals: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|r| {
+                if let QueryValue::Int(n) = r[bytes_col] {
+                    n
+                } else {
+                    0
+                }
+            })
+            .collect();
         for w in vals.windows(2) {
             assert!(w[0] >= w[1], "rows not sorted DESC: {} < {}", w[0], w[1]);
         }
@@ -2068,13 +2163,20 @@ mod tests {
         );
         assert!(plan.needs.string_values, "must be carry mode");
 
-        let results = crate::query::run::run_single_dump(path, &[(q, plan)], false)
-            .expect("run_single_dump");
+        let results =
+            crate::query::run::run_single_dump(path, &[(q, plan)], false).expect("run_single_dump");
         let result = &results[0];
-        assert!(result.error.is_none(), "unexpected error: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "unexpected error: {:?}",
+            result.error
+        );
         assert!(result.row_count > 0, "expected rows");
 
-        let addr_col = result.columns.iter().position(|c| c.name == "@objectAddress")
+        let addr_col = result
+            .columns
+            .iter()
+            .position(|c| c.name == "@objectAddress")
             .expect("@objectAddress column");
         for row in &result.rows {
             if let QueryValue::Int(addr) = row[addr_col] {
@@ -2396,10 +2498,10 @@ mod tests {
                     union_limit: None,
                     distinct: false,
                     limit: None,
-                offset: None,
-                intersect_count: 0,
-                except_count: 0,
-                order_by: None,
+                    offset: None,
+                    intersect_count: 0,
+                    except_count: 0,
+                    order_by: None,
                 },
                 UnionGroup {
                     head: 1,
@@ -2407,10 +2509,10 @@ mod tests {
                     union_limit: None,
                     distinct: false,
                     limit: None,
-                offset: None,
-                intersect_count: 0,
-                except_count: 0,
-                order_by: None,
+                    offset: None,
+                    intersect_count: 0,
+                    except_count: 0,
+                    order_by: None,
                 },
             ]
         );
@@ -2434,10 +2536,10 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
-            offset: None,
-            intersect_count: 0,
-            except_count: 0,
-            order_by: None,
+                offset: None,
+                intersect_count: 0,
+                except_count: 0,
+                order_by: None,
             },
             UnionGroup {
                 head: 1,
@@ -2445,10 +2547,10 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
-            offset: None,
-            intersect_count: 0,
-            except_count: 0,
-            order_by: None,
+                offset: None,
+                intersect_count: 0,
+                except_count: 0,
+                order_by: None,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -2471,10 +2573,10 @@ mod tests {
             union_limit: Some(3),
             distinct: false,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 1);
@@ -2496,10 +2598,10 @@ mod tests {
             union_limit: Some(99),
             distinct: false,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3, "all rows returned");
@@ -2516,10 +2618,10 @@ mod tests {
             union_limit: Some(0),
             distinct: false,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert!(out[0].rows.is_empty(), "LIMIT 0 → no rows");
@@ -2537,10 +2639,10 @@ mod tests {
             union_limit: None,
             distinct: false,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 5);
@@ -2558,10 +2660,10 @@ mod tests {
             union_limit: Some(3),
             distinct: false,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3);
@@ -2610,10 +2712,10 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
-            offset: None,
-            intersect_count: 0,
-            except_count: 0,
-            order_by: None,
+                offset: None,
+                intersect_count: 0,
+                except_count: 0,
+                order_by: None,
             },
             UnionGroup {
                 head: 1,
@@ -2621,10 +2723,10 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
-            offset: None,
-            intersect_count: 0,
-            except_count: 0,
-            order_by: None,
+                offset: None,
+                intersect_count: 0,
+                except_count: 0,
+                order_by: None,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -2647,7 +2749,7 @@ mod tests {
                 offset: None,
                 intersect_count: 0,
                 except_count: 0,
-            order_by: None,
+                order_by: None,
             }],
         )
     }
@@ -2660,9 +2762,14 @@ mod tests {
         assert_eq!(out.len(), 1);
         let r = &out[0];
         use crate::query::model::QueryValue;
-        let vals: Vec<i64> = r.rows.iter().map(|row| {
-            match row[0] { QueryValue::Int(v) => v, _ => panic!("unexpected") }
-        }).collect();
+        let vals: Vec<i64> = r
+            .rows
+            .iter()
+            .map(|row| match row[0] {
+                QueryValue::Int(v) => v,
+                _ => panic!("unexpected"),
+            })
+            .collect();
         assert_eq!(vals, vec![1, 2, 3], "first-occurrence stable dedup");
         assert_eq!(r.row_count, 3);
     }
@@ -2706,16 +2813,21 @@ mod tests {
             union_limit: None,
             distinct: true,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].row_count, 4, "cross-branch dupes removed: 1,2,3,4");
-        let vals: Vec<i64> = out[0].rows.iter().map(|row| {
-            match row[0] { QueryValue::Int(v) => v, _ => panic!() }
-        }).collect();
+        let vals: Vec<i64> = out[0]
+            .rows
+            .iter()
+            .map(|row| match row[0] {
+                QueryValue::Int(v) => v,
+                _ => panic!(),
+            })
+            .collect();
         assert_eq!(vals, vec![1, 2, 3, 4]);
     }
 
@@ -2748,10 +2860,10 @@ mod tests {
             union_limit: None,
             distinct: true,
             limit: None,
-        offset: None,
-        intersect_count: 0,
-        except_count: 0,
-        order_by: None,
+            offset: None,
+            intersect_count: 0,
+            except_count: 0,
+            order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         // Two NaN rows should also dedup (Debug format is total: "Float(NaN)" == "Float(NaN)").
@@ -2774,9 +2886,14 @@ mod tests {
         groups[0].limit = Some(3);
         let out = collapse_union_results(flat, &groups);
         use crate::query::model::QueryValue;
-        let vals: Vec<i64> = out[0].rows.iter().map(|row| {
-            match row[0] { QueryValue::Int(v) => v, _ => panic!() }
-        }).collect();
+        let vals: Vec<i64> = out[0]
+            .rows
+            .iter()
+            .map(|row| match row[0] {
+                QueryValue::Int(v) => v,
+                _ => panic!(),
+            })
+            .collect();
         assert_eq!(vals, vec![1, 2, 3], "LIMIT applied after dedup");
         assert_eq!(out[0].row_count, 3);
         assert!(out[0].truncated, "truncated because limit dropped rows");
@@ -2804,7 +2921,11 @@ mod tests {
         let (_flat, groups) = expand_union_queries(&[(q, p)]);
         assert_eq!(groups.len(), 1);
         assert!(groups[0].distinct, "UnionGroup.distinct must be true");
-        assert_eq!(groups[0].limit, Some(5), "UnionGroup.limit carries the deferred limit");
+        assert_eq!(
+            groups[0].limit,
+            Some(5),
+            "UnionGroup.limit carries the deferred limit"
+        );
     }
 
     #[test]
@@ -2874,9 +2995,21 @@ mod tests {
             oql: String::new(),
             columns: vec![],
             rows: vec![
-                vec![QueryValue::ObjRef { index: 0, class: "C".into(), addr: None }],
-                vec![QueryValue::ObjRef { index: 1, class: "C".into(), addr: None }],
-                vec![QueryValue::ObjRef { index: 2, class: "C".into(), addr: None }],
+                vec![QueryValue::ObjRef {
+                    index: 0,
+                    class: "C".into(),
+                    addr: None,
+                }],
+                vec![QueryValue::ObjRef {
+                    index: 1,
+                    class: "C".into(),
+                    addr: None,
+                }],
+                vec![QueryValue::ObjRef {
+                    index: 2,
+                    class: "C".into(),
+                    addr: None,
+                }],
                 vec![QueryValue::Int(99)],
             ],
             row_count: 4,
@@ -2893,7 +3026,10 @@ mod tests {
         filter_result_by_src(&mut result, &src, &dfn);
         // src[1]=1 dropped (unreachable); src[3]=99 dropped (out-of-range);
         // src[0]=0 and src[2]=2 kept.
-        assert_eq!(result.row_count, 2, "unreachable + out-of-range src dropped");
+        assert_eq!(
+            result.row_count, 2,
+            "unreachable + out-of-range src dropped"
+        );
         assert_eq!(result.rows.len(), 2);
     }
 

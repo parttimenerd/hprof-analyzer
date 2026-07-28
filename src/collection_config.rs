@@ -1,6 +1,6 @@
 // src/collection_config.rs
 
-use crate::pass2::{builtin_coll_descs, CollDesc, CollKind};
+use crate::pass2::{CollDesc, CollKind, builtin_coll_descs};
 use std::path::{Path, PathBuf};
 
 /// Parse a `Class#field` string into `(field_name, declaring_class)`.
@@ -129,9 +129,7 @@ pub(crate) fn load_config_queries(explicit_path: Option<&Path>) -> Vec<ConfigQue
     find_config(explicit_path)
         .and_then(|p| {
             std::fs::read_to_string(&p)
-                .map_err(|e| {
-                    eprintln!("warning: could not read query config {}: {e}", p.display())
-                })
+                .map_err(|e| eprintln!("warning: could not read query config {}: {e}", p.display()))
                 .ok()
         })
         .and_then(|src| {

@@ -150,7 +150,10 @@ pub fn detect_mat_parser_id(mat_bin: Option<&Path>) -> Option<String> {
             std::path::PathBuf::from("/Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"),
         );
         if let Some(home) = std::env::var_os("HOME") {
-            candidates.push(std::path::Path::new(&home).join("Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"));
+            candidates.push(
+                std::path::Path::new(&home)
+                    .join("Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"),
+            );
             // Linux: ~/mat/plugins (common after unpacking the tar.gz)
             candidates.push(std::path::Path::new(&home).join("mat/plugins"));
         }
@@ -535,7 +538,11 @@ impl MatEmitter {
                         } else {
                             0
                         };
-                        let line = if frame_num == u32::MAX { 0 } else { frame_num + 1 };
+                        let line = if frame_num == u32::MAX {
+                            0
+                        } else {
+                            frame_num + 1
+                        };
                         writeln!(f, "    objectId=0x{:x}, line={}", local_addr, line)?;
                     }
                 }
@@ -641,7 +648,10 @@ impl MatEmitter {
         let ts_ms = meta.timestamp_ms as i64;
         let snapshot_layers = vec![
             // XSnapshotInfo layer (subclass, written second in reverse — actually first since we iterate layers.rev())
-            LayerData { fields: vec![], values: vec![] },
+            LayerData {
+                fields: vec![],
+                values: vec![],
+            },
             // SnapshotInfo layer (superclass, written first in stream = last in layers.rev())
             LayerData {
                 fields: vec![
@@ -649,36 +659,62 @@ impl MatEmitter {
                     f_obj("properties", "Ljava/util/Map;"),
                 ],
                 values: vec![
-                    ("creationDate".into(), FieldVal::ObjRef(Box::new(move |s: &mut Ser| {
-                        s.write_date(ts_ms);
-                    }))),
-                    ("properties".into(), FieldVal::ObjRef(Box::new(move |s: &mut Ser| {
-                        // Properties map: known MAT keys from the real .index.
-                        // $heapFormat, $useCompressedOops, hprof.version, hprof.length
-                        let entries: Vec<(i32, Box<dyn FnOnce(&mut Ser)>, Box<dyn FnOnce(&mut Ser)>)> = vec![
-                            (
-                                Ser::java_string_hashcode("$heapFormat"),
-                                Box::new(|s: &mut Ser| { s.string("$heapFormat"); }),
-                                Box::new(|s: &mut Ser| { s.string("HPROF"); }),
-                            ),
-                            (
-                                Ser::java_string_hashcode("$useCompressedOops"),
-                                Box::new(|s: &mut Ser| { s.string("$useCompressedOops"); }),
-                                Box::new(|s: &mut Ser| { s.write_boolean(false); }),
-                            ),
-                            (
-                                Ser::java_string_hashcode("hprof.version"),
-                                Box::new(|s: &mut Ser| { s.string("hprof.version"); }),
-                                Box::new(move |s: &mut Ser| { s.string(&hprof_version); }),
-                            ),
-                            (
-                                Ser::java_string_hashcode("hprof.length"),
-                                Box::new(|s: &mut Ser| { s.string("hprof.length"); }),
-                                Box::new(move |s: &mut Ser| { s.write_long(file_size as i64); }),
-                            ),
-                        ];
-                        s.write_hashmap(16, 12, entries);
-                    }))),
+                    (
+                        "creationDate".into(),
+                        FieldVal::ObjRef(Box::new(move |s: &mut Ser| {
+                            s.write_date(ts_ms);
+                        })),
+                    ),
+                    (
+                        "properties".into(),
+                        FieldVal::ObjRef(Box::new(move |s: &mut Ser| {
+                            // Properties map: known MAT keys from the real .index.
+                            // $heapFormat, $useCompressedOops, hprof.version, hprof.length
+                            let entries: Vec<(
+                                i32,
+                                Box<dyn FnOnce(&mut Ser)>,
+                                Box<dyn FnOnce(&mut Ser)>,
+                            )> = vec![
+                                (
+                                    Ser::java_string_hashcode("$heapFormat"),
+                                    Box::new(|s: &mut Ser| {
+                                        s.string("$heapFormat");
+                                    }),
+                                    Box::new(|s: &mut Ser| {
+                                        s.string("HPROF");
+                                    }),
+                                ),
+                                (
+                                    Ser::java_string_hashcode("$useCompressedOops"),
+                                    Box::new(|s: &mut Ser| {
+                                        s.string("$useCompressedOops");
+                                    }),
+                                    Box::new(|s: &mut Ser| {
+                                        s.write_boolean(false);
+                                    }),
+                                ),
+                                (
+                                    Ser::java_string_hashcode("hprof.version"),
+                                    Box::new(|s: &mut Ser| {
+                                        s.string("hprof.version");
+                                    }),
+                                    Box::new(move |s: &mut Ser| {
+                                        s.string(&hprof_version);
+                                    }),
+                                ),
+                                (
+                                    Ser::java_string_hashcode("hprof.length"),
+                                    Box::new(|s: &mut Ser| {
+                                        s.string("hprof.length");
+                                    }),
+                                    Box::new(move |s: &mut Ser| {
+                                        s.write_long(file_size as i64);
+                                    }),
+                                ),
+                            ];
+                            s.write_hashmap(16, 12, entries);
+                        })),
+                    ),
                 ],
             },
         ];
@@ -695,9 +731,13 @@ impl MatEmitter {
         let mut class_entries: Vec<(i32, usize)> = (0..num_rows)
             .filter_map(|row| {
                 let old_cobj = inv[row];
-                if old_cobj < 0 { return None; }
+                if old_cobj < 0 {
+                    return None;
+                }
                 let mat_id = mm.translate(old_cobj);
-                if mat_id <= 0 { return None; }
+                if mat_id <= 0 {
+                    return None;
+                }
                 Some((mat_id, row))
             })
             .collect();
@@ -748,7 +788,11 @@ impl MatEmitter {
             |s, val_idx| {
                 let (mat_id, row) = class_entries[val_idx];
                 let old_cobj = inv[row];
-                let addr = if old_cobj >= 0 { mm.addr_at_mat(mat_id) } else { 0 };
+                let addr = if old_cobj >= 0 {
+                    mm.addr_at_mat(mat_id)
+                } else {
+                    0
+                };
                 let name = &class_names[row];
                 let loader_addr = class_loader_id[row];
                 let loader_mid = if loader_addr != 0 {
@@ -759,11 +803,8 @@ impl MatEmitter {
                 } else {
                     0i32
                 };
-                let (super_addr, _loader_addr_ci, inst_size) = meta
-                    .class_info
-                    .get(&addr)
-                    .copied()
-                    .unwrap_or((0, 0, 0));
+                let (super_addr, _loader_addr_ci, inst_size) =
+                    meta.class_info.get(&addr).copied().unwrap_or((0, 0, 0));
                 // Find super's mat-id by looking it up via its address.
                 let super_mat_id = 0i32; // placeholder: requires addr→mat-id reverse lookup
                 let is_array = name.starts_with('[');
@@ -786,10 +827,15 @@ impl MatEmitter {
                             values: vec![
                                 ("address".into(), FieldVal::Long(addr as i64)),
                                 ("objectId".into(), FieldVal::Int(mat_id)),
-                                ("classInstance".into(), FieldVal::ObjRef({
-                                    let k = key_str.clone();
-                                    Box::new(move |s: &mut Ser| { s.ref_object(&k); })
-                                })),
+                                (
+                                    "classInstance".into(),
+                                    FieldVal::ObjRef({
+                                        let k = key_str.clone();
+                                        Box::new(move |s: &mut Ser| {
+                                            s.ref_object(&k);
+                                        })
+                                    }),
+                                ),
                             ],
                         },
                         // ClassImpl layer (subclass, written second in stream)
@@ -811,20 +857,46 @@ impl MatEmitter {
                                 f_arr("subClasses", "Ljava/util/List;"),
                             ],
                             values: vec![
-                                ("classLoaderAddress".into(), FieldVal::Long(loader_addr as i64)),
+                                (
+                                    "classLoaderAddress".into(),
+                                    FieldVal::Long(loader_addr as i64),
+                                ),
                                 ("classLoaderId".into(), FieldVal::Int(loader_mid)),
                                 ("instanceCount".into(), FieldVal::Int(inst_count_val)),
                                 ("instanceSize".into(), FieldVal::Int(inst_size as i32)),
                                 ("isArrayType".into(), FieldVal::Bool(is_array)),
-                                ("superClassAddress".into(), FieldVal::Long(super_addr as i64)),
+                                (
+                                    "superClassAddress".into(),
+                                    FieldVal::Long(super_addr as i64),
+                                ),
                                 ("superClassId".into(), FieldVal::Int(super_mat_id)),
                                 ("totalSize".into(), FieldVal::Long(total_size)),
-                                ("usedHeapSize".into(), FieldVal::Int(used_heap_val.min(i32::MAX as i64) as i32)),
-                                ("cacheEntry".into(), FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null()))),
-                                ("fields".into(), FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null()))),
-                                ("name".into(), FieldVal::ObjRef(Box::new(move |s: &mut Ser| s.string(&name_clone)))),
-                                ("staticFields".into(), FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null()))),
-                                ("subClasses".into(), FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null()))),
+                                (
+                                    "usedHeapSize".into(),
+                                    FieldVal::Int(used_heap_val.min(i32::MAX as i64) as i32),
+                                ),
+                                (
+                                    "cacheEntry".into(),
+                                    FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null())),
+                                ),
+                                (
+                                    "fields".into(),
+                                    FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null())),
+                                ),
+                                (
+                                    "name".into(),
+                                    FieldVal::ObjRef(Box::new(move |s: &mut Ser| {
+                                        s.string(&name_clone)
+                                    })),
+                                ),
+                                (
+                                    "staticFields".into(),
+                                    FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null())),
+                                ),
+                                (
+                                    "subClasses".into(),
+                                    FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null())),
+                                ),
                             ],
                         },
                     ],
@@ -892,10 +964,7 @@ impl MatEmitter {
                 name: "org.eclipse.mat.collect.BitField".into(),
                 uid: uid::BIT_FIELD,
                 flags: SC_SERIALIZABLE,
-                fields: vec![
-                    f_int("size"),
-                    f_arr("words", "[I"),
-                ],
+                fields: vec![f_int("size"), f_arr("words", "[I")],
             };
             ser.write_class_desc_chain(&[bf_cd]);
         }
@@ -1008,7 +1077,10 @@ mod tests {
         idom[50] = u32::MAX;
         let mm = MatIdMap::build(60, &idom, |i| i as u64);
         let inv = build_row_to_classobj_id(&coc, 6, &mm);
-        assert_eq!(inv[3], 51, "should prefer reachable id 51 over unreachable id 50");
+        assert_eq!(
+            inv[3], 51,
+            "should prefer reachable id 51 over unreachable id 50"
+        );
     }
 
     /// `emit_o2c` composes an identity `inv` (row == value) so we can drive it
@@ -1158,7 +1230,10 @@ mod tests {
         // is <= i32::MAX so compress() is identity and we can round-trip them
         // directly as the "shallow" input.
         let vals = decode_int_index(&real);
-        assert!(vals.iter().all(|&v| v >= 0), "fixture a2s within identity range");
+        assert!(
+            vals.iter().all(|&v| v >= 0),
+            "fixture a2s within identity range"
+        );
         let shallow: Vec<u32> = vals.iter().map(|&v| v as u32).collect();
         let c = CompressedU32::compress(&shallow, Codec::None).unwrap();
         let tmp = std::env::temp_dir().join("mat_emit_a2s_real");
@@ -1306,7 +1381,10 @@ mod tests {
         assert_eq!(size_compress(i32::MAX as i64), i32::MAX);
         // one over i32::MAX → /8 encoding
         let just_over = i32::MAX as i64 + 1;
-        assert_eq!(size_compress(just_over), ((just_over / 8) as i32).wrapping_add(0x7000_0000));
+        assert_eq!(
+            size_compress(just_over),
+            ((just_over / 8) as i32).wrapping_add(0x7000_0000)
+        );
     }
 
     // ── emit_i2sv2 ──────────────────────────────────────────────────────────
@@ -1358,7 +1436,11 @@ mod tests {
 
     // ── emit_threads ────────────────────────────────────────────────────────
 
-    fn make_thread_stack(serial: u32, thread_obj_idx: u32, frames: &[&str]) -> crate::pass2::ThreadStack {
+    fn make_thread_stack(
+        serial: u32,
+        thread_obj_idx: u32,
+        frames: &[&str],
+    ) -> crate::pass2::ThreadStack {
         crate::pass2::ThreadStack {
             thread_serial: serial,
             thread_obj_idx,
@@ -1403,7 +1485,14 @@ mod tests {
         // dense-id 0 → mat-id 1
         assert_eq!(mm.translate(0), 1);
 
-        let ts = make_thread_stack(1, 0, &["com.example.Foo.bar(Foo.java:42)", "com.example.Main.main(Main.java:10)"]);
+        let ts = make_thread_stack(
+            1,
+            0,
+            &[
+                "com.example.Foo.bar(Foo.java:42)",
+                "com.example.Main.main(Main.java:10)",
+            ],
+        );
         let tmp = std::env::temp_dir().join("mat_threads_single");
         let _ = std::fs::remove_dir_all(&tmp);
         let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
@@ -1428,7 +1517,10 @@ mod tests {
         let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
-        assert!(content.starts_with("Thread 0x0\n"), "unreachable thread obj → addr 0, got: {content:?}");
+        assert!(
+            content.starts_with("Thread 0x0\n"),
+            "unreachable thread obj → addr 0, got: {content:?}"
+        );
     }
 
     #[test]
@@ -1449,8 +1541,14 @@ mod tests {
         e.emit_threads(&[ts], &mm, &locals).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         assert!(content.contains("locals:"), "should have locals section");
-        assert!(content.contains("objectId=0x0, line=1"), "frame_num=0 → line 1, local at 0x0 (addr not stored)");
-        assert!(content.contains("objectId=0x0, line=0"), "frame_num=MAX → line 0");
+        assert!(
+            content.contains("objectId=0x0, line=1"),
+            "frame_num=0 → line 1, local at 0x0 (addr not stored)"
+        );
+        assert!(
+            content.contains("objectId=0x0, line=0"),
+            "frame_num=MAX → line 0"
+        );
     }
 
     #[test]
@@ -1469,10 +1567,16 @@ mod tests {
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         // addr_at_mat always returns 0; both threads show as Thread 0x0
         let thread_count = content.lines().filter(|l| *l == "Thread 0x0").count();
-        assert_eq!(thread_count, 2, "expected 2 Thread 0x0 lines, got:\n{content}");
+        assert_eq!(
+            thread_count, 2,
+            "expected 2 Thread 0x0 lines, got:\n{content}"
+        );
         // Each thread block ends with a blank line → content has at least 2 blank lines
         let blank_lines = content.lines().filter(|l| l.is_empty()).count();
-        assert!(blank_lines >= 2, "expected blank lines between threads, got {blank_lines}");
+        assert!(
+            blank_lines >= 2,
+            "expected blank lines between threads, got {blank_lines}"
+        );
     }
 
     // ---- emit_outbound / emit_inbound / emit_dom_out roundtrip tests ----
@@ -1498,13 +1602,20 @@ mod tests {
             (pages, page_size, size as i64, starts)
         }
 
-        fn decode_region(file: &[u8], region: &[u8], pages: usize, psize: i32, size: i64, starts: &[i64]) -> Vec<i32> {
+        fn decode_region(
+            file: &[u8],
+            region: &[u8],
+            pages: usize,
+            psize: i32,
+            size: i64,
+            starts: &[i64],
+        ) -> Vec<i32> {
             use crate::mat::codec::decode_int;
             let mut out = Vec::with_capacity(size as usize);
             for i in 0..pages {
                 let s = starts[i] as usize;
                 let e = starts[i + 1] as usize;
-                let n = ((psize as usize)).min(size as usize - i * psize as usize);
+                let n = (psize as usize).min(size as usize - i * psize as usize);
                 out.extend_from_slice(&decode_int(&file[s..e], n));
             }
             out
@@ -1512,12 +1623,23 @@ mod tests {
 
         fn sorted_get(hdr: &[i32], body: &[i32], idx: usize) -> Vec<i32> {
             let p0 = hdr[idx] as i64;
-            if p0 == 0 { return vec![]; }
+            if p0 == 0 {
+                return vec![];
+            }
             let body_end = (body.len() + 1) as i64;
-            let mut p1 = if idx + 1 < hdr.len() { hdr[idx + 1] as i64 } else { body_end };
+            let mut p1 = if idx + 1 < hdr.len() {
+                hdr[idx + 1] as i64
+            } else {
+                body_end
+            };
             let mut j = idx + 2;
-            while p1 < p0 && j < hdr.len() { p1 = hdr[j] as i64; j += 1; }
-            if p1 < p0 { p1 = body_end; }
+            while p1 < p0 && j < hdr.len() {
+                p1 = hdr[j] as i64;
+                j += 1;
+            }
+            if p1 < p0 {
+                p1 = body_end;
+            }
             let s = (p0 - 1) as usize;
             body[s..s + (p1 - p0) as usize].to_vec()
         }
@@ -1531,7 +1653,9 @@ mod tests {
         let hst_local: Vec<i64> = hst.iter().map(|&s| s - divider as i64).collect();
         let hdr_vals = decode_region(hdr_region, hdr_region, hp, hps, hs, &hst_local);
 
-        (0..hdr_vals.len()).map(|i| sorted_get(&hdr_vals, &body_vals, i)).collect()
+        (0..hdr_vals.len())
+            .map(|i| sorted_get(&hdr_vals, &body_vals, i))
+            .collect()
     }
 
     fn read_unsorted_1n(path: &std::path::Path) -> Vec<Vec<i32>> {
@@ -1554,7 +1678,13 @@ mod tests {
             (pages, page_size, size as i64, starts)
         }
 
-        fn decode_region(file: &[u8], pages: usize, psize: i32, size: i64, starts: &[i64]) -> Vec<i32> {
+        fn decode_region(
+            file: &[u8],
+            pages: usize,
+            psize: i32,
+            size: i64,
+            starts: &[i64],
+        ) -> Vec<i32> {
             use crate::mat::codec::decode_int;
             let mut out = Vec::with_capacity(size as usize);
             for i in 0..pages {
@@ -1587,10 +1717,10 @@ mod tests {
     #[test]
     fn emit_outbound_roundtrip() {
         let entries: Vec<Vec<i32>> = vec![
-            vec![5, 3, 1],  // object 0: class-ref + 2 refs
-            vec![],         // object 1: no outbound refs (hole)
-            vec![7, 2],     // object 2: class-ref + 1 ref
-            vec![9],        // object 3: class-ref only
+            vec![5, 3, 1], // object 0: class-ref + 2 refs
+            vec![],        // object 1: no outbound refs (hole)
+            vec![7, 2],    // object 2: class-ref + 1 ref
+            vec![9],       // object 3: class-ref only
         ];
         let tmp = std::env::temp_dir().join("mat_emit_outbound_rt");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1604,10 +1734,10 @@ mod tests {
     #[test]
     fn emit_inbound_roundtrip() {
         let entries: Vec<Vec<i32>> = vec![
-            vec![],           // object 0: no inbound (hole)
-            vec![0, 2],       // object 1: referenced by 0 and 2
-            vec![0],          // object 2: referenced by 0
-            vec![],           // object 3: hole
+            vec![],     // object 0: no inbound (hole)
+            vec![0, 2], // object 1: referenced by 0 and 2
+            vec![0],    // object 2: referenced by 0
+            vec![],     // object 3: hole
         ];
         let tmp = std::env::temp_dir().join("mat_emit_inbound_rt");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1622,11 +1752,11 @@ mod tests {
     fn emit_dom_out_roundtrip() {
         // domOut is UNSORTED: entries[0] = superroot children, entries[k+1] = children of k.
         let entries: Vec<Vec<i32>> = vec![
-            vec![1, 2],    // superroot children: objects 1 and 2
-            vec![3],       // object 0 dominated by: 3
-            vec![],        // object 1: no dominated children
-            vec![],        // object 2: no dominated children
-            vec![],        // object 3: no dominated children
+            vec![1, 2], // superroot children: objects 1 and 2
+            vec![3],    // object 0 dominated by: 3
+            vec![],     // object 1: no dominated children
+            vec![],     // object 2: no dominated children
+            vec![],     // object 3: no dominated children
         ];
         let tmp = std::env::temp_dir().join("mat_emit_domout_rt");
         let _ = std::fs::remove_dir_all(&tmp);

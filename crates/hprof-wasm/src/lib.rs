@@ -95,8 +95,8 @@ impl HprofSession {
         // dummy (refcount 2 → 1).  try_unwrap succeeds: Vec reclaimed, no copy.
         drop(parse_source);
         cache.source = hprof_analyzer::HprofSource::Path(String::new());
-        let raw_vec: Vec<u8> = Arc::try_unwrap(raw_arc)
-            .expect("Arc::try_unwrap failed — unexpected extra clone");
+        let raw_vec: Vec<u8> =
+            Arc::try_unwrap(raw_arc).expect("Arc::try_unwrap failed — unexpected extra clone");
 
         // ── Step 4: compress (raw and compressed never overlap) ───────────
         let compressed: Vec<u8> = if is_gzip {
@@ -135,7 +135,7 @@ impl HprofSession {
                     "ok": false,
                     "error": { "message": report }
                 })
-                .to_string()
+                .to_string();
             }
         };
 
@@ -146,7 +146,7 @@ impl HprofSession {
                     "ok": false,
                     "error": { "message": e.0 }
                 })
-                .to_string()
+                .to_string();
             }
         };
 
@@ -161,7 +161,7 @@ impl HprofSession {
                         "ok": false,
                         "error": { "message": e.to_string() }
                     })
-                    .to_string()
+                    .to_string();
                 }
             }
         }
@@ -180,7 +180,7 @@ impl HprofSession {
                     "ok": false,
                     "error": { "message": e.to_string() }
                 })
-                .to_string()
+                .to_string();
             }
         };
 
@@ -289,8 +289,7 @@ impl HprofSession {
             hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
             hprof_analyzer::HprofSource::Path(p) => p.clone(),
         };
-        let json = serde_json::to_string(&report)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let json = serde_json::to_string(&report).map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(hprof_analyzer::render_report_html(&source_name, &json))
     }
 
@@ -325,7 +324,11 @@ impl HprofSession {
     /// Because WASM is single-threaded, the browser will not repaint between
     /// callbacks — but each call allows JS to update DOM state that is rendered
     /// after the full load() returns control to the event loop.
-    pub fn load_with_progress(data: &[u8], name: &str, cb: js_sys::Function) -> Result<HprofSession, JsValue> {
+    pub fn load_with_progress(
+        data: &[u8],
+        name: &str,
+        cb: js_sys::Function,
+    ) -> Result<HprofSession, JsValue> {
         let is_gzip = data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b;
         let raw_arc: Arc<Vec<u8>> = Arc::new(data.to_vec());
 
@@ -357,8 +360,8 @@ impl HprofSession {
 
         drop(parse_source);
         cache.source = hprof_analyzer::HprofSource::Path(String::new());
-        let raw_vec: Vec<u8> = Arc::try_unwrap(raw_arc)
-            .expect("Arc::try_unwrap failed — unexpected extra clone");
+        let raw_vec: Vec<u8> =
+            Arc::try_unwrap(raw_arc).expect("Arc::try_unwrap failed — unexpected extra clone");
 
         let compressed: Vec<u8> = if is_gzip {
             call_progress(&cb, "compress", 1.0);
@@ -406,13 +409,12 @@ impl HprofSession {
         let mut opts = hprof_analyzer::AnalyzeOptions::default();
         opts.find_duplicates = find_duplicates;
         opts.collections = collections;
-        let (report, retained) =
-            hprof_analyzer::analyze_to_report_with_progress(
-                &self.source,
-                &opts,
-                &mut |phase, frac| call_progress(&cb, phase, frac),
-            )
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let (report, retained) = hprof_analyzer::analyze_to_report_with_progress(
+            &self.source,
+            &opts,
+            &mut |phase, frac| call_progress(&cb, phase, frac),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.retained = retained;
         let source_name = match &self.source {
             hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
@@ -435,8 +437,8 @@ impl HprofSession {
 /// before returning, so the raw bytes and the compressed output never coexist.
 /// The encoder's output Vec is pre-sized to ~N/4 (typical hprof ratio).
 fn gzip_compress_owned(raw: Box<[u8]>) -> Vec<u8> {
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
     let capacity = (raw.len() / 4).max(64 * 1024);
     // Drop `raw` immediately after copying into the encoder so the two big

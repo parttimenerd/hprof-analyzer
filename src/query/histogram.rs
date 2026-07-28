@@ -91,9 +91,9 @@ fn eval_agg(item: &SelectItem, count: u64, shallow: u64) -> (String, QueryValue)
 mod tests {
     use super::*;
     use crate::query::ast::{AggFunc, Attr, SelectItem};
-    use crate::query::plan::plan_query;
-    use crate::query::plan::QueryPlan;
     use crate::query::parse::parse;
+    use crate::query::plan::QueryPlan;
+    use crate::query::plan::plan_query;
 
     fn pq(q: &crate::query::ast::Query) -> QueryPlan {
         plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
@@ -127,8 +127,7 @@ mod tests {
 
     #[test]
     fn sum_shallow_of_one_class() {
-        let q =
-            parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap();
+        let q = parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap();
         let plan = pq(&q);
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -176,8 +175,7 @@ mod tests {
     /// instance_scalar need is set). Verifies 2400/100 == 24.0.
     #[test]
     fn avg_shallow_is_histogram_only_and_correct() {
-        let q =
-            parse("SELECT AVG(@usedHeapSize) FROM java.lang.String").unwrap();
+        let q = parse("SELECT AVG(@usedHeapSize) FROM java.lang.String").unwrap();
         let plan = pq(&q);
         assert_eq!(
             plan.kind,
@@ -194,8 +192,7 @@ mod tests {
     /// and falls to `_ => Null`.
     #[test]
     fn avg_no_match_is_null() {
-        let q = parse("SELECT AVG(@usedHeapSize) FROM com.nonexistent.Class")
-            .unwrap();
+        let q = parse("SELECT AVG(@usedHeapSize) FROM com.nonexistent.Class").unwrap();
         let plan = pq(&q);
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -217,8 +214,7 @@ mod tests {
     /// SUM on a class that matches nothing → Int(0).
     #[test]
     fn sum_no_match_is_zero() {
-        let q = parse("SELECT SUM(@usedHeapSize) FROM com.nonexistent.Class")
-            .unwrap();
+        let q = parse("SELECT SUM(@usedHeapSize) FROM com.nonexistent.Class").unwrap();
         let plan = pq(&q);
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -230,9 +226,7 @@ mod tests {
     /// column labels emitted by column_name.
     #[test]
     fn multiple_aggregates_in_one_select() {
-        let q =
-            parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.lang.String")
-                .unwrap();
+        let q = parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.lang.String").unwrap();
         let plan = pq(&q);
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -246,8 +240,7 @@ mod tests {
     /// Glob spanning both classes: COUNT(*) = 110, SUM = 2880.
     #[test]
     fn glob_java_star_sums_both_classes() {
-        let q =
-            parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.*").unwrap();
+        let q = parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.*").unwrap();
         let plan = pq(&q);
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -346,7 +339,11 @@ mod tests {
             res.columns[0].name, "n",
             "alias 'n' must override derived 'COUNT(*)' on the histogram path"
         );
-        assert_eq!(res.rows[0][0], QueryValue::Int(100), "row value must be unchanged");
+        assert_eq!(
+            res.rows[0][0],
+            QueryValue::Int(100),
+            "row value must be unchanged"
+        );
     }
 
     /// MAT-parity / normalization invariant: aggregate COUNT(*) over a primitive

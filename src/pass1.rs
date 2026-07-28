@@ -17,7 +17,7 @@ use crate::{
     id_map::IdMap,
     pass2::sub_remaining,
     reader::HprofReader,
-    types::{heap, tags, HprofType},
+    types::{HprofType, heap, tags},
 };
 
 /// A thread-local GC-root edge: `(threadSerial, frameNumber, localAddr)`.
@@ -144,7 +144,10 @@ impl Pass1 {
     /// Runs pass 1 over the dump at `path`. Always records each object's
     /// allocation stack-trace serial (for the always-on alloc-sites report);
     /// serials are 0 unless the JVM ran with allocation tracking enabled.
-    pub fn run(source: &crate::source::HprofSource, capture_hprof_offsets: bool) -> io::Result<Self> {
+    pub fn run(
+        source: &crate::source::HprofSource,
+        capture_hprof_offsets: bool,
+    ) -> io::Result<Self> {
         let file_size = source.len()?;
         let mut r = source.open()?;
         let id_size = r.id_size;
@@ -550,7 +553,11 @@ fn scan_heap_segment(
                 }
             }
             heap::INSTANCE_DUMP => {
-                let record_off = if capture_hprof_offsets { r.bytes_consumed() - 1 } else { 0 };
+                let record_off = if capture_hprof_offsets {
+                    r.bytes_consumed() - 1
+                } else {
+                    0
+                };
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial(u4)
                 tmp_alloc_serial.push(stack_serial);
@@ -574,7 +581,11 @@ fn scan_heap_segment(
                 *instance_count += 1;
             }
             heap::OBJ_ARRAY_DUMP => {
-                let record_off = if capture_hprof_offsets { r.bytes_consumed() - 1 } else { 0 };
+                let record_off = if capture_hprof_offsets {
+                    r.bytes_consumed() - 1
+                } else {
+                    0
+                };
                 // addr(id) + stack_serial(u4) + count(u4) + elem_class(id)
                 // + count element ids.
                 let addr = r.id()?;
@@ -601,7 +612,11 @@ fn scan_heap_segment(
                 *obj_array_count += 1;
             }
             heap::PRIM_ARRAY_DUMP => {
-                let record_off = if capture_hprof_offsets { r.bytes_consumed() - 1 } else { 0 };
+                let record_off = if capture_hprof_offsets {
+                    r.bytes_consumed() - 1
+                } else {
+                    0
+                };
                 // addr(id) + stack_serial(u4) + count(u4) + elem_type(u1)
                 // + count*elem_size raw element bytes.
                 let addr = r.id()?;

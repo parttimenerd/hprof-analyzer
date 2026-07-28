@@ -238,7 +238,9 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Path { .. } => {}
             // toString(s) carries no RefPath hops; string values are a separate side table.
             SelectItem::ToString(_) => {}
-            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+            SelectItem::Expr(_) => {
+                unreachable!("Expr select item reached before arithmetic wiring")
+            }
         }
     }
     if let Some(pred) = &q.where_ {
@@ -298,7 +300,9 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Path { .. } => {}
             // toString(s) carries no RefPath tail fields.
             SelectItem::ToString(_) => {}
-            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+            SelectItem::Expr(_) => {
+                unreachable!("Expr select item reached before arithmetic wiring")
+            }
         }
     }
     if let Some(pred) = &q.where_ {
@@ -335,12 +339,12 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
             Expr::Lit(_) => false,
             Expr::Binary { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
             Expr::Unary { arg, .. } => expr_has(arg),
-            Expr::Method { receiver, args, .. } => {
-                expr_has(receiver) || args.iter().any(expr_has)
-            }
+            Expr::Method { receiver, args, .. } => expr_has(receiver) || args.iter().any(expr_has),
             Expr::Aggregate { .. } => false,
             Expr::Case { branches, else_ } => {
-                branches.iter().any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
+                branches
+                    .iter()
+                    .any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
                     || else_.as_ref().map_or(false, |e| expr_has(e))
             }
             Expr::Coalesce(args) => args.iter().any(expr_has),
@@ -359,7 +363,9 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
 
     let select_has = q.select.iter().any(|item| match item {
         SelectItem::Attr(a) => attr_has(a),
-        SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a)),
+        SelectItem::Aggregate { arg, .. } => {
+            matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a))
+        }
         SelectItem::Expr(e) => expr_has(e),
         _ => false,
     });
@@ -394,12 +400,12 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             Expr::Lit(_) => false,
             Expr::Binary { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
             Expr::Unary { arg, .. } => expr_has(arg),
-            Expr::Method { receiver, args, .. } => {
-                expr_has(receiver) || args.iter().any(expr_has)
-            }
+            Expr::Method { receiver, args, .. } => expr_has(receiver) || args.iter().any(expr_has),
             Expr::Aggregate { .. } => false,
             Expr::Case { branches, else_ } => {
-                branches.iter().any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
+                branches
+                    .iter()
+                    .any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
                     || else_.as_ref().map_or(false, |e| expr_has(e))
             }
             Expr::Coalesce(args) => args.iter().any(expr_has),
@@ -418,7 +424,9 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
 
     let select_has = q.select.iter().any(|item| match item {
         SelectItem::Attr(a) => attr_has(a),
-        SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a)),
+        SelectItem::Aggregate { arg, .. } => {
+            matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a))
+        }
         SelectItem::Expr(e) => expr_has(e),
         _ => false,
     });
@@ -557,9 +565,10 @@ mod tests {
             crate::query::parse::parse("SELECT s.value.@length FROM java.lang.String s").unwrap();
         assert!(refwalk_has_length_tail(&q));
         // WHERE tail.
-        let q =
-            crate::query::parse::parse("SELECT s FROM java.lang.String s WHERE s.value.@length > 3")
-                .unwrap();
+        let q = crate::query::parse::parse(
+            "SELECT s FROM java.lang.String s WHERE s.value.@length > 3",
+        )
+        .unwrap();
         assert!(refwalk_has_length_tail(&q));
         // A field tail (not @length) does NOT arm length capture.
         let q = crate::query::parse::parse("SELECT x.parent.name FROM C x").unwrap();
@@ -577,19 +586,26 @@ mod tests {
             "SELECT s FROM java.lang.String s WHERE 3 < s.value.@length",
         )
         .unwrap();
-        assert!(refwalk_has_length_tail(&q), "RHS @length tail must arm capture");
+        assert!(
+            refwalk_has_length_tail(&q),
+            "RHS @length tail must arm capture"
+        );
         // Tail wrapped in an arithmetic Binary on the LHS.
         let q = crate::query::parse::parse(
             "SELECT s FROM java.lang.String s WHERE s.value.@length + 1 > 4",
         )
         .unwrap();
-        assert!(refwalk_has_length_tail(&q), "wrapped @length tail must arm capture");
+        assert!(
+            refwalk_has_length_tail(&q),
+            "wrapped @length tail must arm capture"
+        );
         // Tail wrapped in a SELECT-list expression.
-        let q = crate::query::parse::parse(
-            "SELECT s.value.@length + 1 FROM java.lang.String s",
-        )
-        .unwrap();
-        assert!(refwalk_has_length_tail(&q), "SELECT-expr @length tail must arm capture");
+        let q = crate::query::parse::parse("SELECT s.value.@length + 1 FROM java.lang.String s")
+            .unwrap();
+        assert!(
+            refwalk_has_length_tail(&q),
+            "SELECT-expr @length tail must arm capture"
+        );
     }
 
     #[test]
@@ -598,12 +614,18 @@ mod tests {
             "SELECT s FROM java.util.HashMap$Node s WHERE 0 < s.key.@objectAddress",
         )
         .unwrap();
-        assert!(refwalk_has_address_tail(&q), "RHS @objectAddress tail must arm capture");
+        assert!(
+            refwalk_has_address_tail(&q),
+            "RHS @objectAddress tail must arm capture"
+        );
         let q = crate::query::parse::parse(
             "SELECT s.value.@objectAddress + 0 FROM java.util.HashMap$Node s",
         )
         .unwrap();
-        assert!(refwalk_has_address_tail(&q), "SELECT-expr @objectAddress tail must arm capture");
+        assert!(
+            refwalk_has_address_tail(&q),
+            "SELECT-expr @objectAddress tail must arm capture"
+        );
     }
 
     #[test]

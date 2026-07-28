@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use crate::{
     pass1::Pass1,
     reader::HprofReader,
-    types::{heap, tags, HprofType},
+    types::{HprofType, heap, tags},
 };
 
 use std::io::{self, ErrorKind};
 
 use super::{
-    build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump, sub_remaining,
     CharArrayWaste, CharArrayWasteRow, DupStringSample, DupStrings, StrLenBucket, StrLenStats,
-    StringHolder,
+    StringHolder, build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump,
+    sub_remaining,
 };
 
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
@@ -38,11 +38,7 @@ pub(crate) const CHAR_ARRAY_WASTE_TOP: usize = 25;
 /// The skip skeleton for every non-INSTANCE_DUMP sub-record is identical to
 /// `scan_instance_blobs`; only the INSTANCE_DUMP arm differs (it always reads
 /// the blob and calls `f`).
-pub(crate) fn scan_all_instances<O, F>(
-    open: O,
-    id_size: u8,
-    mut f: F,
-) -> io::Result<()>
+pub(crate) fn scan_all_instances<O, F>(open: O, id_size: u8, mut f: F) -> io::Result<()>
 where
     O: Fn() -> io::Result<HprofReader>,
     F: FnMut(u64, u64, &[u8]),
@@ -162,8 +158,8 @@ pub(crate) fn resolve_duplicate_strings<O>(open: O, p1: &Pass1) -> io::Result<Du
 where
     O: Fn() -> io::Result<HprofReader>,
 {
-    use std::collections::hash_map::DefaultHasher;
     use std::collections::HashSet;
+    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let id_size = p1.id_size;

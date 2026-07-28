@@ -24,8 +24,8 @@ use crate::{
 };
 
 use super::{
-    field_offset, prim_array_class_name, read_ref, scan_all_records, AttributionRaw, CollValuesRaw,
-    FieldSizeRaw, Record,
+    AttributionRaw, CollValuesRaw, FieldSizeRaw, Record, field_offset, prim_array_class_name,
+    read_ref, scan_all_records,
 };
 
 // ── Caps (bound every aggregate) ─────────────────────────────────────────────
@@ -814,7 +814,11 @@ fn assemble_field_size_raw(
     // HashMap iteration order is nondeterministic; sort the groups by
     // (holder_class, field) so downstream "first writer wins" owner attribution
     // (build.rs `biggest_owner`) picks the same label every run.
-    out.sort_by(|a, b| a.holder_class.cmp(&b.holder_class).then(a.field.cmp(&b.field)));
+    out.sort_by(|a, b| {
+        a.holder_class
+            .cmp(&b.holder_class)
+            .then(a.field.cmp(&b.field))
+    });
     out
 }
 
@@ -940,9 +944,9 @@ where
     let mut map_collision = FillAcc::default();
     let mut coll_total: u64 = 0; // every collection with a size read
     let mut map_total: u64 = 0; // every map collection seen
-                                // Per-kind collection summary (always-on): indexed by CollKind discriminant
-                                // 0=List..5=Tree. Each entry = (count, total_elements, total_shallow,
-                                // max_elements). Folded only when a size was read (mirrors coll_total).
+    // Per-kind collection summary (always-on): indexed by CollKind discriminant
+    // 0=List..5=Tree. Each entry = (count, total_elements, total_shallow,
+    // max_elements). Folded only when a size was read (mirrors coll_total).
     let mut kind_stats: [(u64, u64, u64, u64); 6] = [(0, 0, 0, 0); 6];
     // Wanted backing arrays (array addr → its collection's size/is_map).
     let mut wanted_arrays: HashMap<u64, ArrayWant> = HashMap::new();
@@ -1271,14 +1275,9 @@ where
                     if o + obj_ref_width <= blob.len() {
                         let pointee = read_ref(&blob[o..], obj_ref_width);
                         if pointee != 0 && !array_owner_by_addr.contains_key(&pointee) {
-                            let fname = strings
-                                .get(&fname_id)
-                                .map(|s| s.as_str())
-                                .unwrap_or("");
-                            array_owner_by_addr.insert(
-                                pointee,
-                                format!("{}#{}", holder_name, fname),
-                            );
+                            let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+                            array_owner_by_addr
+                                .insert(pointee, format!("{}#{}", holder_name, fname));
                         }
                     }
                     if array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
@@ -1325,10 +1324,8 @@ where
                                 ftype.byte_size() as u32
                             };
                             if ftype == crate::types::HprofType::Object {
-                                let fname = strings
-                                    .get(&fname_id)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("");
+                                let fname =
+                                    strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
                                 if fname == "key" {
                                     key_off = Some(byte_offset);
                                 } else if fname == "value" || fname == "val" {
@@ -1357,7 +1354,9 @@ where
                         let key_dense = if ko + obj_ref_width <= blob.len() {
                             let r = read_ref(&blob[ko..], obj_ref_width);
                             if r != 0 {
-                                ic.index_of(&p1.id_map, r).map(|i| i as u32).unwrap_or(u32::MAX)
+                                ic.index_of(&p1.id_map, r)
+                                    .map(|i| i as u32)
+                                    .unwrap_or(u32::MAX)
                             } else {
                                 u32::MAX
                             }
@@ -1367,7 +1366,9 @@ where
                         let val_dense = if vo + obj_ref_width <= blob.len() {
                             let r = read_ref(&blob[vo..], obj_ref_width);
                             if r != 0 {
-                                ic.index_of(&p1.id_map, r).map(|i| i as u32).unwrap_or(u32::MAX)
+                                ic.index_of(&p1.id_map, r)
+                                    .map(|i| i as u32)
+                                    .unwrap_or(u32::MAX)
                             } else {
                                 u32::MAX
                             }
@@ -1477,7 +1478,9 @@ where
             };
             // Wasted bytes: unused (null) slots × the reference slot width — the
             // reclaimable backing-store bytes if the array were sized to fit.
-            let arr_wasted = count.saturating_sub(non_null).saturating_mul(obj_ref_width as u64);
+            let arr_wasted = count
+                .saturating_sub(non_null)
+                .saturating_mul(obj_ref_width as u64);
             array_fill.add(non_null, count, arr_shallow, arr_wasted);
 
             // Top object arrays: fold EVERY object array. The per-class key is the
@@ -1695,11 +1698,7 @@ where
             const_other,
             const_truncated,
         ),
-        top_prim_arrays: top_prim.into_top_arrays(
-            p1,
-            prim_array_name_of_key,
-            Some(&owner_by_addr),
-        ),
+        top_prim_arrays: top_prim.into_top_arrays(p1, prim_array_name_of_key, Some(&owner_by_addr)),
         top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, Some(&owner_by_addr)),
         kind_summary,
     };
@@ -2252,7 +2251,7 @@ mod tests {
         assert_eq!(decode_prim_value(char_code, &[0xFF, 0xFF]), 65535);
         assert_eq!(decode_prim_value(char_code, &[0x80, 0x00]), 32768);
         assert_eq!(decode_prim_value(char_code, &[0x00, 0x41]), 65); // 'A'
-                                                                     // Short with the same high-bit bytes is negative.
+        // Short with the same high-bit bytes is negative.
         assert_eq!(decode_prim_value(short_code, &[0xFF, 0xFF]), -1);
     }
 }

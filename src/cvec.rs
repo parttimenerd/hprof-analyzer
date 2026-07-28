@@ -178,11 +178,21 @@ impl CompressedU64 {
     pub fn compress(v: &[u64], codec: Codec) -> io::Result<Self> {
         let len = v.len();
         match codec {
-            Codec::None => Ok(Self { codec, blob: Vec::new(), raw: v.to_vec(), len }),
+            Codec::None => Ok(Self {
+                codec,
+                blob: Vec::new(),
+                raw: v.to_vec(),
+                len,
+            }),
             Codec::Deflate9 => {
                 let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len * 8) };
                 let blob = deflate_compress(bytes)?;
-                Ok(Self { codec, blob, raw: Vec::new(), len })
+                Ok(Self {
+                    codec,
+                    blob,
+                    raw: Vec::new(),
+                    len,
+                })
             }
         }
     }
@@ -192,7 +202,10 @@ impl CompressedU64 {
             Codec::None => Ok(self.raw.clone()),
             Codec::Deflate9 => {
                 let bytes = deflate_decompress(&self.blob, self.len * 8)?;
-                Ok(bytes.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect())
+                Ok(bytes
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+                    .collect())
             }
         }
     }
@@ -217,10 +230,18 @@ pub struct CompressedBytes {
 impl CompressedBytes {
     pub fn compress(v: Vec<u8>, codec: Codec) -> io::Result<Self> {
         match codec {
-            Codec::None => Ok(Self { codec, blob: Vec::new(), raw: v }),
+            Codec::None => Ok(Self {
+                codec,
+                blob: Vec::new(),
+                raw: v,
+            }),
             Codec::Deflate9 => {
                 let blob = deflate_compress(&v)?;
-                Ok(Self { codec, blob, raw: Vec::new() })
+                Ok(Self {
+                    codec,
+                    blob,
+                    raw: Vec::new(),
+                })
             }
         }
     }

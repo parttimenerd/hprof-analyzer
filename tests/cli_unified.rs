@@ -341,9 +341,15 @@ fn compare_reports_renders_growth_section() {
         String::from_utf8_lossy(&out.stderr)
     );
     let md = String::from_utf8_lossy(&out.stdout);
-    assert!(md.contains("## Cross-Dump Growth"), "missing growth section");
+    assert!(
+        md.contains("## Cross-Dump Growth"),
+        "missing growth section"
+    );
     assert!(md.contains("**Verdict:**"), "missing verdict line");
-    assert!(md.contains("### Headline Totals"), "missing headline totals");
+    assert!(
+        md.contains("### Headline Totals"),
+        "missing headline totals"
+    );
     // §37.2: the per-step gross churn line is always present in headline totals.
     assert!(
         md.contains("Gross Retained churn"),

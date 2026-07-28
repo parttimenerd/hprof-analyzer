@@ -263,9 +263,9 @@ fn build_garbage_root_trees(
 ) -> Vec<UnreachableGarbageRoot> {
     // Collect subtree object counts once (post-order fold over dominator children).
     let mut subtree_objects = vec![1u64; u]; // each node counts itself
-                                             // We need a post-order traversal; reuse the dominator-children CSR.
-                                             // Build a topological ordering (parents before children in dc_off iteration
-                                             // means we can fold in reverse RPO — just do a BFS from roots).
+    // We need a post-order traversal; reuse the dominator-children CSR.
+    // Build a topological ordering (parents before children in dc_off iteration
+    // means we can fold in reverse RPO — just do a BFS from roots).
     {
         let mut queue: std::collections::VecDeque<u32> = (0..u as u32)
             .filter(|&n| !has_pred.get(n as usize))

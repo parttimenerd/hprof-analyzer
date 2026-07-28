@@ -87,7 +87,13 @@ impl<W: Write> IntIndexStreamer<W> {
         if !self.page.is_empty() {
             self.flush_page()?;
         }
-        write_footer(&mut self.w, &self.page_starts, PAGE_SIZE_INT as i32, self.size, true)?;
+        write_footer(
+            &mut self.w,
+            &self.page_starts,
+            PAGE_SIZE_INT as i32,
+            self.size,
+            true,
+        )?;
         Ok(self.w)
     }
 }
@@ -138,7 +144,13 @@ impl<W: Write> LongIndexStreamer<W> {
         }
         // LongIndexStreamer in MAT writes `size` with a plain (int) cast; it does
         // not use the huge-form negative encoding that IntIndexStreamer uses.
-        write_footer(&mut self.w, &self.page_starts, PAGE_SIZE_LONG as i32, self.size, false)?;
+        write_footer(
+            &mut self.w,
+            &self.page_starts,
+            PAGE_SIZE_LONG as i32,
+            self.size,
+            false,
+        )?;
         Ok(self.w)
     }
 }

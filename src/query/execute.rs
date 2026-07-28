@@ -457,7 +457,11 @@ pub(crate) fn eval_having_term(
             let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
             let like_re = if matches!(op, CompareOp::Like | CompareOp::NotLike) {
                 rhs.as_lit().and_then(|v| {
-                    if let Value::Str(pat) = v { like_regexes.get(pat.as_str()) } else { None }
+                    if let Value::Str(pat) = v {
+                        like_regexes.get(pat.as_str())
+                    } else {
+                        None
+                    }
                 })
             } else {
                 None
@@ -491,13 +495,13 @@ fn eval_having_expr(
             // Find this aggregate by structural match in query.select, bypassing
             // any AS alias — the alias changes the column name but not the
             // SelectItem variant. This is alias-transparent.
-            let pos = query.select.iter().position(|it| {
-                match it {
-                    SelectItem::Aggregate { func: f, arg: a } => f == func && a == arg,
-                    _ => false,
-                }
+            let pos = query.select.iter().position(|it| match it {
+                SelectItem::Aggregate { func: f, arg: a } => f == func && a == arg,
+                _ => false,
             });
-            pos.and_then(|i| row.get(i)).cloned().unwrap_or(QueryValue::Null)
+            pos.and_then(|i| row.get(i))
+                .cloned()
+                .unwrap_or(QueryValue::Null)
         }
         Expr::Attr(attr) => {
             // Non-aggregate column in HAVING — match by column name.
@@ -514,7 +518,10 @@ fn eval_having_expr(
             let r = eval_having_expr(rhs, row, query, columns, like_regexes);
             arith(&l, *op, &r)
         }
-        Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, query, columns, like_regexes)),
+        Expr::Unary { op, arg } => unary(
+            *op,
+            &eval_having_expr(arg, row, query, columns, like_regexes),
+        ),
         Expr::Method { .. } => QueryValue::Null,
         Expr::Case { branches, else_ } => {
             for (pred, then_expr) in branches {
@@ -530,7 +537,9 @@ fn eval_having_expr(
         Expr::Coalesce(args) => {
             for arg in args {
                 let v = eval_having_expr(arg, row, query, columns, like_regexes);
-                if !matches!(v, QueryValue::Null) { return v; }
+                if !matches!(v, QueryValue::Null) {
+                    return v;
+                }
             }
             QueryValue::Null
         }
@@ -582,7 +591,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         // no per-object data (see plan.rs); anything routed to SingleScan with an
         // aggregate gets its own accumulator here.
         let agg_acc = if plan.kind != crate::query::plan::StageKind::GroupBy
-            && query.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. }))
+            && query
+                .select
+                .iter()
+                .any(|it| matches!(it, SelectItem::Aggregate { .. }))
         {
             Some(query.select.iter().map(init_agg_acc).collect())
         } else {
@@ -1004,9 +1016,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 arith(&l, *op, &r)
             }
             Expr::Unary { op, arg } => unary(*op, &self.eval_expr(arg, src_idx, class_id, blob)),
-            Expr::Method { receiver, name, args } => {
-                self.dispatch_method(receiver, name, args, src_idx, class_id, blob)
-            }
+            Expr::Method {
+                receiver,
+                name,
+                args,
+            } => self.dispatch_method(receiver, name, args, src_idx, class_id, blob),
             // Aggregate expressions are only valid in HAVING; calling eval_expr
             // on one during per-row scan means the planner allowed it incorrectly.
             Expr::Aggregate { .. } => QueryValue::Null,
@@ -1038,7 +1052,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
-    fn eval_expr_array(&self, e: &Expr, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
+    fn eval_expr_array(
+        &self,
+        e: &Expr,
+        src_idx: usize,
+        class_name: &str,
+        length: u32,
+    ) -> QueryValue {
         match e {
             Expr::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
             Expr::Lit(v) => value_to_qv(v),
@@ -1047,7 +1067,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 let r = self.eval_expr_array(rhs, src_idx, class_name, length);
                 arith(&l, *op, &r)
             }
-            Expr::Unary { op, arg } => unary(*op, &self.eval_expr_array(arg, src_idx, class_name, length)),
+            Expr::Unary { op, arg } => {
+                unary(*op, &self.eval_expr_array(arg, src_idx, class_name, length))
+            }
             Expr::Method { name, .. } => match name.as_str() {
                 // Arrays expose only `length`/`size`; everything else is Null for now.
                 "length" | "size" => QueryValue::Int(length as i64),
@@ -1098,13 +1120,17 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             "getObjectAddress" => self.project_attr(&Attr::ObjectAddress, src_idx, class_id, blob),
             "getObjectId" => self.project_attr(&Attr::ObjectId, src_idx, class_id, blob),
             "getUsedHeapSize" => self.project_attr(&Attr::UsedHeapSize, src_idx, class_id, blob),
-            "getRetainedHeapSize" => self.project_attr(&Attr::RetainedHeapSize, src_idx, class_id, blob),
+            "getRetainedHeapSize" => {
+                self.project_attr(&Attr::RetainedHeapSize, src_idx, class_id, blob)
+            }
             "getClazz" => self.project_attr(&Attr::ClassOf, src_idx, class_id, blob),
             // For a String receiver this yields the `<class> @ 0x<addr>` display, not
             // the decoded string content: `Expr::Method` bypasses the `SelectItem::Expr`
             // path that arms `needs.string_values` in the planner, so the value side
             // table is never populated. Non-String toString (the common case) is correct.
-            "toString" => self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob),
+            "toString" => {
+                self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob)
+            }
             "length" => self.project_attr(&Attr::Length, src_idx, class_id, blob),
             _ => self.emulate_jvm_method(receiver, name, args, src_idx, class_id, blob),
         }
@@ -1120,23 +1146,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     ) -> QueryValue {
         let cname = self.resolver.class_name(class_id).unwrap_or("");
         match (name, cname) {
-            ("intValue" | "longValue" | "shortValue" | "byteValue", c)
-                if is_boxed_integral(c) =>
-            {
+            ("intValue" | "longValue" | "shortValue" | "byteValue", c) if is_boxed_integral(c) => {
                 self.decode_field(class_id, "value", blob)
             }
             ("floatValue" | "doubleValue", c) if is_boxed_fp(c) => {
                 self.decode_field(class_id, "value", blob)
             }
-            ("booleanValue", "java.lang.Boolean") => {
-                self.decode_field(class_id, "value", blob)
-            }
-            ("charValue", "java.lang.Character") => {
-                self.decode_field(class_id, "value", blob)
-            }
-            ("size", c) if is_sized_collection(c) => {
-                self.decode_field(class_id, "size", blob)
-            }
+            ("booleanValue", "java.lang.Boolean") => self.decode_field(class_id, "value", blob),
+            ("charValue", "java.lang.Character") => self.decode_field(class_id, "value", blob),
+            ("size", c) if is_sized_collection(c) => self.decode_field(class_id, "size", blob),
             ("equals", _) => {
                 let recv = self.eval_expr(receiver, src_idx, class_id, blob);
                 let arg = args
@@ -1147,7 +1165,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             }
             ("contains", "java.lang.String") => {
                 let recv = self.eval_expr(receiver, src_idx, class_id, blob);
-                let arg = args.first().map(|a| self.eval_expr(a, src_idx, class_id, blob));
+                let arg = args
+                    .first()
+                    .map(|a| self.eval_expr(a, src_idx, class_id, blob));
                 match (recv, arg) {
                     (QueryValue::Str(hay), Some(QueryValue::Str(needle))) => {
                         QueryValue::Bool(hay.contains(&needle))
@@ -1401,12 +1421,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                             // group_by_exprs[j] corresponds to key[j]; find the first
                             // group_by_expr that structurally matches this select item.
                             let col_name = column_name(item);
-                            let gb_match = self
-                                .plan
-                                .group_by_exprs
-                                .iter()
-                                .enumerate()
-                                .find(|(_, ge)| {
+                            let gb_match =
+                                self.plan.group_by_exprs.iter().enumerate().find(|(_, ge)| {
                                     // Match by column name equality: the select item's
                                     // display name should match the group-by expr's name.
                                     let ge_name = expr_name(ge);
@@ -2124,7 +2140,9 @@ fn collect_like_in_expr(
             }
         }
         Expr::Coalesce(args) => {
-            for arg in args { collect_like_in_expr(arg, out)?; }
+            for arg in args {
+                collect_like_in_expr(arg, out)?;
+            }
         }
         Expr::NullIf { lhs, rhs } => {
             collect_like_in_expr(lhs, out)?;
@@ -2156,9 +2174,7 @@ fn collect_like_regexes(
                     // LIKE uses Java-style full-match regex, not SQL globs.
                     // Give an actionable hint before the regex compile attempt.
                     if pat.contains('%') && !pat.contains(".*") && !pat.starts_with('^') {
-                        let suggested = pat
-                            .replace('%', ".*")
-                            .replace('_', ".");
+                        let suggested = pat.replace('%', ".*").replace('_', ".");
                         return Err(crate::query::QueryError(format!(
                             "LIKE \"{pat}\": looks like a SQL glob (`%` wildcard), but LIKE \
                              uses Java-style regex (full-match). \
@@ -2258,7 +2274,8 @@ pub(crate) fn sort_rows_with_src(
             SortDir::Desc => ord.reverse(),
         }
     });
-    let new_rows: Vec<Vec<QueryValue>> = perm.iter().map(|&i| std::mem::take(&mut rows[i])).collect();
+    let new_rows: Vec<Vec<QueryValue>> =
+        perm.iter().map(|&i| std::mem::take(&mut rows[i])).collect();
     let new_src: Vec<u32> = perm.iter().map(|&i| src_vec[i]).collect();
     *rows = new_rows;
     *src_vec = new_src;
@@ -2326,7 +2343,11 @@ pub fn column_name(it: &SelectItem) -> String {
 
 /// Build output columns for a query, applying per-item AS aliases where present.
 pub(crate) fn query_columns(q: &Query) -> Vec<QueryColumn> {
-    debug_assert_eq!(q.select.len(), q.select_aliases.len(), "select and select_aliases must stay parallel");
+    debug_assert_eq!(
+        q.select.len(),
+        q.select_aliases.len(),
+        "select and select_aliases must stay parallel"
+    );
     q.select
         .iter()
         .zip(
@@ -2441,7 +2462,10 @@ pub fn expr_name(e: &Expr) -> String {
             UnaryOp::Neg => format!("-{}", expr_name(arg)),
             UnaryOp::Pos => expr_name(arg),
         },
-        Expr::Method { name, args, .. } => format!("{name}({})", args.iter().map(expr_name).collect::<Vec<_>>().join(", ")), // D2 fills this
+        Expr::Method { name, args, .. } => format!(
+            "{name}({})",
+            args.iter().map(expr_name).collect::<Vec<_>>().join(", ")
+        ), // D2 fills this
         Expr::Aggregate { func, arg } => {
             let func_name = match func {
                 AggFunc::Count => "COUNT",
@@ -3618,8 +3642,7 @@ mod tests {
         // rows, discarding matches. So all matched instances are collected even
         // though LIMIT 2 is present; the executor emits every scanned object and
         // does NOT set `truncated` from a scan cap.
-        let q =
-            crate::query::parse::parse("SELECT * FROM (SELECT * FROM C c) x LIMIT 2").unwrap();
+        let q = crate::query::parse::parse("SELECT * FROM (SELECT * FROM C c) x LIMIT 2").unwrap();
         let plan = pq(&q);
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -3780,10 +3803,7 @@ mod tests {
 
     #[test]
     fn alias_overrides_column_name_in_finish() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId AS myid FROM com.acme.Foo",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId AS myid FROM com.acme.Foo").unwrap();
         let plan = pq(&q);
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -3798,8 +3818,7 @@ mod tests {
 
     #[test]
     fn no_alias_preserves_derived_column_name() {
-        let q =
-            crate::query::parse::parse("SELECT @usedHeapSize FROM com.acme.Foo").unwrap();
+        let q = crate::query::parse::parse("SELECT @usedHeapSize FROM com.acme.Foo").unwrap();
         let plan = pq(&q);
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -3826,10 +3845,8 @@ mod tests {
 
     #[test]
     fn quoted_alias_applied_to_column() {
-        let q = crate::query::parse::parse(
-            r#"SELECT @usedHeapSize AS "size" FROM com.acme.Foo"#,
-        )
-        .unwrap();
+        let q = crate::query::parse::parse(r#"SELECT @usedHeapSize AS "size" FROM com.acme.Foo"#)
+            .unwrap();
         let plan = pq(&q);
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -3840,10 +3857,7 @@ mod tests {
 
     #[test]
     fn count_aggregate_alias() {
-        let q = crate::query::parse::parse(
-            "SELECT COUNT(*) AS n FROM com.acme.Foo",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT COUNT(*) AS n FROM com.acme.Foo").unwrap();
         let plan = pq(&q);
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -3922,10 +3936,8 @@ mod tests {
     /// to force SingleScan path). Use `WHERE @usedHeapSize > 0` to route to scan.
     #[test]
     fn scan_acc_count_star_with_where() {
-        let q = crate::query::parse::parse(
-            "SELECT COUNT(*) FROM C WHERE @usedHeapSize > 0",
-        )
-        .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT COUNT(*) FROM C WHERE @usedHeapSize > 0").unwrap();
         let plan = pq(&q);
         let sc = ShallowSchema::new("C", &[(1, 24), (2, 24), (3, 24)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -3954,7 +3966,11 @@ mod tests {
         ex.visit_instance(3, 10, &[]);
         let res = ex.finish("q1");
         assert_eq!(res.row_count, 1);
-        assert_eq!(res.rows[0][0], QueryValue::Int(120), "SUM(@usedHeapSize * 2) = 120");
+        assert_eq!(
+            res.rows[0][0],
+            QueryValue::Int(120),
+            "SUM(@usedHeapSize * 2) = 120"
+        );
     }
 
     /// SUM ignores Null per-object values (object with unknown shallow size).
@@ -3967,10 +3983,9 @@ mod tests {
         )
         .unwrap();
         // Force scan by having a WHERE clause; idx 2 missing from sizes map → shallow_of = None
-        let q2 = crate::query::parse::parse(
-            "SELECT SUM(@usedHeapSize) FROM C WHERE @objectId >= 0",
-        )
-        .unwrap();
+        let q2 =
+            crate::query::parse::parse("SELECT SUM(@usedHeapSize) FROM C WHERE @objectId >= 0")
+                .unwrap();
         let plan = pq(&q2);
         let sc = ShallowSchema::new("C", &[(1, 100), (3, 50)]); // idx 2 missing
         let mut ex = SingleScanExecutor::new(&q2, &plan, &sc);
@@ -3987,10 +4002,9 @@ mod tests {
     #[test]
     fn scan_acc_avg_is_float() {
         // sizes 10, 20, 30 → avg = 20.0
-        let q = crate::query::parse::parse(
-            "SELECT AVG(@usedHeapSize) FROM C WHERE @usedHeapSize > 0",
-        )
-        .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT AVG(@usedHeapSize) FROM C WHERE @usedHeapSize > 0")
+                .unwrap();
         let plan = pq(&q);
         let sc = ShallowSchema::new("C", &[(1, 10), (2, 20), (3, 30)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -4015,8 +4029,15 @@ mod tests {
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[]); // class 10 = "C", not "Missing"
         let res = ex.finish("q1");
-        assert_eq!(res.row_count, 1, "aggregate always emits 1 row even with 0 matches");
-        assert_eq!(res.rows[0][0], QueryValue::Null, "AVG with no values → Null");
+        assert_eq!(
+            res.row_count, 1,
+            "aggregate always emits 1 row even with 0 matches"
+        );
+        assert_eq!(
+            res.rows[0][0],
+            QueryValue::Null,
+            "AVG with no values → Null"
+        );
     }
 
     /// MIN and MAX return correct bounds.
@@ -4051,8 +4072,16 @@ mod tests {
         ex.visit_instance(1, 10, &[]); // class 10 = "C", not "Missing"
         let res = ex.finish("q1");
         assert_eq!(res.row_count, 1);
-        assert_eq!(res.rows[0][0], QueryValue::Null, "MIN with no values → Null");
-        assert_eq!(res.rows[0][1], QueryValue::Null, "MAX with no values → Null");
+        assert_eq!(
+            res.rows[0][0],
+            QueryValue::Null,
+            "MIN with no values → Null"
+        );
+        assert_eq!(
+            res.rows[0][1],
+            QueryValue::Null,
+            "MAX with no values → Null"
+        );
     }
 
     /// SUM promotes to Float when any per-object value is Float.
@@ -4084,10 +4113,9 @@ mod tests {
     /// An object with no shallow size gives Null for @usedHeapSize; COUNT skips it.
     #[test]
     fn scan_acc_count_expr_skips_null() {
-        let q = crate::query::parse::parse(
-            "SELECT COUNT(@usedHeapSize) FROM C WHERE @objectId >= 0",
-        )
-        .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT COUNT(@usedHeapSize) FROM C WHERE @objectId >= 0")
+                .unwrap();
         let plan = pq(&q);
         // idx 2 missing → shallow_of returns None → Null → not counted
         let sc = ShallowSchema::new("C", &[(1, 24), (3, 24)]);
@@ -4107,10 +4135,8 @@ mod tests {
     /// Non-aggregate scan must be completely unaffected — no accumulator interference.
     #[test]
     fn scan_no_aggregate_is_unaffected_by_accumulator() {
-        let q = crate::query::parse::parse(
-            "SELECT @usedHeapSize FROM C WHERE @usedHeapSize > 0",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT @usedHeapSize FROM C WHERE @usedHeapSize > 0")
+            .unwrap();
         let plan = pq(&q);
         let sc = ShallowSchema::new("C", &[(1, 10), (2, 20), (3, 30)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -4119,7 +4145,10 @@ mod tests {
         ex.visit_instance(3, 10, &[]);
         let res = ex.finish("q1");
         // Must produce 3 individual rows, NOT one aggregate row.
-        assert_eq!(res.row_count, 3, "non-aggregate must produce per-object rows");
+        assert_eq!(
+            res.row_count, 3,
+            "non-aggregate must produce per-object rows"
+        );
         assert_eq!(res.rows[0][0], QueryValue::Int(10));
         assert_eq!(res.rows[1][0], QueryValue::Int(20));
         assert_eq!(res.rows[2][0], QueryValue::Int(30));

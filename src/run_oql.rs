@@ -8,8 +8,8 @@
 use std::io;
 
 use crate::opts::{AnalyzeOptions, DEFAULT_QUERY_PATH_DEPTH};
-use crate::{cvec, dominator, pass1, pass2, retained, rpo_dfs};
 use crate::query;
+use crate::{cvec, dominator, pass1, pass2, retained, rpo_dfs};
 
 /// A `ClassIndexResolver` that resolves nothing — used when only the boolean
 /// `RunFlags` (retain_inbound/retain_forward/outbounds_by_rescan) are needed and
@@ -99,10 +99,14 @@ pub(crate) fn run_oql_escalated(
     // @objectAddress in a retained/refwalk/cross-phase context. Without this, late-window
     // @objectAddress would read from an empty id_map and return 0 for every object.
     let needs_addr = needs_sv
-        || flat.iter().any(|(_, p)| {
-            p.finalize_at != crate::query::plan::Phase::P1
-        });
-    let addr_vec = if needs_addr { query::run::id_map_to_addrs(&p1.id_map) } else { Vec::new() };
+        || flat
+            .iter()
+            .any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
+    let addr_vec = if needs_addr {
+        query::run::id_map_to_addrs(&p1.id_map)
+    } else {
+        Vec::new()
+    };
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
     let (
@@ -115,7 +119,15 @@ pub(crate) fn run_oql_escalated(
         refwalk_csr,
         string_values,
         string_values_truncated,
-    ) = pass2::Pass2::build(&source, p1, compress, opts, flat, &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(
+        &source,
+        p1,
+        compress,
+        opts,
+        flat,
+        &mut no_in_sets,
+        &mut no_exists_bools,
+    )?;
 
     // Convert raw JVM slash-form class names to dotted display form so the late
     // window produces classof values consistent with the scan-time path.
@@ -246,13 +258,8 @@ pub(crate) fn run_oql_escalated(
         rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
         rpo.dfn = Vec::new();
 
-        g.idom = dominator::compute_dominators(
-            g.n,
-            rpo,
-            &g.gc_root_indices,
-            &inb_block_off,
-            &inb_data,
-        )?;
+        g.idom =
+            dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
         drop(inb_block_off);
         drop(inb_data);
 

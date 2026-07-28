@@ -380,7 +380,12 @@ fn expr_display_name(e: &Expr) -> String {
         Expr::Attr(a) => attr_display_name(a),
         Expr::Lit(v) => format!("{v:?}"),
         Expr::Binary { op, lhs, rhs } => {
-            format!("({} {:?} {})", expr_display_name(lhs), op, expr_display_name(rhs))
+            format!(
+                "({} {:?} {})",
+                expr_display_name(lhs),
+                op,
+                expr_display_name(rhs)
+            )
         }
         Expr::Unary { op, arg } => format!("{op:?}({})", expr_display_name(arg)),
         Expr::Method { name, .. } => format!("{name}(...)"),
@@ -410,8 +415,12 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
                 f(base);
             }
             if let Attr::ArraySlice { base, start, end } = a {
-                if let Some(s) = start { expr_for_each_attr(s, f); }
-                if let Some(e) = end { expr_for_each_attr(e, f); }
+                if let Some(s) = start {
+                    expr_for_each_attr(s, f);
+                }
+                if let Some(e) = end {
+                    expr_for_each_attr(e, f);
+                }
                 f(base);
             }
         }
@@ -421,9 +430,12 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             expr_for_each_attr(rhs, f);
         }
         Expr::Unary { arg, .. } => expr_for_each_attr(arg, f),
-        Expr::Method { receiver, args, .. } => { // D2 fills this
+        Expr::Method { receiver, args, .. } => {
+            // D2 fills this
             expr_for_each_attr(receiver, f);
-            for a in args { expr_for_each_attr(a, f); }
+            for a in args {
+                expr_for_each_attr(a, f);
+            }
         }
         Expr::Aggregate { .. } => {} // no Attr leaves in aggregate position
         Expr::Case { branches, else_ } => {
@@ -431,10 +443,14 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
                 pred_for_each_attr(pred, f);
                 expr_for_each_attr(then_expr, f);
             }
-            if let Some(e) = else_ { expr_for_each_attr(e, f); }
+            if let Some(e) = else_ {
+                expr_for_each_attr(e, f);
+            }
         }
         Expr::Coalesce(args) => {
-            for arg in args { expr_for_each_attr(arg, f); }
+            for arg in args {
+                expr_for_each_attr(arg, f);
+            }
         }
         Expr::NullIf { lhs, rhs } => {
             expr_for_each_attr(lhs, f);
@@ -458,7 +474,11 @@ fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
 /// available in the late (P2) window.
 fn expr_has_string_method(e: &Expr) -> bool {
     match e {
-        Expr::Method { name, receiver, args } => {
+        Expr::Method {
+            name,
+            receiver,
+            args,
+        } => {
             if name == "contains" || name == "toString" {
                 return true;
             }
@@ -468,9 +488,7 @@ fn expr_has_string_method(e: &Expr) -> bool {
             args.iter().any(expr_has_string_method)
         }
         Expr::Attr(_) | Expr::Lit(_) => false,
-        Expr::Binary { lhs, rhs, .. } => {
-            expr_has_string_method(lhs) || expr_has_string_method(rhs)
-        }
+        Expr::Binary { lhs, rhs, .. } => expr_has_string_method(lhs) || expr_has_string_method(rhs),
         Expr::Unary { arg, .. } => expr_has_string_method(arg),
         Expr::Aggregate { .. } => false,
         Expr::Case { branches, else_ } => {
@@ -478,9 +496,7 @@ fn expr_has_string_method(e: &Expr) -> bool {
                 || else_.as_ref().map_or(false, |e| expr_has_string_method(e))
         }
         Expr::Coalesce(args) => args.iter().any(expr_has_string_method),
-        Expr::NullIf { lhs, rhs } => {
-            expr_has_string_method(lhs) || expr_has_string_method(rhs)
-        }
+        Expr::NullIf { lhs, rhs } => expr_has_string_method(lhs) || expr_has_string_method(rhs),
     }
 }
 
@@ -521,7 +537,11 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
             expr_for_each_method(rhs, f);
         }
         Expr::Unary { arg, .. } => expr_for_each_method(arg, f),
-        Expr::Method { receiver, name, args } => {
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
             f(name.as_str());
             expr_for_each_method(receiver, f);
             for a in args {
@@ -530,11 +550,17 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
         }
         Expr::Aggregate { .. } => {} // no Method nodes in aggregate position
         Expr::Case { branches, else_ } => {
-            for (_, then_expr) in branches { expr_for_each_method(then_expr, f); }
-            if let Some(e) = else_ { expr_for_each_method(e, f); }
+            for (_, then_expr) in branches {
+                expr_for_each_method(then_expr, f);
+            }
+            if let Some(e) = else_ {
+                expr_for_each_method(e, f);
+            }
         }
         Expr::Coalesce(args) => {
-            for arg in args { expr_for_each_method(arg, f); }
+            for arg in args {
+                expr_for_each_method(arg, f);
+            }
         }
         Expr::NullIf { lhs, rhs } => {
             expr_for_each_method(lhs, f);
@@ -658,7 +684,11 @@ fn rewrite_value_array_expr(e: Expr) -> Expr {
             op,
             arg: Box::new(rewrite_value_array_expr(*arg)),
         },
-        Expr::Method { receiver, name, args } => Expr::Method {
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => Expr::Method {
             receiver: Box::new(rewrite_value_array_expr(*receiver)),
             name,
             args: args.into_iter().map(rewrite_value_array_expr).collect(),
@@ -731,9 +761,7 @@ fn select_item_has_reference_array(item: &SelectItem) -> bool {
     match item {
         SelectItem::Attr(Attr::ReferenceArray) => true,
         SelectItem::Aggregate { arg, .. } => select_item_has_reference_array(arg),
-        SelectItem::Expr(e) => {
-            expr_any_attr(e, |a| matches!(a, Attr::ReferenceArray))
-        }
+        SelectItem::Expr(e) => expr_any_attr(e, |a| matches!(a, Attr::ReferenceArray)),
         _ => false,
     }
 }
@@ -768,10 +796,7 @@ fn reject_reference_array_on_instance(q: &Query) -> Result<(), QueryError> {
     {
         return Ok(());
     }
-    let has_ref_array = q
-        .select
-        .iter()
-        .any(select_item_has_reference_array)
+    let has_ref_array = q.select.iter().any(select_item_has_reference_array)
         || q.where_.as_ref().map_or(false, pred_has_reference_array);
     if has_ref_array {
         return Err(QueryError(
@@ -1107,7 +1132,10 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // A mixed select containing path(a, b) alongside other items is not supported:
     // path emits a one-column object-ref subgraph, so combining it with other
     // projections is meaningless. Reject with an actionable error.
-    if q.select.iter().any(|it| matches!(it, SelectItem::Path { .. })) {
+    if q.select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Path { .. }))
+    {
         return Err(QueryError(
             "path(a, b) must be the only select item \
              (e.g. SELECT path(a, b) FROM java.lang.Thread a)"
@@ -1342,7 +1370,11 @@ fn enforce_from_subquery_projection(inner: &Query) -> Result<(), QueryError> {
 /// (`@objectAddress`, or `*` — but `*` yields an ObjRef index, not an address,
 /// so for IN we require an explicit `@objectAddress`). Nested inners' own IN
 /// predicates are handled when their plan is built (recursively via plan_query).
-fn collect_in_subplans(pred: &Predicate, out: &mut Vec<InSubplan>, depth_cap: usize) -> Result<(), QueryError> {
+fn collect_in_subplans(
+    pred: &Predicate,
+    out: &mut Vec<InSubplan>,
+    depth_cap: usize,
+) -> Result<(), QueryError> {
     match pred {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             collect_in_subplans(a, out, depth_cap)?;
@@ -1369,7 +1401,11 @@ fn collect_in_subplans(pred: &Predicate, out: &mut Vec<InSubplan>, depth_cap: us
 /// only needs to know if ≥1 row was produced, so no projection restriction is imposed.
 /// Evaluation order: inner scans run before the outer scan; results are passed to the
 /// executor as a `Vec<bool>` parallel to the `exists_subplans` index.
-fn collect_exists_subplans(pred: &Predicate, out: &mut Vec<ExistsSubplan>, depth_cap: usize) -> Result<(), QueryError> {
+fn collect_exists_subplans(
+    pred: &Predicate,
+    out: &mut Vec<ExistsSubplan>,
+    depth_cap: usize,
+) -> Result<(), QueryError> {
     match pred {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             collect_exists_subplans(a, out, depth_cap)?;
@@ -1385,7 +1421,9 @@ fn collect_exists_subplans(pred: &Predicate, out: &mut Vec<ExistsSubplan>, depth
             });
             Ok(())
         }
-        Predicate::Compare { .. } | Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => Ok(()),
+        Predicate::Compare { .. } | Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => {
+            Ok(())
+        }
     }
 }
 /// addresses, so the inner must `SELECT @objectAddress` — a scalar/field or a
@@ -1406,7 +1444,10 @@ fn uses_retained(q: &Query) -> bool {
     let in_select = q.select.iter().any(select_uses_retained);
     let in_where = q.where_.as_ref().map(pred_uses_retained).unwrap_or(false);
     let in_order = matches!(&q.order_by, Some(ob) if ob.key == Attr::RetainedHeapSize);
-    let in_group_by = q.group_by.iter().any(|ge| expr_any_attr(ge, |a| matches!(a, Attr::RetainedHeapSize)));
+    let in_group_by = q
+        .group_by
+        .iter()
+        .any(|ge| expr_any_attr(ge, |a| matches!(a, Attr::RetainedHeapSize)));
     in_select || in_where || in_order || in_group_by
 }
 fn select_uses_retained(it: &SelectItem) -> bool {
@@ -1483,9 +1524,7 @@ pub(crate) fn pred_uses_tostring(p: &Predicate) -> bool {
 /// `@retainedHeapSize` and String `toString` terms.
 pub(crate) fn pred_uses_refpath(p: &Predicate) -> bool {
     match p {
-        Predicate::And(a, b) | Predicate::Or(a, b) => {
-            pred_uses_refpath(a) || pred_uses_refpath(b)
-        }
+        Predicate::And(a, b) | Predicate::Or(a, b) => pred_uses_refpath(a) || pred_uses_refpath(b),
         Predicate::Not(a) => pred_uses_refpath(a),
         Predicate::Compare { lhs, rhs, .. } => {
             expr_any_attr(lhs, |a| matches!(a, Attr::RefPath { .. }))
@@ -1605,7 +1644,11 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
                 for i in 1..=m {
                     curr[0] = i;
                     for j in 1..=n {
-                        curr[j] = if a[i-1] == b[j-1] { prev[j-1] } else { 1 + prev[j-1].min(prev[j]).min(curr[j-1]) };
+                        curr[j] = if a[i - 1] == b[j - 1] {
+                            prev[j - 1]
+                        } else {
+                            1 + prev[j - 1].min(prev[j]).min(curr[j - 1])
+                        };
                     }
                     std::mem::swap(&mut prev, &mut curr);
                 }
@@ -1912,7 +1955,8 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             let lhs_attr = lhs.as_attr();
             let rhs_val = rhs.as_lit();
             // Reject ArrayIndex/ArraySlice in WHERE predicates at plan time.
-            let is_array_attr = |a: &Attr| matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. });
+            let is_array_attr =
+                |a: &Attr| matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. });
             if lhs_attr.map_or(false, is_array_attr)
                 || expr_any_attr(lhs, is_array_attr)
                 || expr_any_attr(rhs, is_array_attr)
@@ -1984,7 +2028,9 @@ fn pred_cost(pred: &Predicate) -> PredCost {
                 PredCost::Ref
             } else {
                 match lhs.as_attr() {
-                    Some(Attr::Field(_)) if matches!(rhs.as_lit(), Some(Value::Str(_))) => PredCost::Str,
+                    Some(Attr::Field(_)) if matches!(rhs.as_lit(), Some(Value::Str(_))) => {
+                        PredCost::Str
+                    }
                     Some(Attr::DisplayName) => PredCost::Str,
                     Some(Attr::ClassOf) => PredCost::Type,
                     _ => PredCost::Scalar,
@@ -2145,7 +2191,10 @@ mod tests {
         // runtime_type (class-metadata only) is still resident-only.
         let mut p4 = QueryPlan::default();
         p4.needs.runtime_type = true;
-        assert!(p4.is_resident_only(), "runtime_type is class metadata, resident");
+        assert!(
+            p4.is_resident_only(),
+            "runtime_type is class metadata, resident"
+        );
     }
 
     /// Convenience wrapper: plan with the canonical default depth (used by all
@@ -2264,8 +2313,7 @@ mod tests {
 
     #[test]
     fn string_projection_sets_string_need() {
-        let plan =
-            pq(&parse("SELECT @displayName FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @displayName FROM java.lang.String").unwrap()).unwrap();
         assert!(plan.needs.instance_string);
     }
 
@@ -2287,16 +2335,14 @@ mod tests {
     #[test]
     fn retained_in_where_is_cross_phase() {
         let plan =
-            pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap())
-                .unwrap();
+            pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap()).unwrap();
         assert!(plan.needs.retained);
         assert_eq!(plan.finalize_at, Phase::P3);
     }
     #[test]
     fn retained_in_order_by_is_cross_phase() {
         let plan =
-            pq(&parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap())
-                .unwrap();
+            pq(&parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap()).unwrap();
         assert!(plan.needs.retained);
         assert_eq!(plan.finalize_at, Phase::P3);
         assert_eq!(plan.late_ops, vec![StageOp::JoinRetained]);
@@ -2318,12 +2364,22 @@ mod tests {
         let plan = pq(&q).unwrap();
         println!("finalize_at = {:?}", plan.finalize_at);
         println!("needs.array_index = {}", plan.needs.array_index);
-        assert!(plan.needs.array_index, "array index must set needs.array_index");
-        assert_eq!(plan.finalize_at, Phase::P2, "array index must finalize at P2");
+        assert!(
+            plan.needs.array_index,
+            "array index must set needs.array_index"
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "array index must finalize at P2"
+        );
         // late_ops must contain ResolveArrayIndex
         assert!(
-            plan.late_ops.iter().any(|op| matches!(op, StageOp::ResolveArrayIndex)),
-            "array index must emit ResolveArrayIndex late op, got: {:?}", plan.late_ops
+            plan.late_ops
+                .iter()
+                .any(|op| matches!(op, StageOp::ResolveArrayIndex)),
+            "array index must emit ResolveArrayIndex late op, got: {:?}",
+            plan.late_ops
         );
     }
 
@@ -2331,24 +2387,39 @@ mod tests {
     fn distinct_now_plans() {
         // DISTINCT is no longer rejected at plan time; the plan must succeed.
         let plan = pq(&parse("SELECT DISTINCT * FROM C").unwrap());
-        assert!(plan.is_ok(), "DISTINCT should plan successfully, got: {:?}", plan.unwrap_err());
+        assert!(
+            plan.is_ok(),
+            "DISTINCT should plan successfully, got: {:?}",
+            plan.unwrap_err()
+        );
     }
 
     #[test]
     fn distinct_with_limit_plans_ok() {
         let plan = pq(&parse("SELECT DISTINCT @objectId FROM C LIMIT 5").unwrap());
-        assert!(plan.is_ok(), "DISTINCT LIMIT should plan, got: {:?}", plan.unwrap_err());
+        assert!(
+            plan.is_ok(),
+            "DISTINCT LIMIT should plan, got: {:?}",
+            plan.unwrap_err()
+        );
         // For a DISTINCT query, scan-time limit is cleared so all rows flow through
         // for dedup; the limit is applied post-dedup at the choke point.
         let plan = plan.unwrap();
-        assert_eq!(plan.limit, None, "scan-time limit must be cleared for DISTINCT");
+        assert_eq!(
+            plan.limit, None,
+            "scan-time limit must be cleared for DISTINCT"
+        );
     }
 
     #[test]
     fn non_distinct_limit_unchanged() {
         // Non-DISTINCT queries must keep their scan-time limit (invariant guard).
         let plan = pq(&parse("SELECT @objectId FROM C LIMIT 7").unwrap()).unwrap();
-        assert_eq!(plan.limit, Some(7), "non-distinct limit must pass through unchanged");
+        assert_eq!(
+            plan.limit,
+            Some(7),
+            "non-distinct limit must pass through unchanged"
+        );
     }
 
     #[test]
@@ -2373,8 +2444,7 @@ mod tests {
 
     #[test]
     fn plan_dominators_emits_dominator_children_stage() {
-        let plan =
-            pq(&parse("SELECT dominators(s) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT dominators(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(matches!(plan.carry, CarryLayout::IndexOnly));
         assert_eq!(plan.late_ops.len(), 1);
         assert!(matches!(
@@ -2386,14 +2456,12 @@ mod tests {
     }
     #[test]
     fn plan_dominators_unknown_alias_rejected() {
-        let err = pq(&parse("SELECT dominators(x) FROM java.lang.String s").unwrap())
-            .unwrap_err();
+        let err = pq(&parse("SELECT dominators(x) FROM java.lang.String s").unwrap()).unwrap_err();
         assert!(err.to_string().contains("unknown alias 'x'"), "got: {err}");
     }
     #[test]
     fn plan_dominatorof_emits_dominator_of_stage() {
-        let plan =
-            pq(&parse("SELECT dominatorof(s) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT dominatorof(s) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(plan.late_ops.len(), 1);
         assert!(matches!(plan.late_ops[0], StageOp::DominatorOf));
         assert_eq!(plan.finalize_at, Phase::P3);
@@ -2448,17 +2516,15 @@ mod tests {
 
     #[test]
     fn plan_retained_set_emits_retained_set_stage() {
-        let plan = pq(&parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap())
-            .unwrap();
+        let plan = pq(&parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap()).unwrap();
         assert!(matches!(plan.late_ops[0], StageOp::RetainedSet { .. }));
         assert_eq!(plan.finalize_at, Phase::P3);
         assert!(plan.needs.dominator_children);
     }
     #[test]
     fn plan_retained_set_with_aggregate_rejected() {
-        let err =
-            pq(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap())
-                .unwrap_err();
+        let err = pq(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap())
+            .unwrap_err();
         assert!(
             err.to_string()
                 .contains("RETAINED SET cannot be combined with aggregate"),
@@ -2470,8 +2536,16 @@ mod tests {
     fn plan_percentile_over_scan_attr_ok() {
         // PERCENTILE over a plain scan-time attribute plans fine (no late phase).
         let plan = pq(&parse("SELECT PERCENTILE(@usedHeapSize, 95) FROM C").unwrap()).unwrap();
-        assert_eq!(plan.finalize_at, Phase::P1, "percentile over @usedHeapSize is scan-time");
-        assert!(plan.late_ops.is_empty(), "no late ops, got: {:?}", plan.late_ops);
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P1,
+            "percentile over @usedHeapSize is scan-time"
+        );
+        assert!(
+            plan.late_ops.is_empty(),
+            "no late ops, got: {:?}",
+            plan.late_ops
+        );
     }
 
     #[test]
@@ -2479,17 +2553,18 @@ mod tests {
         let err =
             pq(&parse("SELECT PERCENTILE(@retainedHeapSize, 95) FROM C").unwrap()).unwrap_err();
         assert!(
-            err.to_string().contains("PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize"),
+            err.to_string()
+                .contains("PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize"),
             "got: {err}"
         );
     }
 
     #[test]
     fn plan_median_over_retained_rejected() {
-        let err =
-            pq(&parse("SELECT MEDIAN(@retainedHeapSize) FROM C").unwrap()).unwrap_err();
+        let err = pq(&parse("SELECT MEDIAN(@retainedHeapSize) FROM C").unwrap()).unwrap_err();
         assert!(
-            err.to_string().contains("PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize"),
+            err.to_string()
+                .contains("PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize"),
             "got: {err}"
         );
     }
@@ -2637,8 +2712,7 @@ mod tests {
 
     #[test]
     fn classof_projection_sets_runtime_type() {
-        let plan =
-            pq(&parse("SELECT classof(s) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT classof(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(plan.needs.runtime_type);
         assert!(!plan.needs.instance_string);
         assert!(!plan.needs.instance_scalar);
@@ -2647,8 +2721,7 @@ mod tests {
     #[test]
     fn instanceof_where_sets_runtime_type_and_type_cost() {
         let plan =
-            pq(&parse("SELECT * FROM C WHERE s INSTANCEOF java.lang.String").unwrap())
-                .unwrap();
+            pq(&parse("SELECT * FROM C WHERE s INSTANCEOF java.lang.String").unwrap()).unwrap();
         assert!(plan.needs.runtime_type);
         assert!(matches!(
             plan.where_terms.first(),
@@ -2661,8 +2734,7 @@ mod tests {
 
     #[test]
     fn displayname_compare_sets_string_need_and_str_cost() {
-        let plan =
-            pq(&parse("SELECT * FROM C WHERE @displayName = \"foo\"").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT * FROM C WHERE @displayName = \"foo\"").unwrap()).unwrap();
         assert!(plan.needs.instance_string);
         assert!(matches!(
             plan.where_terms.first(),
@@ -2874,14 +2946,20 @@ mod tests {
         let q =
             parse("SELECT @retainedHeapSize AS bytes FROM java.lang.String ORDER BY bytes DESC")
                 .unwrap();
-        assert!(validate_fields(&q, &schema).is_ok(), "alias in ORDER BY must be accepted");
+        assert!(
+            validate_fields(&q, &schema).is_ok(),
+            "alias in ORDER BY must be accepted"
+        );
 
         // Also works when combined with toString() (the original failing case).
         let q = parse(
             "SELECT toString(s) AS value, @retainedHeapSize AS bytes FROM java.lang.String s ORDER BY bytes DESC LIMIT 5",
         )
         .unwrap();
-        assert!(validate_fields(&q, &schema).is_ok(), "toString + alias ORDER BY must be accepted");
+        assert!(
+            validate_fields(&q, &schema).is_ok(),
+            "toString + alias ORDER BY must be accepted"
+        );
     }
 
     #[test]
@@ -3139,8 +3217,7 @@ mod tests {
 
     #[test]
     fn tostring_select_sets_string_values_need_and_p2_finalize() {
-        let plan =
-            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(
             plan.needs.string_values,
             "toString SELECT must arm string_values need"
@@ -3161,10 +3238,10 @@ mod tests {
 
     #[test]
     fn tostring_where_sets_string_values_need() {
-        let plan = pq(
-            &parse(r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#)
-                .unwrap(),
+        let plan = pq(&parse(
+            r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#,
         )
+        .unwrap())
         .unwrap();
         assert!(
             plan.needs.string_values,
@@ -3193,8 +3270,7 @@ mod tests {
 
     #[test]
     fn tostring_string_still_uses_string_values() {
-        let plan =
-            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(
             format!("{plan:?}").contains("ResolveStringValues"),
             "String toString must still emit ResolveStringValues, got {plan:?}"
@@ -3266,9 +3342,8 @@ mod tests {
     /// A WHERE-only query on @usedHeapSize must NOT set `string_values`.
     #[test]
     fn no_tostring_used_heap_size_where_gating_false() {
-        let plan =
-            pq(&parse("SELECT * FROM java.lang.String s WHERE @usedHeapSize > 0").unwrap())
-                .unwrap();
+        let plan = pq(&parse("SELECT * FROM java.lang.String s WHERE @usedHeapSize > 0").unwrap())
+            .unwrap();
         assert!(
             !plan.needs.string_values,
             "WHERE @usedHeapSize query must not arm string_values, got: {:?}",
@@ -3292,8 +3367,7 @@ mod tests {
     /// window), and emit a `ResolveStringValues` late op.
     #[test]
     fn tostring_select_sets_string_values_true_and_p2() {
-        let plan =
-            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(
             plan.needs.string_values,
             "toString SELECT must arm string_values, got: {:?}",
@@ -3318,10 +3392,10 @@ mod tests {
     /// `needs.string_values == true` and finalize at P2.
     #[test]
     fn tostring_where_like_sets_string_values_true_and_p2() {
-        let plan = pq(
-            &parse(r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#)
-                .unwrap(),
+        let plan = pq(&parse(
+            r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#,
         )
+        .unwrap())
         .unwrap();
         assert!(
             plan.needs.string_values,
@@ -3363,8 +3437,7 @@ mod tests {
     /// BoundedPath late op at P2 with depth_cap == DEFAULT_PATH_DEPTH_CAP.
     #[test]
     fn plan_path_lone_emits_bounded_path_op() {
-        let plan =
-            pq(&parse("SELECT path(a, b) FROM java.lang.Thread a").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT path(a, b) FROM java.lang.Thread a").unwrap()).unwrap();
         assert_eq!(
             plan.late_ops,
             vec![StageOp::BoundedPath {
@@ -3372,11 +3445,7 @@ mod tests {
             }],
             "lone path(a,b) must emit exactly one BoundedPath op"
         );
-        assert_eq!(
-            plan.finalize_at,
-            Phase::P2,
-            "path(a,b) must finalize at P2"
-        );
+        assert_eq!(plan.finalize_at, Phase::P2, "path(a,b) must finalize at P2");
         assert!(
             matches!(plan.carry, CarryLayout::IndexOnly),
             "path(a,b) carry must be IndexOnly"
@@ -3388,10 +3457,8 @@ mod tests {
     /// actionable error mentioning "only select item".
     #[test]
     fn plan_path_mixed_select_rejected_actionably() {
-        let err = pq(
-            &parse("SELECT path(a,b), @usedHeapSize FROM java.lang.Thread a").unwrap(),
-        )
-        .unwrap_err();
+        let err = pq(&parse("SELECT path(a,b), @usedHeapSize FROM java.lang.Thread a").unwrap())
+            .unwrap_err();
         assert!(
             err.0.contains("only select item"),
             "mixed path select must mention 'only select item'; got: {}",
@@ -3403,8 +3470,7 @@ mod tests {
     #[test]
     fn plan_path_as_aggregate_arg_rejected() {
         let err =
-            pq(&parse("SELECT COUNT(path(a, b)) FROM java.lang.Thread a").unwrap())
-                .unwrap_err();
+            pq(&parse("SELECT COUNT(path(a, b)) FROM java.lang.Thread a").unwrap()).unwrap_err();
         assert!(
             err.0.contains("aggregate"),
             "path-as-aggregate-arg must mention 'aggregate'; got: {}",
@@ -3419,7 +3485,10 @@ mod tests {
         let plan = pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(plan.finalize_at, Phase::P1);
         assert!(
-            !plan.late_ops.iter().any(|op| matches!(op, StageOp::BoundedPath { .. })),
+            !plan
+                .late_ops
+                .iter()
+                .any(|op| matches!(op, StageOp::BoundedPath { .. })),
             "non-path query must not emit BoundedPath op"
         );
     }
@@ -3499,9 +3568,8 @@ mod tests {
     /// `WHERE @retainedHeapSize * 2 > 100` must arm the retained need and finalize at P3.
     #[test]
     fn arithmetic_where_retained_arms_p3() {
-        let plan =
-            pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100").unwrap())
-                .unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100").unwrap())
+            .unwrap();
         assert!(
             plan.needs.retained,
             "WHERE @retainedHeapSize * 2 > 100 must arm the retained need"
@@ -3542,8 +3610,7 @@ mod tests {
     /// A `WHERE` arithmetic compare with a `Field` leaf must arm `instance_scalar`.
     #[test]
     fn arithmetic_where_field_arms_instance_scalar() {
-        let plan =
-            pq(&parse("SELECT @objectId FROM C WHERE count * 2 > 100").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C WHERE count * 2 > 100").unwrap()).unwrap();
         assert!(
             plan.needs.instance_scalar,
             "WHERE count * 2 > 100 must arm instance_scalar"
@@ -3566,7 +3633,11 @@ mod tests {
         }));
         let mut out = Vec::new();
         collect_select_fields(&item, &mut out);
-        assert_eq!(out, vec!["count"], "collect_select_fields must descend into Expr and collect 'count'");
+        assert_eq!(
+            out,
+            vec!["count"],
+            "collect_select_fields must descend into Expr and collect 'count'"
+        );
     }
 
     /// Field validation must reject an unknown field inside arithmetic in SELECT.
@@ -3613,8 +3684,7 @@ mod tests {
     #[test]
     fn arithmetic_select_refpath_arms_refwalk_p2() {
         // `x.parent.id * 2` — a 1-hop RefPath inside arithmetic in SELECT
-        let plan =
-            pq(&parse("SELECT x.parent.id * 2 FROM Node x").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT x.parent.id * 2 FROM Node x").unwrap()).unwrap();
         assert!(
             plan.needs.ref_walk,
             "arithmetic SELECT with RefPath must arm ref_walk"
@@ -3659,8 +3729,8 @@ mod tests {
         let p2 = pq(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
         assert!(p2.needs.instance_scalar && p2.finalize_at == Phase::P1 && !p2.needs.retained);
 
-        let p3 = pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap())
-            .unwrap();
+        let p3 =
+            pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap()).unwrap();
         assert!(p3.needs.retained && p3.finalize_at == Phase::P3);
     }
 
@@ -3673,10 +3743,8 @@ mod tests {
     /// for MIN/MAX because the histogram only knows count + shallow_total.
     #[test]
     fn min_used_heap_size_routes_single_scan() {
-        let plan = pq(
-            &parse("SELECT MIN(s.@usedHeapSize) FROM java.lang.String s").unwrap(),
-        )
-        .unwrap();
+        let plan =
+            pq(&parse("SELECT MIN(s.@usedHeapSize) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::SingleScan,
@@ -3688,10 +3756,8 @@ mod tests {
     /// `MAX(s.@usedHeapSize)` must also route to SingleScan.
     #[test]
     fn max_used_heap_size_routes_single_scan() {
-        let plan = pq(
-            &parse("SELECT MAX(s.@usedHeapSize) FROM java.lang.String s").unwrap(),
-        )
-        .unwrap();
+        let plan =
+            pq(&parse("SELECT MAX(s.@usedHeapSize) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::SingleScan,
@@ -3702,8 +3768,7 @@ mod tests {
     /// `MIN(@objectId)` must route to SingleScan (histogram has no object-id info).
     #[test]
     fn min_object_id_routes_single_scan() {
-        let plan =
-            pq(&parse("SELECT MIN(s.@objectId) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT MIN(s.@objectId) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::SingleScan,
@@ -3714,8 +3779,7 @@ mod tests {
     /// `MAX(@objectId)` must route to SingleScan.
     #[test]
     fn max_object_id_routes_single_scan() {
-        let plan =
-            pq(&parse("SELECT MAX(s.@objectId) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT MAX(s.@objectId) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::SingleScan,
@@ -3726,8 +3790,7 @@ mod tests {
     /// `MIN(s.hash)` (plain instance field) must also route to SingleScan.
     #[test]
     fn min_instance_field_routes_single_scan() {
-        let plan =
-            pq(&parse("SELECT MIN(s.hash) FROM java.lang.String s").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT MIN(s.hash) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::SingleScan,
@@ -3741,8 +3804,7 @@ mod tests {
     /// `COUNT(*)` must stay on HistogramOnly.
     #[test]
     fn count_star_stays_histogram_only() {
-        let plan =
-            pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::HistogramOnly,
@@ -3753,8 +3815,7 @@ mod tests {
     /// `SUM(@usedHeapSize)` must stay on HistogramOnly.
     #[test]
     fn sum_used_heap_size_stays_histogram_only() {
-        let plan =
-            pq(&parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::HistogramOnly,
@@ -3765,8 +3826,7 @@ mod tests {
     /// `AVG(@usedHeapSize)` must stay on HistogramOnly.
     #[test]
     fn avg_used_heap_size_stays_histogram_only() {
-        let plan =
-            pq(&parse("SELECT AVG(@usedHeapSize) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT AVG(@usedHeapSize) FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::HistogramOnly,
@@ -3778,12 +3838,10 @@ mod tests {
     /// histogram-answerable, even though SUM would be alone).
     #[test]
     fn mixed_min_sum_routes_single_scan() {
-        let plan = pq(
-            &parse(
-                "SELECT MIN(s.@usedHeapSize), SUM(s.@usedHeapSize) FROM java.lang.String s",
-            )
-            .unwrap(),
+        let plan = pq(&parse(
+            "SELECT MIN(s.@usedHeapSize), SUM(s.@usedHeapSize) FROM java.lang.String s",
         )
+        .unwrap())
         .unwrap();
         assert_eq!(
             plan.kind,
@@ -3799,8 +3857,7 @@ mod tests {
     /// the histogram (guarded by `count_star_stays_histogram_only`).
     #[test]
     fn count_instanceof_routes_single_scan() {
-        let plan =
-            pq(&parse("SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread").unwrap()).unwrap();
         assert_eq!(
             plan.kind,
             StageKind::SingleScan,
@@ -3812,10 +3869,7 @@ mod tests {
     #[test]
     fn gcroots_attr_sets_needs_gc_roots_and_forces_carry() {
         let plan = pq(&parse("SELECT @GCRoots FROM java.lang.Thread").unwrap()).unwrap();
-        assert!(
-            plan.needs.gc_roots,
-            "@GCRoots must set needs.gc_roots"
-        );
+        assert!(plan.needs.gc_roots, "@GCRoots must set needs.gc_roots");
         assert_ne!(
             plan.finalize_at,
             Phase::P1,
@@ -3825,17 +3879,17 @@ mod tests {
 
     #[test]
     fn group_by_plans_as_group_by_stage() {
-        let q = parse(
-            "SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName",
-        )
-        .unwrap();
+        let q = parse("SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName")
+            .unwrap();
         let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.kind, StageKind::GroupBy);
         assert_eq!(plan.group_by_exprs.len(), 1);
         assert!(
             matches!(
                 plan.group_by_exprs.first(),
-                Some(crate::query::ast::Expr::Attr(crate::query::ast::Attr::DisplayName))
+                Some(crate::query::ast::Expr::Attr(
+                    crate::query::ast::Attr::DisplayName
+                ))
             ),
             "expected DisplayName expr in group_by_exprs"
         );
@@ -3866,7 +3920,9 @@ mod tests {
         let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
             .expect_err("@usedHeapSize not in GROUP BY must error");
         assert!(
-            err.0.contains("@usedHeapSize") || err.0.contains("usedHeapSize") || err.0.to_lowercase().contains("non-aggregate"),
+            err.0.contains("@usedHeapSize")
+                || err.0.contains("usedHeapSize")
+                || err.0.to_lowercase().contains("non-aggregate"),
             "error must name the offending column, got: {}",
             err.0
         );
@@ -3885,7 +3941,8 @@ mod tests {
                 let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
                     .expect_err("ArrayIndex in WHERE must error");
                 assert!(
-                    err.0.to_lowercase().contains("array") || err.0.to_lowercase().contains("where"),
+                    err.0.to_lowercase().contains("array")
+                        || err.0.to_lowercase().contains("where"),
                     "error must mention array or WHERE, got: {}",
                     err.0
                 );
@@ -3893,4 +3950,3 @@ mod tests {
         }
     }
 }
-

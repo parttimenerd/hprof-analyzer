@@ -68,13 +68,13 @@ function showToast(msg, type = 'info', durationMs = 3500) {
 }
 
 // ── Upload screen ─────────────────────────────────────────────────────────────
-// Sample dumps available when served from the repo root (e.g. python -m http.server)
-// Paths are relative to the HTML file location; dist/ is one level below repo root.
+// Sample dumps served from docs/samples/ on GitHub Pages (and locally when
+// running from the repo root with e.g. python -m http.server).
 const SAMPLE_DUMPS = [
-  { name: 'mnemonics',     path: '../tests/fixtures/dump_1_mnemonics.hprof',     sizeMb: 20 },
-  { name: 'scala-doku',    path: '../tests/fixtures/dump_2_scala-doku.hprof',    sizeMb: 51 },
-  { name: 'philosophers',  path: '../tests/fixtures/dump_4_philosophers.hprof',  sizeMb: 23 },
-  { name: 'gauss-mix',     path: '../tests/fixtures/dump_7_gauss-mix.hprof',     sizeMb: 70 },
+  { name: 'mnemonics',     path: 'samples/dump_1_mnemonics.hprof',     sizeMb: 20 },
+  { name: 'scala-doku',    path: 'samples/dump_2_scala-doku.hprof',    sizeMb: 51 },
+  { name: 'philosophers',  path: 'samples/dump_4_philosophers.hprof',  sizeMb: 23 },
+  { name: 'gauss-mix',     path: 'samples/dump_7_gauss-mix.hprof',     sizeMb: 70 },
 ];
 
 (function initUploadScreen() {

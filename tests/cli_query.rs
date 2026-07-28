@@ -233,7 +233,10 @@ fn query_from_known_class_has_no_absent_note() {
         .arg("query")
         .arg(&hprof)
         // java.lang.String exists; a never-true WHERE yields zero rows.
-        .args(["--query", "SELECT * FROM java.lang.String WHERE @objectId = 0"])
+        .args([
+            "--query",
+            "SELECT * FROM java.lang.String WHERE @objectId = 0",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success(), "known-class query failed");
@@ -335,7 +338,10 @@ fn refpath_query_resolves_in_query_subcommand() {
 fn mixed_refpath_and_retained_query_auto_escalates() {
     let Some(hprof) = philosophers() else { return };
     // The pure retained query now auto-escalates and returns numeric sizes.
-    let pure = run_query_stdout(&hprof, "SELECT @retainedHeapSize FROM java.lang.Thread LIMIT 2");
+    let pure = run_query_stdout(
+        &hprof,
+        "SELECT @retainedHeapSize FROM java.lang.Thread LIMIT 2",
+    );
     assert!(
         !pure.to_lowercase().contains("the full analysis pipeline"),
         "pure retained query must auto-escalate, not error:\n{pure}"
@@ -369,12 +375,8 @@ fn query_retained_heap_size_auto_escalates() {
     );
     // At least one data row whose first cell is a numeric retained size.
     assert!(
-        out.lines().any(|l| {
-            l.trim()
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-        }),
+        out.lines()
+            .any(|l| { l.trim().chars().next().is_some_and(|c| c.is_ascii_digit()) }),
         "expected at least one numeric retained-size row:\n{out}"
     );
 }
@@ -387,18 +389,10 @@ fn query_escalated_respects_reachable_only_default() {
     let Some(hprof) = philosophers() else { return };
     let count_numeric = |s: &str| -> usize {
         s.lines()
-            .filter(|l| {
-                l.trim()
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_digit())
-            })
+            .filter(|l| l.trim().chars().next().is_some_and(|c| c.is_ascii_digit()))
             .count()
     };
-    let def = run_query_stdout(
-        &hprof,
-        "SELECT c.@retainedHeapSize FROM java.lang.Thread c",
-    );
+    let def = run_query_stdout(&hprof, "SELECT c.@retainedHeapSize FROM java.lang.Thread c");
     let all = run_query_args(
         &hprof,
         &["--all"],
@@ -565,11 +559,11 @@ fn tohex_formats_address() {
     let Some(hprof) = philosophers() else { return };
     let out = run_query_stdout(&hprof, "SELECT toHex(255) FROM java.lang.Thread LIMIT 1");
     assert!(out.contains("0xff"), "got: {out}");
-    let out2 = run_query_stdout(
-        &hprof,
-        "SELECT toHex(\"x\") FROM java.lang.Thread LIMIT 1",
+    let out2 = run_query_stdout(&hprof, "SELECT toHex(\"x\") FROM java.lang.Thread LIMIT 1");
+    assert!(
+        !out2.contains("0x"),
+        "non-int arg should be Null, got: {out2}"
     );
-    assert!(!out2.contains("0x"), "non-int arg should be Null, got: {out2}");
 }
 
 /// Wave F: `toHex` over an arithmetic expression proves the inner-expr attr
@@ -582,12 +576,18 @@ fn tohex_over_expr_and_multi_column() {
         &hprof,
         "SELECT toHex(@objectAddress + 0) FROM java.lang.Thread LIMIT 1",
     );
-    assert!(out.contains("0x"), "toHex over arithmetic expr should format hex, got: {out}");
+    assert!(
+        out.contains("0x"),
+        "toHex over arithmetic expr should format hex, got: {out}"
+    );
     let multi = run_query_stdout(
         &hprof,
         "SELECT @objectId, toHex(@objectAddress) FROM java.lang.Thread LIMIT 1",
     );
-    assert!(multi.contains("0x"), "toHex in multi-column SELECT should format hex, got: {multi}");
+    assert!(
+        multi.contains("0x"),
+        "toHex in multi-column SELECT should format hex, got: {multi}"
+    );
 }
 
 /// Regression: @objectAddress returned 0 for all rows when toString(s) was
@@ -628,10 +628,7 @@ fn object_address_nonzero_in_tostring_carry_mode() {
 #[test]
 fn tostring_non_string_shows_class_and_address() {
     let Some(hprof) = philosophers() else { return };
-    let out = run_query_stdout(
-        &hprof,
-        "SELECT toString(t) FROM java.lang.Thread t LIMIT 1",
-    );
+    let out = run_query_stdout(&hprof, "SELECT toString(t) FROM java.lang.Thread t LIMIT 1");
     assert!(
         out.contains("java.lang.Thread @ 0x"),
         "non-String toString must render `<class> @ 0x<addr>`, got:\n{out}"
@@ -900,7 +897,10 @@ fn query_subcommand_distinct_deduplicates_rows() {
     let distinct = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT DISTINCT @displayName FROM java.lang.Thread"])
+        .args([
+            "--query",
+            "SELECT DISTINCT @displayName FROM java.lang.Thread",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -925,7 +925,10 @@ fn query_subcommand_distinct_limit_returns_exactly_n_distinct() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT DISTINCT @objectId FROM java.lang.String LIMIT 5"])
+        .args([
+            "--query",
+            "SELECT DISTINCT @objectId FROM java.lang.String LIMIT 5",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -2080,8 +2083,11 @@ fn from_subquery_semijoin_is_bounded_by_outer() {
 fn from_subquery_limit_returns_exactly_n() {
     let Some(hprof) = philosophers() else { return };
     // Unbounded semi-join count is large (all Strings); LIMIT must not undershoot.
-    let full = query_row_count(&hprof, "SELECT @objectId FROM (SELECT * FROM java.lang.String s) x")
-        .expect("unbounded FROM-subquery failed or had no row count");
+    let full = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM (SELECT * FROM java.lang.String s) x",
+    )
+    .expect("unbounded FROM-subquery failed or had no row count");
     assert!(full >= 100, "fixture must have >= 100 strings; got {full}");
     for n in [1u64, 5, 100] {
         let got = query_row_count(
@@ -2178,7 +2184,10 @@ fn in_subquery_inner_set_is_reachability_filtered() {
         reachable, 27,
         "reachable-only inner Thread set must be MAT's 27 reachable Threads, got {reachable}"
     );
-    assert_eq!(all, 29, "--all inner Thread set must be all 29 Threads, got {all}");
+    assert_eq!(
+        all, 29,
+        "--all inner Thread set must be all 29 Threads, got {all}"
+    );
     assert!(
         reachable < all,
         "inner-set reachability pruning must drop the 2 unreachable Threads \
@@ -3060,9 +3069,15 @@ fn where_instanceof_walks_hierarchy() {
         "SELECT @objectAddress FROM INSTANCEOF java.lang.Object o WHERE o INSTANCEOF java.lang.Thread",
     )
     .expect("WHERE INSTANCEOF query must succeed");
-    let via_from = query_row_count(&hprof, "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread")
-        .expect("FROM INSTANCEOF Thread must succeed");
-    assert!(via_from > 0, "fixture must have Thread-subtype objects; got {via_from}");
+    let via_from = query_row_count(
+        &hprof,
+        "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread",
+    )
+    .expect("FROM INSTANCEOF Thread must succeed");
+    assert!(
+        via_from > 0,
+        "fixture must have Thread-subtype objects; got {via_from}"
+    );
     assert_eq!(
         via_where, via_from,
         "WHERE o INSTANCEOF Thread ({via_where}) must match FROM INSTANCEOF Thread \
@@ -3135,10 +3150,7 @@ fn alias_bytes_column_name_in_output() {
 #[test]
 fn alias_aggregate_column_name_in_output() {
     let Some(hprof) = philosophers() else { return };
-    let stdout = query_stdout(
-        &hprof,
-        "SELECT COUNT(*) AS n FROM java.lang.String",
-    );
+    let stdout = query_stdout(&hprof, "SELECT COUNT(*) AS n FROM java.lang.String");
     assert!(
         stdout.lines().any(|l| l == "n"),
         "expected a line exactly 'n' as column header in output:\n{stdout}"
@@ -3149,10 +3161,7 @@ fn alias_aggregate_column_name_in_output() {
 #[test]
 fn no_alias_derived_column_name_preserved() {
     let Some(hprof) = philosophers() else { return };
-    let stdout = query_stdout(
-        &hprof,
-        "SELECT COUNT(*) FROM java.lang.String",
-    );
+    let stdout = query_stdout(&hprof, "SELECT COUNT(*) FROM java.lang.String");
     assert!(
         stdout.contains("COUNT(*)"),
         "derived name COUNT(*) must appear when no alias is set:\n{stdout}"
@@ -3213,10 +3222,7 @@ fn alias_quoted_name_appears_in_output() {
 #[test]
 fn histogram_alias_column_header_is_alias_not_derived() {
     let Some(hprof) = philosophers() else { return };
-    let stdout = query_stdout(
-        &hprof,
-        "SELECT COUNT(*) AS n FROM java.lang.String",
-    );
+    let stdout = query_stdout(&hprof, "SELECT COUNT(*) AS n FROM java.lang.String");
     // The column header line must be exactly "n", not "COUNT(*)".
     assert!(
         stdout.lines().any(|l| l == "n"),
@@ -3235,7 +3241,10 @@ fn as_retained_set_does_not_produce_retained_column() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT s AS RETAINED SET FROM java.lang.String s LIMIT 1"])
+        .args([
+            "--query",
+            "SELECT s AS RETAINED SET FROM java.lang.String s LIMIT 1",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -3255,14 +3264,8 @@ fn as_retained_set_does_not_produce_retained_column() {
 #[test]
 fn select_objects_noop_rows_identical_to_plain_select() {
     let Some(hprof) = philosophers() else { return };
-    let with_objects = query_stdout(
-        &hprof,
-        "SELECT OBJECTS s FROM java.lang.String s LIMIT 3",
-    );
-    let without_objects = query_stdout(
-        &hprof,
-        "SELECT s FROM java.lang.String s LIMIT 3",
-    );
+    let with_objects = query_stdout(&hprof, "SELECT OBJECTS s FROM java.lang.String s LIMIT 3");
+    let without_objects = query_stdout(&hprof, "SELECT s FROM java.lang.String s LIMIT 3");
     // Skip the echoed query-text line — it differs only by the OBJECTS keyword.
     // Data rows (column headers, values, row-count line) must match.
     let data_rows = |s: &str| -> Vec<String> {
@@ -3285,7 +3288,10 @@ fn leading_as_retained_set_end_to_end() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT AS RETAINED SET s FROM java.lang.String s LIMIT 1"])
+        .args([
+            "--query",
+            "SELECT AS RETAINED SET s FROM java.lang.String s LIMIT 1",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -3375,7 +3381,10 @@ fn query(hprof: &str, oql: &str) -> std::process::Output {
 #[test]
 fn arith_projection_double_used_heap_size() {
     let Some(hprof) = philosophers() else { return };
-    let out = query(&hprof, "SELECT @usedHeapSize * 2 FROM java.lang.String LIMIT 3");
+    let out = query(
+        &hprof,
+        "SELECT @usedHeapSize * 2 FROM java.lang.String LIMIT 3",
+    );
     assert!(
         out.status.success(),
         "arithmetic projection failed: {}",
@@ -3619,10 +3628,8 @@ fn scan_agg_min_max_are_sane() {
         .lines()
         .find_map(|l| {
             let parts: Vec<&str> = l.split('|').collect();
-            let parsed: Option<Vec<i64>> = parts
-                .iter()
-                .map(|s| s.trim().parse::<i64>().ok())
-                .collect();
+            let parsed: Option<Vec<i64>> =
+                parts.iter().map(|s| s.trim().parse::<i64>().ok()).collect();
             parsed
         })
         .expect("no numeric data row found in MIN/MAX output");
@@ -3633,7 +3640,10 @@ fn scan_agg_min_max_are_sane() {
     );
     let mn = *nums.iter().min().unwrap();
     let mx = *nums.iter().max().unwrap();
-    assert!(mn >= 1, "MIN must be ≥ 1 (WHERE @usedHeapSize > 0), got {mn}");
+    assert!(
+        mn >= 1,
+        "MIN must be ≥ 1 (WHERE @usedHeapSize > 0), got {mn}"
+    );
     assert!(mx >= mn, "MAX must be ≥ MIN, got min={mn} max={mx}");
 }
 
@@ -3653,7 +3663,10 @@ fn scan_agg_double_sum_equals_2x_histogram() {
         .expect("histogram SUM must be a parseable integer");
 
     // Scan path (aggregate-over-expression).
-    let scan_out = query(&hprof, "SELECT SUM(@usedHeapSize * 2) FROM java.lang.String");
+    let scan_out = query(
+        &hprof,
+        "SELECT SUM(@usedHeapSize * 2) FROM java.lang.String",
+    );
     let scan_stdout = String::from_utf8_lossy(&scan_out.stdout);
     let scan_sum: i64 = scan_stdout
         .lines()
@@ -3717,7 +3730,10 @@ fn count_alias_equals_count_star() {
         .lines()
         .find_map(|l| l.trim().parse::<u64>().ok())
         .expect("COUNT(*) must produce a parseable integer");
-    assert!(count_star > 0, "COUNT(*) must be non-zero, got {count_star}");
+    assert!(
+        count_star > 0,
+        "COUNT(*) must be non-zero, got {count_star}"
+    );
 
     let out_alias = query(&hprof, "SELECT COUNT(s) FROM java.lang.String s");
     assert!(
@@ -3855,7 +3871,10 @@ fn dotted_alias_at_attr_unaffected_by_bare_alias_fix() {
     );
     // @objectId values are non-negative integers; check at least one integer row.
     let has_int = stdout.lines().any(|l| l.trim().parse::<u64>().is_ok());
-    assert!(has_int, "dotted alias s.@objectId must yield integer rows:\n{stdout}");
+    assert!(
+        has_int,
+        "dotted alias s.@objectId must yield integer rows:\n{stdout}"
+    );
 }
 
 /// SUM(s) with a bare alias: although semantically odd (SUM of objects is
@@ -3958,7 +3977,10 @@ fn min_avg_max_used_heap_size_ordering() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT AVG(s.@usedHeapSize) FROM java.lang.String s"])
+        .args([
+            "--query",
+            "SELECT AVG(s.@usedHeapSize) FROM java.lang.String s",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success(), "AVG(@usedHeapSize) failed");
@@ -3987,11 +4009,8 @@ fn min_avg_max_used_heap_size_ordering() {
 #[test]
 fn min_object_id_is_non_null_non_negative() {
     let Some(hprof) = philosophers() else { return };
-    let val = query_single_i64(
-        &hprof,
-        "SELECT MIN(s.@objectId) FROM java.lang.String s",
-    )
-    .expect("MIN(s.@objectId) must return a non-null integer");
+    let val = query_single_i64(&hprof, "SELECT MIN(s.@objectId) FROM java.lang.String s")
+        .expect("MIN(s.@objectId) must return a non-null integer");
     assert!(
         val >= 0,
         "MIN(@objectId) must be a non-negative integer; got {val}"
@@ -4003,20 +4022,11 @@ fn min_object_id_is_non_null_non_negative() {
 #[test]
 fn max_object_id_geq_min_object_id() {
     let Some(hprof) = philosophers() else { return };
-    let min = query_single_i64(
-        &hprof,
-        "SELECT MIN(s.@objectId) FROM java.lang.String s",
-    )
-    .expect("MIN(@objectId) must not be null");
-    let max = query_single_i64(
-        &hprof,
-        "SELECT MAX(s.@objectId) FROM java.lang.String s",
-    )
-    .expect("MAX(@objectId) must not be null");
-    assert!(
-        min <= max,
-        "MIN({min}) must be <= MAX({max}) for @objectId"
-    );
+    let min = query_single_i64(&hprof, "SELECT MIN(s.@objectId) FROM java.lang.String s")
+        .expect("MIN(@objectId) must not be null");
+    let max = query_single_i64(&hprof, "SELECT MAX(s.@objectId) FROM java.lang.String s")
+        .expect("MAX(@objectId) must not be null");
+    assert!(min <= max, "MIN({min}) must be <= MAX({max}) for @objectId");
 }
 
 /// Regression: SUM(@usedHeapSize) and COUNT(*) must still work (histogram fast
@@ -4031,9 +4041,8 @@ fn sum_and_count_still_work_after_routing_fix() {
     .expect("SUM(@usedHeapSize) must still return a value after routing fix");
     assert!(sum > 0, "SUM(@usedHeapSize) must be > 0; got {sum}");
 
-    let count =
-        query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
-            .expect("COUNT(*) must still return a value after routing fix");
+    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
+        .expect("COUNT(*) must still return a value after routing fix");
     assert!(count > 0, "COUNT(*) must be > 0; got {count}");
 
     // SUM / COUNT ~ AVG: sanity-check that SUM >= COUNT (all shallow sizes >= 1).
@@ -4042,7 +4051,6 @@ fn sum_and_count_still_work_after_routing_fix() {
         "SUM({sum}) must be >= COUNT({count}) (shallow size >= 1 per object)"
     );
 }
-
 
 /// Extract every integer-only data row (one numeric column) in output order.
 /// Skips the `(N rows)` footer (which is parenthesized) and headers.
@@ -4070,7 +4078,10 @@ fn order_by_scan_attr_desc_is_sorted() {
         "SELECT s.@usedHeapSize FROM java.lang.String s ORDER BY s.@usedHeapSize DESC LIMIT 50",
     );
     let vals = ordered_int_column(&out);
-    assert!(vals.len() >= 2, "need at least 2 rows to check ordering:\n{out}");
+    assert!(
+        vals.len() >= 2,
+        "need at least 2 rows to check ordering:\n{out}"
+    );
     for w in vals.windows(2) {
         assert!(
             w[0] >= w[1],
@@ -4092,7 +4103,12 @@ fn order_by_scan_attr_asc_is_sorted() {
     let vals = ordered_int_column(&out);
     assert!(vals.len() >= 2, "need at least 2 rows:\n{out}");
     for w in vals.windows(2) {
-        assert!(w[0] <= w[1], "ASC not sorted: {} before {}\n{out}", w[0], w[1]);
+        assert!(
+            w[0] <= w[1],
+            "ASC not sorted: {} before {}\n{out}",
+            w[0],
+            w[1]
+        );
     }
 }
 
@@ -4141,10 +4157,7 @@ fn percentile_p95_at_least_median() {
         "SELECT MEDIAN(s.@usedHeapSize) FROM java.lang.String s",
     )
     .expect("median must return a numeric value");
-    assert!(
-        p95 >= median,
-        "p95 ({p95}) must be >= median ({median})"
-    );
+    assert!(p95 >= median, "p95 ({p95}) must be >= median ({median})");
 }
 
 /// MEDIAN(@x) must equal PERCENTILE(@x, 50) — MEDIAN is defined as p50.
@@ -4245,10 +4258,7 @@ fn percentile_out_of_range_is_cli_error() {
             .args(["--query", &oql])
             .output()
             .unwrap();
-        assert!(
-            !out.status.success(),
-            "PERCENTILE p={bad} must be rejected"
-        );
+        assert!(!out.status.success(), "PERCENTILE p={bad} must be rejected");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             stderr.contains("between 1 and 100"),
@@ -4368,8 +4378,7 @@ fn viz_explicit_name_still_wins_over_from_target() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"name\": \"My Threads\"")
-            || stdout.contains("\"name\":\"My Threads\""),
+        stdout.contains("\"name\": \"My Threads\"") || stdout.contains("\"name\":\"My Threads\""),
         "explicit @viz name must win over the FROM-target default:\n{}",
         &stdout[..stdout.len().min(4000)]
     );
@@ -4421,9 +4430,7 @@ fn malformed_viz_directive_falls_back_with_note() {
     let out = Command::new(BIN)
         .arg(&hprof)
         .args(["--format", "json"])
-        .args([
-            "--query=-- @viz boguskind\nSELECT COUNT(*) FROM java.lang.String",
-        ])
+        .args(["--query=-- @viz boguskind\nSELECT COUNT(*) FROM java.lang.String"])
         .output()
         .unwrap();
     assert!(
@@ -4555,7 +4562,10 @@ fn viz_directive_line_in_query_file_attaches_to_next() {
 fn from_objects_single_address_returns_one_row() {
     let Some(hprof) = philosophers() else { return };
     // 1) Grab one real object address (decimal integer cell).
-    let seed = run_query_stdout(&hprof, "SELECT @objectAddress FROM java.lang.Thread LIMIT 1");
+    let seed = run_query_stdout(
+        &hprof,
+        "SELECT @objectAddress FROM java.lang.Thread LIMIT 1",
+    );
     let addr = seed
         .lines()
         .find_map(|l| {
@@ -4569,7 +4579,10 @@ fn from_objects_single_address_returns_one_row() {
         .unwrap_or_else(|| panic!("no object address in seed output:\n{seed}"));
 
     // 2) Query that exact object by address; the same address must appear.
-    let by_addr = run_query_stdout(&hprof, &format!("SELECT @objectAddress FROM OBJECTS {addr}"));
+    let by_addr = run_query_stdout(
+        &hprof,
+        &format!("SELECT @objectAddress FROM OBJECTS {addr}"),
+    );
     assert!(
         by_addr.lines().any(|l| l.trim() == addr.to_string()),
         "FROM OBJECTS {addr} did not return that address:\n{by_addr}"
@@ -4625,7 +4638,10 @@ fn extract_data_rows(stdout: &str) -> Vec<&str> {
 fn method_alias_getname_equals_class() {
     let Some(hprof) = philosophers() else { return };
     let a = run_query_stdout(&hprof, "SELECT s.getName() FROM java.lang.Thread s LIMIT 1");
-    let b = run_query_stdout(&hprof, "SELECT @displayName FROM java.lang.Thread s LIMIT 1");
+    let b = run_query_stdout(
+        &hprof,
+        "SELECT @displayName FROM java.lang.Thread s LIMIT 1",
+    );
     let av = extract_data_rows(&a);
     let bv = extract_data_rows(&b);
     assert_eq!(
@@ -4641,7 +4657,10 @@ fn method_alias_getname_equals_class() {
 #[test]
 fn method_equals_returns_bool() {
     let Some(hprof) = philosophers() else { return };
-    let out = run_query_stdout(&hprof, "SELECT i.equals(1) FROM java.lang.Integer i LIMIT 3");
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT i.equals(1) FROM java.lang.Integer i LIMIT 3",
+    );
     let rows = extract_data_rows(&out);
     assert!(!rows.is_empty(), "equals(1) produced no rows:\n{out}");
     assert!(
@@ -4649,9 +4668,15 @@ fn method_equals_returns_bool() {
         "equals(1) column must be all bool literals; got {rows:?}\n{out}"
     );
     // Reference-identity: a value equals itself, so every row is `true`.
-    let selfeq = run_query_stdout(&hprof, "SELECT i.equals(i) FROM java.lang.Integer i LIMIT 3");
+    let selfeq = run_query_stdout(
+        &hprof,
+        "SELECT i.equals(i) FROM java.lang.Integer i LIMIT 3",
+    );
     let self_rows = extract_data_rows(&selfeq);
-    assert!(!self_rows.is_empty(), "equals(i) produced no rows:\n{selfeq}");
+    assert!(
+        !self_rows.is_empty(),
+        "equals(i) produced no rows:\n{selfeq}"
+    );
     assert!(
         self_rows.iter().all(|r| *r == "true"),
         "i.equals(i) must be true for every row (identity); got {self_rows:?}\n{selfeq}"
@@ -4668,7 +4693,10 @@ fn method_equals_returns_bool() {
 #[test]
 fn method_contains_string() {
     let Some(hprof) = philosophers() else { return };
-    let out = run_query_stdout(&hprof, "SELECT s.contains(\"a\") FROM java.lang.String s LIMIT 3");
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.contains(\"a\") FROM java.lang.String s LIMIT 3",
+    );
     assert!(
         out.contains("contains(\"a\")"),
         "missing contains() column header:\n{out}"
@@ -4708,8 +4736,14 @@ fn method_get_rejected_nonzero_exit() {
 #[test]
 fn method_alias_getobjectaddress_equals_attr() {
     let Some(hprof) = philosophers() else { return };
-    let a = run_query_stdout(&hprof, "SELECT s.getObjectAddress() FROM java.lang.Thread s LIMIT 3");
-    let b = run_query_stdout(&hprof, "SELECT @objectAddress FROM java.lang.Thread s LIMIT 3");
+    let a = run_query_stdout(
+        &hprof,
+        "SELECT s.getObjectAddress() FROM java.lang.Thread s LIMIT 3",
+    );
+    let b = run_query_stdout(
+        &hprof,
+        "SELECT @objectAddress FROM java.lang.Thread s LIMIT 3",
+    );
     let av = extract_data_rows(&a);
     let bv = extract_data_rows(&b);
     assert_eq!(
@@ -4728,7 +4762,10 @@ fn method_alias_getobjectaddress_equals_attr() {
 fn method_emulate_self_class_fields() {
     let Some(hprof) = philosophers() else { return };
     // intValue() reads the `value` field on a boxed Integer
-    let iv = run_query_stdout(&hprof, "SELECT i.intValue() FROM java.lang.Integer i LIMIT 5");
+    let iv = run_query_stdout(
+        &hprof,
+        "SELECT i.intValue() FROM java.lang.Integer i LIMIT 5",
+    );
     let vf = run_query_stdout(&hprof, "SELECT value FROM java.lang.Integer LIMIT 5");
     assert_eq!(
         extract_data_rows(&iv),
@@ -4749,7 +4786,10 @@ fn method_emulate_self_class_fields() {
 #[test]
 fn method_in_arithmetic() {
     let Some(hprof) = philosophers() else { return };
-    let a = run_query_stdout(&hprof, "SELECT i.intValue() * 2 FROM java.lang.Integer i LIMIT 3");
+    let a = run_query_stdout(
+        &hprof,
+        "SELECT i.intValue() * 2 FROM java.lang.Integer i LIMIT 3",
+    );
     assert!(!a.trim().is_empty());
 }
 
@@ -4840,7 +4880,11 @@ fn gcroot_attrs_resolve_in_analyze_mode() {
 fn query_reachable_only_is_default_and_all_is_superset() {
     let Some(hprof) = philosophers() else { return };
     let def = run_query_stdout(&hprof, "SELECT @objectAddress FROM java.lang.Thread");
-    let all = run_query_args(&hprof, &["--all"], "SELECT @objectAddress FROM java.lang.Thread");
+    let all = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT @objectAddress FROM java.lang.Thread",
+    );
     let n_def = parse_row_count(&def);
     let n_all = parse_row_count(&all);
     assert!(
@@ -4885,9 +4929,7 @@ fn count_addr_rows_in_report(md: &str) -> usize {
             // check the single cell is a decimal integer (the address).
             let t = l.trim();
             let inner = t.trim_start_matches('|').trim_end_matches('|').trim();
-            !inner.is_empty()
-                && !inner.contains('|')
-                && inner.parse::<u64>().is_ok()
+            !inner.is_empty() && !inner.contains('|') && inner.parse::<u64>().is_ok()
         })
         .count()
 }
@@ -4920,7 +4962,7 @@ fn analyze_reachable_only_filters_oql_rows() {
 /// the worker sets (which the in-process unit socket test omits), and the JSON
 /// body. Covers the CLI dispatch + `run_server` path the unit tests can't reach.
 mod server_cli {
-    use super::{philosophers, BIN};
+    use super::{BIN, philosophers};
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::process::{Child, Command, Stdio};
@@ -5007,7 +5049,10 @@ mod server_cli {
             "SELECT @objectAddress FROM java.lang.Thread",
         );
         let (status, headers, body) = parse_resp(&resp);
-        assert!(status.contains("200"), "expected 200, got status {status:?}\n{resp}");
+        assert!(
+            status.contains("200"),
+            "expected 200, got status {status:?}\n{resp}"
+        );
         assert!(
             headers.contains("content-type: application/json"),
             "worker must set JSON content-type, headers:\n{headers}"
@@ -5015,7 +5060,10 @@ mod server_cli {
         let v: serde_json::Value =
             serde_json::from_str(&body).unwrap_or_else(|e| panic!("body not JSON ({e}): {body}"));
         assert_eq!(v["ok"], serde_json::json!(true), "expected ok: {v}");
-        assert!(v["result"]["row_count"].as_u64().unwrap() > 0, "some rows: {v}");
+        assert!(
+            v["result"]["row_count"].as_u64().unwrap() > 0,
+            "some rows: {v}"
+        );
     }
 
     #[test]
@@ -5024,10 +5072,17 @@ mod server_cli {
         let srv = spawn(&hprof);
         let resp = http(srv.port, "POST", "/", "SELCT bad");
         let (status, _headers, body) = parse_resp(&resp);
-        assert!(status.contains("400"), "expected 400, got {status:?}\n{resp}");
+        assert!(
+            status.contains("400"),
+            "expected 400, got {status:?}\n{resp}"
+        );
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(false), "failure: {v}");
-        assert_eq!(v["error"]["kind"], serde_json::json!("parse"), "parse kind: {v}");
+        assert_eq!(
+            v["error"]["kind"],
+            serde_json::json!("parse"),
+            "parse kind: {v}"
+        );
     }
 
     #[test]
@@ -5036,7 +5091,10 @@ mod server_cli {
         let srv = spawn(&hprof);
         let resp = http(srv.port, "GET", "/help", "");
         let (status, _headers, body) = parse_resp(&resp);
-        assert!(status.contains("200"), "expected 200, got {status:?}\n{resp}");
+        assert!(
+            status.contains("200"),
+            "expected 200, got {status:?}\n{resp}"
+        );
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(v["keywords"].is_array(), "keywords listed: {v}");
         assert!(v["usage"].is_object(), "usage present: {v}");
@@ -5057,7 +5115,10 @@ mod server_cli {
             let resp = http(srv.port, "POST", "/", oql);
             let (status, _h, _b) = parse_resp(&resp);
             let want = if i % 2 == 0 { "200" } else { "400" };
-            assert!(status.contains(want), "req {i} expected {want}, got {status:?}");
+            assert!(
+                status.contains(want),
+                "req {i} expected {want}, got {status:?}"
+            );
         }
     }
 
@@ -5070,9 +5131,19 @@ mod server_cli {
         assert!(status.contains("200"), "200: {resp}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         let first = &v["result"]["rows"][0][0];
-        assert_eq!(first["kind"], serde_json::json!("obj_ref"), "obj_ref value: {first}");
-        assert!(first["v"]["addr"].is_u64(), "obj_ref carries a numeric addr: {first}");
-        assert!(first["v"]["index"].is_u64() && first["v"]["class"].is_string(), "index+class still present");
+        assert_eq!(
+            first["kind"],
+            serde_json::json!("obj_ref"),
+            "obj_ref value: {first}"
+        );
+        assert!(
+            first["v"]["addr"].is_u64(),
+            "obj_ref carries a numeric addr: {first}"
+        );
+        assert!(
+            first["v"]["index"].is_u64() && first["v"]["class"].is_string(),
+            "index+class still present"
+        );
     }
 
     #[test]
@@ -5083,7 +5154,11 @@ mod server_cli {
         assert!(status.contains("200"), "200: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         let s = serde_json::to_string(&v).unwrap();
-        assert!(s.contains("QueryResult"), "schema mentions QueryResult: {}", &s[..s.len().min(200)]);
+        assert!(
+            s.contains("QueryResult"),
+            "schema mentions QueryResult: {}",
+            &s[..s.len().min(200)]
+        );
     }
 
     #[test]
@@ -5093,8 +5168,14 @@ mod server_cli {
         let (status, _h, body) = parse_resp(&http(srv.port, "GET", "/version", ""));
         assert!(status.contains("200"), "200: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert!(v["version"].as_str().map_or(false, |s| !s.is_empty()), "version present: {v}");
-        assert!(v["endpoints"].is_array() && !v["endpoints"].as_array().unwrap().is_empty(), "endpoint list: {v}");
+        assert!(
+            v["version"].as_str().map_or(false, |s| !s.is_empty()),
+            "version present: {v}"
+        );
+        assert!(
+            v["endpoints"].is_array() && !v["endpoints"].as_array().unwrap().is_empty(),
+            "endpoint list: {v}"
+        );
     }
 
     #[test]
@@ -5109,15 +5190,34 @@ mod server_cli {
     fn server_stream_emits_ndjson_lines() {
         let Some(hprof) = philosophers() else { return };
         let srv = spawn(&hprof);
-        let (status, headers, body) = parse_resp(&http(srv.port, "POST", "/stream", "SELECT @objectAddress FROM java.lang.Thread"));
+        let (status, headers, body) = parse_resp(&http(
+            srv.port,
+            "POST",
+            "/stream",
+            "SELECT @objectAddress FROM java.lang.Thread",
+        ));
         assert!(status.contains("200"), "200: {body}");
-        assert!(headers.contains("content-type: application/x-ndjson"), "ndjson content-type: {headers}");
+        assert!(
+            headers.contains("content-type: application/x-ndjson"),
+            "ndjson content-type: {headers}"
+        );
         let mut lines = body.lines().filter(|l| !l.trim().is_empty());
         let meta: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
-        assert_eq!(meta["kind"], serde_json::json!("meta"), "first line is meta: {meta}");
-        assert!(meta["row_count"].as_u64().unwrap() > 0, "row_count in meta: {meta}");
+        assert_eq!(
+            meta["kind"],
+            serde_json::json!("meta"),
+            "first line is meta: {meta}"
+        );
+        assert!(
+            meta["row_count"].as_u64().unwrap() > 0,
+            "row_count in meta: {meta}"
+        );
         let row: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
-        assert_eq!(row["kind"], serde_json::json!("row"), "second line is a row: {row}");
+        assert_eq!(
+            row["kind"],
+            serde_json::json!("row"),
+            "second line is a row: {row}"
+        );
         assert!(row["v"].is_array(), "row carries a value array: {row}");
     }
 
@@ -5128,22 +5228,38 @@ mod server_cli {
         let (status, _h, body) = parse_resp(&http(srv.port, "POST", "/stream", "SELCT bad"));
         assert!(status.contains("400"), "400: {body}");
         let first: serde_json::Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
-        assert_eq!(first["kind"], serde_json::json!("error"), "error line: {first}");
+        assert_eq!(
+            first["kind"],
+            serde_json::json!("error"),
+            "error line: {first}"
+        );
     }
 
     #[test]
     fn server_stream_row_count_matches_emitted_rows() {
         let Some(hprof) = philosophers() else { return };
         let srv = spawn(&hprof);
-        let (status, _h, body) = parse_resp(&http(srv.port, "POST", "/stream", "SELECT @objectAddress FROM java.lang.Thread"));
+        let (status, _h, body) = parse_resp(&http(
+            srv.port,
+            "POST",
+            "/stream",
+            "SELECT @objectAddress FROM java.lang.Thread",
+        ));
         assert!(status.contains("200"), "200: {body}");
         let mut lines = body.lines().filter(|l| !l.trim().is_empty());
         let meta: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
         let declared = meta["row_count"].as_u64().unwrap();
-        let emitted = lines.filter(|l| {
-            serde_json::from_str::<serde_json::Value>(l).map(|v| v["kind"] == serde_json::json!("row")).unwrap_or(false)
-        }).count() as u64;
-        assert_eq!(declared, emitted, "meta row_count must equal number of row lines");
+        let emitted = lines
+            .filter(|l| {
+                serde_json::from_str::<serde_json::Value>(l)
+                    .map(|v| v["kind"] == serde_json::json!("row"))
+                    .unwrap_or(false)
+            })
+            .count() as u64;
+        assert_eq!(
+            declared, emitted,
+            "meta row_count must equal number of row lines"
+        );
     }
 
     #[test]
@@ -5182,7 +5298,10 @@ fn group_by_having_filters_groups() {
     // With HAVING COUNT(*) > 0, all groups should appear (every class has >= 1 instance).
     // Must have at least header + 1 data row.
     let lines: Vec<_> = out.lines().filter(|l| !l.trim().is_empty()).collect();
-    assert!(lines.len() >= 2, "expected rows with HAVING COUNT(*) > 0, got: {out}");
+    assert!(
+        lines.len() >= 2,
+        "expected rows with HAVING COUNT(*) > 0, got: {out}"
+    );
 }
 
 #[test]
@@ -5222,7 +5341,10 @@ fn case_when_in_select() {
         out.contains("large") || out.contains("small"),
         "expected 'large' or 'small' in output (got null?): {out}"
     );
-    assert!(!out.contains("null"), "got null — CASE stub not replaced: {out}");
+    assert!(
+        !out.contains("null"),
+        "got null — CASE stub not replaced: {out}"
+    );
 }
 
 #[test]
@@ -5235,7 +5357,10 @@ fn case_when_no_match_no_else_is_null() {
     assert!(out.contains("x"), "got: {out}");
     assert!(!out.contains("error"), "got: {out}");
     // No branch matches (size >= 0 always), no ELSE → null is the correct result.
-    assert!(out.contains("null"), "expected null for no-match CASE: {out}");
+    assert!(
+        out.contains("null"),
+        "expected null for no-match CASE: {out}"
+    );
 }
 
 #[test]
@@ -5264,7 +5389,10 @@ fn group_by_tostring_counts_distinct_values() {
          GROUP BY toString(s) ORDER BY count DESC LIMIT 5",
     );
     assert!(!out.contains("error"), "unexpected error: {out}");
-    assert!(out.contains("value") && out.contains("count"), "missing columns: {out}");
+    assert!(
+        out.contains("value") && out.contains("count"),
+        "missing columns: {out}"
+    );
     // Should produce multiple rows (distinct string values), not just one null-all row.
     let data_lines: Vec<_> = out
         .lines()
@@ -5272,7 +5400,10 @@ fn group_by_tostring_counts_distinct_values() {
         .skip(1)
         .filter(|l| !l.trim().is_empty())
         .collect();
-    assert!(data_lines.len() >= 2, "expected multiple distinct groups, got: {out}");
+    assert!(
+        data_lines.len() >= 2,
+        "expected multiple distinct groups, got: {out}"
+    );
 }
 
 #[test]
@@ -5448,8 +5579,14 @@ fn array_index_out_of_bounds_is_null() {
         &hprof,
         "SELECT s.value[999999] AS elem FROM java.lang.String s LIMIT 3",
     );
-    assert!(out.contains("elem"), "expected 'elem' column header, got: {out}");
-    assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+    assert!(
+        out.contains("elem"),
+        "expected 'elem' column header, got: {out}"
+    );
+    assert!(
+        !out.to_lowercase().contains("error"),
+        "unexpected error in output, got: {out}"
+    );
 }
 
 #[test]
@@ -5459,8 +5596,14 @@ fn array_slice_returns_subarray_string() {
         &hprof,
         "SELECT s.value[0:3] AS slc FROM java.lang.String s LIMIT 5",
     );
-    assert!(out.contains("slc"), "expected 'slc' column header, got: {out}");
-    assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+    assert!(
+        out.contains("slc"),
+        "expected 'slc' column header, got: {out}"
+    );
+    assert!(
+        !out.to_lowercase().contains("error"),
+        "unexpected error in output, got: {out}"
+    );
 }
 
 #[test]
@@ -5470,8 +5613,14 @@ fn array_slice_oob_end_clamps_gracefully() {
         &hprof,
         "SELECT s.value[0:999999] AS slc FROM java.lang.String s LIMIT 3",
     );
-    assert!(out.contains("slc"), "expected 'slc' column header, got: {out}");
-    assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+    assert!(
+        out.contains("slc"),
+        "expected 'slc' column header, got: {out}"
+    );
+    assert!(
+        !out.to_lowercase().contains("error"),
+        "unexpected error in output, got: {out}"
+    );
 }
 
 #[test]
@@ -5517,7 +5666,10 @@ fn named_query_empty_collections_uses_size_method() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(!stdout.contains("unknown field"), "got unknown field error: {stdout}");
+    assert!(
+        !stdout.contains("unknown field"),
+        "got unknown field error: {stdout}"
+    );
     assert!(stdout.contains("class"), "missing 'class' column: {stdout}");
 }
 
@@ -5539,7 +5691,10 @@ fn named_query_large_collections_uses_size_method() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(!stdout.contains("unknown field"), "got unknown field error: {stdout}");
+    assert!(
+        !stdout.contains("unknown field"),
+        "got unknown field error: {stdout}"
+    );
 }
 
 #[test]
@@ -5566,10 +5721,20 @@ fn size_method_works_on_linked_hash_map() {
     // The dump has LinkedHashMaps with non-zero size; SUM must be > 0
     let total: i64 = stdout
         .lines()
-        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('(') && !is_separator_line(l.trim()))
+        .find(|l| {
+            !l.trim().is_empty()
+                && !l.contains("total_sz")
+                && !l.starts_with("==")
+                && !l.starts_with("  SELECT")
+                && !l.starts_with('(')
+                && !is_separator_line(l.trim())
+        })
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
-    assert!(total > 0, "expected non-zero SUM(size()) for LinkedHashMap, got: {stdout}");
+    assert!(
+        total > 0,
+        "expected non-zero SUM(size()) for LinkedHashMap, got: {stdout}"
+    );
 }
 
 #[test]
@@ -5594,10 +5759,20 @@ fn size_method_works_on_tree_map() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let total: i64 = stdout
         .lines()
-        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('(') && !is_separator_line(l.trim()))
+        .find(|l| {
+            !l.trim().is_empty()
+                && !l.contains("total_sz")
+                && !l.starts_with("==")
+                && !l.starts_with("  SELECT")
+                && !l.starts_with('(')
+                && !is_separator_line(l.trim())
+        })
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
-    assert!(total > 0, "expected non-zero SUM(size()) for TreeMap, got: {stdout}");
+    assert!(
+        total > 0,
+        "expected non-zero SUM(size()) for TreeMap, got: {stdout}"
+    );
 }
 
 #[test]
@@ -5633,7 +5808,10 @@ fn union_order_by_sorts_globally_across_branches() {
     assert!(!values.is_empty(), "expected result rows, got: {stdout}");
     // Must be sorted descending globally
     let is_sorted_desc = values.windows(2).all(|w| w[0] >= w[1]);
-    assert!(is_sorted_desc, "UNION result not sorted DESC: {values:?}\nstdout: {stdout}");
+    assert!(
+        is_sorted_desc,
+        "UNION result not sorted DESC: {values:?}\nstdout: {stdout}"
+    );
 }
 
 #[test]
@@ -5648,13 +5826,20 @@ fn in_value_list_filters_correctly() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "IN value list query failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "IN value list query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Must contain exactly the 3 requested days
     assert!(stdout.contains("MONDAY"), "MONDAY missing: {stdout}");
     assert!(stdout.contains("TUESDAY"), "TUESDAY missing: {stdout}");
     assert!(stdout.contains("WEDNESDAY"), "WEDNESDAY missing: {stdout}");
-    assert!(stdout.contains("(3 rows)"), "expected 3 rows, got: {stdout}");
+    assert!(
+        stdout.contains("(3 rows)"),
+        "expected 3 rows, got: {stdout}"
+    );
 }
 
 #[test]
@@ -5669,16 +5854,35 @@ fn not_in_value_list_excludes_correctly() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "NOT IN query failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "NOT IN query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Only look at data rows (skip the header echoing the query)
-    let rows: Vec<&str> = stdout.lines()
-        .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with("(") && !l.trim().is_empty())
+    let rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| {
+            !l.starts_with("==")
+                && !l.starts_with("  ")
+                && !l.starts_with("(")
+                && !l.trim().is_empty()
+        })
         .collect();
     let rows_str = rows.join("\n");
-    assert!(!rows_str.contains("SATURDAY"), "SATURDAY should be excluded: {rows_str}");
-    assert!(!rows_str.contains("SUNDAY"), "SUNDAY should be excluded: {rows_str}");
-    assert!(rows_str.contains("MONDAY"), "MONDAY should be included: {rows_str}");
+    assert!(
+        !rows_str.contains("SATURDAY"),
+        "SATURDAY should be excluded: {rows_str}"
+    );
+    assert!(
+        !rows_str.contains("SUNDAY"),
+        "SUNDAY should be excluded: {rows_str}"
+    );
+    assert!(
+        rows_str.contains("MONDAY"),
+        "MONDAY should be included: {rows_str}"
+    );
 }
 
 #[test]
@@ -5688,13 +5892,21 @@ fn is_null_and_is_not_null_filter() {
     let out_not_null = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT COUNT(*) AS n FROM java.lang.String s WHERE toString(s) IS NOT NULL"])
+        .args([
+            "--query",
+            "SELECT COUNT(*) AS n FROM java.lang.String s WHERE toString(s) IS NOT NULL",
+        ])
         .output()
         .unwrap();
-    assert!(out_not_null.status.success(), "IS NOT NULL failed: {}", String::from_utf8_lossy(&out_not_null.stderr));
+    assert!(
+        out_not_null.status.success(),
+        "IS NOT NULL failed: {}",
+        String::from_utf8_lossy(&out_not_null.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out_not_null.stdout);
     // n should be > 0 (all strings have a value)
-    let count: i64 = stdout.lines()
+    let count: i64 = stdout
+        .lines()
         .filter(|l| !l.contains("n") && !l.contains("="))
         .flat_map(|l| l.trim().parse().ok())
         .next()
@@ -5704,12 +5916,22 @@ fn is_null_and_is_not_null_filter() {
     let out_null = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT COUNT(*) AS n FROM java.lang.String s WHERE toString(s) IS NULL"])
+        .args([
+            "--query",
+            "SELECT COUNT(*) AS n FROM java.lang.String s WHERE toString(s) IS NULL",
+        ])
         .output()
         .unwrap();
-    assert!(out_null.status.success(), "IS NULL failed: {}", String::from_utf8_lossy(&out_null.stderr));
+    assert!(
+        out_null.status.success(),
+        "IS NULL failed: {}",
+        String::from_utf8_lossy(&out_null.stderr)
+    );
     let stdout2 = String::from_utf8_lossy(&out_null.stdout);
-    assert!(stdout2.contains("0"), "IS NULL should return 0 for all-non-null strings: {stdout2}");
+    assert!(
+        stdout2.contains("0"),
+        "IS NULL should return 0 for all-non-null strings: {stdout2}"
+    );
 }
 
 #[test]
@@ -5719,22 +5941,34 @@ fn limit_offset_paginates_correctly() {
     let page1 = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query",
+        .args([
+            "--query",
             "SELECT classof(x) AS class FROM INSTANCEOF java.lang.Object x \
-             ORDER BY class ASC LIMIT 3"])
+             ORDER BY class ASC LIMIT 3",
+        ])
         .output()
         .unwrap();
-    assert!(page1.status.success(), "{}", String::from_utf8_lossy(&page1.stderr));
+    assert!(
+        page1.status.success(),
+        "{}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
 
     let page2 = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query",
+        .args([
+            "--query",
             "SELECT classof(x) AS class FROM INSTANCEOF java.lang.Object x \
-             ORDER BY class ASC LIMIT 3 OFFSET 3"])
+             ORDER BY class ASC LIMIT 3 OFFSET 3",
+        ])
         .output()
         .unwrap();
-    assert!(page2.status.success(), "{}", String::from_utf8_lossy(&page2.stderr));
+    assert!(
+        page2.status.success(),
+        "{}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
 
     let s1 = String::from_utf8_lossy(&page1.stdout);
     let s2 = String::from_utf8_lossy(&page2.stdout);
@@ -5742,7 +5976,14 @@ fn limit_offset_paginates_correctly() {
     // Extract data rows (lines that are not header/separator/status lines)
     let data_rows = |s: &str| -> Vec<String> {
         s.lines()
-            .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with('(') && !l.is_empty() && !l.contains("class") && !l.starts_with('-'))
+            .filter(|l| {
+                !l.starts_with("==")
+                    && !l.starts_with("  ")
+                    && !l.starts_with('(')
+                    && !l.is_empty()
+                    && !l.contains("class")
+                    && !l.starts_with('-')
+            })
             .map(|l| l.trim().to_string())
             .collect()
     };
@@ -5764,12 +6005,18 @@ fn not_between_filters_correctly() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query",
+        .args([
+            "--query",
             "SELECT COUNT(*) AS n FROM java.lang.String s \
-             WHERE @usedHeapSize NOT BETWEEN 10 AND 100"])
+             WHERE @usedHeapSize NOT BETWEEN 10 AND 100",
+        ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "NOT BETWEEN query failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "NOT BETWEEN query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Count should be 0 — all strings have @usedHeapSize=24 which IS between 10 and 100.
     let count: u64 = stdout
@@ -5777,25 +6024,37 @@ fn not_between_filters_correctly() {
         .filter_map(|l| l.trim().parse().ok())
         .next()
         .unwrap_or(u64::MAX);
-    assert_eq!(count, 0, "NOT BETWEEN 10 AND 100 should return 0 (all strings have @usedHeapSize=24): {stdout}");
+    assert_eq!(
+        count, 0,
+        "NOT BETWEEN 10 AND 100 should return 0 (all strings have @usedHeapSize=24): {stdout}"
+    );
 
     // Complement: BETWEEN 10 AND 100 should return >0.
     let out2 = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query",
+        .args([
+            "--query",
             "SELECT COUNT(*) AS n FROM java.lang.String s \
-             WHERE @usedHeapSize BETWEEN 10 AND 100"])
+             WHERE @usedHeapSize BETWEEN 10 AND 100",
+        ])
         .output()
         .unwrap();
-    assert!(out2.status.success(), "BETWEEN query failed: {}", String::from_utf8_lossy(&out2.stderr));
+    assert!(
+        out2.status.success(),
+        "BETWEEN query failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
     let stdout2 = String::from_utf8_lossy(&out2.stdout);
     let count2: u64 = stdout2
         .lines()
         .filter_map(|l| l.trim().parse().ok())
         .next()
         .unwrap_or(0);
-    assert!(count2 > 0, "BETWEEN 10 AND 100 should return >0 rows: {stdout2}");
+    assert!(
+        count2 > 0,
+        "BETWEEN 10 AND 100 should return >0 rows: {stdout2}"
+    );
 }
 
 #[test]
@@ -5812,7 +6071,11 @@ fn limit_offset_with_where_returns_correct_page() {
             r#"SELECT toString(s) AS name FROM java.lang.String s WHERE toString(s) LIKE ".*DAY" ORDER BY name ASC LIMIT 3"#])
         .output()
         .unwrap();
-    assert!(page1.status.success(), "{}", String::from_utf8_lossy(&page1.stderr));
+    assert!(
+        page1.status.success(),
+        "{}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
 
     let page2 = Command::new(BIN)
         .arg("query")
@@ -5821,24 +6084,46 @@ fn limit_offset_with_where_returns_correct_page() {
             r#"SELECT toString(s) AS name FROM java.lang.String s WHERE toString(s) LIKE ".*DAY" ORDER BY name ASC LIMIT 3 OFFSET 3"#])
         .output()
         .unwrap();
-    assert!(page2.status.success(), "{}", String::from_utf8_lossy(&page2.stderr));
+    assert!(
+        page2.status.success(),
+        "{}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
 
     let s1 = String::from_utf8_lossy(&page1.stdout);
     let s2 = String::from_utf8_lossy(&page2.stdout);
 
     let data_rows = |s: &str| -> Vec<String> {
         s.lines()
-            .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with('(') && !l.is_empty() && !l.contains("name") && !is_separator_line(l.trim()))
+            .filter(|l| {
+                !l.starts_with("==")
+                    && !l.starts_with("  ")
+                    && !l.starts_with('(')
+                    && !l.is_empty()
+                    && !l.contains("name")
+                    && !is_separator_line(l.trim())
+            })
             .map(|l| l.trim().to_string())
             .collect()
     };
     let rows1 = data_rows(&s1);
     let rows2 = data_rows(&s2);
 
-    assert_eq!(rows1.len(), 3, "page1 with WHERE should have 3 rows, got: {s1}");
-    assert_eq!(rows2.len(), 3, "page2 with WHERE+OFFSET should have 3 rows, got: {s2}");
+    assert_eq!(
+        rows1.len(),
+        3,
+        "page1 with WHERE should have 3 rows, got: {s1}"
+    );
+    assert_eq!(
+        rows2.len(),
+        3,
+        "page2 with WHERE+OFFSET should have 3 rows, got: {s2}"
+    );
     for r in &rows1 {
-        assert!(!rows2.contains(r), "row {r:?} appeared in both pages (OFFSET with WHERE broken)");
+        assert!(
+            !rows2.contains(r),
+            "row {r:?} appeared in both pages (OFFSET with WHERE broken)"
+        );
     }
 }
 
@@ -5848,9 +6133,14 @@ fn query_classof_with_retained_heap_size_is_non_null() {
     // classof(x) alongside @retainedHeapSize requires the cross-phase path.
     // Previously project_late_row had no ClassOf arm and returned Null for it.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query", "SELECT classof(x), @retainedHeapSize FROM java.lang.String x LIMIT 5"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT classof(x), @retainedHeapSize FROM java.lang.String x LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Every data row must have a non-null class name (java.lang.String) in col 0
@@ -5877,12 +6167,16 @@ fn query_group_by_retained_heap_size_sum_is_non_null() {
     // GROUP BY + SUM(@retainedHeapSize) requires late-phase re-aggregation.
     // Previously this produced null for all SUM values.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x) AS class, SUM(@retainedHeapSize) AS retained_bytes \
              FROM INSTANCEOF java.lang.Object x \
-             GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 5"])
-        .output().unwrap();
+             GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -5919,10 +6213,14 @@ fn query_used_heap_size_with_retained_is_non_null() {
     // @usedHeapSize alongside @retainedHeapSize: both must be non-null in the
     // retained cross-phase window (project_late_row had no UsedHeapSize arm before).
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
-            "SELECT @usedHeapSize, @retainedHeapSize FROM java.lang.String x LIMIT 5"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT @usedHeapSize, @retainedHeapSize FROM java.lang.String x LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -5949,19 +6247,26 @@ fn query_group_by_sum_used_heap_size_with_retained_is_non_null() {
     // GROUP BY classof(x) with SUM(@usedHeapSize) and @retainedHeapSize as
     // the escalation trigger: SUM(@usedHeapSize) must not be null.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x) AS c, SUM(@usedHeapSize) AS sh, SUM(@retainedHeapSize) AS ret \
              FROM INSTANCEOF java.lang.Object x \
-             GROUP BY classof(x) ORDER BY ret DESC LIMIT 5"])
-        .output().unwrap();
+             GROUP BY classof(x) ORDER BY ret DESC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
         .lines()
         .filter(|l| l.contains('|') && !l.starts_with('c') && !l.contains("---"))
         .collect();
-    assert!(!data_rows.is_empty(), "expected GROUP BY rows, got:\n{stdout}");
+    assert!(
+        !data_rows.is_empty(),
+        "expected GROUP BY rows, got:\n{stdout}"
+    );
     let first = data_rows[0];
     let cols: Vec<&str> = first.split('|').map(|s| s.trim()).collect();
     // cols[1] = c, cols[2] = sh, cols[3] = ret (1-based, 0-indexed shift from leading |)
@@ -5978,10 +6283,14 @@ fn query_classof_in_retained_path_uses_dotted_format() {
     // classof(x) in a retained query was returning JVM slash-form ("java/lang/String")
     // instead of the dotted display form ("java.lang.String") that the scan-time path uses.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
-            "SELECT classof(x), @retainedHeapSize FROM java.lang.String x LIMIT 3"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT classof(x), @retainedHeapSize FROM java.lang.String x LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6007,13 +6316,17 @@ fn query_having_like_filters_groups_in_retained_path() {
     // HAVING with a LIKE pattern was broken: compare_values received None for like_re
     // and silently returned false for all LIKE comparisons.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x), SUM(@retainedHeapSize) AS ret \
              FROM INSTANCEOF java.lang.Object x \
              GROUP BY classof(x) HAVING classof(x) LIKE \"java.lang.*\" \
-             ORDER BY ret DESC LIMIT 3"])
-        .output().unwrap();
+             ORDER BY ret DESC LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6037,13 +6350,17 @@ fn query_having_like_filters_groups_non_retained() {
     let Some(hprof) = philosophers() else { return };
     // Same HAVING LIKE bug in the scan-time GROUP BY path.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x), COUNT(*) AS n \
              FROM INSTANCEOF java.lang.Object x \
              GROUP BY classof(x) HAVING classof(x) LIKE \"java.lang.*\" \
-             ORDER BY n DESC LIMIT 3"])
-        .output().unwrap();
+             ORDER BY n DESC LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6068,12 +6385,16 @@ fn query_case_when_with_retained_heap_size_is_non_null() {
     // CASE WHEN / arithmetic expressions in SELECT with @retainedHeapSize were returning
     // Null because project_late_row had no SelectItem::Expr arm.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x), @retainedHeapSize, \
              CASE WHEN @retainedHeapSize > 100000 THEN \"large\" ELSE \"small\" END AS size \
-             FROM INSTANCEOF java.lang.Object x ORDER BY @retainedHeapSize DESC LIMIT 5"])
-        .output().unwrap();
+             FROM INSTANCEOF java.lang.Object x ORDER BY @retainedHeapSize DESC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6097,11 +6418,15 @@ fn query_arithmetic_expr_with_retained_heap_size_is_non_null() {
     let Some(hprof) = philosophers() else { return };
     // Arithmetic expressions like @retainedHeapSize * 2 were Null in the late window.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT @retainedHeapSize, @retainedHeapSize * 2 AS double_ret \
-             FROM INSTANCEOF java.lang.Object x ORDER BY @retainedHeapSize DESC LIMIT 3"])
-        .output().unwrap();
+             FROM INSTANCEOF java.lang.Object x ORDER BY @retainedHeapSize DESC LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6112,10 +6437,15 @@ fn query_arithmetic_expr_with_retained_heap_size_is_non_null() {
     let first = data_rows[0];
     let cols: Vec<&str> = first.split('|').map(|s| s.trim()).collect();
     let retained = cols.get(0).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-    let double = cols.get(1).and_then(|s| s.parse::<i64>().ok()).unwrap_or(-1);
+    let double = cols
+        .get(1)
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(-1);
     assert_eq!(
-        double, retained * 2,
-        "@retainedHeapSize * 2 should be double the retained size; got {double} vs {retained}*2={}", retained * 2
+        double,
+        retained * 2,
+        "@retainedHeapSize * 2 should be double the retained size; got {double} vs {retained}*2={}",
+        retained * 2
     );
 }
 
@@ -6126,11 +6456,15 @@ fn query_order_by_classof_in_retained_path_is_sorted() {
     // because join_retained only sorted (idx,ret) pairs by RetainedHeapSize before
     // projecting — other ORDER BY columns were ignored.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x), @retainedHeapSize FROM INSTANCEOF java.lang.Object x \
-             WHERE @retainedHeapSize > 200000 ORDER BY classof(x) ASC LIMIT 5"])
-        .output().unwrap();
+             WHERE @retainedHeapSize > 200000 ORDER BY classof(x) ASC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let class_names: Vec<&str> = stdout
@@ -6138,13 +6472,17 @@ fn query_order_by_classof_in_retained_path_is_sorted() {
         .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
         .map(|l| l.split('|').next().unwrap_or("").trim())
         .collect();
-    assert!(!class_names.is_empty(), "expected data rows, got:\n{stdout}");
+    assert!(
+        !class_names.is_empty(),
+        "expected data rows, got:\n{stdout}"
+    );
     // Verify ascending order across adjacent pairs.
     for window in class_names.windows(2) {
         assert!(
             window[0] <= window[1],
             "ORDER BY classof ASC not sorted: {:?} > {:?}\nfull output:\n{stdout}",
-            window[0], window[1]
+            window[0],
+            window[1]
         );
     }
 }
@@ -6155,11 +6493,15 @@ fn query_classof_in_tostring_path_is_non_null() {
     // classof(x) was returning Null in the toString late path because project_string_row_item
     // had no ClassOf arm and fell through to _ => QueryValue::Null.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x), @retainedHeapSize FROM java.lang.String x \
-             WHERE toString(x) LIKE \"java.*\" ORDER BY @retainedHeapSize DESC LIMIT 3"])
-        .output().unwrap();
+             WHERE toString(x) LIKE \"java.*\" ORDER BY @retainedHeapSize DESC LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6181,12 +6523,16 @@ fn query_case_expr_in_tostring_path_is_non_null() {
     // CASE/arithmetic expressions in SELECT were returning Null in the toString path
     // because project_string_row_item had no SelectItem::Expr arm.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT CASE WHEN @retainedHeapSize > 0 THEN \"large\" ELSE \"empty\" END, \
              @retainedHeapSize * 2 \
-             FROM java.lang.String x WHERE toString(x) LIKE \"java.*\" LIMIT 3"])
-        .output().unwrap();
+             FROM java.lang.String x WHERE toString(x) LIKE \"java.*\" LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6208,18 +6554,25 @@ fn query_group_by_expr_key_in_retained_path_is_non_null() {
     // GROUP BY with an expression key (e.g. classof(x)) in the retained path was returning
     // Null because eval_late_gb_key only handled plain Attr variants, not arbitrary exprs.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT classof(x), COUNT(*) AS n, SUM(@retainedHeapSize) AS total \
-             FROM java.lang.Object x GROUP BY classof(x) ORDER BY total DESC LIMIT 5"])
-        .output().unwrap();
+             FROM java.lang.Object x GROUP BY classof(x) ORDER BY total DESC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
         .lines()
         .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
         .collect();
-    assert!(!data_rows.is_empty(), "expected GROUP BY rows, got:\n{stdout}");
+    assert!(
+        !data_rows.is_empty(),
+        "expected GROUP BY rows, got:\n{stdout}"
+    );
     for row in &data_rows {
         let cols: Vec<&str> = row.split('|').collect();
         let class_col = cols.get(1).map(|s| s.trim()).unwrap_or("");
@@ -6236,18 +6589,25 @@ fn query_refpath_with_extra_attrs_is_non_null() {
     // classof(x), @usedHeapSize, @retainedHeapSize alongside a RefPath in SELECT
     // were returning Null because refpath_rows only handled ObjectId, Star, and RefPath.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT x.value.@length, classof(x), @usedHeapSize \
-             FROM java.lang.String x WHERE x.value.@length > 5 LIMIT 3"])
-        .output().unwrap();
+             FROM java.lang.String x WHERE x.value.@length > 5 LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
         .lines()
         .filter(|l| l.contains('|') && !l.contains("value.@length") && !l.contains("---"))
         .collect();
-    assert!(!data_rows.is_empty(), "expected refpath rows, got:\n{stdout}");
+    assert!(
+        !data_rows.is_empty(),
+        "expected refpath rows, got:\n{stdout}"
+    );
     for row in &data_rows {
         let cols: Vec<&str> = row.split('|').collect();
         let classof = cols.get(1).map(|s| s.trim()).unwrap_or("");
@@ -6269,24 +6629,47 @@ fn query_ungrouped_aggregate_with_retained_is_single_row() {
     // AVG/MIN/MAX/SUM of @retainedHeapSize without GROUP BY was returning one row per
     // object (1:1 projection) instead of a single aggregate row.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT COUNT(*) AS n, AVG(@retainedHeapSize) AS avg_ret, \
              MIN(@retainedHeapSize) AS min_ret, MAX(@retainedHeapSize) AS max_ret \
-             FROM java.lang.Object x"])
-        .output().unwrap();
+             FROM java.lang.Object x",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
         .lines()
         .filter(|l| l.contains('|') && !l.contains("avg_ret") && !l.contains("---"))
         .collect();
-    assert_eq!(data_rows.len(), 1, "expected exactly 1 aggregate row, got:\n{stdout}");
+    assert_eq!(
+        data_rows.len(),
+        1,
+        "expected exactly 1 aggregate row, got:\n{stdout}"
+    );
     let row = data_rows[0];
     let cols: Vec<&str> = row.split('|').collect();
-    let n = cols.get(0).map(|s| s.trim()).unwrap_or("").parse::<i64>().unwrap_or(-1);
-    let min_ret = cols.get(2).map(|s| s.trim()).unwrap_or("").parse::<i64>().unwrap_or(-1);
-    let max_ret = cols.get(3).map(|s| s.trim()).unwrap_or("").parse::<i64>().unwrap_or(-1);
+    let n = cols
+        .get(0)
+        .map(|s| s.trim())
+        .unwrap_or("")
+        .parse::<i64>()
+        .unwrap_or(-1);
+    let min_ret = cols
+        .get(2)
+        .map(|s| s.trim())
+        .unwrap_or("")
+        .parse::<i64>()
+        .unwrap_or(-1);
+    let max_ret = cols
+        .get(3)
+        .map(|s| s.trim())
+        .unwrap_or("")
+        .parse::<i64>()
+        .unwrap_or(-1);
     assert!(n > 0, "COUNT(*) was 0 or non-integer: {row}");
     assert!(min_ret >= 0, "MIN(@retainedHeapSize) was negative: {row}");
     assert!(max_ret >= min_ret, "MAX < MIN: {row}");
@@ -6296,22 +6679,39 @@ fn query_ungrouped_aggregate_with_retained_is_single_row() {
 fn query_ungrouped_sum_with_retained_filter_is_single_row() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT SUM(@retainedHeapSize) AS total FROM java.lang.Object x \
-             WHERE @retainedHeapSize > 0"])
-        .output().unwrap();
+             WHERE @retainedHeapSize > 0",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
         .lines()
-        .filter(|l| !l.is_empty() && !l.contains("total") && !l.contains("---")
-            && !l.contains("SUM") && !l.starts_with('(') && !l.starts_with("==")
-            && !l.starts_with("  SELECT"))
+        .filter(|l| {
+            !l.is_empty()
+                && !l.contains("total")
+                && !l.contains("---")
+                && !l.contains("SUM")
+                && !l.starts_with('(')
+                && !l.starts_with("==")
+                && !l.starts_with("  SELECT")
+        })
         .collect();
-    assert_eq!(data_rows.len(), 1, "expected exactly 1 aggregate row, got:\n{stdout}");
+    assert_eq!(
+        data_rows.len(),
+        1,
+        "expected exactly 1 aggregate row, got:\n{stdout}"
+    );
     let total = data_rows[0].trim().parse::<i64>().unwrap_or(-1);
-    assert!(total > 0, "SUM(@retainedHeapSize) was non-positive: {stdout}");
+    assert!(
+        total > 0,
+        "SUM(@retainedHeapSize) was non-positive: {stdout}"
+    );
 }
 
 #[test]
@@ -6320,11 +6720,15 @@ fn query_to_hex_in_retained_path_is_non_null() {
     // toHex(@objectAddress) in the retained late path was returning null because
     // project_late_row had no Attr::ToHex arm.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT toHex(@objectId), classof(x) FROM java.lang.String x \
-             ORDER BY @retainedHeapSize DESC LIMIT 3"])
-        .output().unwrap();
+             ORDER BY @retainedHeapSize DESC LIMIT 3",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6349,38 +6753,49 @@ fn query_tostring_with_retained_where_applies_both_filters() {
     // the retained filter was silently ignored — string_values_rows only ran
     // eval_tostring_pred, which passes non-toString compares as true.
     let loose = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT toString(x), @retainedHeapSize FROM java.lang.String x \
              WHERE toString(x) LIKE \".*renaissance.*\" AND @retainedHeapSize > 0 \
-             ORDER BY @retainedHeapSize DESC LIMIT 10"])
-        .output().unwrap();
+             ORDER BY @retainedHeapSize DESC LIMIT 10",
+        ])
+        .output()
+        .unwrap();
     assert!(loose.status.success());
     let loose_stdout = String::from_utf8_lossy(&loose.stdout);
 
     let tight = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT toString(x), @retainedHeapSize FROM java.lang.String x \
              WHERE toString(x) LIKE \".*renaissance.*\" AND @retainedHeapSize > 235 \
-             ORDER BY @retainedHeapSize DESC LIMIT 10"])
-        .output().unwrap();
+             ORDER BY @retainedHeapSize DESC LIMIT 10",
+        ])
+        .output()
+        .unwrap();
     assert!(tight.status.success());
     let tight_stdout = String::from_utf8_lossy(&tight.stdout);
 
     // The loose query should return rows with @retainedHeapSize < 236 as well.
     // The tight query should only return rows with @retainedHeapSize >= 236.
-    let loose_rows: Vec<&str> = loose_stdout.lines()
+    let loose_rows: Vec<&str> = loose_stdout
+        .lines()
         .filter(|l| l.contains('|') && !l.contains("toString") && !l.contains("---"))
         .collect();
-    let tight_rows: Vec<&str> = tight_stdout.lines()
+    let tight_rows: Vec<&str> = tight_stdout
+        .lines()
         .filter(|l| l.contains('|') && !l.contains("toString") && !l.contains("---"))
         .collect();
     assert!(
         loose_rows.len() > tight_rows.len(),
         "tight filter (>235) should return fewer rows than loose filter (>0)\n\
          loose ({} rows):\n{loose_stdout}\ntight ({} rows):\n{tight_stdout}",
-        loose_rows.len(), tight_rows.len()
+        loose_rows.len(),
+        tight_rows.len()
     );
     // Every tight row must have @retainedHeapSize > 235.
     for row in &tight_rows {
@@ -6401,17 +6816,25 @@ fn query_array_index_with_retained_where_applies_filter() {
     // Bug: array_index_rows did not apply @retainedHeapSize WHERE predicates.
     // All seeds were projected regardless, so rows with ret < threshold appeared.
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT @objectId, x[0], @retainedHeapSize FROM char[] x \
-             WHERE @retainedHeapSize > 200 ORDER BY @retainedHeapSize DESC LIMIT 10"])
-        .output().unwrap();
+             WHERE @retainedHeapSize > 200 ORDER BY @retainedHeapSize DESC LIMIT 10",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let data_rows: Vec<&str> = stdout.lines()
+    let data_rows: Vec<&str> = stdout
+        .lines()
         .filter(|l| l.contains('|') && !l.contains("@objectId") && !l.contains("---"))
         .collect();
-    assert!(!data_rows.is_empty(), "expected rows for char[] with ret > 200:\n{stdout}");
+    assert!(
+        !data_rows.is_empty(),
+        "expected rows for char[] with ret > 200:\n{stdout}"
+    );
     for row in &data_rows {
         let cols: Vec<&str> = row.split('|').collect();
         if let Some(ret_str) = cols.get(2) {
@@ -6432,34 +6855,45 @@ fn query_refpath_with_retained_where_applies_filter() {
     // Use a 2-hop RefPath in SELECT (projection-only) to trigger refpath_rows,
     // and verify that the @retainedHeapSize WHERE filter is still applied.
     let loose = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT @objectId, x.table.length, @retainedHeapSize \
              FROM java.util.HashMap x \
-             WHERE @retainedHeapSize > 0 ORDER BY @retainedHeapSize DESC LIMIT 100"])
-        .output().unwrap();
+             WHERE @retainedHeapSize > 0 ORDER BY @retainedHeapSize DESC LIMIT 100",
+        ])
+        .output()
+        .unwrap();
     assert!(loose.status.success());
     let tight = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT @objectId, x.table.length, @retainedHeapSize \
              FROM java.util.HashMap x \
-             WHERE @retainedHeapSize > 100000 ORDER BY @retainedHeapSize DESC LIMIT 100"])
-        .output().unwrap();
+             WHERE @retainedHeapSize > 100000 ORDER BY @retainedHeapSize DESC LIMIT 100",
+        ])
+        .output()
+        .unwrap();
     assert!(tight.status.success());
     let loose_stdout = String::from_utf8_lossy(&loose.stdout);
     let tight_stdout = String::from_utf8_lossy(&tight.stdout);
-    let loose_rows: Vec<&str> = loose_stdout.lines()
+    let loose_rows: Vec<&str> = loose_stdout
+        .lines()
         .filter(|l| l.contains('|') && !l.contains("@objectId") && !l.contains("---"))
         .collect();
-    let tight_rows: Vec<&str> = tight_stdout.lines()
+    let tight_rows: Vec<&str> = tight_stdout
+        .lines()
         .filter(|l| l.contains('|') && !l.contains("@objectId") && !l.contains("---"))
         .collect();
     assert!(
         loose_rows.len() > tight_rows.len(),
         "tight filter (>100000) should return fewer rows than loose (>0)\n\
          loose ({} rows):\n{loose_stdout}\ntight ({} rows):\n{tight_stdout}",
-        loose_rows.len(), tight_rows.len()
+        loose_rows.len(),
+        tight_rows.len()
     );
     for row in &tight_rows {
         let cols: Vec<&str> = row.split('|').collect();
@@ -6482,16 +6916,21 @@ fn query_dominators_with_retained_where_applies_filter() {
     // join_retained. Verify that dominators(x) with a retained WHERE filter
     // returns fewer rows than without.
     let all = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
-            "SELECT dominators(x) FROM java.lang.String x"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT dominators(x) FROM java.lang.String x"])
+        .output()
+        .unwrap();
     assert!(all.status.success());
     let filtered = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
-            "SELECT dominators(x) FROM java.lang.String x WHERE @retainedHeapSize > 5000"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT dominators(x) FROM java.lang.String x WHERE @retainedHeapSize > 5000",
+        ])
+        .output()
+        .unwrap();
     assert!(filtered.status.success());
     let all_stdout = String::from_utf8_lossy(&all.stdout);
     let filtered_stdout = String::from_utf8_lossy(&filtered.stdout);
@@ -6526,10 +6965,14 @@ fn query_or_predicate_with_retained_and_used_heap_filters_correctly() {
     // Only the @retainedHeapSize arm is satisfied (> 100000 gives 3 rows,
     // @usedHeapSize is 48 for all hashmaps so > 100 arm returns 0).
     let retained_only = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
-            "SELECT COUNT(*) FROM java.util.HashMap WHERE @retainedHeapSize > 100000"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT COUNT(*) FROM java.util.HashMap WHERE @retainedHeapSize > 100000",
+        ])
+        .output()
+        .unwrap();
     assert!(retained_only.status.success());
 
     let or_query = Command::new(BIN)
@@ -6540,10 +6983,11 @@ fn query_or_predicate_with_retained_and_used_heap_filters_correctly() {
     assert!(or_query.status.success());
 
     let total_rows = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
-            "SELECT COUNT(*) FROM java.util.HashMap"])
-        .output().unwrap();
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT COUNT(*) FROM java.util.HashMap"])
+        .output()
+        .unwrap();
     assert!(total_rows.status.success());
 
     let parse_count = |out: &[u8]| -> u64 {
@@ -6584,11 +7028,15 @@ fn query_or_predicate_with_retained_and_used_heap_filters_correctly() {
 fn query_object_address_in_retained_path_is_non_zero() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
-        .arg("query").arg(&hprof)
-        .args(["--query",
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
             "SELECT @objectAddress, @retainedHeapSize FROM java.lang.String \
-             ORDER BY @retainedHeapSize DESC LIMIT 5"])
-        .output().unwrap();
+             ORDER BY @retainedHeapSize DESC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let data_rows: Vec<&str> = stdout
@@ -6598,7 +7046,12 @@ fn query_object_address_in_retained_path_is_non_zero() {
     assert!(!data_rows.is_empty(), "expected data rows:\n{stdout}");
     for row in &data_rows {
         let cols: Vec<&str> = row.split('|').collect();
-        let addr: u64 = cols.get(0).map(|s| s.trim()).unwrap_or("0").parse().unwrap_or(0);
+        let addr: u64 = cols
+            .get(0)
+            .map(|s| s.trim())
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
         assert!(
             addr > 0,
             "@objectAddress was 0 in retained path — id_map not populated: {row}\nfull output:\n{stdout}"

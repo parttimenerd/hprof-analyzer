@@ -10,6 +10,9 @@ on:
       - "crates/hprof-wasm/**"
       - "src/**"
       - "tests/fixtures/dump_2_scala-doku.hprof"
+      - "tests/fixtures/dump_1_mnemonics.hprof"
+      - "tests/fixtures/dump_4_philosophers.hprof"
+      - "tests/fixtures/dump_7_gauss-mix.hprof"
       - "scripts/gen-samples.sh"
       - "scripts/build-browser.sh"
       - "scripts/build-oql-guide.sh"
@@ -62,6 +65,14 @@ jobs:
 
       - name: Install browser REPL as homepage
         run: cp dist/hprof-analyzer-browser.html docs/index.html
+
+      # Copy hprof fixture files so the browser REPL sample section can fetch them.
+      - name: Copy sample hprof fixtures
+        run: |
+          cp tests/fixtures/dump_1_mnemonics.hprof    docs/samples/dump_1_mnemonics.hprof
+          cp tests/fixtures/dump_2_scala-doku.hprof   docs/samples/dump_2_scala-doku.hprof
+          cp tests/fixtures/dump_4_philosophers.hprof docs/samples/dump_4_philosophers.hprof
+          cp tests/fixtures/dump_7_gauss-mix.hprof    docs/samples/dump_7_gauss-mix.hprof
 
       - name: Build OQL guide
         run: bash scripts/build-oql-guide.sh
