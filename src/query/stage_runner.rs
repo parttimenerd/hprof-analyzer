@@ -408,22 +408,43 @@ pub(crate) fn run_entry_pub(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -
 fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     // Dominator/retained-set ops each produce a one-column ObjRef result and
     // fully own row building; they never fall through to join_retained.
+    //
+    // Pre-filter carried indices by any @retainedHeapSize WHERE predicate.
+    // Dominator/edge/retained-set ops use their own early-return plan paths
+    // (not JoinRetained), so they must apply the retained filter themselves.
+    // join_retained and string_values_rows apply it internally per row.
+    let has_retained_where = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
+    let get_filtered_idx = |carry: &CrossPhaseEntry| -> Vec<u32> {
+        if has_retained_where {
+            carry
+                .carry
+                .indices()
+                .into_iter()
+                .filter(|&s| {
+                    let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
+                    retained_where_passes(q, ret)
+                })
+                .collect()
+        } else {
+            carry.carry.indices()
+        }
+    };
     for op in &entry.plan.late_ops {
         match op {
             StageOp::JoinRetained => {}
             StageOp::DominatorChildren { cap } => {
-                let idx: Vec<u32> = entry.carry.indices();
+                let idx = get_filtered_idx(entry);
                 let children = run_dominator_children(&idx, *cap, ctx);
                 let truncated = entry.carry.truncated() || children.len() >= *cap;
                 return dominator_rows(entry, q, &children, truncated);
             }
             StageOp::DominatorOf => {
-                let idx: Vec<u32> = entry.carry.indices();
+                let idx = get_filtered_idx(entry);
                 let idoms = run_dominator_of(&idx, ctx);
                 return dominator_rows(entry, q, &idoms, entry.carry.truncated());
             }
             StageOp::RetainedSet { cap } => {
-                let seeds: Vec<u32> = entry.carry.indices();
+                let seeds = get_filtered_idx(entry);
                 let (set, trunc) = run_retained_set(&seeds, *cap, ctx);
                 let truncated = entry.carry.truncated() || trunc;
                 return dominator_rows(entry, q, &set, truncated);
@@ -435,7 +456,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 return refpath_rows(entry, q, ctx);
             }
             StageOp::EdgeLookup { dir } => {
-                let idx: Vec<u32> = entry.carry.indices();
+                let idx = get_filtered_idx(entry);
                 let neighbours = edge_lookup(&idx, *dir, ctx);
                 return dominator_rows(entry, q, &neighbours, entry.carry.truncated());
             }
@@ -445,7 +466,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 // emits the bounded forward-reachable subgraph from the FROM seeds.
                 // `to`-operand early-stop needs a per-index class map we intentionally
                 // don't keep (MEMORY-CRITICAL: no flat per-object Vec<u32>).
-                let seeds: Vec<u32> = entry.carry.indices();
+                let seeds = get_filtered_idx(entry);
                 let mut reached = Vec::new();
                 let mut capped = false;
                 for s in seeds {

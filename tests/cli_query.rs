@@ -6472,3 +6472,43 @@ fn query_refpath_with_retained_where_applies_filter() {
         }
     }
 }
+
+#[test]
+fn query_dominators_with_retained_where_applies_filter() {
+    let Some(hprof) = philosophers() else { return };
+    // Bug: DominatorChildren/DominatorOf/RetainedSet/EdgeLookup/BoundedPath ops
+    // in run_entry used entry.carry.indices() directly without applying
+    // @retainedHeapSize WHERE predicates, because those ops return early before
+    // join_retained. Verify that dominators(x) with a retained WHERE filter
+    // returns fewer rows than without.
+    let all = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT dominators(x) FROM java.lang.String x"])
+        .output().unwrap();
+    assert!(all.status.success());
+    let filtered = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT dominators(x) FROM java.lang.String x WHERE @retainedHeapSize > 5000"])
+        .output().unwrap();
+    assert!(filtered.status.success());
+    let all_stdout = String::from_utf8_lossy(&all.stdout);
+    let filtered_stdout = String::from_utf8_lossy(&filtered.stdout);
+    let count_rows = |s: &str| {
+        s.lines()
+            .filter(|l| l.starts_with("?@") || (l.contains('|') && !l.contains("---")))
+            .count()
+    };
+    let all_count = count_rows(&all_stdout);
+    let filtered_count = count_rows(&filtered_stdout);
+    assert!(
+        filtered_count < all_count,
+        "dominators with retained WHERE >5000 should return fewer rows than without filter\n\
+         all ({all_count} rows):\n{all_stdout}\nfiltered ({filtered_count} rows):\n{filtered_stdout}"
+    );
+    assert!(
+        filtered_count > 0,
+        "dominators with retained WHERE >5000 returned 0 rows (expected some):\n{filtered_stdout}"
+    );
+}
