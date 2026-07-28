@@ -571,9 +571,6 @@ fn dominator_rows(
 /// absent tail attaches an advisory note. A predicate-critical RefPath in WHERE
 /// filters seeds by comparing the resolved tail against the predicate RHS.
 fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
-    // A predicate-critical RefPath in WHERE filters seeds before projection.
-    let where_refpath = q.where_.as_ref().and_then(find_pred_refpath);
-
     // Compile LIKE/NOT LIKE regexes for this query's WHERE predicates. They were
     // already validated at plan time, so compilation here is infallible for
     // well-formed queries; errors fall back to an empty map (LIKE never matches).
@@ -583,35 +580,12 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     let seeds: Vec<u32> = entry.carry.indices();
     let mut note: Option<String> = None;
 
-    // Predicate-critical filter: keep seeds whose resolved tail passes the WHERE
-    // comparison. Only the RefPath term is evaluated here (other terms were
-    // applied in Phase 1); a seed with no comparison keeps all.
-    // Also apply any deferred WHERE terms (retained/toString) that may co-exist
-    // on a cross-phase query (the scan skipped them; we filter here post-retained).
-    let has_deferred_pred = q.where_.as_ref().is_some_and(|p| {
-        crate::query::plan::pred_uses_retained(p) || crate::query::plan::pred_uses_tostring(p)
-    });
-    let kept: Vec<u32> = if let (Some(Attr::RefPath { hops, tail, .. }), Some(pred)) =
-        (where_refpath.as_ref(), q.where_.as_ref())
-    {
-        seeds
-            .iter()
-            .copied()
-            .filter(|&s| {
-                if has_deferred_pred {
-                    let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
-                    if !deferred_where_passes(q, s, ret, ctx, &like_regexes) {
-                        return false;
-                    }
-                }
-                let resolved = walk_refpath(&[s], hops, ctx);
-                let val = resolved
-                    .first()
-                    .and_then(|&d| project_tail(tail, d, ctx, &mut note));
-                eval_refpath_pred(pred, val.as_ref(), &like_regexes)
-            })
-            .collect()
-    } else if has_deferred_pred {
+    // Apply all deferred WHERE predicates (retained, toString, and RefPath) using
+    // the unified evaluator. Since eval_late_expr_multi now resolves Attr::RefPath
+    // by walking hops from the seed, this correctly handles queries that mix
+    // multiple distinct RefPath comparisons in the WHERE clause.
+    let has_where = q.where_.is_some();
+    let kept: Vec<u32> = if has_where {
         seeds
             .iter()
             .copied()
@@ -959,138 +933,6 @@ fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
         Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => false,
     }
 }
-fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e Attr> {
-    match e {
-        Expr::Attr(a) if pred(a) => Some(a),
-        Expr::Attr(_) | Expr::Lit(_) => None,
-        Expr::Binary { lhs, rhs, .. } => {
-            expr_find_attr(lhs, pred).or_else(|| expr_find_attr(rhs, pred))
-        }
-        Expr::Unary { arg, .. } => expr_find_attr(arg, pred),
-        Expr::Method { receiver, args, .. } => // D2 fills this
-            expr_find_attr(receiver, pred).or_else(|| args.iter().find_map(|a| expr_find_attr(a, pred))),
-        Expr::Aggregate { .. } => None,
-        Expr::Case { branches, else_ } => {
-            let pred: &dyn Fn(&Attr) -> bool = pred;
-            branches.iter().find_map(|(cond, then_e)| {
-                pred_find_attr_dyn(cond, pred).or_else(|| expr_find_attr_dyn(then_e, pred))
-            }).or_else(|| else_.as_ref().and_then(|e| expr_find_attr_dyn(e, pred)))
-        }
-        Expr::Coalesce(args) => args.iter().find_map(|a| expr_find_attr(a, pred)),
-        Expr::NullIf { lhs, rhs } => expr_find_attr(lhs, pred).or_else(|| expr_find_attr(rhs, pred)),
-    }
-}
-fn expr_find_attr_dyn<'e>(e: &'e Expr, pred: &dyn Fn(&Attr) -> bool) -> Option<&'e Attr> {
-    match e {
-        Expr::Attr(a) if pred(a) => Some(a),
-        Expr::Attr(_) | Expr::Lit(_) => None,
-        Expr::Binary { lhs, rhs, .. } => {
-            expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred))
-        }
-        Expr::Unary { arg, .. } => expr_find_attr_dyn(arg, pred),
-        Expr::Method { receiver, args, .. } =>
-            expr_find_attr_dyn(receiver, pred).or_else(|| args.iter().find_map(|a| expr_find_attr_dyn(a, pred))),
-        Expr::Aggregate { .. } => None,
-        Expr::Case { branches, else_ } => {
-            branches.iter().find_map(|(cond, then_e)| {
-                pred_find_attr_dyn(cond, pred).or_else(|| expr_find_attr_dyn(then_e, pred))
-            }).or_else(|| else_.as_ref().and_then(|e| expr_find_attr_dyn(e, pred)))
-        }
-        Expr::Coalesce(args) => args.iter().find_map(|a| expr_find_attr_dyn(a, pred)),
-        Expr::NullIf { lhs, rhs } => expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred)),
-    }
-}
-fn pred_find_attr_dyn<'e>(p: &'e Predicate, pred: &dyn Fn(&Attr) -> bool) -> Option<&'e Attr> {
-    match p {
-        Predicate::And(a, b) | Predicate::Or(a, b) => {
-            pred_find_attr_dyn(a, pred).or_else(|| pred_find_attr_dyn(b, pred))
-        }
-        Predicate::Not(a) => pred_find_attr_dyn(a, pred),
-        Predicate::Compare { lhs, rhs, .. } => {
-            expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred))
-        }
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => None,
-        Predicate::Exists { .. } => None,
-    }
-}
-/// "known" (its resolved value passed as `known`), identified by `is_known`.
-/// Any other Attr leaf is unknown at late phase → `QueryValue::Null`. Literals
-/// fold; Binary/Unary compose with Java arithmetic semantics (from execute.rs).
-fn eval_late_expr(
-    e: &Expr,
-    is_known: &impl Fn(&Attr) -> bool,
-    known: &QueryValue,
-) -> QueryValue {
-    match e {
-        Expr::Attr(a) if is_known(a) => known.clone(),
-        Expr::Attr(_) => QueryValue::Null, // unknown at late phase
-        Expr::Lit(v) => value_to_qv(v),
-        Expr::Binary { op, lhs, rhs } => arith(
-            &eval_late_expr(lhs, is_known, known),
-            *op,
-            &eval_late_expr(rhs, is_known, known),
-        ),
-        Expr::Unary { op, arg } => unary(*op, &eval_late_expr(arg, is_known, known)),
-        Expr::Method { .. } => QueryValue::Null, // D2 fills this
-        Expr::Aggregate { .. } => QueryValue::Null, // evaluated in GROUP BY finalization, not late-phase
-        Expr::Case { branches, else_ } => {
-            for (cond, then_expr) in branches {
-                if eval_late_pred(cond, is_known, known) {
-                    return eval_late_expr(then_expr, is_known, known);
-                }
-            }
-            match else_ {
-                Some(e) => eval_late_expr(e, is_known, known),
-                None => QueryValue::Null,
-            }
-        }
-        Expr::Coalesce(args) => {
-            for arg in args {
-                let v = eval_late_expr(arg, is_known, known);
-                if !matches!(v, QueryValue::Null) { return v; }
-            }
-            QueryValue::Null
-        }
-        Expr::NullIf { lhs, rhs } => {
-            let lv = eval_late_expr(lhs, is_known, known);
-            let rv = eval_late_expr(rhs, is_known, known);
-            if lv == rv { QueryValue::Null } else { lv }
-        }
-    }
-}
-
-/// Evaluate a predicate using the same late-window "known attr" semantics as
-/// `eval_late_expr`. Used by `eval_late_expr`'s `Expr::Case` arm.
-fn eval_late_pred(
-    p: &Predicate,
-    is_known: &impl Fn(&Attr) -> bool,
-    known: &QueryValue,
-) -> bool {
-    use crate::query::ast::CompareOp;
-    match p {
-        Predicate::And(a, b) => eval_late_pred(a, is_known, known) && eval_late_pred(b, is_known, known),
-        Predicate::Or(a, b) => eval_late_pred(a, is_known, known) || eval_late_pred(b, is_known, known),
-        Predicate::Not(a) => !eval_late_pred(a, is_known, known),
-        Predicate::Compare { lhs, op, rhs } => {
-            let lv = eval_late_expr(lhs, is_known, known);
-            let rv = eval_late_expr(rhs, is_known, known);
-            // Build a simple like_regexes map on the fly for LIKE predicates.
-            let mut like_re_map = std::collections::HashMap::new();
-            if matches!(op, CompareOp::Like | CompareOp::NotLike) {
-                if let QueryValue::Str(pattern) = &rv {
-                    if let Ok(re) = regex::Regex::new(pattern) {
-                        like_re_map.insert(pattern.clone(), re);
-                    }
-                }
-            }
-            cmp_late_qv(&lv, *op, &rv, &like_re_map)
-        }
-        // InstanceOf and InSubquery are not expected in CASE WHEN conditions
-        // (no heap-type or subquery syntax used inside WHEN predicates).
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => false,
-    }
-}
-
 /// Evaluate an expression in the late window where multiple late attrs are live:
 /// @objectId, @retainedHeapSize, @usedHeapSize, @objectAddress, classof/displayName.
 /// Blob-dependent field attrs (instance scalars, ref paths) remain Null.
@@ -1133,6 +975,19 @@ fn eval_late_expr_multi(
                 .string_value(idx)
                 .map(|s| QueryValue::Str(s.to_string()))
                 .unwrap_or(QueryValue::Null),
+            // RefPath: walk hops from `idx` and project the tail. This lets
+            // eval_late_pred_multi correctly handle WHERE predicates that mix
+            // multiple distinct RefPath comparisons (each resolved independently).
+            Attr::RefPath { hops, tail, .. } => {
+                let resolved = walk_refpath(&[idx], hops, ctx);
+                match resolved.first() {
+                    Some(&d) => {
+                        let mut _note: Option<String> = None;
+                        project_tail(tail, d, ctx, &mut _note).unwrap_or(QueryValue::Null)
+                    }
+                    None => QueryValue::Null,
+                }
+            }
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1476,59 +1331,6 @@ fn project_tail(
         // Nested RefPath tails are folded into `hops` by the parser; any other
         // tail attr is not projectable on a walked-to object here.
         _ => None,
-    }
-}
-
-/// The first `Attr::RefPath` referenced by a predicate, if any.
-/// Widened: finds the RefPath attr wherever it appears in the Compare's
-/// lhs or rhs expression (e.g. `x.parent.hash * 2 > 100`).
-fn find_pred_refpath(p: &Predicate) -> Option<Attr> {
-    let is_refpath = |a: &Attr| matches!(a, Attr::RefPath { .. });
-    match p {
-        Predicate::And(a, b) | Predicate::Or(a, b) => {
-            find_pred_refpath(a).or_else(|| find_pred_refpath(b))
-        }
-        Predicate::Not(a) => find_pred_refpath(a),
-        Predicate::Compare { lhs, rhs, .. } => {
-            expr_find_attr(lhs, &is_refpath)
-                .or_else(|| expr_find_attr(rhs, &is_refpath))
-                .cloned()
-        }
-        _ => None,
-    }
-}
-
-/// Evaluate only the RefPath comparison term(s) of a predicate against the
-/// resolved tail value. Non-RefPath terms pass (they were applied in Phase 1).
-/// A `None` resolved value fails any comparison (dead end / uncaptured tail).
-fn eval_refpath_pred(
-    p: &Predicate,
-    val: Option<&QueryValue>,
-    like_regexes: &std::collections::HashMap<String, regex::Regex>,
-) -> bool {
-    let is_refpath = |a: &Attr| matches!(a, Attr::RefPath { .. });
-    match p {
-        Predicate::And(a, b) => {
-            eval_refpath_pred(a, val, like_regexes) && eval_refpath_pred(b, val, like_regexes)
-        }
-        Predicate::Or(a, b) => {
-            eval_refpath_pred(a, val, like_regexes) || eval_refpath_pred(b, val, like_regexes)
-        }
-        Predicate::Not(a) => !eval_refpath_pred(a, val, like_regexes),
-        Predicate::Compare { lhs, op, rhs } => {
-            // Only handle this Compare if it involves a RefPath attr.
-            if !expr_has_attr(lhs, &is_refpath) && !expr_has_attr(rhs, &is_refpath) {
-                return true;
-            }
-            let known = match val {
-                Some(v) => v.clone(),
-                None => return false, // dead end / uncaptured tail → no match
-            };
-            let lv = eval_late_expr(lhs, &is_refpath, &known);
-            let rv = eval_late_expr(rhs, &is_refpath, &known);
-            cmp_late_qv(&lv, *op, &rv, like_regexes)
-        }
-        _ => true,
     }
 }
 // cmp_query_value / cmp_i64 / cmp_f64 removed: callers now use cmp_late_qv.
@@ -3829,103 +3631,16 @@ mod tostring_tests {
 mod arith_late_tests {
     //! Unit tests for the late-phase arithmetic-expression evaluator introduced in
     //! Task 6. These tests cover:
-    //!   - `eval_late_expr` directly (the building-block helper)
     //!   - Case A: arithmetic on the RHS only (literal-only RHS folds at late time)
     //!   - Case B: arithmetic on the LHS (the late attr is buried inside a Binary)
     //!   - RHS containing a non-late Attr (yields Null → comparison false, no panic)
     //!   - Non-arithmetic queries still work exactly as before (regression guard)
-    //!   - Detector widening: `has_to_string_pred` and `find_pred_refpath` find the
-    //!     late attr when it is buried inside a Binary/Unary expression.
+    //!   - Detector widening: `has_to_string_pred` finds the late attr when buried
+    //!     inside a Binary/Unary expression.
 
     use super::*;
     use crate::query::ast::{Attr, CompareOp, Expr, ArithOp, UnaryOp, Predicate, Value};
     use crate::query::model::QueryValue;
-
-    // ── eval_late_expr ────────────────────────────────────────────────────────
-
-    /// A plain Attr that IS the known attr resolves to the supplied known value.
-    #[test]
-    fn eval_late_expr_known_attr_resolves_to_known() {
-        let e = Expr::Attr(Attr::RetainedHeapSize);
-        let known = QueryValue::Int(50);
-        let result = eval_late_expr(
-            &e,
-            &|a| matches!(a, Attr::RetainedHeapSize),
-            &known,
-        );
-        assert_eq!(result, QueryValue::Int(50));
-    }
-
-    /// An unknown Attr resolves to Null.
-    #[test]
-    fn eval_late_expr_unknown_attr_is_null() {
-        let e = Expr::Attr(Attr::UsedHeapSize);
-        let known = QueryValue::Int(999);
-        let result = eval_late_expr(
-            &e,
-            &|a| matches!(a, Attr::RetainedHeapSize),
-            &known,
-        );
-        assert_eq!(result, QueryValue::Null);
-    }
-
-    /// A literal folds to the corresponding QueryValue.
-    #[test]
-    fn eval_late_expr_lit_folds() {
-        let e = Expr::Lit(Value::Int(42));
-        let result = eval_late_expr(
-            &e,
-            &|a| matches!(a, Attr::RetainedHeapSize),
-            &QueryValue::Null,
-        );
-        assert_eq!(result, QueryValue::Int(42));
-    }
-
-    /// `@retainedHeapSize * 2` with known=Int(50) → Int(100).
-    #[test]
-    fn eval_late_expr_retained_mul_2() {
-        let e = Expr::Binary {
-            op: ArithOp::Mul,
-            lhs: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
-            rhs: Box::new(Expr::Lit(Value::Int(2))),
-        };
-        let result = eval_late_expr(
-            &e,
-            &|a| matches!(a, Attr::RetainedHeapSize),
-            &QueryValue::Int(50),
-        );
-        assert_eq!(result, QueryValue::Int(100));
-    }
-
-    /// Unary negation: `-@retainedHeapSize` with known=Int(5) → Int(-5).
-    #[test]
-    fn eval_late_expr_unary_neg() {
-        let e = Expr::Unary {
-            op: UnaryOp::Neg,
-            arg: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
-        };
-        let result = eval_late_expr(
-            &e,
-            &|a| matches!(a, Attr::RetainedHeapSize),
-            &QueryValue::Int(5),
-        );
-        assert_eq!(result, QueryValue::Int(-5));
-    }
-
-    /// Unary pos: `+@retainedHeapSize` is identity.
-    #[test]
-    fn eval_late_expr_unary_pos_is_identity() {
-        let e = Expr::Unary {
-            op: UnaryOp::Pos,
-            arg: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
-        };
-        let result = eval_late_expr(
-            &e,
-            &|a| matches!(a, Attr::RetainedHeapSize),
-            &QueryValue::Int(7),
-        );
-        assert_eq!(result, QueryValue::Int(7));
-    }
 
     // ── cmp_late_qv (QueryValue vs QueryValue comparator) ────────────────────
 
@@ -4070,59 +3785,6 @@ mod arith_late_tests {
             rhs: Expr::Lit(Value::Int(100)),
         };
         assert!(!has_to_string_pred(&p));
-    }
-
-    // ── find_pred_refpath — detector widening ─────────────────────────────────
-
-    /// A normal `x.parent.name > 100` is found.
-    #[test]
-    fn find_pred_refpath_detects_plain_refpath() {
-        let refpath = Attr::RefPath {
-            hops: vec!["parent".to_string()],
-            tail: Box::new(Attr::Field("name".to_string())),
-            role: crate::query::ast::RefRole::PredicateCritical,
-        };
-        let p = Predicate::Compare {
-            lhs: Expr::Attr(refpath.clone()),
-            op: CompareOp::Gt,
-            rhs: Expr::Lit(Value::Int(100)),
-        };
-        let found = find_pred_refpath(&p);
-        assert!(found.is_some());
-        assert_eq!(found.unwrap(), refpath);
-    }
-
-    /// `x.parent.name * 2 > 100` — RefPath buried in Binary on LHS. Must be found.
-    #[test]
-    fn find_pred_refpath_detects_buried_in_binary() {
-        let refpath = Attr::RefPath {
-            hops: vec!["parent".to_string()],
-            tail: Box::new(Attr::Field("hash".to_string())),
-            role: crate::query::ast::RefRole::PredicateCritical,
-        };
-        let p = Predicate::Compare {
-            lhs: Expr::Binary {
-                op: ArithOp::Mul,
-                lhs: Box::new(Expr::Attr(refpath.clone())),
-                rhs: Box::new(Expr::Lit(Value::Int(2))),
-            },
-            op: CompareOp::Gt,
-            rhs: Expr::Lit(Value::Int(100)),
-        };
-        let found = find_pred_refpath(&p);
-        assert!(found.is_some(), "should find refpath buried in binary lhs");
-        assert_eq!(found.unwrap(), refpath);
-    }
-
-    /// A non-refpath compare returns None.
-    #[test]
-    fn find_pred_refpath_returns_none_for_plain_retained() {
-        let p = Predicate::Compare {
-            lhs: Expr::Attr(Attr::RetainedHeapSize),
-            op: CompareOp::Gt,
-            rhs: Expr::Lit(Value::Int(100)),
-        };
-        assert!(find_pred_refpath(&p).is_none());
     }
 
     // ── End-to-end via resume(): retained arithmetic ──────────────────────────
