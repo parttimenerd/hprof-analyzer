@@ -105,6 +105,10 @@ pub fn build_model(
         triage: Vec::new(),
         top_retainers,
         queries: Vec::new(),
+        analysis_flags: crate::report::AnalysisFlags {
+            find_duplicates: opts.find_duplicates,
+            collections: opts.collections,
+        },
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);

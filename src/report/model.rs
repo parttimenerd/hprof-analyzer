@@ -1442,6 +1442,24 @@ pub struct Report {
     /// Custom OQL query results (empty unless --query/--query-file was given).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queries: Vec<crate::query::model::QueryResult>,
+    /// Which opt-in analysis passes were enabled. Additive; defaults to all-false
+    /// for round-trip with older JSON (which lacks the field).
+    #[serde(default)]
+    pub analysis_flags: AnalysisFlags,
+}
+
+/// Which opt-in analysis passes were enabled when the report was generated.
+/// Used by the viewer to show context-appropriate "not run" messages.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct AnalysisFlags {
+    /// `--find-duplicates` was passed (duplicate string/array analysis).
+    #[serde(default)]
+    pub find_duplicates: bool,
+    /// `--collections` was passed (fill-ratio & waste analysis).
+    #[serde(default)]
+    pub collections: bool,
 }
 
 /// One row of the merged Top Retainers table (§813).

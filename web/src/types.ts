@@ -767,6 +767,14 @@ export interface Report {
   top_retainers?: RetainerRow[];
   // Custom OQL query results. Absent/empty when no queries were run.
   queries?: QueryResult[];
+  // Which opt-in passes were enabled. Absent on older reports (all flags default false).
+  analysis_flags?: AnalysisFlags;
+}
+
+// Which opt-in analysis passes were enabled when the report was generated.
+export interface AnalysisFlags {
+  find_duplicates: boolean;
+  collections: boolean;
 }
 
 // One row of the merged Top Retainers table (§813).

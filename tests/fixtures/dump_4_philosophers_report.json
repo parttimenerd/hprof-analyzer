@@ -1,6 +1,6 @@
 {
   "schema_version": 9,
-  "generated": "2026-07-26T09:14:10.748639000Z",
+  "generated": "2026-07-28T18:33:12.250614000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -91369,5 +91369,9 @@
       "kind": "stack-frame",
       "retained": 8480
     }
-  ]
+  ],
+  "analysis_flags": {
+    "find_duplicates": false,
+    "collections": false
+  }
 }

@@ -990,12 +990,18 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const d = report.overview.duplicate_strings;
   if (!d) {
+    const wasRun = report.analysis_flags?.find_duplicates ?? false;
     return (
       <section id="duplicate-strings-approximate">
         <h2>Duplicate Strings (approximate)</h2>
-        {kbBtn && <div className="tools">{kbBtn}</div>}
         <p className="subtitle">
-          Duplicate-string analysis not run (pass <code>--find-duplicates</code>).
+          {wasRun
+            ? "Duplicate-string analysis ran but found no data."
+            : <>
+                Not run. Re-analyze with the <strong>Full Analysis</strong> option (browser)
+                {" "}or pass <code>--find-duplicates</code> (CLI).
+              </>
+          }
         </p>
       </section>
     );
@@ -1064,12 +1070,18 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const d = report.overview.duplicate_prim_arrays;
   if (!d) {
+    const wasRun = report.analysis_flags?.find_duplicates ?? false;
     return (
       <section id="duplicate-prim-arrays">
         <h2>Duplicate Primitive Arrays (approximate)</h2>
-        {kbBtn && <div className="tools">{kbBtn}</div>}
         <p className="subtitle">
-          Duplicate primitive-array analysis not run (pass <code>--find-duplicates</code>).
+          {wasRun
+            ? "Duplicate primitive-array analysis ran but found no data."
+            : <>
+                Not run. Re-analyze with the <strong>Full Analysis</strong> option (browser)
+                {" "}or pass <code>--find-duplicates</code> (CLI).
+              </>
+          }
         </p>
       </section>
     );
