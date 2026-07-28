@@ -413,7 +413,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     // skipped at scan time because it contains @retainedHeapSize / toString /
     // RefPath). Dominator/edge/retained-set ops use their own early-return plan
     // paths (not JoinRetained), so they must apply the deferred filter themselves.
-    // join_retained and string_values_rows apply it internally per row.
+    // join_retained, string_values_rows, and array_index_rows apply it internally per row.
     let has_deferred_where = q.where_.as_ref().is_some_and(|p| {
         crate::query::plan::pred_uses_retained(p)
             || crate::query::plan::pred_uses_tostring(p)
@@ -753,21 +753,18 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 
         // GROUP BY path: group by the toString(s) key, one row per distinct value.
         if !q.group_by.is_empty() {
-            // Key: string value (None → Null group). Value: (key_val, accs).
+            // Key: string value (None → Null group).
+            // Value: (representative dense index, accs).
             let mut group_map: std::collections::HashMap<
                 Option<String>,
-                (QueryValue, Vec<crate::query::execute::AggAcc>),
+                (u32, Vec<crate::query::execute::AggAcc>),
             > = std::collections::HashMap::new();
             for &idx in &kept {
-                let key_val: QueryValue = ctx
-                    .string_value(idx)
-                    .map(|s| QueryValue::Str(s.to_string()))
-                    .unwrap_or(QueryValue::Null);
                 let key_opt: Option<String> = ctx.string_value(idx).map(|s| s.to_string());
                 let entry_ref = group_map.entry(key_opt).or_insert_with(|| {
                     let init: Vec<crate::query::execute::AggAcc> =
                         q.select.iter().map(crate::query::execute::init_agg_acc).collect();
-                    (key_val.clone(), init)
+                    (idx, init)
                 });
                 for (acc, item) in entry_ref.1.iter_mut().zip(q.select.iter()) {
                     if let SelectItem::Aggregate { arg, .. } = item {
@@ -778,11 +775,13 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             }
             let mut out_rows: Vec<Vec<QueryValue>> = group_map
                 .into_values()
-                .map(|(key_val, accs)| {
+                .map(|(rep_idx, accs)| {
                     let finalized: Vec<QueryValue> =
                         accs.into_iter().map(crate::query::execute::finalize_agg_acc).collect();
-                    // Build one output row: aggregates from finalized accs, non-aggregates
-                    // (i.e. the toString(s) GROUP BY key projection) from key_val.
+                    // Build one output row: aggregates from finalized accs; non-aggregates
+                    // (GROUP BY key projections) resolved from the representative object.
+                    // Using project_string_row_item ensures @classOf, @objectId, etc.
+                    // project correctly rather than always returning the string value.
                     q.select
                         .iter()
                         .enumerate()
@@ -790,7 +789,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                             SelectItem::Aggregate { .. } => {
                                 finalized.get(i).cloned().unwrap_or(QueryValue::Null)
                             }
-                            _ => key_val.clone(),
+                            _ => project_string_row_item(item, rep_idx, ctx, &like_regexes),
                         })
                         .collect()
                 })
