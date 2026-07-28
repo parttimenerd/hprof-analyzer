@@ -717,6 +717,95 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
+// ── TextModal ─────────────────────────────────────────────────────────────────
+// Full-screen overlay showing long text with a search/highlight bar.
+// Uses the native <dialog> element for focus-trap and backdrop.
+function TextModal({ title, text, onClose }: { title: string; text: string; onClose: () => void }) {
+  const dialogRef = React.useRef<HTMLDialogElement>(null);
+  const [query, setQuery] = React.useState("");
+
+  React.useEffect(() => {
+    const d = dialogRef.current;
+    if (!d) return;
+    d.showModal();
+    const close = () => onClose();
+    d.addEventListener("close", close);
+    return () => d.removeEventListener("close", close);
+  }, [onClose]);
+
+  const highlighted = React.useMemo(() => {
+    if (!query) return <code className="text-modal-body">{text}</code>;
+    const lc = query.toLowerCase();
+    const parts: React.ReactNode[] = [];
+    let i = 0;
+    let lcText = text.toLowerCase();
+    while (i < text.length) {
+      const idx = lcText.indexOf(lc, i);
+      if (idx === -1) { parts.push(text.slice(i)); break; }
+      if (idx > i) parts.push(text.slice(i, idx));
+      parts.push(<mark key={idx}>{text.slice(idx, idx + query.length)}</mark>);
+      i = idx + query.length;
+    }
+    return <code className="text-modal-body">{parts}</code>;
+  }, [text, query]);
+
+  return (
+    <dialog ref={dialogRef} className="text-modal" onClick={e => { if (e.target === dialogRef.current) dialogRef.current?.close(); }}>
+      <div className="text-modal-inner">
+        <div className="text-modal-header">
+          <span className="text-modal-title">{title}</span>
+          <input
+            type="text"
+            className="filter"
+            placeholder="Search…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            autoFocus
+          />
+          <button className="copy-btn" style={{ fontSize: "1rem" }} onClick={() => navigator.clipboard?.writeText(text)} title="Copy">⎘</button>
+          <button className="copy-btn" style={{ fontSize: "1.1rem" }} onClick={() => dialogRef.current?.close()} title="Close">✕</button>
+        </div>
+        <div className="text-modal-content">
+          {highlighted}
+        </div>
+        {query && (
+          <div className="text-modal-footer">
+            {(() => {
+              const count = (text.toLowerCase().match(new RegExp(query.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+              return <span className="hint">{count} match{count !== 1 ? "es" : ""}</span>;
+            })()}
+          </div>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
+// ExpandableText: shows text truncated in cell; double-click opens TextModal.
+// Any cell text is expandable; long text also shows a small "⤢" hint button.
+const EXPAND_THRESHOLD = 60;
+function ExpandableText({ text, label }: { text: string; label?: string }) {
+  const [open, setOpen] = React.useState(false);
+  const isLong = text.length > EXPAND_THRESHOLD;
+  return (
+    <span
+      className="expandable-text"
+      onDoubleClick={e => { e.stopPropagation(); setOpen(true); }}
+      title={isLong ? "Double-click to expand" : undefined}
+    >
+      <code className={isLong ? "expandable-truncated" : ""}>{text}</code>
+      {isLong && (
+        <button
+          className="expand-btn"
+          onClick={e => { e.stopPropagation(); setOpen(true); }}
+          title="Show full value"
+        >⤢</button>
+      )}
+      {open && <TextModal title={label ?? "Full value"} text={text} onClose={() => setOpen(false)} />}
+    </span>
+  );
+}
+
 // ── ChartOrNote ──────────────────────────────────────────────────────────────
 // Renders children when hasData is true; otherwise shows a muted note matching
 // the "System properties not captured in this dump." pattern.
@@ -810,7 +899,7 @@ function TopDuplicatedTable({ rows }: { rows: DupStringSample[] }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "100px", cell: byteCell(s => s.wasted_bytes, fmtB, useKB), selector: (s) => s.wasted_bytes },
-    { id: "value", name: "Value", grow: 1, cell: (s) => <code>{s.text}</code> },
+    { id: "value", name: "Value", grow: 1, cell: (s) => <ExpandableText text={s.text} label="Duplicated string value" /> },
   ];
   return (
     <>
@@ -825,7 +914,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "len", name: "Length", right: true, width: "100px", format: (s) => fmtCount(s.len), selector: (s) => s.len },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
-    { id: "value", name: "Value", grow: 1, cell: (s) => <code>{s.text}</code> },
+    { id: "value", name: "Value", grow: 1, cell: (s) => <ExpandableText text={s.text} label="Longest string value" /> },
   ];
   return (
     <>
@@ -1346,7 +1435,7 @@ function SysPropsTable({ rows }: { rows: { key: string; value: string }[] }) {
     { id: "key", name: "Key", width: "280px", grow: 0,
       cell: r => <code>{r.key}</code>, selector: r => r.key, sortable: true },
     { id: "val", name: "Value", grow: 1,
-      cell: r => <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.82rem", wordBreak: "break-word", whiteSpace: "normal" }}>{r.value}</span>,
+      cell: r => <ExpandableText text={r.value} label={`${r.key}`} />,
       selector: r => r.value },
   ];
   return <StdTable columns={sysCols} data={rows} searchKeys={["key", "value"]} />;
@@ -2928,6 +3017,11 @@ function CustomQueriesSection({ report }: { report: Report }) {
                   id: `col_${ci}`,
                   name: c.name,
                   grow: 1,
+                  cell: (row) => {
+                    const val = row[ci];
+                    const text = fmtCell(val);
+                    return val.kind === "str" ? <ExpandableText text={text} label={c.name} /> : <span>{text}</span>;
+                  },
                   selector: (row) => fmtCell(row[ci]),
                 }));
                 return <StdTable columns={queryCols} data={q.rows} searchKeys={[]} cap={q.rows.length} />;
