@@ -1455,7 +1455,7 @@ pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
 /// Such predicates cannot be evaluated during the pass2 scan — the string
 /// value is decoded only after the backing-array pass (P2) — so a carry-mode
 /// scan must SKIP them (leaving the object to be carried) and defer them to the
-/// late stage, where `eval_tostring_pred` resolves them against the decoded
+/// late stage, where `deferred_where_passes` resolves them against the decoded
 /// text. Without this skip the scan would compare `toString(s)` against `Null`
 /// and drop every row before the late phase could re-filter (SW-2).
 pub(crate) fn pred_uses_tostring(p: &Predicate) -> bool {

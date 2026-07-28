@@ -1239,45 +1239,6 @@ fn has_to_string_pred(p: &Predicate) -> bool {
     }
 }
 
-/// Evaluate a predicate tree for a String instance at `dense`, resolving
-/// `toString(s)` comparisons against `ctx.string_values`.
-fn eval_tostring_pred(
-    p: &Predicate,
-    dense: u32,
-    ctx: &LateCtx,
-    like_regexes: &std::collections::HashMap<String, regex::Regex>,
-) -> bool {
-    match p {
-        Predicate::And(a, b) => {
-            eval_tostring_pred(a, dense, ctx, like_regexes)
-                && eval_tostring_pred(b, dense, ctx, like_regexes)
-        }
-        Predicate::Or(a, b) => {
-            eval_tostring_pred(a, dense, ctx, like_regexes)
-                || eval_tostring_pred(b, dense, ctx, like_regexes)
-        }
-        Predicate::Not(a) => !eval_tostring_pred(a, dense, ctx, like_regexes),
-        Predicate::Compare { lhs, op, rhs } => {
-            // Detect whether this Compare involves a ToString attr anywhere in
-            // lhs or rhs. If not, it was applied in Phase 1 and passes here.
-            let is_tostring = |a: &Attr| matches!(a, Attr::ToString(_));
-            if !expr_has_attr(lhs, &is_tostring) && !expr_has_attr(rhs, &is_tostring) {
-                return true;
-            }
-            // Resolve the toString attr for this dense index.
-            let string_qv = match ctx.string_value(dense) {
-                Some(s) => QueryValue::Str(s.to_string()),
-                None => return false, // not captured → no match
-            };
-            let lv = eval_late_expr(lhs, &is_tostring, &string_qv);
-            let rv = eval_late_expr(rhs, &is_tostring, &string_qv);
-            cmp_late_qv(&lv, *op, &rv, like_regexes)
-        }
-        // Non-toString predicates were already applied at scan time (Phase 1).
-        _ => true,
-    }
-}
-
 /// Project a single SELECT item for a toString(s) result row.
 fn project_string_row_item(
     it: &SelectItem,
