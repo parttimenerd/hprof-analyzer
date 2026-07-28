@@ -14,7 +14,8 @@ self-contained report covering the same ground as [Eclipse MAT](https://eclipse.
 Overview, Leak Suspects, and Top Consumers analyses, plus additional views. Peak
 RSS stays well below the dump size: on a 33 GiB dump it peaks at ~15 GiB where
 MAT needs ~62 GiB (see [Performance](#performance)). The report is a single file you can email, attach to a
-ticket, or diff in CI.
+ticket, or diff in CI. For dumps up to 3 GB you can also [run the analysis directly in
+your browser](https://parttimenerd.github.io/hprof-analyzer/) — no install needed.
 
 *An experimental tool by the [SapMachine](https://sapmachine.io) team.*
 
@@ -53,13 +54,14 @@ A live viewer shows all four output formats side by side, built from the public
 
 ## Try it in the browser
 
-A browser-based front-end for the `hprof-analyzer server` — no local install
-needed to view the UI, but you still need the server running locally for query
-execution:
+**➡ [Open the browser UI](https://parttimenerd.github.io/hprof-analyzer/)**
 
-**➡ [Open the browser REPL](https://parttimenerd.github.io/hprof-analyzer/)**
+Drop a `.hprof` file directly onto the page — the entire analysis runs in your
+browser via WebAssembly, no install required. Heap dumps **up to 3 GB** are
+supported.
 
-Start the server locally, then paste the URL into the connect screen:
+You can also connect to a locally running server for larger dumps or interactive
+OQL queries:
 
 ```sh
 hprof-analyzer server heap.hprof   # prints http://127.0.0.1:7070
