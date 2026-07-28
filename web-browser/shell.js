@@ -1532,7 +1532,7 @@ function startTerminal() {
     + (namedQueries.length ? `  ·  ${namedQueries.length.toLocaleString('en-US')} named queries` : '')
     + (histCount ? `  ·  ${histCount.toLocaleString('en-US')} history entries` : '')
     + '\x1b[0m');
-  term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = search history  ·  /help = commands\x1b[0m');
+  term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = history  ·  /help = commands  ·  /examples = OQL tour\x1b[0m');
   term.writeln('');
   term.write(PROMPT);
 
@@ -2127,6 +2127,12 @@ function startTerminal() {
       } else {
         printHelp();
       }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/examples' || cmd.startsWith('/examples ')) {
+      const cat = cmd.replace('/examples', '').trim() || null;
+      printExamples(cat);
       term.write(PROMPT);
       return;
     }
@@ -3544,7 +3550,7 @@ function startTerminal() {
         '/filter', '/grep', '/not', '/exclude', '/sort', '/select', '/drop', '/rename',
         '/distinct', '/dedup', '/sample', '/top', '/head', '/tail', '/unique', '/pivot',
         '/stats', '/undo', '/run', '/limit', '/set', '/export', '/bookmark', '/save',
-        '/forget', '/watch', '/analyze', '/status', '/clear', '/q', '/disconnect', '/help',
+        '/forget', '/watch', '/analyze', '/status', '/clear', '/q', '/disconnect', '/help', '/examples',
       ];
       const typed = cmdWord.slice(1);
       const close = ALL_CMDS.filter(c => {
@@ -3827,6 +3833,7 @@ function startTerminal() {
     c('/q  /disconnect',         '— back to connect screen (Ctrl+D on empty line)');
     c('/help',                   '— this message');
     c('/help oql',               '— OQL language reference (keywords, functions, syntax)');
+    c('/examples [category]',    '— runnable OQL examples: basic, groupby, subquery, viz, misc');
     term.writeln('');
     term.writeln('\x1b[1;33mKeyboard shortcuts\x1b[0m');
     term.writeln('  Tab       complete  ·  Ctrl+R  reverse history search  ·  ↑/↓  history');
@@ -3851,12 +3858,19 @@ function startTerminal() {
   }
 
   async function printOqlRef() {
-    term.writeln('\r\n\x1b[1mOQL Language Reference\x1b[0m  \x1b[2m(from server /help)\x1b[0m');
+    // In WASM mode HprofSession.oql_help() provides the reference offline.
+    // In server mode we fetch from /help (which also includes dump class names).
     let ref_;
     try {
-      ref_ = await fetch(serverUrl + '/help').then(r => r.json());
+      if (serverUrl) {
+        ref_ = await fetch(serverUrl + '/help').then(r => r.json());
+        term.writeln('\r\n\x1b[1mOQL Language Reference\x1b[0m  \x1b[2m(from server /help)\x1b[0m');
+      } else {
+        ref_ = JSON.parse(HprofSession.oql_help());
+        term.writeln('\r\n\x1b[1mOQL Language Reference\x1b[0m  \x1b[2m(built-in)\x1b[0m');
+      }
     } catch (e) {
-      term.writeln(`\x1b[31mcould not fetch /help: ${e.message}\x1b[0m`);
+      term.writeln(`\x1b[31mcould not load OQL reference: ${e.message}\x1b[0m`);
       return;
     }
     const section = (title, items) => {
@@ -3869,19 +3883,136 @@ function startTerminal() {
       }
     };
     section('Keywords', ref_.keywords);
+    section('Clauses / modifiers', ref_.reserved);
     section('Aggregate functions', ref_.aggregates);
-    section('Functions', ref_.functions);
+    section('Scalar functions', ref_.functions);
     section('Methods (on objects)', ref_.methods);
-    section('Attributes (@ prefix)', ref_.attributes?.map(a => '@' + a));
+    section('Attributes (@ prefix)', ref_.attributes);
+
     term.writeln('');
-    term.writeln('  \x1b[33mSyntax examples\x1b[0m');
-    term.writeln('    \x1b[2mSELECT * FROM java.lang.String\x1b[0m');
-    term.writeln('    \x1b[2mSELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100\x1b[0m');
-    term.writeln('    \x1b[2mSELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)\x1b[0m');
-    term.writeln('    \x1b[2mSELECT * FROM INSTANCEOF java.util.Collection\x1b[0m');
-    term.writeln('    \x1b[2mSELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC\x1b[0m');
+    term.writeln('  \x1b[33mGrammar summary\x1b[0m');
+    const g = (s) => term.writeln('  \x1b[2m' + s + '\x1b[0m');
+    g('SELECT [DISTINCT] [OBJECTS] <expr, …> [AS RETAINED SET]');
+    g('  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | (subquery)> [alias]');
+    g('  [WHERE <pred>]  [GROUP BY <expr>]  [HAVING <pred>]');
+    g('  [ORDER BY <expr> [ASC|DESC]]  [LIMIT n]');
+    g('[UNION | INTERSECT | EXCEPT  <select> …]');
+
     term.writeln('');
-    term.writeln('  \x1b[2mTip: /describe <ClassName> to see available fields\x1b[0m');
+    term.writeln('  \x1b[33mQuick examples\x1b[0m  \x1b[2m(type /examples for more)\x1b[0m');
+    const ex = (q) => term.writeln('  \x1b[36m' + q + '\x1b[0m');
+    ex('SELECT * FROM java.lang.String LIMIT 10');
+    ex('SELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15');
+    ex('SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC LIMIT 5');
+    ex('SELECT toString(s) AS val, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 5 ORDER BY n DESC LIMIT 20');
+    term.writeln('');
+    term.writeln('  \x1b[2mTip: /describe <ClassName>  ·  /examples [basic|groupby|subquery|viz|misc]  ·  Tab to complete\x1b[0m');
+    term.writeln('');
+  }
+
+  // OQL example categories shown by /examples
+  const OQL_EXAMPLES = [
+    { cat: 'basic', title: 'Basic SELECT / WHERE / ORDER BY / LIMIT', examples: [
+      { desc: 'All String objects (first 10)',
+        oql: 'SELECT * FROM java.lang.String LIMIT 10' },
+      { desc: 'Class and shallow size, sorted biggest first',
+        oql: 'SELECT @displayName AS class, @usedHeapSize AS bytes FROM INSTANCEOF java.lang.Object ORDER BY bytes DESC LIMIT 20' },
+      { desc: 'All subclasses of Collection',
+        oql: 'SELECT * FROM INSTANCEOF java.util.Collection LIMIT 20' },
+      { desc: 'Objects matching a class-name regex',
+        oql: 'SELECT @displayName, @usedHeapSize FROM "java\\.util\\..*" LIMIT 20' },
+      { desc: 'Strings longer than 100 chars',
+        oql: 'SELECT toString(s) AS value, s.count AS len FROM java.lang.String s WHERE s.count > 100 ORDER BY len DESC LIMIT 20' },
+      { desc: 'Distinct class names (DISTINCT)',
+        oql: 'SELECT DISTINCT @displayName FROM java.lang.Thread' },
+      { desc: 'Retained heap for threads (needs full analysis)',
+        oql: 'SELECT @displayName AS thread, @retainedHeapSize AS retained FROM java.lang.Thread ORDER BY retained DESC' },
+      { desc: 'BETWEEN predicate (moderate-sized objects)',
+        oql: 'SELECT @displayName, @usedHeapSize AS bytes FROM INSTANCEOF java.lang.Object WHERE bytes BETWEEN 500 AND 5000 LIMIT 20' },
+    ]},
+    { cat: 'groupby', title: 'GROUP BY / HAVING / aggregates', examples: [
+      { desc: 'Instance count per class (top 15)',
+        oql: 'SELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
+      { desc: 'Classes with >100 instances',
+        oql: 'SELECT @displayName AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName HAVING n > 100 ORDER BY n DESC LIMIT 20' },
+      { desc: 'Duplicate String values (top by count)',
+        oql: 'SELECT toString(s) AS value, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 1 ORDER BY n DESC LIMIT 30' },
+      { desc: 'Total shallow heap per class',
+        oql: 'SELECT @displayName AS cls, SUM(@usedHeapSize) AS total FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY total DESC LIMIT 15' },
+      { desc: 'Size bucket distribution (CASE WHEN)',
+        oql: 'SELECT CASE WHEN @usedHeapSize>10000 THEN "large" WHEN @usedHeapSize>1000 THEN "medium" ELSE "small" END AS bucket, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY CASE WHEN @usedHeapSize>10000 THEN "large" WHEN @usedHeapSize>1000 THEN "medium" ELSE "small" END ORDER BY n DESC' },
+      { desc: 'PERCENTILE — 95th percentile shallow size per class',
+        oql: 'SELECT @displayName AS cls, PERCENTILE(@usedHeapSize,95) AS p95 FROM INSTANCEOF java.lang.Object GROUP BY @displayName HAVING COUNT(*) > 50 ORDER BY p95 DESC LIMIT 15' },
+      { desc: 'COALESCE — replace null with placeholder',
+        oql: 'SELECT COALESCE(toString(s), "<null>") AS val FROM java.lang.String s LIMIT 20' },
+    ]},
+    { cat: 'subquery', title: 'Subqueries / UNION / INTERSECT / EXCEPT / EXISTS', examples: [
+      { desc: 'Subquery in FROM (objects held by HashMap)',
+        oql: 'SELECT @displayName, @usedHeapSize FROM (SELECT * FROM java.util.HashMap) LIMIT 10' },
+      { desc: 'IN predicate — addresses from subquery',
+        oql: 'SELECT * FROM java.lang.Object WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.Thread) LIMIT 10' },
+      { desc: 'EXISTS — run only when leaked connections exist',
+        oql: 'SELECT COUNT(*) FROM java.lang.Object WHERE EXISTS (SELECT * FROM java.net.Socket s WHERE s.closed = false)' },
+      { desc: 'UNION — combine two class sets',
+        oql: 'SELECT @displayName, @usedHeapSize FROM java.util.HashMap UNION SELECT @displayName, @usedHeapSize FROM java.util.ArrayList ORDER BY @usedHeapSize DESC LIMIT 20' },
+      { desc: 'INTERSECT — class names in two packages',
+        oql: 'SELECT @displayName FROM "com\\.example\\.cache\\..*" INTERSECT SELECT @displayName FROM "com\\.example\\..*"' },
+      { desc: 'EXCEPT — exclude subclass from parent scan',
+        oql: 'SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.util.AbstractList GROUP BY @displayName EXCEPT SELECT @displayName, COUNT(*) AS n FROM java.util.ArrayList GROUP BY @displayName ORDER BY n DESC' },
+    ]},
+    { cat: 'viz', title: 'Visualization directives (-- @viz)', examples: [
+      { desc: 'Histogram of class instance counts',
+        oql: '-- @viz histogram\nSELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
+      { desc: 'Pie chart of heap by package',
+        oql: '-- @viz piechart cap=10\nSELECT @displayName AS cls, SUM(@usedHeapSize) AS bytes FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY bytes DESC LIMIT 10' },
+      { desc: 'Treemap of retained heap by class (needs full analysis)',
+        oql: '-- @viz treemap\nSELECT @displayName AS cls, @retainedHeapSize AS retained FROM INSTANCEOF java.lang.Object ORDER BY retained DESC LIMIT 30' },
+      { desc: 'Named chart block',
+        oql: '-- @viz histogram name="String duplicates" title="Top duplicate String values"\nSELECT toString(s) AS value, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 1 ORDER BY n DESC LIMIT 20' },
+    ]},
+    { cat: 'misc', title: 'Attributes, functions, array access, field paths', examples: [
+      { desc: 'Object address and hex address',
+        oql: 'SELECT @objectId AS id, toHex(@objectAddress) AS addr, @displayName FROM java.lang.Thread' },
+      { desc: 'Field path traversal',
+        oql: 'SELECT s.value AS chars, s.count AS len FROM java.lang.String s WHERE s.count > 50 LIMIT 10' },
+      { desc: 'classof() — class object attributes',
+        oql: 'SELECT classof(s).@name AS cls, classof(s).@usedHeapSize AS cls_size FROM java.lang.Thread s' },
+      { desc: 'Array element access (first element)',
+        oql: 'SELECT @objectId, value[0] AS first FROM byte[] LIMIT 10' },
+      { desc: 'Array slice',
+        oql: 'SELECT @objectId, value[0:4] AS slice FROM char[] LIMIT 10' },
+      { desc: 'Dominator chain for largest object (needs full analysis)',
+        oql: 'SELECT dominators(o) FROM INSTANCEOF java.lang.Object o ORDER BY @retainedHeapSize DESC LIMIT 1' },
+      { desc: 'GC roots (@GCRoots attribute)',
+        oql: 'SELECT @GCRoots FROM java.lang.Thread LIMIT 5' },
+      { desc: 'Inbound / outbound reference counts (needs full analysis)',
+        oql: 'SELECT @displayName, @inbounds AS refs_in, @outbounds AS refs_out FROM java.lang.Thread' },
+    ]},
+  ];
+
+  function printExamples(filter) {
+    const cats = filter
+      ? OQL_EXAMPLES.filter(c => c.cat === filter || c.title.toLowerCase().includes(filter.toLowerCase()))
+      : OQL_EXAMPLES;
+    if (!cats.length) {
+      term.writeln(`\x1b[33mNo examples matched "${filter}". Categories: ${OQL_EXAMPLES.map(c => c.cat).join(', ')}\x1b[0m`);
+      return;
+    }
+    term.writeln('');
+    term.writeln('\x1b[1mOQL Examples\x1b[0m  \x1b[2m(copy a query and paste into the prompt)\x1b[0m');
+    for (const { title, examples } of cats) {
+      term.writeln(`\r\n  \x1b[1;33m${title}\x1b[0m`);
+      for (const { desc, oql } of examples) {
+        term.writeln(`  \x1b[2m${desc}\x1b[0m`);
+        // Show multi-line queries indented; single-line gets the cyan prompt style
+        const lines = oql.split('\n');
+        for (const ln of lines) {
+          term.writeln(`    \x1b[36m${ln}\x1b[0m`);
+        }
+      }
+    }
+    term.writeln('');
+    term.writeln(`  \x1b[2m/examples basic  |  /examples groupby  |  /examples subquery  |  /examples viz  |  /examples misc\x1b[0m`);
     term.writeln('');
   }
 

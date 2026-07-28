@@ -315,6 +315,25 @@ impl HprofSession {
         serde_json::to_string(&self.class_names).unwrap_or_else(|_| "[]".to_string())
     }
 
+    /// Returns the OQL language reference as a JSON object with keys:
+    /// keywords, reserved, aggregates, functions, methods, attributes.
+    /// Same structure as the server's GET /help endpoint (minus dump-specific
+    /// class/field lists) so the WASM shell can show /help oql offline.
+    pub fn oql_help() -> String {
+        use hprof_analyzer::query::parse::{
+            AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED,
+        };
+        serde_json::json!({
+            "keywords": KEYWORDS,
+            "reserved": RESERVED,
+            "aggregates": AGG_FUNCS,
+            "functions": FUNCS,
+            "methods": METHODS,
+            "attributes": ATTRIBUTES,
+        })
+        .to_string()
+    }
+
     /// Like `load()` but fires a JS progress callback at phase boundaries.
     ///
     /// The callback receives `(phase: string, fraction: number)` where fraction
