@@ -2064,12 +2064,24 @@ function startTerminal() {
       else if (names.length > 1) { term.writeln(''); term.writeln('  ' + names.map(n => `\x1b[35m${n}\x1b[0m`).join('  ')); redrawLine(); }
       return;
     }
-    // Complete /viz [kind]
-    if (line.startsWith('/viz ') && !line.slice(5).includes(' ')) {
-      const partial = line.slice(5).toLowerCase();
-      const kinds = ['treemap', 'histogram', 'table'].filter(k => k.startsWith(partial));
-      if (kinds.length === 1) { setLine('/viz ' + kinds[0]); }
-      else if (kinds.length > 1) { term.writeln(''); term.writeln('  ' + kinds.join('  ')); redrawLine(); }
+    // Complete /viz [kind] [labelcol] [valuecol]
+    if (line.startsWith('/viz ')) {
+      const after = line.slice(5);
+      const parts = after.split(' ');
+      const kinds = ['treemap', 'histogram', 'table'];
+      if (parts.length === 1) {
+        // completing kind or @N
+        const partial = parts[0].toLowerCase();
+        const matches = kinds.filter(k => k.startsWith(partial));
+        if (matches.length === 1) { setLine('/viz ' + matches[0]); }
+        else if (matches.length > 1) { term.writeln(''); term.writeln('  ' + matches.join('  ')); redrawLine(); }
+      } else if (parts.length >= 2 && lastResult) {
+        // completing label or value column
+        const partial = parts[parts.length - 1].toLowerCase();
+        const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
+        if (cols.length === 1) { setLine(line.slice(0, line.lastIndexOf(' ') + 1) + cols[0]); }
+        else if (cols.length > 1) { term.writeln(''); term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  ')); redrawLine(); }
+      }
       return;
     }
     // Complete column names from lastResult for result-manipulation commands
@@ -2936,30 +2948,107 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    // /viz [kind] [labelcol] [valuecol] — visualise last result
+    // /viz [@N] [kind] [labelcol] [valuecol] — visualise last (or Nth previous) result
     if (cmd.startsWith('/viz') && (cmd === '/viz' || cmd[4] === ' ')) {
-      if (!lastResult || !lastResult.rows.length) {
-        term.writeln('\x1b[33m(no result to visualise — run a query first)\x1b[0m');
+      const rawArgs = cmd.slice(4).trim();
+      const parts = rawArgs ? rawArgs.split(/\s+/) : [];
+
+      // Resolve source result: @N references resultLog (1=last, 2=second-to-last…)
+      let srcResult = lastResult;
+      let srcQuery = null;
+      let argOffset = 0;
+      const refMatch = parts[0] && /^@(\d+)$/.exec(parts[0]);
+      if (refMatch) {
+        const idx = parseInt(refMatch[1], 10) - 1;
+        if (idx < 0 || idx >= resultLog.length) {
+          term.writeln(`\x1b[31m@${idx + 1}: no result at that position — only ${resultLog.length} result${resultLog.length !== 1 ? 's' : ''} in history\x1b[0m`);
+          if (resultLog.length > 0) {
+            term.writeln('\x1b[2mAvailable:\x1b[0m');
+            resultLog.slice(0, 10).forEach((e, i) => {
+              term.writeln(`  \x1b[33m@${i + 1}\x1b[0m  \x1b[2m${e.query.slice(0, 60)}${e.query.length > 60 ? '…' : ''}  (${e.result.rows.length} rows)\x1b[0m`);
+            });
+          }
+          term.write(PROMPT);
+          return;
+        }
+        srcResult = resultLog[idx].result;
+        srcQuery = resultLog[idx].query;
+        argOffset = 1;
+      }
+
+      // If no args and no result — show history list
+      if (!srcResult || !srcResult.rows.length) {
+        if (resultLog.length > 0) {
+          term.writeln('\x1b[33m(no current result)\x1b[0m  \x1b[2mUse /viz @N to reference a previous result:\x1b[0m');
+          resultLog.slice(0, 10).forEach((e, i) => {
+            term.writeln(`  \x1b[33m@${i + 1}\x1b[0m  \x1b[2m${e.query.slice(0, 60)}${e.query.length > 60 ? '…' : ''}  (${e.result.rows.length} rows)\x1b[0m`);
+          });
+        } else {
+          term.writeln('\x1b[33m(no result to visualise — run a query first)\x1b[0m');
+        }
         term.write(PROMPT);
         return;
       }
-      const parts = cmd.slice(4).trim().split(/\s+/);
-      const kind = parts[0] || 'treemap';
-      if (!['treemap', 'histogram', 'table'].includes(kind)) {
-        term.writeln('\x1b[31musage: /viz [treemap|histogram|table] [labelcol] [valuecol]\x1b[0m');
+
+      const kindArg = parts[argOffset] || '';
+      const kinds = ['treemap', 'histogram', 'table'];
+      const kind = kinds.includes(kindArg) ? kindArg : 'treemap';
+      const colArgOffset = argOffset + (kinds.includes(kindArg) ? 1 : 0);
+
+      const cols = srcResult.columns;
+
+      // /viz with no args: show auto-detected columns and usage
+      if (!rawArgs || (argOffset === 0 && !kindArg)) {
+        const autoLabelIdx = cols.findIndex((c, i) => {
+          const sample = srcResult.rows.find(r => r[i] !== null && r[i] !== undefined);
+          return sample ? !isNumericKind(sample[i]) : false;
+        });
+        const autoValueIdx = cols.findIndex((c, i) => {
+          const sample = srcResult.rows.find(r => r[i] !== null && r[i] !== undefined);
+          return sample ? isNumericKind(sample[i]) : false;
+        });
+        const lCol = autoLabelIdx >= 0 ? cols[autoLabelIdx] : cols[0];
+        const vCol = autoValueIdx >= 0 ? cols[autoValueIdx] : cols[cols.length - 1];
+        term.writeln(`\x1b[33m/viz\x1b[0m  \x1b[2m[treemap|histogram|table]\x1b[0m  \x1b[36m[labelcol]\x1b[0m  \x1b[36m[valuecol]\x1b[0m`);
+        term.writeln(`  Auto-detected: label=\x1b[36m${lCol}\x1b[0m  value=\x1b[36m${vCol}\x1b[0m`);
+        term.writeln(`  Columns: \x1b[2m${cols.join(', ')}\x1b[0m`);
+        if (resultLog.length > 1) {
+          term.writeln(`  Previous results: \x1b[2m${resultLog.slice(0, 5).map((e, i) => `@${i + 1} (${e.result.rows.length}r)`).join('  ')}\x1b[0m`);
+        }
+        term.writeln(`\x1b[2m  Press Enter to run /viz with auto-detected columns, or specify them:\x1b[0m`);
+        // Auto-run with detected columns
+        const slices = srcResult.rows
+          .map(r => {
+            const lc = r[autoLabelIdx >= 0 ? autoLabelIdx : 0];
+            const vc = r[autoValueIdx >= 0 ? autoValueIdx : cols.length - 1];
+            const name = lc == null ? '' : (typeof lc === 'object' ? String(lc.v ?? lc) : String(lc));
+            const value = vc == null ? 0 : (typeof vc === 'object' ? Number(vc.v) || 0 : Number(vc) || 0);
+            return { name, value };
+          })
+          .filter(s => s.value > 0)
+          .slice(0, 50);
+        if (slices.length) {
+          openVizOverlay(slices, 'treemap', vCol, srcQuery);
+        } else {
+          term.writeln('\x1b[33m(no positive values found in auto-detected value column)\x1b[0m');
+        }
         term.write(PROMPT);
         return;
       }
+
       if (kind === 'table') {
-        renderResult(lastResult);
+        renderResult(srcResult);
         term.write(PROMPT);
         return;
       }
-      const cols = lastResult.columns;
-      // auto-detect label column (first string-ish col) and value column (first numeric)
-      const autoLabel = parts[1] || cols[0];
-      const autoValue = parts[2] || cols.find((c, i) => {
-        const sample = lastResult.rows.find(r => r[i] !== null && r[i] !== undefined);
+
+      // auto-detect label column (first non-numeric) and value column (first numeric)
+      const autoLabel = parts[colArgOffset] || cols.find((c, i) => {
+        const sample = srcResult.rows.find(r => r[i] !== null && r[i] !== undefined);
+        return sample ? !isNumericKind(sample[i]) : false;
+      }) || cols[0];
+      const autoValue = parts[colArgOffset + 1] || cols.find((c, i) => {
+        const sample = srcResult.rows.find(r => r[i] !== null && r[i] !== undefined);
         return sample ? isNumericKind(sample[i]) : false;
       }) || cols[cols.length - 1];
       const labelIdx = resolveCol(autoLabel, cols);
@@ -2969,7 +3058,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const slices = lastResult.rows
+      const slices = srcResult.rows
         .map(r => {
           const lc = r[labelIdx]; const vc = r[valueIdx];
           const name = lc == null ? '' : (typeof lc === 'object' ? String(lc.v ?? lc) : String(lc));
@@ -2983,7 +3072,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      openVizOverlay(slices, kind, cols[valueIdx]);
+      openVizOverlay(slices, kind, cols[valueIdx], srcQuery);
       term.write(PROMPT);
       return;
     }
@@ -3795,7 +3884,7 @@ function startTerminal() {
   // ── Viz overlay (floating treemap / histogram panel) ─────────────────────────
   let _vizOverlay = null;
 
-  function openVizOverlay(slices, kind, valueLabel) {
+  function openVizOverlay(slices, kind, valueLabel, srcQuery) {
     if (_vizOverlay) { _vizOverlay.remove(); _vizOverlay = null; }
     const overlay = document.createElement('div');
     overlay.className = 'viz-overlay';
@@ -3803,7 +3892,9 @@ function startTerminal() {
     header.className = 'viz-overlay-header';
     const title = document.createElement('span');
     title.className = 'viz-overlay-title';
-    title.textContent = `${kind} — ${valueLabel || ''}`;
+    const titleBase = srcQuery ? srcQuery.replace(/\n/g, ' ').slice(0, 60) + (srcQuery.length > 60 ? '…' : '') : `${kind} — ${valueLabel || ''}`;
+    title.textContent = titleBase;
+    title.title = srcQuery || '';
     const actions = document.createElement('div');
     actions.className = 'viz-overlay-actions';
     const starBtn = document.createElement('button');
@@ -3813,7 +3904,7 @@ function startTerminal() {
     starBtn.addEventListener('click', () => {
       if (!lastResult) return;
       const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
-      const oql = history.find(h => !h.startsWith('/star') && !h.startsWith('/viz'));
+      const oql = srcQuery || history.find(h => !h.startsWith('/star') && !h.startsWith('/viz'));
       const label = (oql || 'unnamed').replace(/\n/g, ' ').slice(0, 50);
       const entry = { label, oql: oql || '', columns: lastResult.columns, rows: lastResult.rows.slice(0, 200), ts: Date.now() };
       const idx = starred.findIndex(e => e.label === label);
@@ -3981,6 +4072,13 @@ function startTerminal() {
   let prevResult = null;    // single-level undo: saved before result-mutating commands
   let watchTimer = null;    // setInterval handle for /watch
   let currentRowIdx = 0;    // 0-based row cursor for /row next/prev
+  const resultLog = [];     // ring buffer of { query, result } for /viz @N references
+  const RESULT_LOG_MAX = 20;
+
+  function pushResultLog(query, result) {
+    resultLog.unshift({ query, result });
+    if (resultLog.length > RESULT_LOG_MAX) resultLog.length = RESULT_LOG_MAX;
+  }
 
   function cellColor(cell, colName) {
     if (!settings.color) return '';
@@ -4094,6 +4192,7 @@ function startTerminal() {
         renderResult(r);
         prevResult = null;
         lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
+        pushResultLog(oql, lastResult);
         currentRowIdx = 0;
         const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
         const elapsedFmt = fmtElapsed(queryMs);
@@ -4106,7 +4205,7 @@ function startTerminal() {
             return sample ? isNumericKind(sample[i]) : false;
           });
           const statHint = hasNumeric ? '  /stats <col>' : '';
-          term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv|tsv|json]\x1b[0m`);
+          term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv|tsv|json]  /viz  /star  /store\x1b[0m`);
         }
       } else {
         prevResult = null;
@@ -4236,7 +4335,8 @@ function startTerminal() {
     c('/star [label]',           '— star last query+result for the dashboard');
     c('/unstar <label>',         '— remove a starred result');
     c('/dashboard',              '— open starred-results dashboard panel');
-    c('/viz [kind] [l] [v]',     '— visualise last result: treemap|histogram|table, label+value cols');
+    c('/viz [@N] [kind] [l] [v]','— visualise last (or @N previous) result as treemap|histogram; auto-detects columns');
+    c('',                        '  @1=last  @2=second-to-last … (up to 20)  Tab completes kind + column names');
     h('Settings  (/set with no args shows current values)');
     c('/set limit <N>',          '— cap rows displayed (0 = unlimited, default 200)');
     c('/set bytes raw|human',    '— byte columns: numbers or 4.3 KiB (default human)');

@@ -9,6 +9,7 @@ import {
   ConcentrationStackedBar,
   DepthHistogramChart,
   GcRootsChart,
+  GcRootsRetainedChart,
   HeapCompositionChart,
   LeakShareChart,
   LoaderRollupChart,
@@ -1313,6 +1314,9 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>GC Roots by Type</h3>
+            {totalRetained > 0
+              ? <GcRootsRetainedChart data={gcRows} />
+              : <GcRootsChart data={gcRows} />}
             <StdTable columns={gcCols} data={gcRows} searchKeys={["root_type"]} />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "90px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }} />
@@ -1332,7 +1336,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         </p>
       )}
       <ChartOrNote hasData={o.histogram.length > 0} note="No histogram classes to chart.">
-        <TopClassesChart data={o.histogram} />
+        <TopClassesChart data={o.histogram} totalRetained={o.histogram.reduce((s, r) => s + r.retained, 0)} />
       </ChartOrNote>
       <ClassHistogramTable rows={o.histogram} totalShallow={o.total_shallow} />
 

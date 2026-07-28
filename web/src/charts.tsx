@@ -314,16 +314,17 @@ export function HeapCompositionChart({ data }: { data: KindStat[] }) {
   return <FlatTreemap data={data.map((k) => ({ name: k.kind, value: k.shallow_heap }))} fmt={formatBytes} height={180} />;
 }
 
-export function TopClassesChart({ data }: { data: HistRow[] }) {
+export function TopClassesChart({ data, totalRetained }: { data: HistRow[]; totalRetained?: number }) {
   if (data.length === 0) return null;
-  const N = 10;
-  const top: Slice[] = data.slice(0, N).map((r) => ({ name: r.pretty_class, value: r.retained }));
-  if (data.length > N) {
-    const rest = data.slice(N).reduce((s, r) => s + r.retained, 0);
-    if (rest > 0) top.push({ name: "(rest)", value: rest });
-  }
-  const titles = top.map((row) => `${row.name} — ${formatBytes(row.value)}`);
-  return <HBar data={top} fmt={formatBytes} titles={titles} />;
+  const total = totalRetained ?? data.reduce((s, r) => s + r.retained, 0);
+  // Show classes with >= 1% retained heap; always include top 2 so there's always something
+  const threshold = total * 0.01;
+  const significant = data.filter((r) => r.retained >= threshold);
+  const shown = significant.length >= 2 ? significant : data.slice(0, 2);
+  const rest = data.filter((r) => !shown.includes(r)).reduce((s, r) => s + r.retained, 0);
+  const slices: Slice[] = shown.map((r) => ({ name: r.pretty_class, value: r.retained }));
+  if (rest > 0) slices.push({ name: "(rest)", value: rest });
+  return <FlatTreemap data={slices} fmt={formatBytes} height={220} />;
 }
 
 export function LoaderRollupChart({ data }: { data: LoaderRollup[] }) {
@@ -332,10 +333,7 @@ export function LoaderRollupChart({ data }: { data: LoaderRollup[] }) {
     name: shortLoader(r.loader_label) ?? `loader@${r.loader_id}`,
     value: r.retained,
   }));
-  const titles = data.map(
-    (r) => `${shortLoader(r.loader_label) ?? `loader@${r.loader_id}`} — ${fmtCount(r.class_count)} classes, ${formatBytes(r.retained)} retained`,
-  );
-  return <HBar data={rows} fmt={formatBytes} barColor={4} titles={titles} />;
+  return <FlatTreemap data={rows} fmt={formatBytes} height={180} />;
 }
 
 export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect[]; total: number; onSlice?: (i: number) => void }) {
@@ -405,7 +403,12 @@ export function DepthHistogramChart({ data }: { data: DepthBucket[] }) {
 
 export function GcRootsChart({ data }: { data: GcRootTypeRow[] }) {
   if (data.length < 2) return null;
-  return <HBar data={data.map((r) => ({ name: r.root_type, value: r.count }))} fmt={fmtCount} barColor={2} />;
+  return <FlatTreemap data={data.map((r) => ({ name: r.root_type, value: r.count }))} fmt={fmtCount} height={180} />;
+}
+
+export function GcRootsRetainedChart({ data }: { data: { root_type: string; count: number; retained: number }[] }) {
+  if (data.length < 2 || data.every((r) => r.retained === 0)) return null;
+  return <FlatTreemap data={data.map((r) => ({ name: r.root_type, value: r.retained }))} fmt={formatBytes} height={180} />;
 }
 
 // ── Stacked horizontal bar ───────────────────────────────────────────────────
