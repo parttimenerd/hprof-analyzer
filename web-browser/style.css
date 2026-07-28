@@ -598,3 +598,104 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
 .toast-success { border-color: #2a5a2a; background: #0f2a0f; color: #7dbb7d; }
 .toast-error   { border-color: #5a2a2a; background: #2a0f0f; color: #bb7d7d; }
 .toast-info    { border-color: #2a3a5a; background: #0f1a2a; color: #7ab4ff; }
+
+/* ── My Queries sidebar section ─────────────────────────────────────────────── */
+.nq-group-my { color: #a0c8f8 !important; border-bottom: 1px solid #2a3a5a; margin-bottom: 4px; padding-bottom: 5px; }
+.nq-my-query { border: 1px solid #1e2840; }
+.nq-my-query:hover { background: #151a2e; border-color: #3a5a8a; }
+.nq-my-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.nq-del-btn {
+  background: none; border: none; color: #556; cursor: pointer;
+  font-size: .9rem; padding: 0 2px; line-height: 1; flex-shrink: 0;
+  border-radius: 3px;
+}
+.nq-del-btn:hover { color: #f08080; background: #2a1a1a; }
+
+/* ── Dashboard button ────────────────────────────────────────────────────────── */
+#btn-dashboard {
+  background: #1e2840; border: 1px solid #3a5a8a;
+  color: #d0c840; font-size: .78rem; padding: 4px 12px;
+}
+#btn-dashboard:hover { background: #2a3a5a; }
+
+/* ── Viz overlay (floating treemap / histogram) ──────────────────────────────── */
+.viz-overlay {
+  position: absolute;
+  top: 50px; right: 16px;
+  width: 520px; max-width: calc(100vw - 260px);
+  background: #0d0f1e;
+  border: 1px solid #2a3a5a;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  z-index: 200;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.viz-overlay-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px;
+  background: #111525;
+  border-bottom: 1px solid #1e2840;
+  cursor: move; user-select: none;
+}
+.viz-overlay-title { font-size: .78rem; color: #8aaccc; font-weight: 600; }
+.viz-overlay-actions { display: flex; gap: 4px; }
+.viz-action-btn {
+  background: none; border: 1px solid #2a3a5a; color: #8aaccc;
+  border-radius: 4px; cursor: pointer; font-size: .75rem; padding: 2px 7px; line-height: 1.4;
+}
+.viz-action-btn:hover { background: #1e2840; color: #c0e0ff; }
+.viz-close-btn:hover { color: #f08080; border-color: #5a3a3a; background: #2a1a1a; }
+.viz-overlay-body { padding: 10px; min-height: 200px; overflow: auto; }
+
+/* ── Dashboard overlay ───────────────────────────────────────────────────────── */
+.dashboard-overlay {
+  position: absolute;
+  inset: 0;
+  background: #080a14;
+  z-index: 300;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.dashboard-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px;
+  background: #0d0f1e;
+  border-bottom: 1px solid #1e2840;
+  flex-shrink: 0;
+}
+.dashboard-title { font-size: 1rem; font-weight: 700; color: #d0c840; }
+.dashboard-empty { color: #556; font-size: .88rem; padding: 40px 24px; text-align: center; }
+.dashboard-grid {
+  flex: 1; overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  padding: 16px;
+  align-content: start;
+}
+.dashboard-card {
+  background: #0d0f1e;
+  border: 1px solid #1e2840;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.dashboard-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px;
+  background: #111525;
+  border-bottom: 1px solid #1e2840;
+}
+.dashboard-card-title {
+  font-size: .8rem; font-weight: 600; color: #90b8e8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.dashboard-card-actions { display: flex; gap: 4px; flex-shrink: 0; margin-left: 8px; }
+.dashboard-card-btn {
+  background: none; border: 1px solid #2a3a5a; color: #8aaccc;
+  border-radius: 3px; cursor: pointer; font-size: .72rem; padding: 1px 6px; line-height: 1.4;
+}
+.dashboard-card-btn:hover { background: #1e2840; color: #c0e0ff; }
+.dashboard-viz { padding: 10px; min-height: 180px; overflow: hidden; }
+

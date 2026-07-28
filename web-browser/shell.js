@@ -6,6 +6,8 @@ const HISTORY_KEY = 'hprof-analyzer.oql-history';
 const SETTINGS_KEY = 'hprof-analyzer.settings';
 const LAST_URL_KEY = 'hprof-analyzer.last-url';
 const BOOKMARKS_KEY = 'hprof-analyzer.bookmarks';
+const STORED_QUERIES_KEY = 'hprof-analyzer.stored-queries';
+const STARRED_KEY = 'hprof-analyzer.starred';
 
 // Restore last-used server URL into the input on page load
 (function restoreLastUrl() {
@@ -1324,6 +1326,11 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   showScreen('upload-screen');
 });
 
+// ── Dashboard button ──────────────────────────────────────────────────────────
+document.getElementById('btn-dashboard').addEventListener('click', () => {
+  if (typeof openDashboard === 'function') openDashboard();
+});
+
 // ── Show Report button ────────────────────────────────────────────────────────
 document.getElementById('btn-show-report').addEventListener('click', async () => {
   if (wasmSession) {
@@ -1441,6 +1448,57 @@ function _showNqPreview(card, oql) {
 function buildSidebar(analysisReady) {
   const list = document.getElementById('named-query-list');
   list.innerHTML = '';
+
+  // ── My Queries (stored / starred) ──────────────────────────────────────────
+  const stored = JSON.parse(localStorage.getItem(STORED_QUERIES_KEY) || '{}');
+  const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
+
+  function _makeMyQueryCard(name, oql, onDelete) {
+    const card = document.createElement('div');
+    card.className = 'nq-card nq-my-query';
+    card.dataset.oql = oql;
+    const row = document.createElement('div');
+    row.className = 'nq-my-row';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'nq-name';
+    nameEl.textContent = name;
+    const delBtn = document.createElement('button');
+    delBtn.className = 'nq-del-btn';
+    delBtn.title = 'Remove';
+    delBtn.textContent = '×';
+    delBtn.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+    row.appendChild(nameEl);
+    row.appendChild(delBtn);
+    card.appendChild(row);
+    card.addEventListener('mouseenter', () => _showNqPreview(card, oql));
+    card.addEventListener('mouseleave', () => { _nqPreview.style.display = 'none'; });
+    card.addEventListener('click', () => {
+      _nqPreview.style.display = 'none';
+      if (term && window._hprofRunQuery) window._hprofRunQuery(oql);
+      else if (term && window._hprofSetLine) window._hprofSetLine(oql);
+    });
+    return card;
+  }
+
+  const storedEntries = Object.entries(stored);
+  if (storedEntries.length > 0) {
+    const hdr = document.createElement('div');
+    hdr.className = 'nq-group-hdr nq-group-my';
+    hdr.textContent = 'My Queries';
+    list.appendChild(hdr);
+    storedEntries.forEach(([name, oql]) => {
+      const card = _makeMyQueryCard(name, oql, () => {
+        const s = JSON.parse(localStorage.getItem(STORED_QUERIES_KEY) || '{}');
+        delete s[name];
+        localStorage.setItem(STORED_QUERIES_KEY, JSON.stringify(s));
+        buildSidebar(analysisReady);
+        showToast(`Removed "${name}"`, 'info');
+      });
+      list.appendChild(card);
+    });
+  }
+
+  // ── Named queries (WASM built-ins) ─────────────────────────────────────────
   let curGroup = '';
   namedQueries.forEach(q => {
     if (q.group !== curGroup) {
@@ -1453,7 +1511,7 @@ function buildSidebar(analysisReady) {
     const disabled = q.needs_retained && !analysisReady;
     const card = document.createElement('div');
     card.className = 'nq-card' + (disabled ? ' needs-analysis' : '');
-    card.dataset.oql = q.oql;  // used by sidebar search to match OQL content
+    card.dataset.oql = q.oql;
     const nameEl = document.createElement('div');
     nameEl.className = 'nq-name';
     nameEl.textContent = q.name;
@@ -1462,7 +1520,6 @@ function buildSidebar(analysisReady) {
     descEl.textContent = q.display;
     card.appendChild(nameEl);
     card.appendChild(descEl);
-    // OQL preview on hover
     const previewOql = disabled
       ? q.oql + '\n\n[Requires full analysis — click "Run Analysis" first]'
       : q.oql;
@@ -1894,7 +1951,8 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','fields','plan','explain','filter','grep',
-                    'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','drop','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','drop','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect',
+                    'store','remove','star','unstar','viz','dashboard'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -1989,6 +2047,29 @@ function startTerminal() {
         term.writeln('  ' + bNames.map(n => `\x1b[35m${n}\x1b[0m`).join('  '));
         redrawLine();
       }
+      return;
+    }
+    // Complete /remove <stored-name> and /unstar <starred-label>
+    if (line.startsWith('/remove ') || line.startsWith('/unstar ')) {
+      const isRemove = line.startsWith('/remove ');
+      const pfxLen = isRemove ? 8 : 8;
+      const partial = line.slice(pfxLen).toLowerCase();
+      let names;
+      if (isRemove) {
+        names = Object.keys(JSON.parse(localStorage.getItem(STORED_QUERIES_KEY) || '{}')).filter(n => n.toLowerCase().startsWith(partial));
+      } else {
+        names = (JSON.parse(localStorage.getItem(STARRED_KEY) || '[]')).map(e => e.label).filter(n => n.toLowerCase().startsWith(partial));
+      }
+      if (names.length === 1) { setLine(line.slice(0, pfxLen) + names[0]); }
+      else if (names.length > 1) { term.writeln(''); term.writeln('  ' + names.map(n => `\x1b[35m${n}\x1b[0m`).join('  ')); redrawLine(); }
+      return;
+    }
+    // Complete /viz [kind]
+    if (line.startsWith('/viz ') && !line.slice(5).includes(' ')) {
+      const partial = line.slice(5).toLowerCase();
+      const kinds = ['treemap', 'histogram', 'table'].filter(k => k.startsWith(partial));
+      if (kinds.length === 1) { setLine('/viz ' + kinds[0]); }
+      else if (kinds.length > 1) { term.writeln(''); term.writeln('  ' + kinds.join('  ')); redrawLine(); }
       return;
     }
     // Complete column names from lastResult for result-manipulation commands
@@ -2759,6 +2840,150 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31mno bookmark named "${name}"\x1b[0m`);
       }
+      term.write(PROMPT);
+      return;
+    }
+    // /store [name] — save last OQL query permanently in sidebar "My Queries"
+    if (cmd.startsWith('/store') && (cmd === '/store' || cmd[6] === ' ')) {
+      const stored = JSON.parse(localStorage.getItem(STORED_QUERIES_KEY) || '{}');
+      const rest = cmd.slice(6).trim();
+      if (!rest) {
+        const entries = Object.entries(stored);
+        if (entries.length === 0) {
+          term.writeln('\x1b[2m(no stored queries — use /store <name> to save the last query)\x1b[0m');
+        } else {
+          term.writeln('\x1b[1mMy Queries\x1b[0m  \x1b[2m(persisted in sidebar)\x1b[0m');
+          entries.forEach(([n, oql]) => {
+            const flat = oql.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
+            const trunc = flat.length > term.cols - n.length - 6 ? flat.slice(0, term.cols - n.length - 7) + '…' : flat;
+            term.writeln(`  \x1b[36m${n.padEnd(20)}\x1b[0m  \x1b[2m${trunc}\x1b[0m`);
+          });
+          term.writeln('\x1b[2m  Use /store <name> to add, /remove <name> to delete\x1b[0m');
+        }
+      } else {
+        const toSave = history.find(h => !h.startsWith('/store') && !h.startsWith('/star') && !h.startsWith('/viz'));
+        if (!toSave) {
+          term.writeln('\x1b[33m(no query to store — run a query first)\x1b[0m');
+        } else {
+          stored[rest] = toSave;
+          localStorage.setItem(STORED_QUERIES_KEY, JSON.stringify(stored));
+          buildSidebar(hasRetained);
+          term.writeln(`\x1b[32m✓ stored as "${rest}"\x1b[0m  \x1b[2m(visible in sidebar · /remove ${rest} to delete)\x1b[0m`);
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
+    // /remove <name> — delete a stored query from My Queries
+    if (cmd.startsWith('/remove ')) {
+      const stored = JSON.parse(localStorage.getItem(STORED_QUERIES_KEY) || '{}');
+      const name = cmd.slice(8).trim();
+      if (stored[name]) {
+        delete stored[name];
+        localStorage.setItem(STORED_QUERIES_KEY, JSON.stringify(stored));
+        buildSidebar(hasRetained);
+        term.writeln(`\x1b[32m✓ removed "${name}" from My Queries\x1b[0m`);
+      } else {
+        term.writeln(`\x1b[31mno stored query named "${name}"\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    // /star [name] — star the last query+result for the dashboard
+    if (cmd.startsWith('/star') && (cmd === '/star' || cmd[5] === ' ')) {
+      const name = cmd.slice(5).trim() || null;
+      const toSave = history.find(h => !h.startsWith('/star') && !h.startsWith('/viz'));
+      if (!toSave) {
+        term.writeln('\x1b[33m(no query to star — run a query first)\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      if (!lastResult) {
+        term.writeln('\x1b[33m(no result to star — run a query first)\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
+      const label = name || toSave.replace(/\n/g, ' ').replace(/\s+/g, ' ').slice(0, 50);
+      // Replace existing entry with same label if present
+      const idx = starred.findIndex(e => e.label === label);
+      const entry = { label, oql: toSave, columns: lastResult.columns, rows: lastResult.rows.slice(0, 200), ts: Date.now() };
+      if (idx >= 0) { starred[idx] = entry; } else { starred.unshift(entry); }
+      if (starred.length > 20) starred.length = 20;
+      localStorage.setItem(STARRED_KEY, JSON.stringify(starred));
+      term.writeln(`\x1b[33m★\x1b[0m starred as \x1b[1m"${label}"\x1b[0m  \x1b[2m(/dashboard to view · /unstar "${label}" to remove)\x1b[0m`);
+      term.write(PROMPT);
+      return;
+    }
+    // /unstar <name> — remove a starred result
+    if (cmd.startsWith('/unstar ')) {
+      const name = cmd.slice(8).trim();
+      const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
+      const idx = starred.findIndex(e => e.label === name);
+      if (idx >= 0) {
+        starred.splice(idx, 1);
+        localStorage.setItem(STARRED_KEY, JSON.stringify(starred));
+        term.writeln(`\x1b[32m✓ unstarred "${name}"\x1b[0m`);
+      } else {
+        term.writeln(`\x1b[31mno starred result named "${name}"\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    // /dashboard — open the starred results panel
+    if (cmd === '/dashboard') {
+      openDashboard();
+      term.write(PROMPT);
+      return;
+    }
+    // /viz [kind] [labelcol] [valuecol] — visualise last result
+    if (cmd.startsWith('/viz') && (cmd === '/viz' || cmd[4] === ' ')) {
+      if (!lastResult || !lastResult.rows.length) {
+        term.writeln('\x1b[33m(no result to visualise — run a query first)\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const parts = cmd.slice(4).trim().split(/\s+/);
+      const kind = parts[0] || 'treemap';
+      if (!['treemap', 'histogram', 'table'].includes(kind)) {
+        term.writeln('\x1b[31musage: /viz [treemap|histogram|table] [labelcol] [valuecol]\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      if (kind === 'table') {
+        renderResult(lastResult);
+        term.write(PROMPT);
+        return;
+      }
+      const cols = lastResult.columns;
+      // auto-detect label column (first string-ish col) and value column (first numeric)
+      const autoLabel = parts[1] || cols[0];
+      const autoValue = parts[2] || cols.find((c, i) => {
+        const sample = lastResult.rows.find(r => r[i] !== null && r[i] !== undefined);
+        return sample ? isNumericKind(sample[i]) : false;
+      }) || cols[cols.length - 1];
+      const labelIdx = resolveCol(autoLabel, cols);
+      const valueIdx = resolveCol(autoValue, cols);
+      if (labelIdx < 0 || valueIdx < 0) {
+        term.writeln(`\x1b[31mcould not resolve columns — available: ${cols.join(', ')}\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const slices = lastResult.rows
+        .map(r => {
+          const lc = r[labelIdx]; const vc = r[valueIdx];
+          const name = lc == null ? '' : (typeof lc === 'object' ? String(lc.v ?? lc) : String(lc));
+          const value = vc == null ? 0 : (typeof vc === 'object' ? Number(vc.v) || 0 : Number(vc) || 0);
+          return { name, value };
+        })
+        .filter(s => s.value > 0)
+        .slice(0, 50);
+      if (!slices.length) {
+        term.writeln('\x1b[33m(no positive values to chart)\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      openVizOverlay(slices, kind, cols[valueIdx]);
       term.write(PROMPT);
       return;
     }
@@ -3551,6 +3776,7 @@ function startTerminal() {
         '/distinct', '/dedup', '/sample', '/top', '/head', '/tail', '/unique', '/pivot',
         '/stats', '/undo', '/run', '/limit', '/set', '/export', '/bookmark', '/save',
         '/forget', '/watch', '/analyze', '/status', '/clear', '/q', '/disconnect', '/help', '/examples',
+        '/store', '/remove', '/star', '/unstar', '/viz', '/dashboard',
       ];
       const typed = cmdWord.slice(1);
       const close = ALL_CMDS.filter(c => {
@@ -3565,6 +3791,190 @@ function startTerminal() {
     }
     await runQuery(full.trim());
   }
+
+  // ── Viz overlay (floating treemap / histogram panel) ─────────────────────────
+  let _vizOverlay = null;
+
+  function openVizOverlay(slices, kind, valueLabel) {
+    if (_vizOverlay) { _vizOverlay.remove(); _vizOverlay = null; }
+    const overlay = document.createElement('div');
+    overlay.className = 'viz-overlay';
+    const header = document.createElement('div');
+    header.className = 'viz-overlay-header';
+    const title = document.createElement('span');
+    title.className = 'viz-overlay-title';
+    title.textContent = `${kind} — ${valueLabel || ''}`;
+    const actions = document.createElement('div');
+    actions.className = 'viz-overlay-actions';
+    const starBtn = document.createElement('button');
+    starBtn.className = 'viz-action-btn';
+    starBtn.title = 'Star this result';
+    starBtn.textContent = '☆';
+    starBtn.addEventListener('click', () => {
+      if (!lastResult) return;
+      const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
+      const oql = history.find(h => !h.startsWith('/star') && !h.startsWith('/viz'));
+      const label = (oql || 'unnamed').replace(/\n/g, ' ').slice(0, 50);
+      const entry = { label, oql: oql || '', columns: lastResult.columns, rows: lastResult.rows.slice(0, 200), ts: Date.now() };
+      const idx = starred.findIndex(e => e.label === label);
+      if (idx >= 0) { starred[idx] = entry; } else { starred.unshift(entry); }
+      if (starred.length > 20) starred.length = 20;
+      localStorage.setItem(STARRED_KEY, JSON.stringify(starred));
+      starBtn.textContent = '★';
+      starBtn.style.color = '#f0d060';
+      showToast(`Starred "${label}"`, 'success');
+    });
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'viz-action-btn viz-close-btn';
+    closeBtn.title = 'Close';
+    closeBtn.textContent = '✕';
+    closeBtn.addEventListener('click', () => { overlay.remove(); _vizOverlay = null; });
+    actions.appendChild(starBtn);
+    actions.appendChild(closeBtn);
+    header.appendChild(title);
+    header.appendChild(actions);
+    const body = document.createElement('div');
+    body.className = 'viz-overlay-body';
+    overlay.appendChild(header);
+    overlay.appendChild(body);
+    document.getElementById('shell-screen').appendChild(overlay);
+    _vizOverlay = overlay;
+    // Use React bundle if available, otherwise ASCII fallback
+    if (window.hprofRenderViz) {
+      const fmtKind = (valueLabel || '').toLowerCase().includes('size') || (valueLabel || '').toLowerCase().includes('byte') ? 'bytes' : 'count';
+      window.hprofRenderViz(body, slices, kind, fmtKind, 320);
+    } else {
+      _asciiViz(slices, kind);
+    }
+    // Drag to move
+    let dragX = 0, dragY = 0;
+    header.addEventListener('mousedown', e => {
+      dragX = e.clientX - overlay.offsetLeft;
+      dragY = e.clientY - overlay.offsetTop;
+      const onMove = e2 => { overlay.style.left = (e2.clientX - dragX) + 'px'; overlay.style.top = (e2.clientY - dragY) + 'px'; };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  function _asciiViz(slices, kind) {
+    // Fallback ASCII bar chart when React bundle not loaded yet
+    const max = slices.reduce((m, s) => Math.max(m, s.value), 0) || 1;
+    const barW = 30;
+    slices.slice(0, 20).forEach(s => {
+      const filled = Math.round((s.value / max) * barW);
+      const bar = '█'.repeat(filled) + '░'.repeat(barW - filled);
+      term.writeln(`  \x1b[36m${bar}\x1b[0m  ${s.name}`);
+    });
+  }
+
+  // ── Dashboard ─────────────────────────────────────────────────────────────────
+  let _dashOverlay = null;
+
+  function openDashboard() {
+    if (_dashOverlay) { _dashOverlay.remove(); _dashOverlay = null; }
+    const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
+    const overlay = document.createElement('div');
+    overlay.className = 'dashboard-overlay';
+    const header = document.createElement('div');
+    header.className = 'dashboard-header';
+    const htitle = document.createElement('span');
+    htitle.className = 'dashboard-title';
+    htitle.textContent = '★ Dashboard';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'viz-action-btn viz-close-btn';
+    closeBtn.textContent = '✕';
+    closeBtn.title = 'Close';
+    closeBtn.addEventListener('click', () => { overlay.remove(); _dashOverlay = null; });
+    header.appendChild(htitle);
+    header.appendChild(closeBtn);
+    overlay.appendChild(header);
+    if (starred.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'dashboard-empty';
+      empty.textContent = 'No starred results yet. Run a query and use /star or click ☆ on a viz overlay.';
+      overlay.appendChild(empty);
+    } else {
+      const grid = document.createElement('div');
+      grid.className = 'dashboard-grid';
+      starred.forEach((entry, ei) => {
+        const card = document.createElement('div');
+        card.className = 'dashboard-card';
+        const cardHdr = document.createElement('div');
+        cardHdr.className = 'dashboard-card-header';
+        const cardTitle = document.createElement('span');
+        cardTitle.className = 'dashboard-card-title';
+        cardTitle.textContent = entry.label;
+        cardTitle.title = entry.oql;
+        const cardActions = document.createElement('div');
+        cardActions.className = 'dashboard-card-actions';
+        const rerunBtn = document.createElement('button');
+        rerunBtn.className = 'dashboard-card-btn';
+        rerunBtn.title = 'Re-run query';
+        rerunBtn.textContent = '↺';
+        rerunBtn.addEventListener('click', () => {
+          overlay.remove(); _dashOverlay = null;
+          if (window._hprofRunQuery && entry.oql) window._hprofRunQuery(entry.oql);
+        });
+        const delBtn = document.createElement('button');
+        delBtn.className = 'dashboard-card-btn';
+        delBtn.title = 'Remove from dashboard';
+        delBtn.textContent = '×';
+        delBtn.addEventListener('click', () => {
+          const s = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
+          s.splice(ei, 1);
+          localStorage.setItem(STARRED_KEY, JSON.stringify(s));
+          card.remove();
+          if (grid.children.length === 0) openDashboard();
+        });
+        cardActions.appendChild(rerunBtn);
+        cardActions.appendChild(delBtn);
+        cardHdr.appendChild(cardTitle);
+        cardHdr.appendChild(cardActions);
+        const vizContainer = document.createElement('div');
+        vizContainer.className = 'dashboard-viz';
+        card.appendChild(cardHdr);
+        card.appendChild(vizContainer);
+        grid.appendChild(card);
+        // Render treemap for this card using saved rows
+        if (window.hprofRenderViz && entry.columns && entry.rows) {
+          const cols = Array.isArray(entry.columns) ? entry.columns.map(c => (typeof c === 'string' ? c : c.name)) : [];
+          // Find first string-ish and first numeric col
+          const numIdx = entry.rows[0] ? cols.findIndex((_, i) => {
+            const v = entry.rows[0][i];
+            return typeof v === 'number' || (typeof v === 'object' && v && (v.kind === 'int' || v.kind === 'float' || v.kind === 'i64'));
+          }) : -1;
+          const labelIdx = numIdx > 0 ? 0 : (numIdx === 0 ? 1 : 0);
+          const valueIdx = numIdx >= 0 ? numIdx : cols.length - 1;
+          const slices = entry.rows
+            .map(r => {
+              const lc = r[labelIdx]; const vc = r[valueIdx];
+              const name = lc == null ? '' : (typeof lc === 'object' ? String(lc.v ?? lc) : String(lc));
+              const value = vc == null ? 0 : (typeof vc === 'object' ? Number(vc.v) || 0 : Number(vc) || 0);
+              return { name, value };
+            })
+            .filter(s => s.value > 0)
+            .slice(0, 40);
+          if (slices.length > 0) {
+            const fmtKind = (cols[valueIdx] || '').toLowerCase().includes('byte') || (cols[valueIdx] || '').toLowerCase().includes('size') ? 'bytes' : 'count';
+            window.hprofRenderViz(vizContainer, slices, 'treemap', fmtKind, 180);
+          } else {
+            vizContainer.textContent = '(no numeric data)';
+          }
+        }
+      });
+      overlay.appendChild(grid);
+    }
+    document.getElementById('shell-screen').appendChild(overlay);
+    _dashOverlay = overlay;
+  }
+
+  // ── Star-on-hover: show ☆ button after each result output ────────────────────
+  // We wrap renderResult to emit a clickable star button into the DOM after
+  // the terminal output. The star attaches to the query that produced the result.
+  const _origRenderResult = null; // set below after renderResult is defined
+
 
   let currentAbort = null;  // AbortController for in-flight query
   let lastResult = null;    // { columns, rows } of last successful query for /export
@@ -3820,6 +4230,13 @@ function startTerminal() {
     c('/history [N|clear]',      '— show/clear history; !N to re-run entry N');
     c('/bookmark  /save [name]', '— save last query as named bookmark');
     c('/forget <name>',          '— delete a bookmark');
+    h('My Queries & Dashboard');
+    c('/store [name]',           '— save last query permanently in sidebar (persists across reloads)');
+    c('/remove <name>',          '— delete a stored query from sidebar');
+    c('/star [label]',           '— star last query+result for the dashboard');
+    c('/unstar <label>',         '— remove a starred result');
+    c('/dashboard',              '— open starred-results dashboard panel');
+    c('/viz [kind] [l] [v]',     '— visualise last result: treemap|histogram|table, label+value cols');
     h('Settings  (/set with no args shows current values)');
     c('/set limit <N>',          '— cap rows displayed (0 = unlimited, default 200)');
     c('/set bytes raw|human',    '— byte columns: numbers or 4.3 KiB (default human)');
@@ -3963,8 +4380,8 @@ function startTerminal() {
     { cat: 'viz', title: 'Visualization directives (-- @viz)', examples: [
       { desc: 'Histogram of class instance counts',
         oql: '-- @viz histogram\nSELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
-      { desc: 'Pie chart of heap by package',
-        oql: '-- @viz piechart cap=10\nSELECT @displayName AS cls, SUM(@usedHeapSize) AS bytes FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY bytes DESC LIMIT 10' },
+      { desc: 'Treemap of heap by class (shallow size)',
+        oql: '-- @viz treemap cap=20\nSELECT @displayName AS cls, SUM(@usedHeapSize) AS bytes FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY bytes DESC LIMIT 20' },
       { desc: 'Treemap of retained heap by class (needs full analysis)',
         oql: '-- @viz treemap\nSELECT @displayName AS cls, @retainedHeapSize AS retained FROM INSTANCEOF java.lang.Object ORDER BY retained DESC LIMIT 30' },
       { desc: 'Named chart block',
@@ -3999,15 +4416,15 @@ function startTerminal() {
       return;
     }
     term.writeln('');
-    term.writeln('\x1b[1mOQL Examples\x1b[0m  \x1b[2m(copy a query and paste into the prompt)\x1b[0m');
+    term.writeln('\x1b[1mOQL Examples\x1b[0m  \x1b[2m(click or paste a query, then press Enter)\x1b[0m');
     for (const { title, examples } of cats) {
       term.writeln(`\r\n  \x1b[1;33m${title}\x1b[0m`);
       for (const { desc, oql } of examples) {
         term.writeln(`  \x1b[2m${desc}\x1b[0m`);
-        // Show multi-line queries indented; single-line gets the cyan prompt style
+        // Syntax-highlight each line of the query, same as the input line
         const lines = oql.split('\n');
         for (const ln of lines) {
-          term.writeln(`    \x1b[36m${ln}\x1b[0m`);
+          term.writeln('    ' + highlightOql(ln) + '\x1b[0m');
         }
       }
     }

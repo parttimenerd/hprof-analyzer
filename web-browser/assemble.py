@@ -35,6 +35,7 @@ def assemble(output: pathlib.Path) -> None:
     pkg = root / "crates/hprof-wasm/pkg"
     wasm_bin = pkg / "hprof_wasm_bg.wasm"
     wasm_js  = pkg / "hprof_wasm.js"
+    react_bundle = root / "web/dist/bundle.js"
 
     for p in (wasm_bin, wasm_js):
         if not p.exists():
@@ -42,12 +43,18 @@ def assemble(output: pathlib.Path) -> None:
                 f"Missing: {p}\n"
                 "Run: wasm-pack build crates/hprof-wasm --target web --release"
             )
+    if not react_bundle.exists():
+        sys.exit(
+            f"Missing: {react_bundle}\n"
+            "Run: cd web && node esbuild.config.mjs"
+        )
 
     wasm  = wasm_bin.read_bytes()
     wjs   = wasm_js.read_text(encoding="utf-8")
     shell = (root / "web-browser/shell.js").read_text(encoding="utf-8")
     css   = (root / "web-browser/style.css").read_text(encoding="utf-8")
     idx   = (root / "web-browser/index.html").read_text(encoding="utf-8")
+    react = react_bundle.read_text(encoding="utf-8")
 
     b64wasm = base64.b64encode(wasm).decode("ascii")
 
@@ -60,6 +67,7 @@ def assemble(output: pathlib.Path) -> None:
         sys.exit("WASM JS contains </script> — escaping required; update this script.")
     html = html.replace("%%WASM_JS%%", wjs)
     html = html.replace("%%WASM_B64%%", b64wasm)
+    html = html.replace("%%REACT_BUNDLE%%", react)
     html = html.replace("%%SHELL_JS%%", shell)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -68,9 +76,10 @@ def assemble(output: pathlib.Path) -> None:
     size_kb  = output.stat().st_size / 1024
     wasm_kb  = len(wasm) / 1024
     b64_kb   = len(b64wasm) / 1024
+    react_kb = len(react.encode()) / 1024
     print(
         f"Written {output}  "
-        f"({size_kb:.0f} KB total, wasm={wasm_kb:.0f} KB, b64={b64_kb:.0f} KB)"
+        f"({size_kb:.0f} KB total, wasm={wasm_kb:.0f} KB, b64={b64_kb:.0f} KB, react={react_kb:.0f} KB)"
     )
 
 

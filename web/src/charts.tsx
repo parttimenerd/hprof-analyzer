@@ -40,7 +40,109 @@ const PALETTE = [
 ];
 const color = (i: number) => PALETTE[i % PALETTE.length];
 
-// ── Pie / donut ─────────────────────────────────────────────────────────────
+// ── FlatTreemap — lightweight squarify treemap for flat slice data ───────────
+// Used in place of pie charts: shows proportions + labels without wasted space.
+function FlatTreemap({
+  data, fmt, height = 220, onSlice,
+}: {
+  data: Slice[]; fmt: (n: number) => string; height?: number; onSlice?: (i: number) => void;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(600);
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver((entries) => {
+      const bw = entries[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const positive = data.filter((d) => d.value > 0);
+  const total = positive.reduce((s, d) => s + d.value, 0) || 1;
+
+  const nodes = React.useMemo(() => {
+    if (positive.length === 0 || w < 10) return [];
+    const root = hierarchy<{ name: string; value: number; children?: unknown[] }>(
+      { name: "", value: 0, children: positive },
+      (d) => d.children as { name: string; value: number }[] | undefined,
+    )
+      .sum((d) => (d.children ? 0 : d.value))
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    treemap<{ name: string; value: number }>()
+      .tile(treemapSquarify)
+      .size([w, height])
+      .paddingOuter(2)
+      .paddingInner(1)(root as never);
+    return root.leaves();
+  }, [positive, w, height]);
+
+  if (nodes.length === 0) return null;
+
+  return (
+    <div className="chart-wrap" ref={ref}>
+      <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
+        {nodes.map((leaf, i) => {
+          const x0 = (leaf as any).x0 as number;
+          const y0 = (leaf as any).y0 as number;
+          const x1 = (leaf as any).x1 as number;
+          const y1 = (leaf as any).y1 as number;
+          const lw = x1 - x0;
+          const lh = y1 - y0;
+          if (lw < 1 || lh < 1) return null;
+          const label = (leaf.data as { name: string }).name;
+          const value = leaf.value ?? 0;
+          const pct = ((value / total) * 100).toFixed(1);
+          const origIdx = data.findIndex((d) => d.name === label);
+          const clickable = onSlice != null && origIdx !== -1 && origIdx < data.length - (data.length > positive.length ? 0 : 0);
+          return (
+            <div
+              key={i}
+              title={`${label}: ${fmt(value)} (${pct}%)`}
+              onClick={clickable ? () => onSlice!(origIdx) : undefined}
+              style={{
+                position: "absolute",
+                left: x0, top: y0, width: lw, height: lh,
+                background: PALETTE[i % PALETTE.length],
+                opacity: 0.85,
+                boxSizing: "border-box",
+                overflow: "hidden",
+                cursor: clickable ? "pointer" : "default",
+              }}
+            >
+              {lw > 44 && lh > 22 && (
+                <span style={{
+                  display: "block", padding: "2px 4px",
+                  fontSize: Math.min(12, lw / 7),
+                  color: "#fff", whiteSpace: "nowrap",
+                  overflow: "hidden", textOverflow: "ellipsis",
+                }}>
+                  {label}
+                </span>
+              )}
+              {lw > 44 && lh > 38 && (
+                <span style={{
+                  display: "block", padding: "0 4px",
+                  fontSize: Math.min(11, lw / 8),
+                  color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap",
+                  overflow: "hidden", textOverflow: "ellipsis",
+                }}>
+                  {fmt(value)} ({pct}%)
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Export for use outside the bundle (shell.js /viz command and dashboard)
+export { FlatTreemap };
+
+
 interface Slice {
   name: string;
   value: number;
@@ -209,7 +311,7 @@ function VBar({
 // ── Chart wrappers keyed to model fields ────────────────────────────────────
 export function HeapCompositionChart({ data }: { data: KindStat[] }) {
   if (data.length < 2) return null;
-  return <Pie data={data.map((k) => ({ name: k.kind, value: k.shallow_heap }))} fmt={formatBytes} donut />;
+  return <FlatTreemap data={data.map((k) => ({ name: k.kind, value: k.shallow_heap }))} fmt={formatBytes} height={180} />;
 }
 
 export function TopClassesChart({ data }: { data: HistRow[] }) {
@@ -236,24 +338,12 @@ export function LoaderRollupChart({ data }: { data: LoaderRollup[] }) {
   return <HBar data={rows} fmt={formatBytes} barColor={4} titles={titles} />;
 }
 
-export function LeakShareChart({ suspects, total }: { suspects: Suspect[]; total: number }) {
+export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect[]; total: number; onSlice?: (i: number) => void }) {
   if (suspects.length === 0 || total <= 0) return null;
   const rows: Slice[] = suspects.map((s) => ({ name: s.pretty_class, value: s.retained }));
   const sum = suspects.reduce((s, x) => s + x.retained, 0);
   if (total > sum) rows.push({ name: "(remainder)", value: total - sum });
-  const titles = rows.map((row) => `${row.name} — ${formatBytes(row.value)} (${((row.value / total) * 100).toFixed(1)}%)`);
-  return (
-    <Pie
-      data={rows}
-      fmt={formatBytes}
-      titles={titles}
-      onSlice={(i) => {
-        if (i < suspects.length) {
-          document.getElementById(`suspect-${i + 1}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }}
-    />
-  );
+  return <FlatTreemap data={rows} fmt={formatBytes} height={220} onSlice={onSlice} />;
 }
 
 export function ConcentrationChart({ rc }: { rc: RetentionSummary }) {

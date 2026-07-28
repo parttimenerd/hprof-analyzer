@@ -66,7 +66,7 @@
   <div id="landing-footer">
     <a href="https://github.com/parttimenerd/hprof-analyzer" target="_blank" rel="noopener">GitHub</a>
     <span class="sep">·</span>
-    <span>MIT License</span>
+    <a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     <span class="sep">·</span>
     <span>CLI: <code>cargo install hprof-analyzer</code></span>
   </div>
@@ -117,6 +117,7 @@
     <span id="server-badge">● Connected</span>
     <span id="server-url-display"></span>
     <div id="topbar-actions">
+      <button id="btn-dashboard" title="Starred results dashboard (★)">★ Dashboard</button>
       <button id="btn-show-report" title="Show analysis report (Ctrl+Shift+R)">
         Show Report
       </button>
@@ -143,6 +144,9 @@
 <!-- WASM glue: stored as inert text to avoid template-literal escaping issues -->
 <script type="text/plain" id="wasm-glue-src">%%WASM_JS%%</script>
 <script type="text/plain" id="wasm-b64-src">%%WASM_B64%%</script>
+
+<!-- React bundle: exposes window.hprofRenderViz / hprofRenderQueryViz / hprofUnmountViz -->
+<script>%%REACT_BUNDLE%%</script>
 
 <script type="module">
 // ── Load WASM glue from inert <script type="text/plain"> tags ─────────────────

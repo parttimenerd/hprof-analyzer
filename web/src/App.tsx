@@ -1625,7 +1625,10 @@ function LeakSuspectsSection({ report }: { report: Report }) {
             else on the reachable heap.
           </p>
           <ChartOrNote hasData={l.suspects.length > 0 && l.total_shallow > 0} note="No leak suspects to chart.">
-            <LeakShareChart suspects={l.suspects} total={l.total_shallow} />
+            <LeakShareChart suspects={l.suspects} total={l.total_shallow} onSlice={(i) => {
+              if (i < l.suspects.length)
+                document.getElementById(`suspect-${i + 1}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }} />
           </ChartOrNote>
           {l.suspects.map((s, i) => (
             <SuspectCard key={i} s={s} total={l.total_shallow} rank={i + 1} />

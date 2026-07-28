@@ -9,6 +9,9 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App, { DiffApp, ErrorBoundary } from "./App";
 import type { Report, SeriesDiffEnvelope } from "./types";
+import { FlatTreemap, QueryViz } from "./charts";
+import { formatBytes, fmtCount } from "./format";
+import type { QueryResult } from "./types";
 import css from "./styles.css";
 
 function fail(msg: string): void {
@@ -21,6 +24,64 @@ function injectStyles(): void {
   style.textContent = css as unknown as string;
   document.head.appendChild(style);
 }
+
+// ── Viz renderer exposed to shell.js ────────────────────────────────────────
+// shell.js calls window.hprofRenderViz(container, slices, kind, fmt) to mount
+// a React treemap / histogram into a plain DOM container. A Map tracks roots
+// so the same container can be re-rendered or unmounted cleanly.
+type VizSlice = { name: string; value: number };
+const _vizRoots = new Map<Element, ReturnType<typeof createRoot>>();
+
+declare global {
+  interface Window {
+    __HPROF_DATA_B64__?: string;
+    hprofDecodeText?: (b64: string) => Promise<string>;
+    hprofRenderViz: (
+      container: Element,
+      slices: VizSlice[],
+      kind: "treemap" | "histogram" | "piechart",
+      fmtKind: "bytes" | "count",
+      height?: number,
+    ) => void;
+    hprofRenderQueryViz: (container: Element, query: QueryResult) => void;
+    hprofUnmountViz: (container: Element) => void;
+  }
+}
+
+window.hprofRenderViz = (container, slices, kind, fmtKind, height = 220) => {
+  let root = _vizRoots.get(container);
+  if (!root) {
+    root = createRoot(container);
+    _vizRoots.set(container, root);
+  }
+  const fmt = fmtKind === "bytes" ? formatBytes : fmtCount;
+  root.render(
+    <React.StrictMode>
+      <FlatTreemap data={slices} fmt={fmt} height={height} />
+    </React.StrictMode>,
+  );
+};
+
+window.hprofRenderQueryViz = (container, query) => {
+  let root = _vizRoots.get(container);
+  if (!root) {
+    root = createRoot(container);
+    _vizRoots.set(container, root);
+  }
+  root.render(
+    <React.StrictMode>
+      <QueryViz query={query} />
+    </React.StrictMode>,
+  );
+};
+
+window.hprofUnmountViz = (container) => {
+  const root = _vizRoots.get(container);
+  if (root) {
+    root.unmount();
+    _vizRoots.delete(container);
+  }
+};
 
 async function boot(): Promise<void> {
   const b64 = window.__HPROF_DATA_B64__ || "";
