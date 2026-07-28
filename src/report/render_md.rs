@@ -450,19 +450,19 @@ fn render_toc(r: &Report, out: &mut String) {
     }
     if r.fields_by_size
         .as_ref()
-        .map_or(false, |f| !f.rows.is_empty())
+        .is_some_and(|f| !f.rows.is_empty())
     {
         out.push_str(&SectionId::FieldsBySize.toc_bullet());
     }
     if r.biggest_collections
         .as_ref()
-        .map_or(false, |b| !b.combined.is_empty() || !b.by_kind.is_empty())
+        .is_some_and(|b| !b.combined.is_empty() || !b.by_kind.is_empty())
     {
         out.push_str(&SectionId::BiggestCollections.toc_bullet());
     }
     if r.collection_contents
         .as_ref()
-        .map_or(false, |c| !c.rows.is_empty())
+        .is_some_and(|c| !c.rows.is_empty())
     {
         out.push_str(&SectionId::CollectionContents.toc_bullet());
     }

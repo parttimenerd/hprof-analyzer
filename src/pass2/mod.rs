@@ -57,6 +57,7 @@ impl Pass2 {
     /// `Graph`, a deferred `InboundBuilder` (the inbound CSR is built later to
     /// keep its ~5.5GB off the rpo peak), and the early-compressed `shallow` /
     /// `class_idx` blobs. `compress` selects the codec for those cold arrays.
+    #[allow(clippy::type_complexity)]
     pub fn build(
         source: &crate::source::HprofSource,
         mut p1: Pass1,
@@ -1065,8 +1066,7 @@ impl Pass2 {
         };
         // Interned field-name pool (pool[0] = ""). Built only under --ref-paths.
         let mut field_name_pool: Vec<String> = if opts.ref_paths {
-            let mut pool = Vec::new();
-            pool.push(String::new()); // index 0 = no name
+            let pool = vec![String::new()]; // index 0 = no name
             pool
         } else {
             Vec::new()

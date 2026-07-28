@@ -801,8 +801,8 @@ fn extract_oql(body: &str) -> Result<String, String> {
 
 pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
     let addr = format!("127.0.0.1:{port}");
-    let server = Server::http(&addr)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bind {addr} failed: {e}")))?;
+    let server =
+        Server::http(&addr).map_err(|e| io::Error::other(format!("bind {addr} failed: {e}")))?;
     let bound = server.server_addr();
     println!("hprof-analyzer OQL server listening on http://{bound}");
     println!("  POST /         (raw body or {{\"query\":\"...\"}}) -> JSON QueryResult");
@@ -928,9 +928,7 @@ mod tests {
             "plain message present, got: {v}"
         );
         assert!(
-            v["error"]["report"]
-                .as_str()
-                .map_or(false, |s| !s.is_empty()),
+            v["error"]["report"].as_str().is_some_and(|s| !s.is_empty()),
             "ariadne report present, got: {v}"
         );
     }
@@ -1410,7 +1408,7 @@ mod tests {
         use crate::query::plan::plan_query;
         use crate::query::run::{ReplCache, run_resident_with_retained};
 
-        let mut cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false)
+        let cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false)
             .expect("ReplCache::build");
         let n = cache.n;
         let retained: Vec<u64> = (0..n as u64).map(|i| i * 8 + 16).collect();

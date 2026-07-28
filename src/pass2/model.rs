@@ -1,5 +1,7 @@
 //! Pass-2 data model: graph output struct + inbound-builder state.
 
+#![allow(dead_code)]
+
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},

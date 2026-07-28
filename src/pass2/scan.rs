@@ -1,5 +1,7 @@
 //! Pass-2 low-level heap-record scanners + skip/reader helpers.
 
+#![allow(dead_code)]
+
 use std::io::{self, ErrorKind};
 
 use crate::{
@@ -493,30 +495,6 @@ pub(crate) fn value_size(type_code: u8, id_size: u8) -> u64 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sub_remaining_errors_on_underflow_instead_of_wrapping() {
-        // Normal accounting decrements in place.
-        let mut rem = 100u64;
-        sub_remaining(&mut rem, 40).unwrap();
-        assert_eq!(rem, 60);
-        sub_remaining(&mut rem, 60).unwrap();
-        assert_eq!(rem, 0);
-
-        // A sub-record claiming more bytes than the segment has left must error
-        // (InvalidData), NOT wrap to ~u64::MAX and spin the scan loop into OOB
-        // reads. This is the malformed/truncated HEAP_DUMP_SEGMENT case.
-        let mut rem = 3u64;
-        let err = sub_remaining(&mut rem, 4).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidData);
-        // On error the counter is left unchanged (no partial mutation).
-        assert_eq!(rem, 3);
-    }
-}
-
 /// Single-pass collection of instance blobs and primitive-array blobs for
 /// multiple disjoint wanted sets, avoiding repeated full-file scans.
 ///
@@ -527,6 +505,7 @@ mod tests {
 ///   appears as a PRIM_ARRAY_DUMP.
 /// - `obj_blobs`: addr → element-ref bytes, for every addr in `wanted_obj`
 ///   that appears as an OBJ_ARRAY_DUMP.
+#[allow(clippy::type_complexity)]
 pub(crate) fn collect_blobs<O>(
     open: O,
     id_size: u8,
@@ -650,4 +629,28 @@ where
         }
     }
     Ok((inst_blobs, prim_blobs, obj_blobs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sub_remaining_errors_on_underflow_instead_of_wrapping() {
+        // Normal accounting decrements in place.
+        let mut rem = 100u64;
+        sub_remaining(&mut rem, 40).unwrap();
+        assert_eq!(rem, 60);
+        sub_remaining(&mut rem, 60).unwrap();
+        assert_eq!(rem, 0);
+
+        // A sub-record claiming more bytes than the segment has left must error
+        // (InvalidData), NOT wrap to ~u64::MAX and spin the scan loop into OOB
+        // reads. This is the malformed/truncated HEAP_DUMP_SEGMENT case.
+        let mut rem = 3u64;
+        let err = sub_remaining(&mut rem, 4).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        // On error the counter is left unchanged (no partial mutation).
+        assert_eq!(rem, 3);
+    }
 }

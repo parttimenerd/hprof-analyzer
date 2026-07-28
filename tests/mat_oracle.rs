@@ -36,8 +36,9 @@
 //!   * `--all` (raw heap) vs MAT → `compare_superset` (MAT ⊆ ours; the delta is
 //!     the unreachable-object count, reported for visibility).
 //!   * reachable-only default vs MAT → `compare_exact` (ours == MAT exactly).
-//! e.g. on dump_4_philosophers, `FROM java.lang.Thread` → MAT 27, ours-`--all`
-//! 29 (2 unreachable Threads), ours-reachable 27 (== MAT).
+//!
+//!   e.g. on dump_4_philosophers, `FROM java.lang.Thread` → MAT 27, ours-`--all`
+//!   29 (2 unreachable Threads), ours-reachable 27 (== MAT).
 //!
 //! # Self-contained parity tests (always compiled)
 //!
@@ -108,7 +109,7 @@ fn group_by_count_matches_manual_count() {
     let grouped_n: u64 = grouped
         .lines()
         .find(|l| l.contains("String") && l.contains('|'))
-        .and_then(|l| l.split('|').last())
+        .and_then(|l| l.split('|').next_back())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
     // Extract count from direct query (the line that is a bare integer)

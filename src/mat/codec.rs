@@ -256,7 +256,7 @@ mod tests {
     fn mat_bits_long_straddle_32() {
         // set bits 16..=47 → mask has 32 varying bits, 16 trailing zeros.
         let mask: i64 = 0x0000_FFFF_FFFF_0000u64 as i64;
-        let (varying, trailing) = mat_bits_long(mask);
+        let (_varying, trailing) = mat_bits_long(mask);
         // trailing: bits 0-15 are 0, bit 16 is set.
         //   shift 0..15: 1<<(k&31)=1<<k → sign-ext positive → mask&1<<k = 0 for k<16.
         //   shift 16: 1<<16 → sign-ext = 65536 → mask & 65536 ≠ 0 → stop. trailing=16.

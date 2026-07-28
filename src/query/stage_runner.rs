@@ -637,14 +637,14 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     }
                 }
                 SelectItem::Attr(Attr::ToHex(inner)) => {
-                    let ret = ctx.retained.get(s as usize).copied().unwrap_or(0) as u64;
+                    let ret = ctx.retained.get(s as usize).copied().unwrap_or(0);
                     match eval_late_expr_multi(inner, s, ret, ctx, &like_regexes) {
                         QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                         _ => QueryValue::Null,
                     }
                 }
                 SelectItem::Expr(e) => {
-                    let ret = ctx.retained.get(s as usize).copied().unwrap_or(0) as u64;
+                    let ret = ctx.retained.get(s as usize).copied().unwrap_or(0);
                     eval_late_expr_multi(e, s, ret, ctx, &like_regexes)
                 }
                 SelectItem::Star => QueryValue::ObjRef {
@@ -916,7 +916,7 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
             let pred: &dyn Fn(&Attr) -> bool = pred;
             branches.iter().any(|(cond, then_e)| {
                 pred_has_attr_dyn(cond, pred) || expr_has_attr_dyn(then_e, pred)
-            }) || else_.as_ref().map_or(false, |e| expr_has_attr_dyn(e, pred))
+            }) || else_.as_ref().is_some_and(|e| expr_has_attr_dyn(e, pred))
         }
         Expr::Coalesce(args) => args.iter().any(|a| expr_has_attr(a, pred)),
         Expr::NullIf { lhs, rhs } => expr_has_attr(lhs, pred) || expr_has_attr(rhs, pred),
@@ -937,7 +937,7 @@ fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
         Expr::Case { branches, else_ } => {
             branches.iter().any(|(cond, then_e)| {
                 pred_has_attr_dyn(cond, pred) || expr_has_attr_dyn(then_e, pred)
-            }) || else_.as_ref().map_or(false, |e| expr_has_attr_dyn(e, pred))
+            }) || else_.as_ref().is_some_and(|e| expr_has_attr_dyn(e, pred))
         }
         Expr::Coalesce(args) => args.iter().any(|a| expr_has_attr_dyn(a, pred)),
         Expr::NullIf { lhs, rhs } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
@@ -1157,14 +1157,14 @@ fn project_string_row_item(
             }
         }
         SelectItem::Attr(Attr::ToHex(inner)) => {
-            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             match eval_late_expr_multi(inner, dense, ret, ctx, like_regexes) {
                 QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                 _ => QueryValue::Null,
             }
         }
         SelectItem::Expr(e) => {
-            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             eval_late_expr_multi(e, dense, ret, ctx, like_regexes)
         }
         SelectItem::Star => QueryValue::ObjRef {
@@ -1216,14 +1216,14 @@ fn project_array_index_item(
             QueryValue::Str(class_name.to_string())
         }
         SelectItem::Attr(Attr::ToHex(inner)) => {
-            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             match eval_late_expr_multi(inner, dense, ret, ctx, like_regexes) {
                 QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                 _ => QueryValue::Null,
             }
         }
         SelectItem::Expr(e) => {
-            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             eval_late_expr_multi(e, dense, ret, ctx, like_regexes)
         }
         SelectItem::Star => QueryValue::ObjRef {
@@ -1454,7 +1454,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
                 }
-                SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes),
+                SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, &like_regexes),
                 SelectItem::Star => QueryValue::Int(1),
                 _ => QueryValue::Null,
             };
@@ -1670,9 +1670,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                     SelectItem::Attr(Attr::ObjectAddress) => {
                         QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
                     }
-                    SelectItem::Expr(e) => {
-                        eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes)
-                    }
+                    SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, &like_regexes),
                     SelectItem::Star => QueryValue::Int(1),
                     _ => QueryValue::Null,
                 };
@@ -2559,6 +2557,7 @@ mod classof_late_tests {
 mod dom_ctx_tests {
     use super::*;
     /// Dominator tree: 0->{1,2}, 1->{3}. CSR dc_off=[0,2,3,3,3], dc_tgt=[1,2,3].
+    #[allow(clippy::type_complexity)]
     pub(super) fn tiny_ctx_parts() -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u64>, Vec<u32>) {
         (
             vec![u32::MAX, 0, 0, 1],
@@ -2603,6 +2602,7 @@ mod dom_ctx_tests {
 mod dom_run_tests {
     use super::*;
 
+    #[allow(clippy::type_complexity)]
     fn ctx_parts() -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u64>, Vec<u32>) {
         super::dom_ctx_tests::tiny_ctx_parts()
     }
@@ -3768,7 +3768,7 @@ mod arith_late_tests {
     //!     inside a Binary/Unary expression.
 
     use super::*;
-    use crate::query::ast::{ArithOp, Attr, CompareOp, Expr, Predicate, UnaryOp, Value};
+    use crate::query::ast::{ArithOp, Attr, CompareOp, Expr, Predicate, Value};
     use crate::query::model::QueryValue;
 
     // ── cmp_late_qv (QueryValue vs QueryValue comparator) ────────────────────

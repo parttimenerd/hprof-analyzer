@@ -124,6 +124,7 @@ impl RefWalkTails {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
@@ -345,7 +346,7 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
                 branches
                     .iter()
                     .any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
-                    || else_.as_ref().map_or(false, |e| expr_has(e))
+                    || else_.as_ref().is_some_and(|e| expr_has(e))
             }
             Expr::Coalesce(args) => args.iter().any(expr_has),
             Expr::NullIf { lhs, rhs } => expr_has(lhs) || expr_has(rhs),
@@ -406,7 +407,7 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
                 branches
                     .iter()
                     .any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
-                    || else_.as_ref().map_or(false, |e| expr_has(e))
+                    || else_.as_ref().is_some_and(|e| expr_has(e))
             }
             Expr::Coalesce(args) => args.iter().any(expr_has),
             Expr::NullIf { lhs, rhs } => expr_has(lhs) || expr_has(rhs),

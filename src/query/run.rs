@@ -19,6 +19,7 @@ use crate::types::HprofType;
 /// serves per-object `@objectAddress` (via `id_map`) and `@usedHeapSize` (via
 /// the dense `shallow` size array). Borrows pass2's live tables immutably for
 /// the scan's lifetime.
+#[allow(clippy::type_complexity)]
 pub struct LiveResolver<'a> {
     class_map: &'a HashMap<u64, ClassInfo>,
     strings: &'a HashMap<u64, String>,
@@ -1557,14 +1558,14 @@ pub fn expand_union_queries(
         let except_plans = std::mem::take(&mut head_plan.except_branch_plans);
         flat.push((head_q, head_plan));
         // One slot per UNION branch, AST paired with its pre-planned counterpart.
-        for (bq, bplan) in q.union_branches.iter().zip(branch_plans.into_iter()) {
+        for (bq, bplan) in q.union_branches.iter().zip(branch_plans) {
             let mut bq = bq.clone();
             bq.union_branches.clear();
             flat.push((bq, bplan));
         }
         // One slot per INTERSECT branch.
         let intersect_count = q.intersect_branches.len();
-        for (bq, bplan) in q.intersect_branches.iter().zip(intersect_plans.into_iter()) {
+        for (bq, bplan) in q.intersect_branches.iter().zip(intersect_plans) {
             let mut bq = bq.clone();
             bq.union_branches.clear();
             bq.intersect_branches.clear();
@@ -1573,7 +1574,7 @@ pub fn expand_union_queries(
         }
         // One slot per EXCEPT branch.
         let except_count = q.except_branches.len();
-        for (bq, bplan) in q.except_branches.iter().zip(except_plans.into_iter()) {
+        for (bq, bplan) in q.except_branches.iter().zip(except_plans) {
             let mut bq = bq.clone();
             bq.union_branches.clear();
             bq.intersect_branches.clear();
@@ -1599,7 +1600,7 @@ pub fn expand_union_queries(
             order_by: q
                 .order_by
                 .as_ref()
-                .map(|ob| (crate::query::execute::attr_name(&ob.key), ob.dir.clone())),
+                .map(|ob| (crate::query::execute::attr_name(&ob.key), ob.dir)),
         });
     }
     (flat, groups)
@@ -1648,7 +1649,7 @@ pub fn collapse_union_results(
         if g.count > 1 {
             if let Some((ref col_name, ref dir)) = g.order_by {
                 if let Some(idx) = result.columns.iter().position(|c| &c.name == col_name) {
-                    crate::query::execute::sort_rows_by_column(&mut result.rows, idx, dir.clone());
+                    crate::query::execute::sort_rows_by_column(&mut result.rows, idx, *dir);
                 }
                 // Apply the union-wide LIMIT now that rows are globally sorted.
                 if let Some(lim) = g.union_limit {

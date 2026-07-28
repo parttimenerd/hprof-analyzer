@@ -567,6 +567,7 @@ impl MatEmitter {
     /// `inv`: per-row inverse map (histogram row → old class-obj dense id), from build_row_to_classobj_id.
     /// `mm`: MAT id map (for translating addresses and old dense ids to mat-ids).
     /// `array_obj_bits`: `g.array_obj_1based` — bitmask threshold (see Graph docs).
+    #[allow(clippy::type_complexity)]
     pub fn emit_dot_index(
         &self,
         meta: &MatClassMeta,
@@ -945,7 +946,7 @@ impl MatEmitter {
         // --- 6. BitField arrayObjects: n+1 bits (mat-id 0..=n), bit set for array objects ---
         // An object is an array if its class name starts with '['.
         let mat_n = mm.mat_count(); // includes synthetic id 0
-        let num_words = (mat_n + 31) / 32;
+        let num_words = mat_n.div_ceil(32);
         let mut words: Vec<i32> = vec![0i32; num_words];
         for &old_id in mm.sorted() {
             let mat_id = mm.translate(old_id as i32);
@@ -1024,9 +1025,9 @@ pub fn build_row_to_classobj_id(
             // Prefer reachable over unreachable; among equal reachability, lower id wins.
             let cur_reachable = mm.translate(*slot) >= 0;
             let new_reachable = mm.translate(classobj_id as i32) >= 0;
-            if !cur_reachable && new_reachable {
-                *slot = classobj_id as i32;
-            } else if cur_reachable == new_reachable && (classobj_id as i32) < *slot {
+            if (!cur_reachable && new_reachable)
+                || (cur_reachable == new_reachable && (classobj_id as i32) < *slot)
+            {
                 *slot = classobj_id as i32;
             }
         }
@@ -1403,7 +1404,7 @@ mod tests {
     #[test]
     fn emit_i2sv2_encoding() {
         // Three entries: (class_mat_id, retained) → file = (i32_be, i64_neg_be) x 3
-        let entries = vec![(1i32, 100i64), (7i32, 200i64), (-1i32, 0i64)];
+        let entries = [(1i32, 100i64), (7i32, 200i64), (-1i32, 0i64)];
         let tmp = std::env::temp_dir().join("mat_i2sv2_encoding");
         let _ = std::fs::remove_dir_all(&tmp);
         let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
@@ -1582,7 +1583,6 @@ mod tests {
     // ---- emit_outbound / emit_inbound / emit_dom_out roundtrip tests ----
 
     fn read_sorted_1n(path: &std::path::Path) -> Vec<Vec<i32>> {
-        use crate::mat::int_index_1n;
         let bytes = std::fs::read(path).unwrap();
         let n = bytes.len();
         let divider = i64::from_be_bytes(bytes[n - 8..n].try_into().unwrap()) as usize;
@@ -1604,7 +1604,7 @@ mod tests {
 
         fn decode_region(
             file: &[u8],
-            region: &[u8],
+            _region: &[u8],
             pages: usize,
             psize: i32,
             size: i64,

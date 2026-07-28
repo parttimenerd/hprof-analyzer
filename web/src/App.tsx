@@ -1943,7 +1943,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
   if (components.length === 0) return null;
   const cols: TableColumn<Component>[] = [
     { id: "component", name: "Component", grow: 1, cell: (c) => <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code> },
-    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "120px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: "140px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
       id: "top_classes", name: "Top classes", grow: 2,

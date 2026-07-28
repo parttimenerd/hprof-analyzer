@@ -30,6 +30,7 @@ pub enum HprofSource {
     ///
     /// `Arc<Vec<u8>>` is used instead of `Arc<[u8]>` so that WASM can call
     /// `Arc::try_unwrap` after parsing to reclaim the buffer without copying.
+    #[allow(dead_code)]
     Bytes { data: Arc<Vec<u8>>, name: String },
 }
 
@@ -56,6 +57,12 @@ impl HprofSource {
             HprofSource::Path(p) => Ok(std::fs::metadata(p)?.len()),
             HprofSource::Bytes { data, .. } => Ok(data.len() as u64),
         }
+    }
+
+    /// Whether the source is empty (zero bytes). Returns `true` on metadata errors.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.len().map_or(true, |n| n == 0)
     }
 
     /// Human-readable name: basename for `Path`, `name` field for `Bytes`.

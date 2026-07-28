@@ -112,7 +112,7 @@ fn analyze_to_report_inner(
     progress: &mut dyn FnMut(&str, f32),
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
-    let p1 = pass1::Pass1::run(&source, false)?;
+    let p1 = pass1::Pass1::run(source, false)?;
     progress("pass1", 1.0);
 
     if p1.class_ids.len() > u32::MAX as usize {
@@ -142,7 +142,7 @@ fn analyze_to_report_inner(
         _string_values,
         _string_values_truncated,
     ) = pass2::Pass2::build(
-        &source,
+        source,
         p1,
         compress,
         opts,

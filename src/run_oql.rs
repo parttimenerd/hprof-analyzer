@@ -336,7 +336,7 @@ pub(crate) fn run_oql_escalated(
             dc_off: &dc_off,
             dc_tgt: &dc_tgt,
             shallow: &g.shallow,
-            id_map: &id_map,
+            id_map,
             fwd_off: rw_off,
             fwd_tgt: rw_tgt,
             fwd_field: rw_field,

@@ -91,8 +91,7 @@ pub fn complete(
     let prefix = &line[..cursor_pos.min(line.len())];
 
     // /run <name> completion
-    if prefix.starts_with("/run ") {
-        let typed = &prefix[5..];
+    if let Some(typed) = prefix.strip_prefix("/run ") {
         return crate::named_queries::NAMED_QUERIES
             .iter()
             .filter(|nq| nq.name.starts_with(typed))
@@ -325,6 +324,7 @@ mod tests {
     fn vals(cs: &[Completion]) -> Vec<&str> {
         cs.iter().map(|c| c.value.as_str()).collect()
     }
+    #[allow(dead_code)]
     fn groups(cs: &[Completion]) -> Vec<Option<&str>> {
         cs.iter().map(|c| c.group.as_deref()).collect()
     }

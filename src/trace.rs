@@ -2,6 +2,8 @@
 //! labeled points. Gated behind a process-global flag set from `--trace-rss`
 //! so production runs stay silent and pay no cost beyond an atomic load.
 
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static TRACE: AtomicBool = AtomicBool::new(false);

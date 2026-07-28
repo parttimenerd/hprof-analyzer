@@ -1403,12 +1403,6 @@ fn finalize_query_labels(
     }
 }
 
-/// True when a FROM target is a *plain* class name — a bare dotted identifier,
-/// not `INSTANCEOF`, not a double-quoted regex, not a `pkg.*` glob, and not an
-/// array (`[]`) target. Only for such a FROM does "zero rows" unambiguously
-/// mean "no such class" (a glob/regex/instanceof can legitimately match nothing
-/// without any single named class being absent).
-
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -1429,6 +1423,12 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[n]
 }
 
+/// True when a FROM target is a *plain* class name — a bare dotted identifier,
+/// not `INSTANCEOF`, not a double-quoted regex, not a `pkg.*` glob, and not an
+/// array (`[]`) target. Only for such a FROM does "zero rows" unambiguously
+/// mean "no such class" (a glob/regex/instanceof can legitimately match nothing
+/// without any single named class being absent).
+#[allow(dead_code)]
 fn is_plain_class_from(q: &query::ast::Query) -> Option<&str> {
     let spec = q.from.class_spec()?;
     if spec.instanceof || spec.is_regex {
@@ -1723,8 +1723,8 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             &addr_vec,
             None,
         );
-        let collapsed = query::run::collapse_union_results(flat_results, &union_groups);
-        collapsed
+
+        query::run::collapse_union_results(flat_results, &union_groups)
     };
 
     // Fill in blank oql text and default names (from-target-derived, else
@@ -1812,11 +1812,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         out.push_str(&hdr_cells.join(" | "));
         out.push('\n');
         // Separator.
-        let sep: Vec<String> = widths
-            .iter()
-            .enumerate()
-            .map(|(i, &w)| "-".repeat(if i + 1 < ncols { w } else { w }))
-            .collect();
+        let sep: Vec<String> = widths.iter().map(|&w| "-".repeat(w)).collect();
         out.push_str(&sep.join("-+-"));
         out.push('\n');
         // Data rows — numeric columns right-aligned, others left-aligned.
@@ -1849,8 +1845,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     }
     print!("{out}");
     if had_error {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "one or more queries returned an error (see output above)",
         ));
     }
@@ -2018,7 +2013,7 @@ fn run(
     let (mat_coc_snapshot, mat_addrs_c): (
         Option<std::collections::HashMap<u32, u32>>,
         Option<cvec::CompressedU64>,
-    ) = if let Some(_) = mat {
+    ) = if mat.is_some() {
         let id_map = inbound
             .id_map
             .as_ref()
@@ -2390,7 +2385,7 @@ fn run(
     // o2hprof: emit after mat_map block so we can move mat_hprof_offsets_c out
     // (freeing the compressed blob before decompressing, avoiding coexistence of
     // the ~2 GB blob and the ~4 GB decompressed bytes).
-    if let (Some(ref m), Some(ref mm)) = (mat.as_ref(), mat_map.as_ref()) {
+    if let (Some(m), Some(mm)) = (mat.as_ref(), mat_map.as_ref()) {
         if let Some(off_c) = mat_hprof_offsets_c {
             // offsets_bytes: flat LE u64 bytes (8 bytes per object). CompressedBytes
             // restore() consumes self — the compressed blob is freed when the method
@@ -2413,7 +2408,7 @@ fn run(
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
     let mut mat_inv: Option<Vec<i32>> =
-        if let (Some(ref mm), Some(ref coc)) = (mat_map.as_ref(), mat_coc_snapshot.as_ref()) {
+        if let (Some(mm), Some(coc)) = (mat_map.as_ref(), mat_coc_snapshot.as_ref()) {
             Some(mat::build_row_to_classobj_id(coc, g.class_names.len(), mm))
         } else {
             None
@@ -2446,7 +2441,7 @@ fn run(
     // mat_fwd_snap.1 holds the compressed class_idx; restore, map through inv,
     // then re-compress so the 45 MB array doesn't inflate the emit_outbound peak.
     let mat_class_obj_ids_c: Option<cvec::CompressedU32> =
-        if let (Some(ref inv), Some(ref fwd_snap)) = (mat_inv.as_ref(), mat_fwd_snap.as_ref()) {
+        if let (Some(inv), Some(fwd_snap)) = (mat_inv.as_ref(), mat_fwd_snap.as_ref()) {
             let class_idx_rows = fwd_snap.1.restore()?;
             let result: Vec<u32> = class_idx_rows
                 .iter()
@@ -2475,7 +2470,7 @@ fn run(
         {
             // Restore fwd_off (prefix-sum offsets), drop compressed blob.
             let mut fwd_off = fwd_off_c.restore()?;
-            let total_edges = if fwd_off.len() > 0 {
+            let total_edges = if !fwd_off.is_empty() {
                 fwd_off[fwd_off.len() - 1] as usize
             } else {
                 0

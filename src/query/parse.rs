@@ -246,6 +246,7 @@ where
         })
 }
 
+#[allow(clippy::type_complexity)]
 fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -1743,8 +1744,8 @@ fn missing_by_hint(src: &str) -> Option<&'static str> {
         .filter(|w| !w.is_empty())
         .map(|w| w.to_ascii_lowercase())
         .collect();
-    let mut it = words.iter().enumerate();
-    while let Some((i, w)) = it.next() {
+    let it = words.iter().enumerate();
+    for (i, w) in it {
         if w == "order" && words.get(i + 1).map(String::as_str) != Some("by") {
             return Some(
                 "`ORDER` must be followed by `BY` (e.g. `ORDER BY @retainedHeapSize DESC`)",
@@ -1767,7 +1768,7 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
         _ => {
             let found = e
                 .found()
-                .map(|t| token_display(t))
+                .map(token_display)
                 .unwrap_or_else(|| "end of input".to_string());
             // On end-of-input, a `SELECT` with no `FROM` is the likely cause;
             // otherwise fall back to the nearest-keyword hint.
@@ -1860,7 +1861,7 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                     _ => {
                         let found = e
                             .found()
-                            .map(|t| token_display(t))
+                            .map(token_display)
                             .unwrap_or_else(|| "end of input".to_string());
                         // Append the nearest-keyword hint (same as the plain
                         // message path) so the CLI/REPL caret diagnostic also
@@ -3259,6 +3260,7 @@ mod tests {
         let q = parse("SELECT @retainedHeapSize FROM C").unwrap();
         assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
     }
+    #[allow(dead_code)]
     fn retained_heap_alias_normalizes_to_retained_heap_size() {
         let q = parse("SELECT @retainedHeap FROM C").unwrap();
         assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
@@ -4817,7 +4819,7 @@ mod tests {
                     assert!(
                         matches!(&args[0], Expr::Lit(Value::Int(0))),
                         "expected Int(0), got {:?}",
-                        &args[0]
+                        args[0]
                     );
                 }
                 other => panic!("expected Expr::Method, got {other:?}"),
@@ -4882,7 +4884,7 @@ mod tests {
             assert!(
                 matches!(&q.select[0], SelectItem::Expr(e) if matches!(e.as_ref(), Expr::Method { .. })),
                 "method in `{oql}` was unexpectedly lowered away from Expr::Method: {:?}",
-                &q.select[0]
+                q.select[0]
             );
         }
     }
@@ -4895,7 +4897,7 @@ mod tests {
         assert!(
             matches!(&q.select[0], SelectItem::Expr(e) if matches!(e.as_ref(), Expr::Method { .. })),
             "getKey(1) with an arg must not lower: {:?}",
-            &q.select[0]
+            q.select[0]
         );
     }
 
@@ -5117,7 +5119,7 @@ mod tests {
 
     #[test]
     fn parse_not_between_desugars_to_lt_gt() {
-        use crate::query::ast::{CompareOp, Expr, Predicate, Value};
+        use crate::query::ast::{CompareOp, Predicate};
         let q = super::parse(
             "SELECT * FROM java.lang.String s WHERE @usedHeapSize NOT BETWEEN 10 AND 100",
         )
@@ -5162,7 +5164,7 @@ mod tests {
 
     #[test]
     fn parse_in_value_list() {
-        use crate::query::ast::{CompareOp, Expr, Predicate, Value};
+        use crate::query::ast::{CompareOp, Predicate};
         let q = super::parse(
             r#"SELECT * FROM java.lang.String s WHERE toString(s) IN ("MONDAY", "TUESDAY")"#,
         )

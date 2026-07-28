@@ -386,7 +386,7 @@ where
         header.push(pos as i32);
         body.push(values.len() as i32)?;
         body_size += 1;
-        for &v in values.as_ref() {
+        for &v in values {
             body.push(v)?;
             body_size += 1;
         }

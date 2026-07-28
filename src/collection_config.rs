@@ -1,4 +1,5 @@
 // src/collection_config.rs
+#![allow(dead_code)]
 
 use crate::pass2::{CollDesc, CollKind, builtin_coll_descs};
 use std::path::{Path, PathBuf};

@@ -9,6 +9,8 @@
 //! Unknown/missing fields resolve to `None` via [`field_offset`] and the
 //! collection is silently skipped (graceful, never panics).
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use crate::{
@@ -1081,10 +1083,9 @@ where
                 }
             }
             let _ = addr; // addr used above only; suppress unused warning if roles don't use it
-            let role = role_cache
+            let role = *role_cache
                 .entry(class_id)
-                .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width, descs))
-                .clone();
+                .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width, descs));
             match role {
                 ClassRole::Plain => {}
                 ClassRole::Collection {
@@ -1261,10 +1262,9 @@ where
             // keyed by (name_id, byte_offset) to avoid touching the interning
             // maps above.
             if array_owner_by_addr.len() < ARRAY_OWNER_CAP {
-                if !light_field_layout.contains_key(&class_id) {
-                    let raw = enumerate_object_fields(class_id, class_map, obj_ref_width);
-                    light_field_layout.insert(class_id, raw);
-                }
+                light_field_layout
+                    .entry(class_id)
+                    .or_insert_with(|| enumerate_object_fields(class_id, class_map, obj_ref_width));
                 let layout = &light_field_layout[&class_id];
                 // Re-read class name inline (cheap; memoized per class).
                 let holder_name = pretty_name_cache
@@ -1312,11 +1312,7 @@ where
                     let mut val_off: Option<u32> = None;
                     let mut byte_offset: u32 = 0;
                     let mut cur = class_id;
-                    'outer: loop {
-                        let ci = match class_map.get(&cur) {
-                            Some(c) => c,
-                            None => break,
-                        };
+                    'outer: while let Some(ci) = class_map.get(&cur) {
                         for &(fname_id, ftype) in &ci.fields {
                             let fsize = if ftype == crate::types::HprofType::Object {
                                 obj_ref_width as u32

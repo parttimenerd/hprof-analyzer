@@ -152,6 +152,7 @@ impl ClassResolver for TestSchema {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub struct SingleScanExecutor<'a, R: ClassResolver> {
     query: &'a Query,
     plan: &'a QueryPlan,
@@ -207,7 +208,7 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// When `Some`, each `self.rows.push(row)` is paired with a push of the
     /// object's dense index here; `finish` keeps it aligned through ORDER BY sort
     /// + LIMIT truncate so the caller can prune rows by GC-reachability using the
-    /// EXACT source index (not a lossy re-read of the projected row value).
+    ///   EXACT source index (not a lossy re-read of the projected row value).
     row_src: Option<Vec<u32>>,
     /// GROUP BY accumulator: maps each unique key vector (encoded as a canonical
     /// Debug string to avoid Float/Hash issues) to (original key Vec, per-column
@@ -1667,6 +1668,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 })
                 .collect();
             let query_select = self.query.select.as_slice();
+            #[allow(clippy::unnecessary_unwrap)]
             let entry = self
                 .group_map
                 .as_mut()
@@ -1700,6 +1702,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 };
                 values.push(v);
             }
+            #[allow(clippy::unnecessary_unwrap)]
             let accs = self.agg_acc.as_mut().unwrap();
             for (i, acc) in accs.iter_mut().enumerate() {
                 if !matches!(acc, AggAcc::None) {
@@ -1779,6 +1782,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 })
                 .collect();
             let query_select = self.query.select.as_slice();
+            #[allow(clippy::unnecessary_unwrap)]
             let entry = self
                 .group_map
                 .as_mut()
@@ -1808,6 +1812,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 };
                 values.push(v);
             }
+            #[allow(clippy::unnecessary_unwrap)]
             let accs = self.agg_acc.as_mut().unwrap();
             for (i, acc) in accs.iter_mut().enumerate() {
                 if !matches!(acc, AggAcc::None) {
@@ -3978,7 +3983,7 @@ mod tests {
     fn scan_acc_sum_ignores_null_values() {
         // idx 2 has no shallow size → ShallowSchema returns None → project_attr returns Null
         // Null * 2 = Null; SUM should skip it.
-        let q = crate::query::parse::parse(
+        let _q = crate::query::parse::parse(
             "SELECT SUM(@usedHeapSize * 2) FROM C WHERE @usedHeapSize > 0 OR @usedHeapSize = 0",
         )
         .unwrap();

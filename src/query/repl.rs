@@ -89,7 +89,7 @@ fn classify_at_with_full(
             if dot_count == 1 {
                 let alias = &frag[..dot_pos];
                 if !alias.is_empty() && !alias.contains('.') {
-                    let text_for_from = full_line.unwrap_or_else(|| {
+                    let text_for_from = full_line.unwrap_or({
                         // Best effort: before + frag (covers FROM clauses before cursor).
                         // NOTE: static lifetime needed; we leak a small string in tests.
                         // In production, full_line is always provided by complete().
@@ -782,8 +782,8 @@ impl Completer for OqlCompleter {
             }
         }
         // `!run <name>` — complete named query names.
-        if upto.starts_with("!run ") {
-            let partial = upto["!run ".len()..].trim_start();
+        if let Some(stripped) = upto.strip_prefix("!run ") {
+            let partial = stripped.trim_start();
             let lower = partial.to_ascii_lowercase();
             let name_start = upto.len() - partial.len();
             let matches: Vec<Suggestion> = crate::named_queries::NAMED_QUERIES
@@ -804,8 +804,8 @@ impl Completer for OqlCompleter {
             let _ = name_start;
         }
         // `!set <key>` — complete setting keys; `!set bytes|color <val>` complete value.
-        if upto.starts_with("!set") {
-            let after = upto["!set".len()..].trim_start();
+        if let Some(stripped) = upto.strip_prefix("!set") {
+            let after = stripped.trim_start();
             let parts: Vec<&str> = after.splitn(3, char::is_whitespace).collect();
             let build = |value: &str| Suggestion {
                 value: format!("!set {value}"),
@@ -3467,8 +3467,7 @@ fn handle_filter(
         None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             // @col pattern — column-specific filter
-            let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
-                let rest = &pattern[1..];
+            let (col_filter_idx, actual_pattern) = if let Some(rest) = pattern.strip_prefix('@') {
                 match rest.split_once(char::is_whitespace) {
                     Some((col, pat)) if !pat.trim().is_empty() => {
                         match resolve_col(col, &res.columns) {
@@ -3612,8 +3611,7 @@ fn handle_filter_not(
         None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             // @col pattern — column-specific filter
-            let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
-                let rest = &pattern[1..];
+            let (col_filter_idx, actual_pattern) = if let Some(rest) = pattern.strip_prefix('@') {
                 match rest.split_once(char::is_whitespace) {
                     Some((col, pat)) if !pat.trim().is_empty() => {
                         match resolve_col(col, &res.columns) {
@@ -3801,7 +3799,7 @@ fn handle_distinct(
                 .rows
                 .iter()
                 .filter(|row| {
-                    let key: Vec<String> = row.iter().map(|v| fmt_value(v)).collect();
+                    let key: Vec<String> = row.iter().map(fmt_value).collect();
                     seen.insert(key)
                 })
                 .cloned()
@@ -4184,7 +4182,7 @@ fn handle_stats(
                             const BAR_MAX: usize = 24;
                             if hi > lo {
                                 let range = hi - lo;
-                                let mut buckets = vec![0usize; NBUCKETS];
+                                let mut buckets = [0usize; NBUCKETS];
                                 for &v in &vals {
                                     let b = ((v - lo) / range * NBUCKETS as f64).floor() as usize;
                                     buckets[b.min(NBUCKETS - 1)] += 1;
@@ -4192,7 +4190,7 @@ fn handle_stats(
                                 let max_b = *buckets.iter().max().unwrap_or(&1);
                                 writeln!(out, "  {cd}dist:{cr}")?;
                                 for (i, &b) in buckets.iter().enumerate() {
-                                    let bar_len = if max_b > 0 { b * BAR_MAX / max_b } else { 0 };
+                                    let bar_len = (b * BAR_MAX).checked_div(max_b).unwrap_or(0);
                                     let bar: String = "█".repeat(bar_len);
                                     let bucket_lo = lo + i as f64 * range / NBUCKETS as f64;
                                     writeln!(
@@ -4518,11 +4516,7 @@ fn handle_unique(
                         "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6)
                     )?;
                     for (val, cnt) in entries {
-                        let filled = if max_cnt > 0 {
-                            (cnt * BAR_W) / max_cnt
-                        } else {
-                            0
-                        };
+                        let filled = (cnt * BAR_W).checked_div(max_cnt).unwrap_or(0);
                         let bar: String = "█".repeat(filled) + &"░".repeat(BAR_W - filled);
                         let pct = if total > 0 {
                             format!("{:.1}%", *cnt as f64 / total as f64 * 100.0)
@@ -5121,8 +5115,8 @@ fn handle_meta(
         }
         "plan" | "explain" => {
             // Detect optional --raw flag.
-            let (raw, query_text) = if rest.starts_with("--raw") {
-                let remainder = rest["--raw".len()..].trim_start();
+            let (raw, query_text) = if let Some(stripped) = rest.strip_prefix("--raw") {
+                let remainder = stripped.trim_start();
                 (true, remainder)
             } else {
                 (false, rest)
@@ -5804,7 +5798,7 @@ fn fmt_time_hms() -> String {
         unsafe {
             libc::localtime_r(&t, &mut tm);
         }
-        return format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
+        format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
     }
     #[cfg(not(unix))]
     {
@@ -6857,7 +6851,7 @@ mod tests {
     #[test]
     fn suggestions_rank_shorter_first() {
         // From a set sharing the "s" prefix, shorter candidates come first.
-        let s = OqlCompleter::suggestions(["su", "sum", "summary", "s"].into_iter(), "s", 0, 1);
+        let s = OqlCompleter::suggestions(["su", "sum", "summary", "s"], "s", 0, 1);
         let v = values(&s);
         assert_eq!(
             v,
@@ -6868,7 +6862,7 @@ mod tests {
 
     #[test]
     fn suggestions_dedup_removes_repeats() {
-        let s = OqlCompleter::suggestions(["ab", "ab", "ac"].into_iter(), "a", 0, 1);
+        let s = OqlCompleter::suggestions(["ab", "ab", "ac"], "a", 0, 1);
         assert_eq!(values(&s), vec!["ab", "ac"], "duplicates must be removed");
     }
 
@@ -8107,6 +8101,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn repl_cmd(cmd: &str, last_r: &mut Option<QueryResult>, prev_r: &mut Option<QueryResult>) {
         use std::collections::VecDeque;
         let mut last_q: Option<String> = None;
@@ -8165,6 +8160,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_variables, unused_assignments)]
     fn undo_slot_preserved_when_filter_is_noop() {
         SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
         // Sort establishes an undo slot, then filter matches everything (no-op).

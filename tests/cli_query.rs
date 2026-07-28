@@ -4993,6 +4993,7 @@ mod server_cli {
 
     /// Spawn `query <dump> --server --port <p>` and wait until it accepts a TCP
     /// connection (up to ~5 s), so tests don't race the bind.
+    #[allow(clippy::zombie_processes)]
     fn spawn(hprof: &str) -> Server {
         let port = free_port();
         let child = Command::new(BIN)
@@ -5169,7 +5170,7 @@ mod server_cli {
         assert!(status.contains("200"), "200: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(
-            v["version"].as_str().map_or(false, |s| !s.is_empty()),
+            v["version"].as_str().is_some_and(|s| !s.is_empty()),
             "version present: {v}"
         );
         assert!(
@@ -6436,7 +6437,10 @@ fn query_arithmetic_expr_with_retained_heap_size_is_non_null() {
     assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
     let first = data_rows[0];
     let cols: Vec<&str> = first.split('|').map(|s| s.trim()).collect();
-    let retained = cols.get(0).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let retained = cols
+        .first()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
     let double = cols
         .get(1)
         .and_then(|s| s.parse::<i64>().ok())
@@ -6653,7 +6657,7 @@ fn query_ungrouped_aggregate_with_retained_is_single_row() {
     let row = data_rows[0];
     let cols: Vec<&str> = row.split('|').collect();
     let n = cols
-        .get(0)
+        .first()
         .map(|s| s.trim())
         .unwrap_or("")
         .parse::<i64>()
@@ -6738,7 +6742,7 @@ fn query_to_hex_in_retained_path_is_non_null() {
     assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
     for row in &data_rows {
         let cols: Vec<&str> = row.split('|').collect();
-        let hex_val = cols.get(0).map(|s| s.trim()).unwrap_or("");
+        let hex_val = cols.first().map(|s| s.trim()).unwrap_or("");
         assert!(
             hex_val.starts_with("0x"),
             "toHex(@objectId) did not return hex string in retained path: {row}\nfull output:\n{stdout}"
@@ -7047,7 +7051,7 @@ fn query_object_address_in_retained_path_is_non_zero() {
     for row in &data_rows {
         let cols: Vec<&str> = row.split('|').collect();
         let addr: u64 = cols
-            .get(0)
+            .first()
             .map(|s| s.trim())
             .unwrap_or("0")
             .parse()

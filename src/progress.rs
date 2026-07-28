@@ -10,6 +10,8 @@
 //! real terminal and neither `--verbose` nor `--trace-rss` is active (those
 //! already emit their own per-phase lines, so we would double-report).
 
+#![allow(dead_code)]
+
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 

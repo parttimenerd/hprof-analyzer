@@ -720,7 +720,7 @@ fn mat_large_dump_equivalence() {
         if let Ok(m) = std::fs::metadata(&ref_path) {
             let ref_sz = m.len();
             let ratio = our_sz as f64 / ref_sz as f64;
-            if ratio < 0.9 || ratio > 1.1 {
+            if !(0.9..=1.1).contains(&ratio) {
                 eprintln!(
                     "  WARN {kind}: size ratio {:.2} (ours={} ref={})",
                     ratio, our_sz, ref_sz

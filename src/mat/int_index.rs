@@ -191,7 +191,7 @@ mod tests {
         let page_size = i32::from_be_bytes(buf[n - 8..n - 4].try_into().unwrap());
         // Recover value count. For our fixtures size is positive.
         let value_count = size as i64;
-        let pages = (value_count as usize + page_size as usize - 1) / page_size as usize;
+        let pages = (value_count as usize).div_ceil(page_size as usize);
         let entries = pages + 1;
         let footer_start = n - 8 - entries * 8;
         let mut page_starts = Vec::with_capacity(entries);

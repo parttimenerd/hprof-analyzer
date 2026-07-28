@@ -493,7 +493,7 @@ fn expr_has_string_method(e: &Expr) -> bool {
         Expr::Aggregate { .. } => false,
         Expr::Case { branches, else_ } => {
             branches.iter().any(|(_, ex)| expr_has_string_method(ex))
-                || else_.as_ref().map_or(false, |e| expr_has_string_method(e))
+                || else_.as_ref().is_some_and(|e| expr_has_string_method(e))
         }
         Expr::Coalesce(args) => args.iter().any(expr_has_string_method),
         Expr::NullIf { lhs, rhs } => expr_has_string_method(lhs) || expr_has_string_method(rhs),
@@ -792,12 +792,12 @@ fn reject_reference_array_on_instance(q: &Query) -> Result<(), QueryError> {
     if class_name.is_empty()
         || class_name.contains('*')
         || class_name.ends_with("[]")
-        || q.from.class_spec().map_or(false, |s| s.is_regex)
+        || q.from.class_spec().is_some_and(|s| s.is_regex)
     {
         return Ok(());
     }
     let has_ref_array = q.select.iter().any(select_item_has_reference_array)
-        || q.where_.as_ref().map_or(false, pred_has_reference_array);
+        || q.where_.as_ref().is_some_and(pred_has_reference_array);
     if has_ref_array {
         return Err(QueryError(
             "@referenceArray on an instance object is not supported; \
@@ -1868,12 +1868,12 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
 /// planner before this check is reached).
 fn agg_histogram_answerable(item: &SelectItem) -> bool {
     match item {
-        SelectItem::Aggregate { func, arg } => match (func, arg.as_ref()) {
-            (AggFunc::Count, SelectItem::Star) => true,
-            (AggFunc::Sum, SelectItem::Attr(Attr::UsedHeapSize)) => true,
-            (AggFunc::Avg, SelectItem::Attr(Attr::UsedHeapSize)) => true,
-            _ => false,
-        },
+        SelectItem::Aggregate { func, arg } => matches!(
+            (func, arg.as_ref()),
+            (AggFunc::Count, SelectItem::Star)
+                | (AggFunc::Sum, SelectItem::Attr(Attr::UsedHeapSize))
+                | (AggFunc::Avg, SelectItem::Attr(Attr::UsedHeapSize))
+        ),
         // Non-aggregate items: treat as not histogram-answerable so any stray
         // mix falls through to SingleScan.
         _ => false,
@@ -1957,7 +1957,7 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             // Reject ArrayIndex/ArraySlice in WHERE predicates at plan time.
             let is_array_attr =
                 |a: &Attr| matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. });
-            if lhs_attr.map_or(false, is_array_attr)
+            if lhs_attr.is_some_and(is_array_attr)
                 || expr_any_attr(lhs, is_array_attr)
                 || expr_any_attr(rhs, is_array_attr)
             {

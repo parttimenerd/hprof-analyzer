@@ -466,6 +466,7 @@ impl Ser {
     /// bucket index ascending, insertion order within a bucket (no treeification for small maps).
     /// `entries` is (key_hashcode, write_key, write_value) in INSERTION order.
     /// `cap` is the table capacity (power of two; default map grows 16→32→… at 0.75 load).
+    #[allow(clippy::type_complexity)]
     pub fn write_hashmap(
         &mut self,
         cap: u32,
@@ -558,6 +559,7 @@ impl Ser {
     /// Write a java.util.ArrayList. Custom writeObject: defaultWriteObject writes `size:I`, then
     /// block-data `capacity:int`, then each element via writeObject in list order.
     /// `capacity` is the backing-array length MAT emits (for `new ArrayList<>(collection)` it equals size).
+    #[allow(clippy::type_complexity)]
     pub fn write_array_list(&mut self, capacity: i32, elems: Vec<Box<dyn FnOnce(&mut Ser)>>) {
         self.u8(TC_OBJECT);
         let cd = ClassDesc {

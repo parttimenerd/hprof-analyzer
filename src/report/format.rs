@@ -128,7 +128,7 @@ pub fn now_iso8601() -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
-        return format_epoch_nanos(now.as_secs(), now.subsec_nanos());
+        format_epoch_nanos(now.as_secs(), now.subsec_nanos())
     }
     #[cfg(target_arch = "wasm32")]
     {

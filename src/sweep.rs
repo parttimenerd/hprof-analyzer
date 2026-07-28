@@ -8,6 +8,8 @@
 //!
 //! Gate (see DESIGN decision 11, zero-tolerance): **GATE PASS** iff BOTH
 //!   (a) zero FAILs across every dump, AND
+
+#![allow(dead_code)]
 //!   (b) the number of REAL MAT comparisons (dumps that had a reference and
 //!       produced at least one compared field) >= `N_MIN`.
 //! Otherwise **GATE FAIL** with the reason. There is deliberately NO tolerance
