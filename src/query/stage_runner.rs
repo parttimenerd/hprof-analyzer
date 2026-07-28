@@ -709,7 +709,9 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
     // via `deferred_where_passes` (which uses `eval_late_pred_multi`). This
     // correctly handles OR predicates mixing toString with retained/other attrs.
     let has_deferred = q.where_.as_ref().is_some_and(|p| {
-        has_to_string_pred(p) || crate::query::plan::pred_uses_retained(p)
+        has_to_string_pred(p)
+            || crate::query::plan::pred_uses_retained(p)
+            || crate::query::plan::pred_uses_refpath(p)
     });
     let kept: Vec<u32> = if has_deferred {
         seeds
@@ -1224,7 +1226,9 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let class_name = q.from.class_name();
     let has_deferred_pred = q.where_.as_ref().is_some_and(|p| {
-        crate::query::plan::pred_uses_retained(p) || crate::query::plan::pred_uses_tostring(p)
+        crate::query::plan::pred_uses_retained(p)
+            || crate::query::plan::pred_uses_tostring(p)
+            || crate::query::plan::pred_uses_refpath(p)
     });
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
     for &s in &seeds {
