@@ -76,11 +76,20 @@ pub fn render_html(r: &Report) -> String {
 :root {{ color-scheme: light dark; }}
 html, body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
 #root {{ padding: 0; }}
-#hprof-fallback {{ padding: 1rem; }}
+#hprof-fallback {{ padding: 2rem; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 160px; gap: 1rem; color: #666; font-size: 0.95rem; }}
+#hprof-pb-wrap {{ width: min(480px, 80vw); background: #e0e0e0; border-radius: 4px; overflow: hidden; height: 6px; }}
+#hprof-pb {{ height: 100%; width: 0%; background: #4a90d9; border-radius: 4px; transition: width 0.08s linear; }}
+#hprof-pb-label {{ font-size: 0.82rem; color: #888; }}
+@media (prefers-color-scheme: dark) {{
+  #hprof-fallback {{ color: #aaa; }}
+  #hprof-pb-wrap {{ background: #333; }}
+  #hprof-pb {{ background: #5ba3e8; }}
+  #hprof-pb-label {{ color: #777; }}
+}}
 </style>
 </head>
 <body>
-<div id="root"><div id="hprof-fallback">Loading heap dump report&hellip;</div></div>
+<div id="root"><div id="hprof-fallback"><span>Loading heap dump report&hellip;</span><div id="hprof-pb-wrap"><div id="hprof-pb"></div></div><span id="hprof-pb-label"></span></div></div>
 <script type="application/octet-stream" id="report-data">{data_b64}</script>
 <script type="application/octet-stream" id="app-bundle">{bundle_b64}</script>
 <script>{bootstrap}</script>
@@ -125,11 +134,20 @@ pub fn render_diff_html(d: &SeriesDiffResult) -> String {
 :root {{ color-scheme: light dark; }}
 html, body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
 #root {{ padding: 0; }}
-#hprof-fallback {{ padding: 1rem; }}
+#hprof-fallback {{ padding: 2rem; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 160px; gap: 1rem; color: #666; font-size: 0.95rem; }}
+#hprof-pb-wrap {{ width: min(480px, 80vw); background: #e0e0e0; border-radius: 4px; overflow: hidden; height: 6px; }}
+#hprof-pb {{ height: 100%; width: 0%; background: #4a90d9; border-radius: 4px; transition: width 0.08s linear; }}
+#hprof-pb-label {{ font-size: 0.82rem; color: #888; }}
+@media (prefers-color-scheme: dark) {{
+  #hprof-fallback {{ color: #aaa; }}
+  #hprof-pb-wrap {{ background: #333; }}
+  #hprof-pb {{ background: #5ba3e8; }}
+  #hprof-pb-label {{ color: #777; }}
+}}
 </style>
 </head>
 <body>
-<div id="root"><div id="hprof-fallback">Loading heap dump comparison&hellip;</div></div>
+<div id="root"><div id="hprof-fallback"><span>Loading heap dump comparison&hellip;</span><div id="hprof-pb-wrap"><div id="hprof-pb"></div></div><span id="hprof-pb-label"></span></div></div>
 <script type="application/octet-stream" id="report-data">{data_b64}</script>
 <script type="application/octet-stream" id="app-bundle">{bundle_b64}</script>
 <script>{bootstrap}</script>
@@ -227,11 +245,26 @@ const BOOTSTRAP_JS: &str = r#"
   window.hprofInflate = inflate;
   var dec = new TextDecoder("utf-8");
   window.hprofDecodeText = function (b64) { return inflate(b64).then(function (u8) { return dec.decode(u8); }); };
+  // Progress bar: estimate total load time from report data size (larger = longer inflate+parse+render).
+  var _t0 = performance.now();
   var dataEl = document.getElementById("report-data");
+  var _dataLen = dataEl ? dataEl.textContent.length : 0;
+  // Empirical: ~300ms base + ~3ms per 1000 chars of base64 report data.
+  var _estMs = 300 + _dataLen * 0.003;
+  var _pb = document.getElementById("hprof-pb");
+  var _pbl = document.getElementById("hprof-pb-label");
+  var _timer = _pb ? setInterval(function () {
+    var pct = Math.min(95, (performance.now() - _t0) / _estMs * 100);
+    _pb.style.width = pct.toFixed(1) + "%";
+    var elapsed = ((performance.now() - _t0) / 1000).toFixed(1);
+    var est = (_estMs / 1000).toFixed(1);
+    if (_pbl) _pbl.textContent = elapsed + "s / ~" + est + "s";
+  }, 50) : null;
   window.__HPROF_DATA_B64__ = dataEl ? dataEl.textContent.trim() : "";
   var bundleEl = document.getElementById("app-bundle");
   var bundleB64 = bundleEl ? bundleEl.textContent.trim() : "";
   window.hprofDecodeText(bundleB64).then(function (src) {
+    if (_timer) clearInterval(_timer);
     var s = document.createElement("script");
     s.textContent = src;
     document.body.appendChild(s);
