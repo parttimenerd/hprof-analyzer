@@ -1839,14 +1839,14 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (threads.length === 0) return null;
   const cols: TableColumn<ThreadInfo>[] = [
-    { id: "name", name: "Name", grow: 1, cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a> },
-    { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow },
-    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained },
-    { id: "max_local", name: useKB ? "Max. Locals' Retained (KB)" : "Max. Locals' Retained", right: true, width: useKB ? "200px" : "160px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained },
-    { id: "loader", name: "Context Class Loader", grow: 1, cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span> },
-    { id: "daemon", name: "Daemon", width: "90px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no" },
+    { id: "name", name: "Name", grow: 1, minWidth: "120px", cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a> },
+    { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "90px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow },
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "90px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained },
+    { id: "max_local", name: useKB ? "Max. Locals' Retained (KB)" : "Max. Locals' Retained", right: true, width: useKB ? "200px" : "172px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained },
+    { id: "loader", name: "Context Class Loader", grow: 1, minWidth: "145px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span> },
+    { id: "daemon", name: "Daemon", width: "85px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no" },
     { id: "priority", name: "Priority", right: true, width: "80px", format: (t) => String(t.priority), selector: (t) => t.priority },
-    { id: "state", name: "State", width: "180px", selector: (t) => t.thread_state ?? "", format: (t) => t.thread_state || "—" },
+    { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", format: (t) => t.thread_state || "—" },
   ];
   return (
     <details className="thread-overview-detail">
@@ -2647,7 +2647,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       ) : (() => {
         const idomCols: TableColumn<import("./types").ImmediateDominatorRow>[] = [
           { id: "dominator_class", name: "Dominator Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /></span> },
-          { id: "dominator_count", name: "#Dominators", right: true, width: "125px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count },
+          { id: "dominator_count", name: "#Dominators", right: true, width: "132px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count },
           { id: "dominated_count", name: "#Dominated", right: true, width: "120px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count },
           { id: "dominator_shallow", name: useKB ? "Dom. Shallow (KB)" : "Dom. Shallow", right: true, width: useKB ? "150px" : "120px", cell: byteCell(r => r.dominator_shallow, fmtB, useKB), selector: (r) => r.dominator_shallow },
           { id: "dominated_shallow", name: useKB ? "Dominated Shallow (KB)" : "Dominated Shallow", right: true, width: useKB ? "175px" : "155px", cell: byteCell(r => r.dominated_shallow, fmtB, useKB), selector: (r) => r.dominated_shallow },
