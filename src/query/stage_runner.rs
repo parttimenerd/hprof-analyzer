@@ -1429,7 +1429,12 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             let (acc, count) = &mut accs.1[i];
             match func {
                 AggFunc::Count => {
-                    if let QueryValue::Int(n) = acc { *n += 1; }
+                    // COUNT(*) always increments; COUNT(expr) skips NULL (MAT semantics).
+                    let count_this = matches!(arg.as_ref(), SelectItem::Star)
+                        || val != QueryValue::Null;
+                    if count_this {
+                        if let QueryValue::Int(n) = acc { *n += 1; }
+                    }
                 }
                 AggFunc::Sum => {
                     if val != QueryValue::Null {
@@ -1614,7 +1619,14 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 };
                 let (acc, count) = &mut accs[i];
                 match func {
-                    AggFunc::Count => { if let QueryValue::Int(n) = acc { *n += 1; } }
+                    AggFunc::Count => {
+                        // COUNT(*) always increments; COUNT(expr) skips NULL (MAT semantics).
+                        let count_this = matches!(arg.as_ref(), SelectItem::Star)
+                            || val != QueryValue::Null;
+                        if count_this {
+                            if let QueryValue::Int(n) = acc { *n += 1; }
+                        }
+                    }
                     AggFunc::Sum => {
                         if val != QueryValue::Null {
                             *acc = match (&*acc, &val) {
