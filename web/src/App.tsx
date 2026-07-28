@@ -1844,9 +1844,9 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained },
     { id: "max_local", name: useKB ? "Max. Locals' Retained (KB)" : "Max. Locals' Retained", right: true, width: useKB ? "200px" : "160px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained },
     { id: "loader", name: "Context Class Loader", grow: 1, cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span> },
-    { id: "daemon", name: "Daemon", width: "80px", format: (t) => t.is_daemon ? "yes" : "no" },
+    { id: "daemon", name: "Daemon", width: "90px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no" },
     { id: "priority", name: "Priority", right: true, width: "80px", format: (t) => String(t.priority), selector: (t) => t.priority },
-    { id: "state", name: "State", grow: 1, format: (t) => t.thread_state || "—" },
+    { id: "state", name: "State", width: "180px", selector: (t) => t.thread_state ?? "", format: (t) => t.thread_state || "—" },
   ];
   return (
     <details className="thread-overview-detail">
@@ -2059,7 +2059,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
       { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code> },
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length },
-      ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "120px", format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—" } as TableColumn<import("./types").TopArrayRow>] : []),
+      ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "120px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—" } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow },
       ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: (r: import("./types").TopArrayRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
     ];
@@ -2158,7 +2158,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
           { id: "kind", name: "Kind", grow: 1, selector: (s) => s.kind },
           { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
           { id: "total_el", name: "Total Elements", right: true, width: "130px", format: (s) => fmtCount(s.total_elements), selector: (s) => s.total_elements },
-          { id: "max_el", name: "Max Elements", right: true, width: "120px", format: (s) => fmtCount(s.max_elements), selector: (s) => s.max_elements },
+          { id: "max_el", name: "Max Elements", right: true, width: "130px", format: (s) => fmtCount(s.max_elements), selector: (s) => s.max_elements },
           { id: "shallow", name: useKB ? "Total Shallow (KB)" : "Total Shallow", right: true, width: useKB ? "150px" : "120px", cell: byteCell(s => s.total_shallow, fmtB, useKB), selector: (s) => s.total_shallow },
         ];
         return (
@@ -2485,11 +2485,11 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const cols: TableColumn<FBSRow>[] = [
     { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code> },
     { id: "pointee", name: "Runtime Pointee Type", grow: 1, cell: (r) => <code>{r.pointee_type}</code> },
-    { id: "category", name: "Category", width: "100px", format: (r) => r.category ?? "—" },
+    { id: "category", name: "Category", width: "100px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—" },
     { id: "pointees", name: "Pointees", right: true, width: "100px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees },
     ...(hasElements ? [{ id: "elements", name: "Elements", right: true, width: "100px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0 } as TableColumn<FBSRow>] : []),
     { id: "holders", name: "Holder Instances", right: true, width: "140px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances },
-    { id: "sharing", name: "Sharing", right: true, width: "90px", format: (r) => r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—" },
+    { id: "sharing", name: "Sharing", right: true, width: "90px", selector: (r) => r.holder_instances > 0 ? r.pointees / r.holder_instances : 0, format: (r) => r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—" },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained },
   ];
   return (
@@ -2853,7 +2853,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
         ];
         const rcCols: TableColumn<RcRow>[] = [
           { id: "scope", name: "Scope", grow: 1, selector: (r) => r.scope },
-          { id: "share", name: "Retained Share", right: true, width: "140px", format: (r) => fmtPct(r.bp / 100) },
+          { id: "share", name: "Retained Share", right: true, width: "140px", selector: (r) => r.bp, format: (r) => fmtPct(r.bp / 100) },
         ];
         return <StdTable columns={rcCols} data={rcRows} searchKeys={[]} />;
       })()}
