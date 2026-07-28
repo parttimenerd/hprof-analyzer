@@ -1849,9 +1849,7 @@ fn project_late_row(
             SelectItem::Star => QueryValue::ObjRef {
                 index: idx as u64,
                 class: ctx.class_name_of(idx).unwrap_or("?").to_string(),
-                // Late window: the dense-address table is compressed away, so
-                // resolving an address here would yield a misleading @0.
-                addr: None,
+                addr: ctx.id_map.to_addr_opt(idx),
             },
             SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, like_regexes),
             _ => QueryValue::Null,
