@@ -1308,7 +1308,7 @@ fn project_string_row_item(
             // id_map is empty (address table compressed away), so `to_addr` here
             // would yield a misleading `@0` for every row.
             index: dense as u64,
-            class: "java.lang.String".to_string(),
+            class: ctx.class_name_of(dense).unwrap_or("java.lang.String").to_string(),
             addr: None,
         },
         _ => QueryValue::Null,
