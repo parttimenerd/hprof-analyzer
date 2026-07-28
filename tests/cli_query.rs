@@ -6512,3 +6512,67 @@ fn query_dominators_with_retained_where_applies_filter() {
         "dominators with retained WHERE >5000 returned 0 rows (expected some):\n{filtered_stdout}"
     );
 }
+
+/// OR predicate mixing @retainedHeapSize with @usedHeapSize must evaluate both
+/// halves correctly. Previously `eval_retained_pred` passed non-retained
+/// Compare arms as `true`, so `OR(retained>X, usedHeap>Y)` always returned
+/// `retained_result || true` = `true` for every row, silently ignoring both
+/// filters. Verify that COUNT(*) with only the retained arm satisfied equals the
+/// count with both terms of the OR that a row can satisfy.
+#[test]
+fn query_or_predicate_with_retained_and_used_heap_filters_correctly() {
+    let Some(hprof) = gauss_mix() else { return };
+
+    // Only the @retainedHeapSize arm is satisfied (> 100000 gives 3 rows,
+    // @usedHeapSize is 48 for all hashmaps so > 100 arm returns 0).
+    let retained_only = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT COUNT(*) FROM java.util.HashMap WHERE @retainedHeapSize > 100000"])
+        .output().unwrap();
+    assert!(retained_only.status.success());
+
+    let or_query = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT COUNT(*) FROM java.util.HashMap WHERE @retainedHeapSize > 100000 OR @usedHeapSize > 100"])
+        .output().unwrap();
+    assert!(or_query.status.success());
+
+    let total_rows = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT COUNT(*) FROM java.util.HashMap"])
+        .output().unwrap();
+    assert!(total_rows.status.success());
+
+    let parse_count = |out: &[u8]| -> u64 {
+        String::from_utf8_lossy(out)
+            .lines()
+            .filter(|l| l.trim().parse::<u64>().is_ok())
+            .filter_map(|l| l.trim().parse::<u64>().ok())
+            .next()
+            .unwrap_or(0)
+    };
+
+    let retained_count = parse_count(&retained_only.stdout);
+    let or_count = parse_count(&or_query.stdout);
+    let total = parse_count(&total_rows.stdout);
+
+    // OR result must equal the retained-only result (usedHeap > 100 is empty).
+    assert_eq!(
+        or_count, retained_count,
+        "OR(retained>100000, usedHeap>100) should equal retained-only count ({retained_count}) \
+         since no rows satisfy usedHeap>100; got {or_count} (total {total})"
+    );
+    // Sanity: the OR filter must actually reduce the full set.
+    assert!(
+        or_count < total,
+        "OR filter should return fewer rows than the total {total}; got {or_count}"
+    );
+    // Sanity: must return some rows (retained arm is non-empty).
+    assert!(
+        or_count > 0,
+        "OR filter returned 0 rows — retained arm should return some rows"
+    );
+}

@@ -409,20 +409,26 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     // Dominator/retained-set ops each produce a one-column ObjRef result and
     // fully own row building; they never fall through to join_retained.
     //
-    // Pre-filter carried indices by any @retainedHeapSize WHERE predicate.
-    // Dominator/edge/retained-set ops use their own early-return plan paths
-    // (not JoinRetained), so they must apply the retained filter themselves.
+    // Pre-filter carried indices by any deferred WHERE predicate (one that was
+    // skipped at scan time because it contains @retainedHeapSize / toString /
+    // RefPath). Dominator/edge/retained-set ops use their own early-return plan
+    // paths (not JoinRetained), so they must apply the deferred filter themselves.
     // join_retained and string_values_rows apply it internally per row.
-    let has_retained_where = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
+    let has_deferred_where = q.where_.as_ref().is_some_and(|p| {
+        crate::query::plan::pred_uses_retained(p)
+            || crate::query::plan::pred_uses_tostring(p)
+            || crate::query::plan::pred_uses_refpath(p)
+    });
+    let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let get_filtered_idx = |carry: &CrossPhaseEntry| -> Vec<u32> {
-        if has_retained_where {
+        if has_deferred_where {
             carry
                 .carry
                 .indices()
                 .into_iter()
                 .filter(|&s| {
                     let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
-                    retained_where_passes(q, ret)
+                    deferred_where_passes(q, s, ret, ctx, &like_regexes)
                 })
                 .collect()
         } else {
@@ -580,9 +586,11 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     // Predicate-critical filter: keep seeds whose resolved tail passes the WHERE
     // comparison. Only the RefPath term is evaluated here (other terms were
     // applied in Phase 1); a seed with no comparison keeps all.
-    // Also apply any @retainedHeapSize WHERE terms that may co-exist on a
-    // cross-phase query (the scan skipped them; we filter here post-retained).
-    let has_retained_pred = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
+    // Also apply any deferred WHERE terms (retained/toString) that may co-exist
+    // on a cross-phase query (the scan skipped them; we filter here post-retained).
+    let has_deferred_pred = q.where_.as_ref().is_some_and(|p| {
+        crate::query::plan::pred_uses_retained(p) || crate::query::plan::pred_uses_tostring(p)
+    });
     let kept: Vec<u32> = if let (Some(Attr::RefPath { hops, tail, .. }), Some(pred)) =
         (where_refpath.as_ref(), q.where_.as_ref())
     {
@@ -590,9 +598,9 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
             .iter()
             .copied()
             .filter(|&s| {
-                if has_retained_pred {
+                if has_deferred_pred {
                     let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
-                    if !retained_where_passes(q, ret) {
+                    if !deferred_where_passes(q, s, ret, ctx, &like_regexes) {
                         return false;
                     }
                 }
@@ -603,13 +611,13 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 eval_refpath_pred(pred, val.as_ref(), &like_regexes)
             })
             .collect()
-    } else if has_retained_pred {
+    } else if has_deferred_pred {
         seeds
             .iter()
             .copied()
             .filter(|&s| {
                 let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
-                retained_where_passes(q, ret)
+                deferred_where_passes(q, s, ret, ctx, &like_regexes)
             })
             .collect()
     } else {
@@ -716,30 +724,25 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 
     let seeds: Vec<u32> = entry.carry.indices();
 
-    // Apply toString(s) WHERE predicates, then any @retainedHeapSize WHERE terms
-    // that may also be present when this path co-runs with a retained join.
-    // `eval_tostring_pred` passes non-toString comparisons as true (they were
-    // applied at scan time); `retained_where_passes` adds the retained-size filter
-    // that the scan skipped (retained size was unknown during pass2).
-    let kept: Vec<u32> = {
-        let has_ts = q.where_.as_ref().is_some_and(has_to_string_pred);
-        let has_ret = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
+    // Apply all deferred WHERE predicates in the late window. The scan skipped
+    // any WHERE conjunct containing @retainedHeapSize, toString(s), or a RefPath
+    // attr. Here we have the full LateCtx so we evaluate the complete predicate
+    // via `deferred_where_passes` (which uses `eval_late_pred_multi`). This
+    // correctly handles OR predicates mixing toString with retained/other attrs.
+    let has_deferred = q.where_.as_ref().is_some_and(|p| {
+        has_to_string_pred(p) || crate::query::plan::pred_uses_retained(p)
+    });
+    let kept: Vec<u32> = if has_deferred {
         seeds
             .iter()
             .copied()
             .filter(|&s| {
-                if has_ts && !eval_tostring_pred(q.where_.as_ref().unwrap(), s, ctx, &like_regexes) {
-                    return false;
-                }
-                if has_ret {
-                    let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
-                    if !retained_where_passes(q, ret) {
-                        return false;
-                    }
-                }
-                true
+                let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
+                deferred_where_passes(q, s, ret, ctx, &like_regexes)
             })
             .collect()
+    } else {
+        seeds
     };
 
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
@@ -1118,6 +1121,14 @@ fn eval_late_expr_multi(
                     _ => QueryValue::Null,
                 }
             }
+            // toString(s) is available in the late window via ctx.string_values.
+            // This lets eval_late_pred_multi act as a unified WHERE evaluator that
+            // correctly handles OR predicates mixing toString, retained, and other
+            // late attrs (e.g. `toString(s) LIKE '%foo%' OR @retainedHeapSize > 1000`).
+            Attr::ToString(_) => ctx
+                .string_value(idx)
+                .map(|s| QueryValue::Str(s.to_string()))
+                .unwrap_or(QueryValue::Null),
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1384,12 +1395,14 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let class_name = q.from.class_name();
-    let has_retained_pred = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
+    let has_deferred_pred = q.where_.as_ref().is_some_and(|p| {
+        crate::query::plan::pred_uses_retained(p) || crate::query::plan::pred_uses_tostring(p)
+    });
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
     for &s in &seeds {
-        if has_retained_pred {
+        if has_deferred_pred {
             let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
-            if !retained_where_passes(q, ret) {
+            if !deferred_where_passes(q, s, ret, ctx, &like_regexes) {
                 continue;
             }
         }
@@ -1587,7 +1600,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
 
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
-        if !retained_where_passes(q, ret) {
+        if !deferred_where_passes(q, idx, ret, ctx, &like_regexes) {
             continue;
         }
         // Compute the GROUP BY key vector.
@@ -1820,7 +1833,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
 
         for idx in entry.carry.indices() {
             let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
-            if !retained_where_passes(q, ret) {
+            if !deferred_where_passes(q, idx, ret, ctx, &like_regexes) {
                 continue;
             }
             for (i, it) in q.select.iter().enumerate() {
@@ -1931,7 +1944,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let mut rows: Vec<(u32, u64)> = Vec::new();
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
-        if retained_where_passes(q, ret) {
+        if deferred_where_passes(q, idx, ret, ctx, &like_regexes) {
             rows.push((idx, ret));
         }
     }
@@ -2006,39 +2019,28 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     }
 }
 
-/// Evaluate only the retained-size WHERE terms; non-retained terms were already
-/// applied in Phase 1, so they pass here.
-fn retained_where_passes(q: &Query, ret: u64) -> bool {
+/// Re-evaluate all deferred WHERE terms in the late window. The scan skips any
+/// WHERE conjunct that contains `@retainedHeapSize`, `toString(s)`, or a RefPath
+/// attr (those are unknowable during the pass2 scan). In the late window we have
+/// the full `LateCtx`, so we can evaluate the COMPLETE predicate via
+/// `eval_late_pred_multi`. This correctly handles OR predicates that mix
+/// cross-phase attrs with scan-time attrs
+/// (e.g. `@retainedHeapSize > 1000 OR @usedHeapSize > 200`): the previous
+/// narrow `eval_retained_pred` would pass `@usedHeapSize > 200` as `true`
+/// (non-retained Compare), causing the OR to always return true and silently
+/// drop the filter. `eval_late_pred_multi` evaluates all late attrs correctly.
+fn deferred_where_passes(
+    q: &Query,
+    idx: u32,
+    ret: u64,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> bool {
     match &q.where_ {
         None => true,
-        Some(p) => eval_retained_pred(p, ret),
+        Some(p) => eval_late_pred_multi(p, idx, ret, ctx, like_regexes),
     }
 }
-fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
-    let is_retained = |a: &Attr| matches!(a, Attr::RetainedHeapSize);
-    // The retained size is represented as an i64 (safe: Java heap sizes fit in
-    // 63 bits for any JVM process that doesn't OOM before analysis) for arithmetic
-    // with the standard `arith` helper which returns Int/Float/Null.
-    let retained_qv = QueryValue::Int(ret as i64);
-    match p {
-        Predicate::And(a, b) => eval_retained_pred(a, ret) && eval_retained_pred(b, ret),
-        Predicate::Or(a, b) => eval_retained_pred(a, ret) || eval_retained_pred(b, ret),
-        Predicate::Not(a) => !eval_retained_pred(a, ret),
-        Predicate::Compare { lhs, op, rhs } => {
-            // Only handle this Compare if it involves @retainedHeapSize.
-            // Non-retained terms were applied in Phase 1 and pass here.
-            if !expr_has_attr(lhs, &is_retained) && !expr_has_attr(rhs, &is_retained) {
-                return true;
-            }
-            let lv = eval_late_expr(lhs, &is_retained, &retained_qv);
-            let rv = eval_late_expr(rhs, &is_retained, &retained_qv);
-            // No LIKE regex map for retained-size comparisons (numeric only).
-            cmp_late_qv(&lv, *op, &rv, &std::collections::HashMap::new())
-        }
-        _ => true,
-    }
-}
-// cmp_u64 removed: callers now use cmp_late_qv via eval_retained_pred.
 
 /// Project a late row from a dense index + retained size. Handles attrs that are
 /// available in the late window: @objectId, @retainedHeapSize, @usedHeapSize (from
@@ -3987,7 +3989,7 @@ mod arith_late_tests {
         assert!(!cmp_late_qv(&QueryValue::Null, CompareOp::Gt, &QueryValue::Int(1), &no_re));
     }
 
-    // ── Case A: arithmetic RHS — retained_where_passes ───────────────────────
+    // ── Case A: arithmetic RHS — deferred_where_passes ───────────────────────
 
     /// `@retainedHeapSize > 40 * 2` with ret=100 → passes (RHS folds to 80).
     #[test]
@@ -3995,7 +3997,8 @@ mod arith_late_tests {
         let q = crate::query::parse::parse(
             "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
         ).unwrap();
-        assert!(retained_where_passes(&q, 100));
+        let no_re = std::collections::HashMap::new();
+        assert!(deferred_where_passes(&q, 0, 100, &ctx_for(&[100]), &no_re));
     }
 
     /// `@retainedHeapSize > 40 * 2` with ret=50 → fails (50 ≤ 80).
@@ -4004,10 +4007,11 @@ mod arith_late_tests {
         let q = crate::query::parse::parse(
             "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
         ).unwrap();
-        assert!(!retained_where_passes(&q, 50));
+        let no_re = std::collections::HashMap::new();
+        assert!(!deferred_where_passes(&q, 0, 50, &ctx_for(&[50]), &no_re));
     }
 
-    // ── Case B: arithmetic LHS — retained_where_passes ───────────────────────
+    // ── Case B: arithmetic LHS — deferred_where_passes ───────────────────────
 
     /// `@retainedHeapSize * 2 > 100` with ret=60 → 120 > 100 → passes.
     #[test]
@@ -4015,7 +4019,8 @@ mod arith_late_tests {
         let q = crate::query::parse::parse(
             "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
         ).unwrap();
-        assert!(retained_where_passes(&q, 60));
+        let no_re = std::collections::HashMap::new();
+        assert!(deferred_where_passes(&q, 0, 60, &ctx_for(&[60]), &no_re));
     }
 
     /// `@retainedHeapSize * 2 > 100` with ret=40 → 80 > 100 → fails.
@@ -4024,23 +4029,28 @@ mod arith_late_tests {
         let q = crate::query::parse::parse(
             "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
         ).unwrap();
-        assert!(!retained_where_passes(&q, 40));
+        let no_re = std::collections::HashMap::new();
+        assert!(!deferred_where_passes(&q, 0, 40, &ctx_for(&[40]), &no_re));
     }
 
-    // ── RHS containing a non-late Attr — no panic, returns false ─────────────
+    // ── @usedHeapSize on RHS is now a known late attr ─────────────────────────
 
-    /// Build a Compare with a non-late Attr on the RHS manually (parser can't do
-    /// this, but the evaluator must not panic and must return false).
+    /// `@retainedHeapSize > @usedHeapSize` — `eval_late_pred_multi` knows both
+    /// attrs. With shallow=[0] (usedHeap=0), ret=999 > 0 → true.
     #[test]
-    fn retained_where_rhs_non_late_attr_no_panic_returns_false() {
-        // Construct: @retainedHeapSize > @usedHeapSize (manually)
-        let pred = Predicate::Compare {
-            lhs: Expr::Attr(Attr::RetainedHeapSize),
-            op: CompareOp::Gt,
-            rhs: Expr::Attr(Attr::UsedHeapSize), // non-late attr, unknown at late phase
+    fn deferred_where_retained_gt_used_heap_both_known() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize > @usedHeapSize"
+        ).unwrap();
+        let no_re = std::collections::HashMap::new();
+        let shallow_val = [0u32];
+        let test_ctx = LateCtx {
+            retained: &[999],
+            shallow: &shallow_val,
+            ..ctx_for(&[999])
         };
-        // Must not panic; the unknown RHS attr becomes Null, so comparison is false.
-        assert!(!eval_retained_pred(&pred, 999));
+        // usedHeapSize(0)=0; ret=999 > 0 → passes
+        assert!(deferred_where_passes(&q, 0, 999, &test_ctx, &no_re));
     }
 
     // ── Non-arithmetic regression guard ──────────────────────────────────────
@@ -4052,9 +4062,10 @@ mod arith_late_tests {
         let q = crate::query::parse::parse(
             "SELECT @objectId FROM C WHERE @retainedHeapSize > 100"
         ).unwrap();
-        assert!(retained_where_passes(&q, 200));
-        assert!(!retained_where_passes(&q, 50));
-        assert!(!retained_where_passes(&q, 100)); // strict >
+        let no_re = std::collections::HashMap::new();
+        assert!(deferred_where_passes(&q, 0, 200, &ctx_for(&[200]), &no_re));
+        assert!(!deferred_where_passes(&q, 0, 50, &ctx_for(&[50]), &no_re));
+        assert!(!deferred_where_passes(&q, 0, 100, &ctx_for(&[100]), &no_re)); // strict >
     }
 
     // ── has_to_string_pred — detector widening ────────────────────────────────
