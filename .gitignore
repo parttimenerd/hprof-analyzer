@@ -48,3 +48,10 @@ docs/missing-views-plan.md
 /_mdgraphs.md
 tests/fixtures/*.md
 tests/fixtures/dump_1_mnemonics.hprof.zip
+
+# Web stress test artifacts (large dumps, results, node deps).
+tests/web-stress/dumps/
+tests/web-stress/results.md
+tests/web-stress/stress-run.log
+tests/web-stress/node_modules/
+tests/web-stress/package-lock.json

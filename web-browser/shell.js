@@ -32,12 +32,39 @@ let fieldNames = [];  // populated after session loads from /help endpoint
 let hasRetained = false;
 let selectedFile = null;  // File object selected on the upload screen
 
+// ── Background analysis worker state ─────────────────────────────────────────
+// Removed: analysis now runs inline before showing the shell.
+
 // ── Screen helpers ────────────────────────────────────────────────────────────
 function showScreen(id) {
   for (const sid of ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen']) {
     const el = document.getElementById(sid);
     if (el) el.style.display = sid === id ? 'flex' : 'none';
   }
+}
+
+// ── Toast notifications ────────────────────────────────────────────────────────
+// showToast(msg, type='info'|'success'|'error', durationMs=3500)
+// Appends a self-dismissing bubble to #toast-container (created on first call).
+function showToast(msg, type = 'info', durationMs = 3500) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  // Trigger CSS fade-in
+  requestAnimationFrame(() => toast.classList.add('toast-visible'));
+  const remove = () => {
+    toast.classList.remove('toast-visible');
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+  };
+  const timer = setTimeout(remove, durationMs);
+  toast.addEventListener('click', () => { clearTimeout(timer); remove(); });
 }
 
 // ── Upload screen ─────────────────────────────────────────────────────────────
@@ -152,6 +179,28 @@ async function loadSampleDump(sample) {
   modeButtons.style.display = 'flex';
 }
 
+// Compress bytes with gzip using the browser's CompressionStream API.
+// Returns the compressed Uint8Array. Input is passed by reference; caller
+// should null it after this call to free memory before the WASM load.
+async function gzipCompress(bytes) {
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const chunks = [];
+  const reader = cs.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
+  const out = new Uint8Array(totalLen);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+  return out;
+}
+
 async function loadWasmSession(file) {
   const statusEl = document.getElementById('wasm-load-status');
   const modeButtons = document.getElementById('mode-buttons');
@@ -184,7 +233,19 @@ async function loadWasmSession(file) {
     return;
   }
 
-  setStage(`Parsing heap dump (Pass 1 + 2)…`, 15);
+  // Compress in JS before handing to WASM — the wasm-bindgen boundary copies
+  // whatever we pass, so passing ~N/4 compressed bytes instead of N raw bytes
+  // cuts the mandatory copy from 70 MB to ~17 MB for a typical dump.
+  const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
+  if (!isGzip) {
+    setStage('Compressing…', 10);
+    await new Promise(r => setTimeout(r, 20));
+    const compressed = await gzipCompress(bytes);
+    bytes = null; // free raw before WASM allocates
+    bytes = compressed;
+  }
+
+  setStage(`Parsing heap dump (Pass 1 + 2)…`, 20);
   await new Promise(r => setTimeout(r, 20));
 
   try {
@@ -196,22 +257,29 @@ async function loadWasmSession(file) {
     if (modeButtons) modeButtons.style.display = 'flex';
     return;
   }
+  // Free the raw buffer — WASM already made its own compressed copy.
+  // Letting the GC collect this now reduces peak memory before the analysis pass.
+  bytes = null;
 
   classNames = JSON.parse(wasmSession.class_names());
-  hasRetained = false;
 
-  setStage('Computing dominators and retained sizes…', 60);
+  // Run full analysis (dominators + retained sizes) before showing the shell.
+  setStage('Computing dominators and retained sizes…', 55);
   await new Promise(r => setTimeout(r, 20));
   try {
     wasmSession.run_full_analysis();
     hasRetained = true;
-  } catch (_) {
-    // Analysis failed (e.g. OOM on very large dumps) — shell still opens, retained queries unavailable
+  } catch (e) {
+    // Non-fatal: shell still works, retained-size queries will error gracefully.
+    hasRetained = false;
+    showToast(`Analysis failed — @retainedHeapSize unavailable: ${e}`, 'error', 6000);
   }
 
   if (statusEl) statusEl.style.display = 'none';
+
   showWasmShell(file.name);
 }
+
 
 async function loadWasmSessionWithReport(file) {
   const msg = document.getElementById('report-message');
@@ -244,6 +312,15 @@ async function loadWasmSessionWithReport(file) {
     return;
   }
 
+  const isGzip2 = bytes[0] === 0x1f && bytes[1] === 0x8b;
+  if (!isGzip2) {
+    setStage('Compressing…', 8);
+    await new Promise(r => setTimeout(r, 20));
+    const compressed = await gzipCompress(bytes);
+    bytes = null;
+    bytes = compressed;
+  }
+
   setStage(`Parsing heap dump (Pass 1 + 2)…`, 15);
   await new Promise(r => setTimeout(r, 20));
 
@@ -254,11 +331,14 @@ async function loadWasmSessionWithReport(file) {
     msg.textContent = `Failed to load ${file.name}: ${e}`;
     return;
   }
+  // Free the raw buffer early to reduce peak memory before analysis.
+  bytes = null;
 
   setStage('Computing dominators and retained sizes…', 55);
   await new Promise(r => setTimeout(r, 20));
   try {
-    const reportHtml = wasmSession.generate_report_html();
+    wasmSession.run_full_analysis();
+    const reportHtml = wasmSession.get_report_html();
     setStage('Opening report…', 90);
     await new Promise(r => setTimeout(r, 16));
     hasRetained = true;
@@ -643,12 +723,8 @@ function showWasmShell(name) {
   if (badge) { badge.textContent = '◉ WASM'; badge.style.color = '#7cb8ff'; }
   document.getElementById('server-url-display').textContent = name;
   document.getElementById('btn-disconnect').textContent = '↩ New file';
-  if (hasRetained) {
-    document.getElementById('analyze-status').textContent = 'Analysis ready';
-  }
   buildSidebar(hasRetained);
   startTerminal();
-  // No keepalive or poll needed for WASM mode
 }
 
 // ── Report screen ─────────────────────────────────────────────────────────────
@@ -853,8 +929,6 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   document.getElementById('named-query-list').innerHTML = '';
   document.getElementById('connect-status').textContent = '';
   document.getElementById('connect-status').className = '';
-  document.getElementById('btn-show-report').disabled = false;
-  document.getElementById('analyze-status').textContent = '';
   document.getElementById('btn-disconnect').textContent = '✕ Disconnect';
   showScreen('upload-screen');
 });
@@ -863,10 +937,14 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
 document.getElementById('btn-show-report').addEventListener('click', async () => {
   if (wasmSession) {
     try {
-      const reportJson = wasmSession.generate_report();
-      showReport(JSON.parse(reportJson), wasmSession._fileName || 'heap.hprof');
+      const html = wasmSession.get_report_html();
+      if (html) {
+        openReportTab(html);
+      } else {
+        showToast('Report not yet generated — wait for analysis to complete', 'info');
+      }
     } catch (e) {
-      document.getElementById('analyze-status').textContent = `Report failed: ${e}`;
+      showToast(`Report failed: ${e}`, 'error');
     }
     return;
   }
@@ -877,10 +955,10 @@ document.getElementById('btn-show-report').addEventListener('click', async () =>
       const reportJson = await rr.text();
       showReport(JSON.parse(reportJson), serverUrl || '');
     } else {
-      document.getElementById('analyze-status').textContent = 'Report not ready';
+      showToast('Report not ready', 'info');
     }
   } catch (e) {
-    document.getElementById('analyze-status').textContent = `Error: ${e.message}`;
+    showToast(`Error: ${e.message}`, 'error');
   }
 });
 
@@ -893,10 +971,8 @@ async function pollAnalysisStatus() {
   try {
     const res = await fetch(serverUrl + '/status');
     const data = await res.json();
-    const statusEl = document.getElementById('analyze-status');
     if (data.status === 'ready') {
       hasRetained = true;
-      statusEl.textContent = 'Analysis ready';
       buildSidebar(true);
       if (term) term.writeln('\r\n\x1b[32m[Analysis complete — @retainedHeapSize queries now available]\x1b[0m');
       try {
@@ -907,13 +983,11 @@ async function pollAnalysisStatus() {
         }
       } catch (_) {}
     } else if (data.status === 'analyzing') {
-      statusEl.textContent = 'Analyzing…';
       pollTimer = setTimeout(pollAnalysisStatus, 2000);
     } else if (data.status === 'failed') {
-      statusEl.textContent = `Analysis failed: ${data.error || ''}`;
+      showToast(`Server analysis failed: ${data.error || ''}`, 'error');
     } else {
-      // not_started — leave button enabled
-      statusEl.textContent = '';
+      // not_started
     }
   } catch (_) {
     // server gone
@@ -1047,6 +1121,7 @@ function startTerminal() {
   let cursorPos = 0;  // index within line where the cursor sits
   let ghostText = '';   // current inline suggestion suffix (display only, not in line)
   let histIdx = -1;
+  let histSavedLine = '';  // current draft line saved when entering history navigation
 
   // ── Completion popover ────────────────────────────────────────────────────
   const popover = document.createElement('div');
@@ -1378,6 +1453,7 @@ function startTerminal() {
     await handleEnter(oql);
   }
   window._hprofRunQuery = runQueryFromSidebar;
+  window._hprofQueryDirect = (oql) => wasmSession ? wasmSession.query(oql) : null;
 
   function handleTab() {
     ghostText = '';
@@ -3207,10 +3283,6 @@ function startTerminal() {
   }
 
   async function runQuery(oql, { showHint = true } = {}) {
-    // Soft warning: if query references retained-size attributes but analysis hasn't run
-    if (!hasRetained && /@retainedHeapSize|@dominatorClass|dominators\s*\(|retained\s*\(/i.test(oql)) {
-      term.writeln('\x1b[33m[hint] Query uses retained-size data — click "Run Analysis" first for accurate results\x1b[0m');
-    }
     const t0 = performance.now();
     const abortCtrl = new AbortController();
     currentAbort = abortCtrl;
@@ -3466,6 +3538,7 @@ function startTerminal() {
       cursorPos = 0;
       ghostText = '';
       histIdx = -1;
+      histSavedLine = '';
       term.writeln('');
       void handleEnter(text);
       return;
@@ -3512,8 +3585,13 @@ function startTerminal() {
         return;
       }
       if (histIdx + 1 < history.length) {
+        if (histIdx === -1) histSavedLine = line;  // save draft before entering history
         histIdx++;
-        setLine(history[histIdx]);
+        line = history[histIdx];
+        cursorPos = line.length;
+        ghostText = '';
+        popHide();
+        redrawLine();
       }
       return;
     }
@@ -3527,10 +3605,18 @@ function startTerminal() {
       }
       if (histIdx > 0) {
         histIdx--;
-        setLine(history[histIdx]);
+        line = history[histIdx];
+        cursorPos = line.length;
+        ghostText = '';
+        popHide();
+        redrawLine();
       } else if (histIdx === 0) {
         histIdx = -1;
-        setLine('');
+        line = histSavedLine;
+        cursorPos = line.length;
+        ghostText = '';
+        popHide();
+        redrawLine();
       }
       return;
     }
@@ -3620,6 +3706,7 @@ function startTerminal() {
         line = '';
         cursorPos = 0;
         histIdx = -1;
+        histSavedLine = '';
         pendingLines = [];
         if (hadPending) {
           term.writeln('\x1b[2m(multi-line input discarded)\x1b[0m');

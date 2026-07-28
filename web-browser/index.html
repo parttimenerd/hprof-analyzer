@@ -144,6 +144,7 @@ try {
 } catch (e) {
   console.warn('[hprof-analyzer] WASM init failed:', e);
 }
+window._hprofWasmReady = () => wasmReady;
 
 // ── Shell logic (inlined from shell.js) ──────────────────────────────────────
 %%SHELL_JS%%
