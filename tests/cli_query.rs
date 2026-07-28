@@ -768,9 +768,11 @@ fn query_subcommand_tostring_late_select_star_uses_dense_index() {
         .filter_map(|l| l.trim().parse::<u64>().ok())
         .collect();
     assert_eq!(
-        star_ids.len(), obj_ids.len(),
+        star_ids.len(),
+        obj_ids.len(),
         "SELECT * row count ({}) must equal @objectId row count ({})",
-        star_ids.len(), obj_ids.len()
+        star_ids.len(),
+        obj_ids.len()
     );
 }
 
