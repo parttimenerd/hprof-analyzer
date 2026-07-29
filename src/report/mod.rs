@@ -1417,7 +1417,8 @@ mod tests {
         // Value-equality: whitespace / key ordering must not cause false diffs.
         assert_eq!(
             committed, fresh,
-            "schema/report.schema.json must equal a fresh schema_for!(Report);              regenerate via `dev emit-schema` if the model changed"
+            "schema/report.schema.json must equal a fresh schema_for!(Report); \
+             regenerate with: cargo build --release && ./target/release/hprof-analyzer dev emit-schema > schema/report.schema.json"
         );
     }
 
