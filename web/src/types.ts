@@ -456,6 +456,8 @@ export interface ImmediateDominators {
 export interface DominatorAnalysis {
   big_drops: BigDrops;
   immediate_dominators: ImmediateDominators;
+  /** Longest path in the dominator tree (idom-hops from virtual root to deepest node). V25. */
+  longest_chain_depth?: number | null;
 }
 
 // One row of the per-class unreachable-objects histogram (idom == u32::MAX).
@@ -676,6 +678,7 @@ export interface LeakIndicators {
   anonymous_class_count: number;
   thread_local_null_key_count: number;
   direct_byte_buffer_capacity_sum: number;
+  direct_byte_buffer_count?: number | null;
 }
 
 export type TriageSeverity = "info" | "warning" | "critical";
