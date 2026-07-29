@@ -276,6 +276,13 @@ export interface ThreadLocalLeakRow {
   retained: number;
 }
 
+// One detected framework's aggregate statistics.
+export interface FrameworkAnalysis {
+  framework: string;
+  instance_count: number;
+  total_retained: number;
+}
+
 // One aggregated allocation site (a distinct HPROF
 // stack-trace serial and the footprint of the objects allocated there).
 export interface AllocSite {
@@ -806,6 +813,9 @@ export interface Report {
   // ThreadLocal Leak Analyzer: per-value-class breakdown. Only present when
   // --find-duplicates (or --full-analysis) was passed.
   thread_local_analysis?: ThreadLocalLeakRow[];
+  // Detected framework aggregate analyses. Empty when no framework classes present.
+  // Always-on; each entry only emitted when its sentinel class is in the heap.
+  framework_analysis?: FrameworkAnalysis[];
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.

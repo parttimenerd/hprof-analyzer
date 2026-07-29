@@ -1447,6 +1447,17 @@ pub struct TriageSignal {
 /// breaking change to the `Report` shape; the JSON always carries this.
 pub const SCHEMA_VERSION: u32 = 10;
 
+/// One detected framework's aggregate statistics.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct FrameworkAnalysis {
+    /// Human-readable framework name (e.g. "Hibernate", "Spring").
+    pub framework: String,
+    /// Count of live instances of the sentinel class (or subclasses).
+    pub instance_count: u32,
+    /// Total retained heap across all sentinel class instances, in bytes.
+    pub total_retained: u64,
+}
+
 /// One row of the ThreadLocal Leak Analyzer breakdown: value class name,
 /// entry counts (total + stale), and total retained heap of the stored values.
 /// A stale entry is one whose weak referent (the ThreadLocal key) has been
@@ -1568,6 +1579,11 @@ pub struct Report {
     /// parity-compared. `#[serde(default)]` keeps older JSON loadable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thread_local_analysis: Vec<ThreadLocalLeakRow>,
+    /// Detected framework aggregate analyses. Empty when no framework classes present.
+    /// Always-on; each entry is only emitted when its sentinel class is in the heap.
+    /// `#[serde(default)]` keeps older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub framework_analysis: Vec<FrameworkAnalysis>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

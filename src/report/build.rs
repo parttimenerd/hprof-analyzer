@@ -357,6 +357,9 @@ pub fn build_model(
     } else {
         Vec::new()
     };
+    // Framework Auto-Analysis — always-on; each framework only emits when its
+    // sentinel class is present in the heap.
+    let framework_analysis = crate::pass2::scan_frameworks(g);
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -388,6 +391,7 @@ pub fn build_model(
         obj_graph_flat,
         type_ref_graph,
         thread_local_analysis,
+        framework_analysis,
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);

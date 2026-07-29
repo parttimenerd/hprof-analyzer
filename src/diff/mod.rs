@@ -130,6 +130,7 @@ mod tests {
             obj_graph_flat: None,
             type_ref_graph: vec![],
             thread_local_analysis: Vec::new(),
+            framework_analysis: Vec::new(),
         }
     }
 

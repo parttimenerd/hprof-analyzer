@@ -26,6 +26,7 @@ use crate::{
 mod boxed;
 mod dup_prim_arrays;
 mod fielddecode;
+pub mod framework_scan;
 mod meta;
 mod model;
 mod scan;
@@ -38,6 +39,7 @@ pub(crate) use dup_prim_arrays::{
 };
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
 pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
+pub use framework_scan::scan_frameworks;
 pub(crate) use meta::*;
 pub use model::*;
 pub(crate) use scan::*;

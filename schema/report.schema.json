@@ -131,6 +131,13 @@
         }
       ]
     },
+    "framework_analysis": {
+      "description": "Detected framework aggregate analyses. Empty when no framework classes present.\nAlways-on; each entry is only emitted when its sentinel class is in the heap.\n`#[serde(default)]` keeps older JSON loadable.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FrameworkAnalysis"
+      }
+    },
     "generated": {
       "type": "string"
     },
@@ -1670,6 +1677,33 @@
         "objects",
         "shallow",
         "wasted"
+      ]
+    },
+    "FrameworkAnalysis": {
+      "description": "One detected framework's aggregate statistics.",
+      "type": "object",
+      "properties": {
+        "framework": {
+          "description": "Human-readable framework name (e.g. \"Hibernate\", \"Spring\").",
+          "type": "string"
+        },
+        "instance_count": {
+          "description": "Count of live instances of the sentinel class (or subclasses).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total_retained": {
+          "description": "Total retained heap across all sentinel class instances, in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "framework",
+        "instance_count",
+        "total_retained"
       ]
     },
     "GcRootClassRow": {

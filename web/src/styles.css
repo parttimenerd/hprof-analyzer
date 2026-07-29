@@ -424,3 +424,9 @@ dialog.text-modal::backdrop {
 .btn-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-size: 0.85rem; text-decoration: underline; }
 .btn-link:disabled { color: var(--muted); text-decoration: none; cursor: default; }
 @media print { .report-footer { display: none; } }
+
+/* ── Framework Auto-Analysis ──────────────────────────────────────────────── */
+.framework-cards { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.5rem; }
+.framework-card { background: var(--card, #f8f9fa); border: 1px solid var(--border, #dee2e6); border-radius: 6px; padding: 0.75rem 1rem; min-width: 200px; }
+.framework-card-name { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
+.framework-card-stats { font-size: 0.85rem; color: var(--muted, #6c757d); }

@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -2585,6 +2585,30 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
   );
 }
 
+// ── Framework Auto-Analysis ───────────────────────────────────────────────────
+function FrameworkAnalysisSection({ items }: { items: FrameworkAnalysis[] }) {
+  if (!items || items.length === 0) return null;
+  const detected = items.map(i => i.framework).join(' · ');
+  return (
+    <section className="section" id="framework-analysis">
+      <h2>Framework Analysis</h2>
+      <p className="subtitle">Detected: {detected}</p>
+      <div className="framework-cards">
+        {items.map(item => (
+          <div key={item.framework} className="framework-card">
+            <div className="framework-card-name">{item.framework}</div>
+            <div className="framework-card-stats">
+              <span>{item.instance_count.toLocaleString()} instances</span>
+              <span className="muted"> · </span>
+              <span>{formatBytes(item.total_retained)} retained</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ThreadsSection({ report }: { report: Report }) {
   const CAP = 100;
   const threads = report.threads?.threads ?? [];
@@ -5073,6 +5097,9 @@ export default function App({ report }: { report: Report }) {
       <HeaderOverheadSection report={report} />
       <DominatorAnalysisSection data={report.dominator_analysis} />
       <ThreadsSection report={report} />
+      {(report.framework_analysis?.length ?? 0) > 0 && (
+        <FrameworkAnalysisSection items={report.framework_analysis!} />
+      )}
       {report.top_components?.components?.length ? (
         <TopComponentsSection data={report.top_components} />
       ) : null}
