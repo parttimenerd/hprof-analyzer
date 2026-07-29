@@ -1193,7 +1193,9 @@ fn build_dominator_analysis(
     let mut longest: u32 = 0;
     let mut stack: Vec<(u32, u32)> = vec![(vroot, 0u32)];
     while let Some((node, depth)) = stack.pop() {
-        if depth > longest { longest = depth; }
+        if depth > longest {
+            longest = depth;
+        }
         let idx = if node == vroot { n } else { node as usize };
         for &child in &children[idx] {
             stack.push((child, depth + 1));
