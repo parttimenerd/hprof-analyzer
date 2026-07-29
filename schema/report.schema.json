@@ -181,6 +181,13 @@
       "format": "uint32",
       "minimum": 0
     },
+    "thread_local_analysis": {
+      "description": "ThreadLocal Leak Analyzer: per-value-class breakdown of\n`ThreadLocalMap$Entry` objects — entry counts, stale counts (null key),\nand total retained heap. Populated only when `--find-duplicates` (or\n`--full-analysis`) is passed; empty otherwise. Additive; not\nparity-compared. `#[serde(default)]` keeps older JSON loadable.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ThreadLocalLeakRow"
+      }
+    },
     "threads": {
       "$ref": "#/$defs/ThreadOverview"
     },
@@ -3659,6 +3666,40 @@
         "thread_serial",
         "frames",
         "local_root_count"
+      ]
+    },
+    "ThreadLocalLeakRow": {
+      "description": "One row of the ThreadLocal Leak Analyzer breakdown: value class name,\nentry counts (total + stale), and total retained heap of the stored values.\nA stale entry is one whose weak referent (the ThreadLocal key) has been\nGC'd but whose value is still strongly held — a classic TL leak signal.",
+      "type": "object",
+      "properties": {
+        "entry_count": {
+          "description": "Total number of ThreadLocalMap$Entry objects with this value class.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "retained": {
+          "description": "Sum of retained heap across all value objects of this class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stale_count": {
+          "description": "Number of entries whose key (referent) has been GC'd (stale entries).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "value_class": {
+          "description": "Pretty class name of the stored value object.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value_class",
+        "entry_count",
+        "stale_count",
+        "retained"
       ]
     },
     "ThreadLocalObj": {

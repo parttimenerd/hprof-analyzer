@@ -350,6 +350,13 @@ pub fn build_model(
     let biggest_collections = build_biggest_collections(g);
     let collection_contents = build_collection_contents(g);
     let top_retainers = build_top_retainers(&fields_by_size, &threads);
+    // ThreadLocal Leak Analyzer — gated on find_duplicates (same opt-in as dup
+    // analysis; also implicitly enabled by --full-analysis via the flag fold).
+    let thread_local_analysis = if opts.find_duplicates {
+        build_threadlocal_analysis(g)
+    } else {
+        Vec::new()
+    };
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -380,6 +387,7 @@ pub fn build_model(
         },
         obj_graph_flat,
         type_ref_graph,
+        thread_local_analysis,
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);
@@ -512,6 +520,63 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
         thread_local_null_key_count,
         direct_byte_buffer_capacity_sum,
     }
+}
+
+/// Build the ThreadLocal Leak Analyzer breakdown. Iterates `g.tl_entry_records`
+/// (captured at field-decode time), looks up each value object's class name and
+/// retained heap, then aggregates by class. Rows are sorted by retained heap
+/// descending, then entry_count descending, then value_class ascending.
+///
+/// Only called when `--find-duplicates` / `--full-analysis` is set.
+fn build_threadlocal_analysis(g: &Graph) -> Vec<ThreadLocalLeakRow> {
+    use std::collections::HashMap;
+    if g.tl_entry_records.is_empty() {
+        return Vec::new();
+    }
+
+    // key: value_class name → (entry_count, stale_count, retained_sum)
+    let mut by_class: HashMap<String, (u32, u32, u64)> = HashMap::new();
+
+    for &(is_stale, val_idx) in &g.tl_entry_records {
+        let val_idx = val_idx as usize;
+        let class_name = if val_idx == usize::MAX {
+            // null value — attribute to a synthetic placeholder
+            "<null value>".to_string()
+        } else {
+            class_display(g, val_idx)
+        };
+        let retained = if val_idx != usize::MAX && val_idx < g.retained.len() {
+            g.retained[val_idx]
+        } else {
+            0
+        };
+        let e = by_class.entry(class_name).or_insert((0, 0, 0));
+        e.0 += 1; // entry_count
+        if is_stale {
+            e.1 += 1; // stale_count
+        }
+        e.2 += retained;
+    }
+
+    let mut rows: Vec<ThreadLocalLeakRow> = by_class
+        .into_iter()
+        .map(|(value_class, (entry_count, stale_count, retained))| ThreadLocalLeakRow {
+            value_class,
+            entry_count,
+            stale_count,
+            retained,
+        })
+        .collect();
+
+    // Sort: retained desc, entry_count desc, value_class asc for determinism.
+    rows.sort_unstable_by(|a, b| {
+        b.retained
+            .cmp(&a.retained)
+            .then_with(|| b.entry_count.cmp(&a.entry_count))
+            .then_with(|| a.value_class.cmp(&b.value_class))
+    });
+
+    rows
 }
 
 /// Pretty class-display name for object index `i`, matching the derivation used

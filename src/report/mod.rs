@@ -230,6 +230,7 @@ mod tests {
             coll_values_raw: None,
             direct_byte_buffer_capacity_sum: 0,
             thread_local_null_key_count: 0,
+            tl_entry_records: Vec::new(),
             unreachable_retained: None,
             node_kv: None,
             fwd_field_name_idx: None,

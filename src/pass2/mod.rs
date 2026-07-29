@@ -918,6 +918,7 @@ impl Pass2 {
             fd_attribution_trunc,
             fd_dbb_capacity_sum,
             fd_tl_null_key_count,
+            fd_tl_entry_records,
         ) = fielddecode::build_field_decode_views(
             &open,
             &p1,
@@ -1233,6 +1234,7 @@ impl Pass2 {
             node_kv: fd_node_kv,
             direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
             thread_local_null_key_count: fd_tl_null_key_count,
+            tl_entry_records: fd_tl_entry_records,
             fwd_field_name_idx: fwd_field_name_idx_opt,
             field_name_pool: if opts.ref_paths {
                 Some(field_name_pool)

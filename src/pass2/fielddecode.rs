@@ -48,6 +48,10 @@ const CONST_ARRAY_OWNER_SAMPLE: usize = 64;
 const REFERENT_CAP: usize = 1_000_000;
 /// Max distinct referent classes retained per reference kind's histogram.
 const REFERENT_HIST_CAP: usize = 200;
+/// Max (is_stale, value_dense_idx) records captured for ThreadLocalMap$Entry
+/// objects. Typical JVM heaps have hundreds to low thousands; this is a safety
+/// cap to avoid unbounded allocation on pathological dumps.
+const TL_ENTRY_CAP: usize = 500_000;
 
 /// Max holder→pointee edges collected under --collections (16 B each → 160 MB).
 const FIELD_REF_CAP: usize = 10_000_000;
@@ -361,6 +365,9 @@ enum ClassRole {
         /// True iff this class is a `ThreadLocal$ThreadLocalMap$Entry` — used to
         /// count entries whose weak referent (the ThreadLocal key) is null.
         is_tl_entry: bool,
+        /// Byte offset of the `value` field in `ThreadLocalMap$Entry`, or `None`
+        /// for non-TL-entry reference objects. Present only when `is_tl_entry`.
+        tl_value_off: Option<(u32, HprofType)>,
     },
 }
 
@@ -438,10 +445,25 @@ fn classify(
                 .and_then(|ci| strings.get(&ci.name_id))
                 .map(|name| name.ends_with("ThreadLocal$ThreadLocalMap$Entry"))
                 .unwrap_or(false);
+            // Capture the `value` field offset for TL entries so we can record
+            // the dense index of the stored value object at scan time.
+            let tl_value_off = if is_tl_entry {
+                field_offset(
+                    class_id,
+                    "value",
+                    "java/lang/ThreadLocal$ThreadLocalMap$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+            } else {
+                None
+            };
             return ClassRole::Reference {
                 kind_idx,
                 referent_off,
                 is_tl_entry,
+                tl_value_off,
             };
         }
         // referent field missing → cannot decode; treat as plain.
@@ -912,6 +934,7 @@ type FieldDecodeViews = (
     bool,
     u64, // direct_byte_buffer_capacity_sum
     u64, // thread_local_null_key_count
+    Vec<(bool, u32)>, // tl_entry_records: (is_stale, value_dense_idx)
 );
 
 /// Compute the collection/array/reference views in exactly THREE full-file
@@ -968,6 +991,10 @@ where
     // ThreadLocal$ThreadLocalMap$Entry instances whose weak referent (the key)
     // is null — the classic thread-local leak signal.
     let mut tl_null_key_count: u64 = 0;
+    // Per-entry records: (is_stale, value_dense_idx) for ThreadLocalMap$Entry
+    // objects. Bounded by TL_ENTRY_CAP. Used to build the per-value-class
+    // breakdown in build_threadlocal_analysis.
+    let mut tl_entry_records: Vec<(bool, u32)> = Vec::new();
 
     // Top arrays (individual + per-class), one per array category.
     let mut top_prim = TopArrayAcc::default();
@@ -1178,6 +1205,7 @@ where
                     kind_idx,
                     referent_off,
                     is_tl_entry,
+                    tl_value_off,
                 } => {
                     ref_instances[kind_idx] += 1;
                     let (off, _ty) = referent_off;
@@ -1188,6 +1216,25 @@ where
                             null_referent_count[kind_idx] += 1;
                             if is_tl_entry {
                                 tl_null_key_count += 1;
+                                // Record stale entry with value index if available.
+                                if tl_entry_records.len() < TL_ENTRY_CAP {
+                                    let val_idx = tl_value_off
+                                        .and_then(|(voff, _)| {
+                                            let vo = voff as usize;
+                                            if vo + obj_ref_width <= blob.len() {
+                                                let val_addr = read_ref(&blob[vo..], obj_ref_width);
+                                                if val_addr != 0 {
+                                                    ic.index_of(&p1.id_map, val_addr).map(|i| i as u32)
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or(u32::MAX);
+                                    tl_entry_records.push((true, val_idx));
+                                }
                             }
                         } else if let Some(ridx) = ic.index_of(&p1.id_map, referent) {
                             let name = class_name_of_index(ridx, p1);
@@ -1203,6 +1250,25 @@ where
                             }
                             if referent_idx[kind_idx].len() < REFERENT_CAP {
                                 referent_idx[kind_idx].push(ridx as u32);
+                            }
+                            // Record live (non-stale) TL entry with value index.
+                            if is_tl_entry && tl_entry_records.len() < TL_ENTRY_CAP {
+                                let val_idx = tl_value_off
+                                    .and_then(|(voff, _)| {
+                                        let vo = voff as usize;
+                                        if vo + obj_ref_width <= blob.len() {
+                                            let val_addr = read_ref(&blob[vo..], obj_ref_width);
+                                            if val_addr != 0 {
+                                                ic.index_of(&p1.id_map, val_addr).map(|i| i as u32)
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(u32::MAX);
+                                tl_entry_records.push((false, val_idx));
                             }
                         }
                     }
@@ -1726,6 +1792,7 @@ where
         attribution_truncated,
         dbb_capacity_sum,
         tl_null_key_count,
+        tl_entry_records,
     ))
 }
 

@@ -1447,6 +1447,22 @@ pub struct TriageSignal {
 /// breaking change to the `Report` shape; the JSON always carries this.
 pub const SCHEMA_VERSION: u32 = 10;
 
+/// One row of the ThreadLocal Leak Analyzer breakdown: value class name,
+/// entry counts (total + stale), and total retained heap of the stored values.
+/// A stale entry is one whose weak referent (the ThreadLocal key) has been
+/// GC'd but whose value is still strongly held — a classic TL leak signal.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ThreadLocalLeakRow {
+    /// Pretty class name of the stored value object.
+    pub value_class: String,
+    /// Total number of ThreadLocalMap$Entry objects with this value class.
+    pub entry_count: u32,
+    /// Number of entries whose key (referent) has been GC'd (stale entries).
+    pub stale_count: u32,
+    /// Sum of retained heap across all value objects of this class.
+    pub retained: u64,
+}
+
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -1545,6 +1561,13 @@ pub struct Report {
     /// for round-trip with older JSON (which lacks the field).
     #[serde(default)]
     pub analysis_flags: AnalysisFlags,
+    /// ThreadLocal Leak Analyzer: per-value-class breakdown of
+    /// `ThreadLocalMap$Entry` objects — entry counts, stale counts (null key),
+    /// and total retained heap. Populated only when `--find-duplicates` (or
+    /// `--full-analysis`) is passed; empty otherwise. Additive; not
+    /// parity-compared. `#[serde(default)]` keeps older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thread_local_analysis: Vec<ThreadLocalLeakRow>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

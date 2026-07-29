@@ -450,6 +450,13 @@ pub struct Graph {
     /// simply an absent edge, indistinguishable from any other missing target.
     #[allow(dead_code)]
     pub thread_local_null_key_count: u64,
+    /// Per-entry records for ThreadLocal$ThreadLocalMap$Entry objects: each
+    /// element is `(is_stale, value_dense_idx)` where `is_stale` is true when
+    /// the weak referent (the ThreadLocal key) is null, and `value_dense_idx`
+    /// is the dense object index of the stored value (u32::MAX when absent/null).
+    /// Captured at scan time (before id_map is consumed). Bounded by TL_ENTRY_CAP.
+    /// Used by `build_threadlocal_analysis` in the report layer.
+    pub tl_entry_records: Vec<(bool, u32)>,
     /// Retained sizes within the unreachable forest, computed by the
     /// `unreachable_retained` stage in `main.rs` while the forward CSR is still
     /// alive. `None` until that stage runs (or when there are no unreachable

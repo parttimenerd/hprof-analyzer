@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -2560,6 +2560,31 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   );
 }
 
+// ── ThreadLocal Leak Analyzer ─────────────────────────────────────────────────
+function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
+  if (!rows.length) return null;
+  const [fmtB, kbBtn, kb] = useFmtBytes();
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <h3>ThreadLocal Variables</h3>
+      <StdTable
+        columns={[
+          { id: "vc", name: "Value Class", grow: 1, cell: (r) => <code>{r.value_class}</code>, selector: (r) => r.value_class },
+          { id: "cnt", name: "Entries", right: true, width: "90px", format: (r) => fmtCount(r.entry_count), selector: (r) => r.entry_count },
+          { id: "stl", name: "Stale", right: true, width: "100px",
+            cell: (r) => r.stale_count > 0 ? <span style={{color:"var(--warning,#e67e22)"}}>{"⚠"} {fmtCount(r.stale_count)}</span> : <span>0</span>,
+            selector: (r) => r.stale_count },
+          { id: "ret", name: "Retained", right: true, width: "120px", cell: byteCell((r) => r.retained, fmtB, kb), selector: (r) => r.retained },
+        ]}
+        data={rows}
+        searchKeys={["value_class"]}
+        fmtBtn={kbBtn}
+      />
+      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale = null key (GC cleared the ThreadLocal key, value still held).</p>
+    </div>
+  );
+}
+
 function ThreadsSection({ report }: { report: Report }) {
   const CAP = 100;
   const threads = report.threads?.threads ?? [];
@@ -2628,6 +2653,9 @@ function ThreadsSection({ report }: { report: Report }) {
             </button>
           )}
         </>
+      )}
+      {(report.thread_local_analysis?.length ?? 0) > 0 && (
+        <ThreadLocalAnalysisTable rows={report.thread_local_analysis!} />
       )}
     </section>
   );

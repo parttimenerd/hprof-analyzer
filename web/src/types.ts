@@ -268,6 +268,14 @@ export interface ThreadLocalObj {
   retained: number;
 }
 
+// One row of the ThreadLocal Leak Analyzer per-value-class breakdown.
+export interface ThreadLocalLeakRow {
+  value_class: string;
+  entry_count: number;
+  stale_count: number;
+  retained: number;
+}
+
 // One aggregated allocation site (a distinct HPROF
 // stack-trace serial and the footprint of the objects allocated there).
 export interface AllocSite {
@@ -795,6 +803,9 @@ export interface Report {
   obj_graph_flat?: ObjGraphFlat;
   // Type-level reference graph (TPFG, V13). Present when --obj-graph was used.
   type_ref_graph?: TypeEdge[];
+  // ThreadLocal Leak Analyzer: per-value-class breakdown. Only present when
+  // --find-duplicates (or --full-analysis) was passed.
+  thread_local_analysis?: ThreadLocalLeakRow[];
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.
