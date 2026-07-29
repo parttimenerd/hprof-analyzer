@@ -19,6 +19,7 @@ fn main() {
     println!("cargo:rerun-if-changed=web/package.json");
     println!("cargo:rerun-if-changed=web/package-lock.json");
     println!("cargo:rerun-if-changed=web/esbuild.config.mjs");
+    println!("cargo:rerun-if-changed=web/dist/bundle.js");
 
     let web = Path::new("web");
     let bundle = web.join("dist/bundle.js");
