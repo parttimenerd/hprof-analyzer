@@ -189,7 +189,7 @@ async function loadSampleDump(sample) {
   selectedFile = file;
   dropZone.classList.add('file-selected');
   document.getElementById('drop-zone-text').innerHTML =
-    `<strong>${file.name}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
+    `<strong>${escHtml(file.name)}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
   modeButtons.style.display = 'flex';
 }
 

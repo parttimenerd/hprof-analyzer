@@ -913,8 +913,12 @@ function showScreen(id) {
     }
     selectedFile = file;
     dropZone.classList.add('file-selected');
-    document.getElementById('drop-zone-text').innerHTML =
-      `<strong>${file.name}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
+    const dropText = document.getElementById('drop-zone-text');
+    dropText.textContent = '';
+    const strong = document.createElement('strong');
+    strong.textContent = file.name;
+    dropText.appendChild(strong);
+    dropText.appendChild(document.createTextNode(` (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`));
     modeButtons.style.display = 'flex';
   }
 
