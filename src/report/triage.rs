@@ -1620,6 +1620,8 @@ mod tests {
             top_retainers: Vec::new(),
             queries: Vec::new(),
             analysis_flags: Default::default(),
+            obj_graph_flat: None,
+            type_ref_graph: vec![],
         }
     }
 
@@ -1979,6 +1981,7 @@ mod tests {
             root_type: "JNI Global".into(),
             count: 8_000,
             retained: 100_000, // 10%
+            top_classes: Vec::new(),
         }];
         assert!(JniGlobalRefLeak.eval(&r).is_some());
 

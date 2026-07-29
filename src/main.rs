@@ -955,6 +955,17 @@ fn analyze_to_report_inner(
         None
     };
 
+    // Capture outbound edges for ALL objects before fwd CSR is consumed.
+    // Must capture all (not just top-N by shallow) because dominator roots have tiny shallow.
+    if opts.obj_graph {
+        const GRAPH_EDGE_CAP: usize = 100;
+        g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
+            &g,
+            usize::MAX,
+            GRAPH_EDGE_CAP,
+        ));
+    }
+
     // build_from_fwd needs dfn alive; it is cleared afterward (matching run()).
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
         std::mem::take(&mut g.fwd_offsets),
@@ -2269,13 +2280,15 @@ fn run(
         None
     };
 
-    // Capture outbound edges for top objects before fwd CSR is consumed (MAT or non-MAT).
+    // Capture outbound edges for ALL objects before fwd CSR is consumed.
+    // Must capture all, not just top-N by shallow, because objects with high retained
+    // heap (dominator roots) often have tiny shallow size and would be missed by a
+    // shallow-sorted top-N filter. Memory is bounded by edge_cap per node.
     if opts.obj_graph {
-        const GRAPH_CAPTURE_TOP_N: usize = 10_000;
         const GRAPH_EDGE_CAP: usize = 100;
         g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
             &g,
-            GRAPH_CAPTURE_TOP_N,
+            usize::MAX,
             GRAPH_EDGE_CAP,
         ));
     }

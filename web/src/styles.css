@@ -7,6 +7,7 @@
   --accent: #2563eb;
   --warn-bg: #fff4e5;
   --warn-border: #f0b429;
+  --ok: #22c55e;
 }
 
 .stack-detail summary { cursor: pointer; list-style: none; }
@@ -28,6 +29,7 @@ tfoot tr { border-top: 2px solid var(--border); }
     --accent: #60a5fa;
     --warn-bg: #2a2318;
     --warn-border: #b8860b;
+    --ok: #4ade80;
   }
 }
 :root[data-theme="dark"] {
@@ -39,6 +41,7 @@ tfoot tr { border-top: 2px solid var(--border); }
   --accent: #60a5fa;
   --warn-bg: #2a2318;
   --warn-border: #b8860b;
+  --ok: #4ade80;
 }
 :root[data-theme="light"] {
   --bg: #ffffff;
@@ -49,6 +52,7 @@ tfoot tr { border-top: 2px solid var(--border); }
   --accent: #2563eb;
   --warn-bg: #fff4e5;
   --warn-border: #f0b429;
+  --ok: #22c55e;
 }
 
 * { box-sizing: border-box; }
@@ -189,6 +193,14 @@ th.sortable.active { color: var(--accent); }
 .dom-subtree { list-style: none; padding: 0; margin: 0.3rem 0 0.3rem 0.6rem; border-left: 1px solid var(--border); }
 .dom-subtree li { padding: 0.15rem 0; font-size: 0.85rem; }
 .dom-subtree summary { cursor: pointer; font-size: 0.85rem; }
+
+/* RootPathChain SVG vertical chain diagram. */
+.root-path-chain svg { max-width: 100%; display: block; margin: 0.5rem 0; }
+
+/* MergedPathSankey SVG horizontal sankey diagram. */
+.merged-path-sankey svg { display: block; width: 100%; overflow: visible; }
+.sankey-node rect { cursor: default; }
+.sankey-link { fill: none; }
 
 
 .copy-cell { display: inline-flex; align-items: center; gap: 0.3rem; max-width: 100%; }
@@ -398,4 +410,17 @@ dialog.text-modal::backdrop {
 .report-footer { margin-top: 3rem; padding: 1.2rem 0 2rem; border-top: 1px solid var(--border); font-size: 0.82rem; color: var(--muted); text-align: center; }
 .report-footer a { color: var(--accent); text-decoration: none; }
 .report-footer a:hover { text-decoration: underline; }
+
+/* ── Object Graph Explorer (V3 + V4) ────────────────────────────────────── */
+.obj-explorer { display: flex; gap: 1rem; flex-wrap: wrap; }
+.obj-explorer-left { flex: 1.5; min-width: 0; min-width: 300px; }
+.obj-explorer-right { flex: 1; min-width: 220px; }
+.obj-nav-row { display: flex; align-items: center; gap: 0.4rem; padding: 2px 0; }
+.shared-badge { font-size: 0.75rem; color: var(--muted); }
+.breadcrumb { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
+.breadcrumb-item { cursor: pointer; color: var(--accent); }
+.breadcrumb-sep { color: var(--muted); }
+.btn-active { padding: 3px 10px; background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+.btn-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-size: 0.85rem; text-decoration: underline; }
+.btn-link:disabled { color: var(--muted); text-decoration: none; cursor: default; }
 @media print { .report-footer { display: none; } }

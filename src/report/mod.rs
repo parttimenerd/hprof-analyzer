@@ -223,6 +223,7 @@ mod tests {
             collections: crate::report::CollectionsAnalysis::default(),
             references: crate::report::ReferencesAnalysis::default(),
             reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],
+            reference_null_referent_count: [0u64; 3],
             collection_attribution_raw: None,
             collection_attribution_truncated: false,
             fields_by_size_raw: None,
@@ -1426,7 +1427,7 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 9);
+        assert_eq!(SCHEMA_VERSION, 10);
     }
 
     #[test]

@@ -768,6 +768,8 @@ mod tests {
             top_retainers: Vec::new(),
             queries: Vec::new(),
             analysis_flags: Default::default(),
+            obj_graph_flat: None,
+            type_ref_graph: vec![],
         }
     }
 

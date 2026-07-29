@@ -11,6 +11,7 @@ import type {
   QueryResult,
   QueryValue,
   RetentionSummary,
+  SeriesClassRow,
   Suspect,
   VizSpec,
 } from "./types";
@@ -1209,5 +1210,68 @@ export function QueryViz({ query }: { query: QueryResult }) {
       {spec.title && <h4>{spec.title}</h4>}
       {chart}
     </>
+  );
+}
+
+// ── RetainedGrowthChart — horizontal bar chart for top growth leaders ─────────
+export function RetainedGrowthChart({ rows }: { rows: SeriesClassRow[] }) {
+  const themeKey = useThemeKey();
+  const t = themeColors();
+  if (rows.length === 0) return null;
+  const top = rows.slice().sort((a, b) => Math.abs(b.delta_retained) - Math.abs(a.delta_retained)).slice(0, 10);
+  const labels = top.map((r) => {
+    const cls = r.pretty_class;
+    return cls.length > 35 ? cls.slice(0, 34) + "…" : cls;
+  });
+  const values = top.map((r) => r.delta_retained);
+  const bgColors = values.map((v) => v >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)");
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        data: values,
+        backgroundColor: bgColors,
+        borderRadius: 3,
+      },
+    ],
+  };
+  const options = {
+    indexAxis: "y" as const,
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        ticks: { color: t.muted, callback: (v: number | string) => formatBytes(Math.abs(Number(v))) },
+        grid: { color: t.border },
+      },
+      y: {
+        ticks: { color: t.fg, font: { size: 11 } },
+        grid: { display: false },
+      },
+    },
+    plugins: {
+      legend: { display: false },
+      title: {
+        display: true,
+        text: "Top Retained Growth (Δ bytes)",
+        color: t.fg,
+        font: { size: 13 },
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { dataIndex: number }) => {
+            const r = top[ctx.dataIndex];
+            const sign = r.delta_retained >= 0 ? "+" : "−";
+            return `${r.pretty_class} — ${sign}${formatBytes(Math.abs(r.delta_retained))}`;
+          },
+        },
+      },
+    },
+  };
+  const height = Math.min(10, top.length) * 32 + 60;
+  return (
+    <div key={themeKey} className="chart-wrap" role="img" aria-label="Retained growth bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
+      <ChartBar data={chartData} options={options} />
+    </div>
   );
 }

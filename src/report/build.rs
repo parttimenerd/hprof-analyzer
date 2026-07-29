@@ -39,6 +39,259 @@ const MERGED_PATH_MAX_NODES: usize = 60;
 
 // ── Model construction ───────────────────────────────────────────────────────
 
+/// Build the flat object graph lookup table for V3/V4 (Reference Graph Explorer
+/// and Dominator Tree Explorer). Walks the dominator tree from vroot BFS,
+/// collecting nodes with retained >= sig_floor, and populates edges from the
+/// `ObjGraphCapture` snapshot taken earlier.
+fn build_obj_graph_flat(
+    g: &Graph,
+    dc_offsets: &[u32],
+    dc_targets: &[u32],
+) -> ObjGraphFlat {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let n = g.n;
+    let vroot = n as u32;
+    let total_shallow: u64 = g.shallow.iter().map(|&s| s as u64).sum();
+    let sig_floor: u64 = (total_shallow / 1000).max(1_048_576);
+    let root_floor: u64 = (total_shallow / 100).max(10_000_000);
+
+    let dom_children_of = |node: u32| -> &[u32] {
+        let idx = node as usize;
+        if idx + 1 < dc_offsets.len() {
+            &dc_targets[dc_offsets[idx] as usize..dc_offsets[idx + 1] as usize]
+        } else {
+            &[]
+        }
+    };
+
+    // BFS from vroot children to collect significant nodes
+    let mut nodes: HashMap<u32, ObjGraphFlatNode> = HashMap::new();
+    let mut dom_children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut roots: Vec<u32> = Vec::new();
+
+    // Find direct children of vroot with retained >= root_floor
+    let vroot_usize = vroot as usize;
+    let vroot_children: Vec<u32> = if vroot_usize + 1 < dc_offsets.len() {
+        dc_targets[dc_offsets[vroot_usize] as usize..dc_offsets[vroot_usize + 1] as usize].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let mut queue: VecDeque<u32> = VecDeque::new();
+    for &root in &vroot_children {
+        if (root as usize) < g.retained.len() && g.retained[root as usize] >= root_floor {
+            roots.push(root);
+            queue.push_back(root);
+        }
+    }
+    roots.sort_unstable_by(|&a, &b| g.retained[b as usize].cmp(&g.retained[a as usize]));
+
+    let mut visited: HashSet<u32> = HashSet::new();
+    while let Some(node) = queue.pop_front() {
+        if !visited.insert(node) {
+            continue;
+        }
+        let idx = node as usize;
+        if idx >= g.retained.len() {
+            continue;
+        }
+        let ret = g.retained[idx];
+        if ret < sig_floor {
+            continue;
+        }
+
+        let ci = g.class_idx[idx] as usize;
+        let class_name = if ci < g.class_names.len() {
+            pretty_class_name(&g.class_names[ci])
+        } else {
+            format!("obj#{}", node)
+        };
+
+        let idom = if g.idom[idx] == vroot {
+            None
+        } else {
+            Some(g.idom[idx])
+        };
+
+        nodes.insert(
+            node,
+            ObjGraphFlatNode {
+                display_class: class_name,
+                shallow: g.shallow[idx] as u64,
+                retained: ret,
+                edges_unknown: false, // set below
+                edges_truncated: false,
+                idom,
+            },
+        );
+
+        let kids = dom_children_of(node);
+        let sig_kids: Vec<u32> = kids
+            .iter()
+            .copied()
+            .filter(|&k| (k as usize) < g.retained.len() && g.retained[k as usize] >= sig_floor)
+            .collect();
+        if !sig_kids.is_empty() {
+            dom_children_map.insert(node, sig_kids.clone());
+            for k in sig_kids {
+                queue.push_back(k);
+            }
+        }
+    }
+
+    // Populate edges from ObjGraphCapture
+    let mut edges_map: HashMap<u32, Vec<ObjGraphEdge>> = HashMap::new();
+    if let Some(cap) = g.obj_graph_edges.as_ref() {
+        for (&src, raw_edges) in &cap.edges {
+            if !nodes.contains_key(&src) {
+                continue;
+            }
+            let mut out: Vec<ObjGraphEdge> = Vec::with_capacity(raw_edges.len().min(100));
+            let truncated = raw_edges.len() > 100;
+            for &(dst, name_idx) in raw_edges.iter().take(100) {
+                let field_name = if name_idx == 0 {
+                    String::new()
+                } else {
+                    cap.field_name_pool
+                        .get(name_idx as usize)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                let dst_ci = g.class_idx.get(dst as usize).copied().unwrap_or(0) as usize;
+                let child_class = if dst_ci < g.class_names.len() {
+                    pretty_class_name(&g.class_names[dst_ci])
+                } else {
+                    format!("obj#{}", dst)
+                };
+                let child_retained = g.retained.get(dst as usize).copied().unwrap_or(0);
+                out.push(ObjGraphEdge {
+                    field_name,
+                    child_idx: dst,
+                    child_class,
+                    child_retained,
+                });
+            }
+            if let Some(node) = nodes.get_mut(&src) {
+                node.edges_truncated = truncated;
+            }
+            if !out.is_empty() {
+                edges_map.insert(src, out);
+            }
+        }
+        // Mark nodes not in capture set as edges_unknown
+        for (&idx, node) in nodes.iter_mut() {
+            if !cap.captured.contains(&idx) {
+                node.edges_unknown = true;
+            }
+        }
+    } else {
+        // No capture: all nodes have edges_unknown
+        for node in nodes.values_mut() {
+            node.edges_unknown = true;
+        }
+    }
+
+    // Pre-build depth-3 DomTreeNode trees for top-20 roots
+    let display_of = |i: usize| -> String {
+        let ci = g.class_idx[i] as usize;
+        if ci < g.class_names.len() {
+            pretty_class_name(&g.class_names[ci])
+        } else {
+            format!("obj#{}", i)
+        }
+    };
+    let top_roots: Vec<u32> = roots.iter().take(20).copied().collect();
+    let root_dom_trees: Vec<(u32, DomTreeNode)> = top_roots
+        .iter()
+        .map(|&root| {
+            let tree = build_dom_subtree(
+                root as usize,
+                dc_offsets,
+                dc_targets,
+                &display_of,
+                g,
+                200, // max_nodes
+                3,   // max_depth
+            );
+            (root, tree)
+        })
+        .collect();
+
+    ObjGraphFlat {
+        nodes,
+        edges: edges_map,
+        dom_children: dom_children_map,
+        root_dom_trees,
+        roots,
+        sig_floor_bytes: sig_floor,
+    }
+}
+
+/// Build the Type-Level Reference Graph (TPFG, V13).
+/// Aggregates object-level edges into (src_class, dst_class) pairs.
+/// Returns top-500 pairs by retained_weight.
+fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
+    use std::collections::HashMap;
+    let cap = match g.obj_graph_edges.as_ref() {
+        Some(c) => c,
+        None => return vec![],
+    };
+
+    // (src_ci, dst_ci) -> (edge_count, retained_weight_sum)
+    let mut pair_map: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
+
+    for (&src_idx, edges) in &cap.edges {
+        let src_idx_usize = src_idx as usize;
+        if src_idx_usize >= g.class_idx.len() {
+            continue;
+        }
+        let src_ci = g.class_idx[src_idx_usize] as u32;
+        let src_retained = g.retained.get(src_idx_usize).copied().unwrap_or(0);
+        let out_degree = edges.len() as u64;
+        if out_degree == 0 {
+            continue;
+        }
+        let weight_per_edge = src_retained / out_degree;
+
+        for &(dst_idx, _name_idx) in edges {
+            let dst_idx_usize = dst_idx as usize;
+            if dst_idx_usize >= g.class_idx.len() {
+                continue;
+            }
+            let dst_ci = g.class_idx[dst_idx_usize] as u32;
+            let entry = pair_map.entry((src_ci, dst_ci)).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += weight_per_edge;
+        }
+    }
+
+    let mut edges: Vec<TypeEdge> = pair_map
+        .into_iter()
+        .map(|((sci, dci), (ec, rw))| {
+            let src_class = if (sci as usize) < g.class_names.len() {
+                crate::report::pretty_class_name(&g.class_names[sci as usize])
+            } else {
+                format!("cls#{}", sci)
+            };
+            let dst_class = if (dci as usize) < g.class_names.len() {
+                crate::report::pretty_class_name(&g.class_names[dci as usize])
+            } else {
+                format!("cls#{}", dci)
+            };
+            TypeEdge {
+                src_class,
+                dst_class,
+                edge_count: ec,
+                retained_weight: rw,
+            }
+        })
+        .collect();
+
+    edges.sort_unstable_by(|a, b| b.retained_weight.cmp(&a.retained_weight));
+    edges.truncate(500);
+    edges
+}
+
 /// Compute all report aggregates from the graph.
 ///
 /// Ordering mirrors the previous three separate render calls so callers keep
@@ -80,6 +333,16 @@ pub fn build_model(
     crate::trace::probe("build_model: after top_components aggregates");
     let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
+    let obj_graph_flat = if opts.obj_graph {
+        Some(build_obj_graph_flat(g, dc_offsets, dc_targets))
+    } else {
+        None
+    };
+    let type_ref_graph = if opts.obj_graph {
+        build_type_ref_graph(g)
+    } else {
+        vec![]
+    };
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
     let collection_attribution = build_collection_attribution(g, &overview);
@@ -115,6 +378,8 @@ pub fn build_model(
             obj_graph: opts.obj_graph,
             ref_paths: opts.ref_paths,
         },
+        obj_graph_flat,
+        type_ref_graph,
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);
@@ -321,6 +586,9 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
         let Some(stats) = stats.as_mut() else {
             continue;
         };
+
+        // Count null referents: tracked at scan time in fielddecode.rs.
+        stats.null_referent_count = g.reference_null_referent_count[kind];
 
         // Accumulate retained per class for the referent histogram (capped at
         // REFERENT_HIST_CAP classes; overflow lands in "<other>"). The
@@ -2150,24 +2418,46 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     // GC roots retained by type: aggregate retained heap per root type.
     let gc_roots_retained_by_type: Vec<crate::report::GcRootRetainedRow> = {
         use std::collections::HashMap;
-        let mut by_type: HashMap<String, (u64, u64)> = HashMap::new();
+        // by_type: root_type_label → (count, retained, HashMap<class_name → (count, retained)>)
+        let mut by_type: HashMap<String, (u64, u64, HashMap<String, (u64, u64)>)> =
+            HashMap::new();
         for (&idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
             if let Some(label) = gc_root_type_label_opt(ty) {
-                let retained = g.retained.get(idx as usize).copied().unwrap_or(0);
-                let e = by_type.entry(label.to_string()).or_insert((0, 0));
+                let i = idx as usize;
+                let retained = g.retained.get(i).copied().unwrap_or(0);
+                let cls = class_display(g, i);
+                let e = by_type.entry(label.to_string()).or_default();
                 e.0 += 1;
                 e.1 = e.1.saturating_add(retained);
+                let ce = e.2.entry(cls).or_insert((0, 0));
+                ce.0 += 1;
+                ce.1 = ce.1.saturating_add(retained);
             }
         }
         let mut rows: Vec<crate::report::GcRootRetainedRow> = by_type
             .into_iter()
-            .map(
-                |(root_type, (count, retained))| crate::report::GcRootRetainedRow {
+            .map(|(root_type, (count, retained, class_map))| {
+                let mut top: Vec<crate::report::GcRootClassRow> = class_map
+                    .into_iter()
+                    .map(|(class_name, (c, r))| crate::report::GcRootClassRow {
+                        class_name,
+                        count: c,
+                        retained: r,
+                    })
+                    .collect();
+                top.sort_unstable_by(|a, b| {
+                    b.retained
+                        .cmp(&a.retained)
+                        .then(a.class_name.cmp(&b.class_name))
+                });
+                top.truncate(5);
+                crate::report::GcRootRetainedRow {
                     root_type,
                     count,
                     retained,
-                },
-            )
+                    top_classes: top,
+                }
+            })
             .collect();
         rows.sort_by(|a, b| {
             b.retained

@@ -75,12 +75,23 @@ pub struct GcRootTypeRow {
     pub count: u64,
 }
 
+/// One class entry within a GC-root-retained-by-type row.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct GcRootClassRow {
+    pub class_name: String,
+    pub count: u64,
+    pub retained: u64,
+}
+
 /// One row of the GC-root-retained-by-type table.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct GcRootRetainedRow {
     pub root_type: String,
     pub count: u64,
     pub retained: u64,
+    /// Top-5 retained classes for this root type (class name, count, retained bytes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_classes: Vec<GcRootClassRow>,
 }
 
 /// One kind-bucket of the heap-composition breakdown (B5).
@@ -483,6 +494,58 @@ pub struct DomTreeNode {
     pub shallow: u64,
     pub retained: u64,
     pub children: Vec<DomTreeNode>,
+}
+
+/// Outbound edge from one object to another (Reference Graph Explorer / V3).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ObjGraphEdge {
+    #[serde(default)]
+    pub field_name: String,
+    pub child_idx: u32,
+    pub child_class: String,
+    pub child_retained: u64,
+}
+
+/// One node in the flat object graph lookup table.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ObjGraphFlatNode {
+    pub display_class: String,
+    pub shallow: u64,
+    pub retained: u64,
+    #[serde(default)]
+    pub edges_unknown: bool,
+    #[serde(default)]
+    pub edges_truncated: bool,
+    pub idom: Option<u32>,
+}
+
+/// One aggregated type-level reference edge for the TPFG (V13).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct TypeEdge {
+    pub src_class: String,
+    pub dst_class: String,
+    pub edge_count: u64,
+    /// Sum of src-object retained / out_degree for all instances of this edge type.
+    pub retained_weight: u64,
+}
+
+/// Flat lookup table powering V3 + V4 navigation (object graph + dominator explorer).
+/// Only present when --obj-graph is used.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ObjGraphFlat {
+    /// All significant nodes (retained >= sig_floor_bytes). Key = dense index (u32).
+    pub nodes: std::collections::HashMap<u32, ObjGraphFlatNode>,
+    /// Outbound edges for captured nodes. Key = dense index (u32).
+    pub edges: std::collections::HashMap<u32, Vec<ObjGraphEdge>>,
+    /// Immediate dominator children for all significant nodes. Key = parent dense index.
+    pub dom_children: std::collections::HashMap<u32, Vec<u32>>,
+    /// Pre-built depth-3 dominator trees for top-20 root objects (for SVG mode in V4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub root_dom_trees: Vec<(u32, DomTreeNode)>,
+    /// Dense indices of dominator roots (idom == vroot).
+    pub roots: Vec<u32>,
+    /// Minimum retained bytes to be included as a significant node.
+    pub sig_floor_bytes: u64,
 }
 
 /// One node of a "merged shortest paths to GC roots" prefix tree (Eclipse MAT
@@ -1301,6 +1364,9 @@ pub struct RefStatClassRow {
 pub struct ReferenceStats {
     pub kind: String,
     pub reference_instances: u64,
+    /// Number of reference objects whose referent field is null (referent was GC'd).
+    #[serde(default)]
+    pub null_referent_count: u64,
     pub referent_histogram: Vec<RefStatClassRow>,
     pub only_weakly_retained: Vec<RefStatClassRow>,
 }
@@ -1379,7 +1445,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
@@ -1469,6 +1535,12 @@ pub struct Report {
     /// Custom OQL query results (empty unless --query/--query-file was given).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queries: Vec<crate::query::model::QueryResult>,
+    /// Flat object graph for V3/V4 navigation. None when --obj-graph not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obj_graph_flat: Option<ObjGraphFlat>,
+    /// Type-level reference graph (TPFG). Present when --obj-graph is used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_ref_graph: Vec<TypeEdge>,
     /// Which opt-in analysis passes were enabled. Additive; defaults to all-false
     /// for round-trip with older JSON (which lacks the field).
     #[serde(default)]

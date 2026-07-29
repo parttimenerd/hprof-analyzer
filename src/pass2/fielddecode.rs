@@ -904,6 +904,7 @@ type FieldDecodeViews = (
     CollectionsAnalysis,
     ReferencesAnalysis,
     [Vec<u32>; 3],
+    [u64; 3], // null_referent_count per kind
     Option<Vec<AttributionRaw>>,
     Option<Vec<FieldSizeRaw>>,
     Option<Vec<CollValuesRaw>>,
@@ -962,6 +963,8 @@ where
     // kind → (objects, shallow) folded into the "<other>" row past the cap.
     let mut ref_hist_other = [(0u64, 0u64); 3];
     let mut referent_idx: [Vec<u32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    // Count of null referents per reference kind (referent == 0 at scan time).
+    let mut null_referent_count: [u64; 3] = [0u64; 3];
     // ThreadLocal$ThreadLocalMap$Entry instances whose weak referent (the key)
     // is null — the classic thread-local leak signal.
     let mut tl_null_key_count: u64 = 0;
@@ -1182,6 +1185,7 @@ where
                     if o + obj_ref_width <= blob.len() {
                         let referent = read_ref(&blob[o..], obj_ref_width);
                         if referent == 0 {
+                            null_referent_count[kind_idx] += 1;
                             if is_tl_entry {
                                 tl_null_key_count += 1;
                             }
@@ -1710,6 +1714,7 @@ where
         collections,
         references,
         referent_idx,
+        null_referent_count,
         attribution_raw,
         fields_by_size_raw,
         coll_values_raw,
@@ -1865,6 +1870,7 @@ fn assemble_ref_stats(
     Some(ReferenceStats {
         kind: kind.to_string(),
         reference_instances: instances,
+        null_referent_count: 0, // populated by build_references()
         referent_histogram: rows,
         only_weakly_retained: Vec::new(),
     })

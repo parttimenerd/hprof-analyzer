@@ -19,11 +19,19 @@ export interface GcRootTypeRow {
   count: number;
 }
 
+// One class entry within a GC-root-retained-by-type row.
+export interface GcRootClassRow {
+  class_name: string;
+  count: number;
+  retained: number;
+}
+
 // One row of the GC-root retained-by-type table (new in Task 6+).
 export interface GcRootRetainedRow {
   root_type: string;
   count: number;
   retained: number;
+  top_classes?: GcRootClassRow[];
 }
 
 export interface KindStat {
@@ -448,8 +456,18 @@ export interface ImmediateDominatorRow {
   dominated_shallow: number;
 }
 
+// One (dominator_class, dominated_class) pair with retained/shallow sizes.
+export interface ImmDomPair {
+  dominator_class: string;
+  dominated_class: string;
+  pair_count: number;
+  dominated_retained: number;
+  dominated_shallow: number;
+}
+
 export interface ImmediateDominators {
   rows: ImmediateDominatorRow[];
+  pairs?: ImmDomPair[];
 }
 
 // Always-on dominator-tree analysis: Big Drops + Immediate Dominators.
@@ -662,6 +680,7 @@ export interface RefStatClassRow {
 export interface ReferenceStats {
   kind: string;
   reference_instances: number;
+  null_referent_count?: number;
   referent_histogram: RefStatClassRow[];
   only_weakly_retained: RefStatClassRow[];
 }
@@ -772,12 +791,18 @@ export interface Report {
   queries?: QueryResult[];
   // Which opt-in passes were enabled. Absent on older reports (all flags default false).
   analysis_flags?: AnalysisFlags;
+  // Flat object graph for V3/V4 navigation. Only present when --obj-graph was used.
+  obj_graph_flat?: ObjGraphFlat;
+  // Type-level reference graph (TPFG, V13). Present when --obj-graph was used.
+  type_ref_graph?: TypeEdge[];
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.
 export interface AnalysisFlags {
   find_duplicates: boolean;
   collections: boolean;
+  obj_graph?: boolean;
+  ref_paths?: boolean;
 }
 
 // One row of the merged Top Retainers table (§813).
@@ -800,6 +825,49 @@ export interface WasteSource {
 export interface WasteSummary {
   total_bytes: number;
   sources: WasteSource[];
+}
+
+// ── Object Graph Explorer types (V3 + V4) ─────────────────────────────────────
+
+// One outbound edge from an object in the Reference Graph Explorer (V3).
+export interface ObjGraphEdge {
+  field_name: string;
+  child_idx: number;
+  child_class: string;
+  child_retained: number;
+}
+
+// One node entry in the flat object graph lookup table.
+export interface ObjGraphFlatNode {
+  display_class: string;
+  shallow: number;
+  retained: number;
+  edges_unknown?: boolean;
+  edges_truncated?: boolean;
+  idom?: number;
+}
+
+// Flat lookup table powering V3/V4 navigation (reference graph + dominator explorer).
+// Only present when --obj-graph was used.
+export interface ObjGraphFlat {
+  // key = dense index (as string because JSON keys are always strings)
+  nodes: Record<string, ObjGraphFlatNode>;
+  edges: Record<string, ObjGraphEdge[]>;
+  dom_children: Record<string, number[]>;
+  root_dom_trees?: [number, DomTreeNode][];
+  roots: number[];
+  sig_floor_bytes: number;
+}
+
+// ── Type-Level Reference Graph (TPFG, V13) ────────────────────────────────────
+
+// One aggregated class-level reference edge in the Type Reference Graph.
+// Present in the report only when --obj-graph was used.
+export interface TypeEdge {
+  src_class: string;
+  dst_class: string;
+  edge_count: number;
+  retained_weight: number;
 }
 
 declare global {

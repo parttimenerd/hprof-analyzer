@@ -405,6 +405,10 @@ pub struct Graph {
     /// consumed in `build_model` to compute `only_weakly_retained` via `idom`.
     /// Not serialized (runtime-only helper).
     pub reference_referent_idx: [Vec<u32>; 3],
+    /// Count of null referents per reference kind (0=Soft, 1=Weak, 2=Phantom).
+    /// Populated at scan time in fielddecode.rs; used by build_references.
+    /// Not serialized (runtime-only helper).
+    pub reference_null_referent_count: [u64; 3],
     /// Raw container-attribution records from field-decode under `--collections`;
     /// `None` when the flag was off. Consumed in build_model to attach retained
     /// sizes and aggregate. Not serialized.
@@ -488,15 +492,18 @@ impl ObjGraphCapture {
 /// them). Field names are included when `g.fwd_field_name_idx` is populated
 /// (`--ref-paths`); otherwise all edges are stored as unnamed (index 0).
 pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjGraphCapture {
-    let n = g.shallow.len();
+    // Use g.n (object count) — g.shallow may be compressed/empty at call time.
+    let n = if g.shallow.is_empty() { g.n } else { g.shallow.len() };
     if n == 0 || g.fwd_offsets.is_empty() {
         return ObjGraphCapture::empty();
     }
 
-    // Sort indices by shallow size descending, keep top_n.
+    // When top_n covers all objects, skip the expensive sort.
     let mut indices: Vec<u32> = (0..n as u32).collect();
-    indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
-    indices.truncate(top_n);
+    if top_n < n {
+        indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
+        indices.truncate(top_n);
+    }
 
     let mut cap = ObjGraphCapture::empty();
     // name_str → pool index (0 reserved for "").

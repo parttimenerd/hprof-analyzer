@@ -1,6 +1,6 @@
 {
-  "schema_version": 9,
-  "generated": "2026-07-29T11:48:53.741692000Z",
+  "schema_version": 10,
+  "generated": "2026-07-29T16:23:16.561052000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -784,22 +784,90 @@
       {
         "root_type": "Thread",
         "count": 136,
-        "retained": 1560416
+        "retained": 1560416,
+        "top_classes": [
+          {
+            "class_name": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+            "count": 128,
+            "retained": 1090432
+          },
+          {
+            "class_name": "java.lang.Thread",
+            "count": 4,
+            "retained": 310392
+          },
+          {
+            "class_name": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
+            "count": 1,
+            "retained": 159016
+          },
+          {
+            "class_name": "java.lang.ref.Finalizer$FinalizerThread",
+            "count": 1,
+            "retained": 208
+          },
+          {
+            "class_name": "java.lang.ref.Reference$ReferenceHandler",
+            "count": 1,
+            "retained": 200
+          }
+        ]
       },
       {
         "root_type": "Sticky Class",
         "count": 1436,
-        "retained": 888664
+        "retained": 888664,
+        "top_classes": [
+          {
+            "class_name": "java.lang.Class",
+            "count": 1436,
+            "retained": 888664
+          }
+        ]
       },
       {
         "root_type": "JNI Global",
         "count": 109,
-        "retained": 130408
+        "retained": 130408,
+        "top_classes": [
+          {
+            "class_name": "java.lang.Object[]",
+            "count": 2,
+            "retained": 109088
+          },
+          {
+            "class_name": "java.lang.invoke.MethodType",
+            "count": 54,
+            "retained": 9992
+          },
+          {
+            "class_name": "java.lang.Thread",
+            "count": 21,
+            "retained": 5544
+          },
+          {
+            "class_name": "java.lang.OutOfMemoryError[]",
+            "count": 2,
+            "retained": 3768
+          },
+          {
+            "class_name": "java.lang.Class",
+            "count": 13,
+            "retained": 1000
+          }
+        ]
       },
       {
         "root_type": "System Class",
         "count": 8,
-        "retained": 0
+        "retained": 0,
+        "top_classes": [
+          {
+            "class_name": "java.lang.Class",
+            "count": 8,
+            "retained": 0
+          }
+        ]
       }
     ],
     "unreachable_histogram": [
@@ -101787,6 +101855,7 @@
     "soft": {
       "kind": "Soft",
       "reference_instances": 223,
+      "null_referent_count": 0,
       "referent_histogram": [
         {
           "pretty_class": "java.lang.invoke.LambdaForm",
@@ -101873,6 +101942,7 @@
     "weak": {
       "kind": "Weak",
       "reference_instances": 993,
+      "null_referent_count": 7,
       "referent_histogram": [
         {
           "pretty_class": "java.lang.invoke.MethodType",
@@ -102042,6 +102112,7 @@
     "phantom": {
       "kind": "Phantom",
       "reference_instances": 67,
+      "null_referent_count": 1,
       "referent_histogram": [
         {
           "pretty_class": "java.util.zip.Inflater",

@@ -127,10 +127,11 @@ mod tests {
             top_retainers: Vec::new(),
             queries: Vec::new(),
             analysis_flags: Default::default(),
+            obj_graph_flat: None,
+            type_ref_graph: vec![],
         }
     }
 
-    // 1. exact match -> MATCH
     #[test]
     fn exact_match_is_match() {
         let d = classify_int("f", 42, 42, || None);

@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -12,12 +12,13 @@ import {
   GcRootsRetainedChart,
   HeapCompositionChart,
   LeakShareChart,
-  LoaderRollupChart,
   QueryViz,
+  RetainedGrowthChart,
   TopClassesChart,
   ZoomableTreemap,
 } from "./charts";
 import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
+import { sankey, sankeyLinkHorizontal } from "d3-sankey";
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto. Persists the choice in localStorage so it
@@ -294,6 +295,12 @@ function Nav({ report }: { report: Report }) {
   if (report.top_components?.components?.length) addData("top-components", "Top Components");
   addData("arrays-by-size", "Arrays by Size");
   addData("collections", "Collections");
+  const hasWasteBudget =
+    (report.overview.duplicate_strings?.approx_wasted_bytes ?? 0) > 0 ||
+    (report.overview.duplicate_prim_arrays?.total_wasted_bytes ?? 0) > 0 ||
+    (report.overview.boxed_numbers?.some(r => r.total_shallow > 0) ?? false) ||
+    (report.collection_attribution?.tiny_overhead?.some(r => r.overhead_bytes > 0) ?? false);
+  if (hasWasteBudget) addData("collection-waste-budget", "Waste Budget");
   if (report.collection_attribution) addData("container-attribution-classfield", "Container Attribution");
   if (report.fields_by_size) addData("fields-by-retained-size-classfield", "Fields by Size");
   if (report.top_retainers?.length) addData("top-retainers", "Top Retainers");
@@ -301,8 +308,11 @@ function Nav({ report }: { report: Report }) {
   if (report.collection_contents) addData("collection-contents-by-type", "Collection Contents");
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
+  if ((report.leak_indicators?.direct_byte_buffer_capacity_sum ?? 0) > 0) addData("off-heap-nio", "Off-Heap NIO");
   if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
   if (report.queries?.length) addData("custom-queries", "Custom Queries", String(report.queries.length));
+  if (report.obj_graph_flat) addData("object-graph", "Object Graph");
+  if (report.type_ref_graph?.length) addData("type-ref-graph", "Type Graph");
 
   // ── Distribution group ──
   let distGroupSet = false;
@@ -403,6 +413,131 @@ function InlineCode({ text }: { text: string }) {
   }
   if (last < text.length) tokens.push(<React.Fragment key={key++}>{text.slice(last)}</React.Fragment>);
   return <>{tokens}</>;
+}
+
+// ── Executive Summary Card (V1 + V25) ─────────────────────────────────────────
+// A compact at-a-glance card placed above the full OomTriage list. Shows:
+//   1. Dump info line (source + date)
+//   2. Heap sizes row (reachable | unreachable | wasted)
+//   3. Badge pills for active issues derived from triage signals + leak_indicators
+//   4. Top suspect line
+//   5. Longest dominator chain (V25, when ≥ 2)
+function ExecSummaryCard({ report }: { report: Report }) {
+  const ov = report.overview;
+  const total = ov.total_shallow;
+  const unreachable = ov.unreachable_shallow ?? 0;
+  const wasted = report.waste_summary?.total_bytes ?? 0;
+  const triage = report.triage ?? [];
+  const li = report.leak_indicators;
+  const top = report.leaks.suspects[0] ?? null;
+  const chainDepth = report.dominator_analysis?.longest_chain_depth ?? null;
+
+  // Badge logic
+  const hasCritical = triage.some((s) => s.severity === "critical");
+  const topRetainsPct = top ? pctOf(top.retained, report.leaks.total_shallow) : 0;
+  const showLeakRisk = hasCritical || (top != null && topRetainsPct >= 50);
+  const showHighGC = triage.some(
+    (s) => (s.id.includes("gc") || s.id.includes("unreachable")) && (s.bytes ?? 0) > 50 * 1024 * 1024,
+  );
+  const showOffHeap = (li?.direct_byte_buffer_capacity_sum ?? 0) > 0;
+  const showStaleThreadLocals = (li?.thread_local_null_key_count ?? 0) > 0;
+
+  const badges: { label: string; color: string }[] = [];
+  if (showLeakRisk) badges.push({ label: "LEAK RISK", color: "var(--critical, #c0392b)" });
+  if (showHighGC) badges.push({ label: "HIGH GC PRESSURE", color: "var(--warning, #e67e22)" });
+  if (showOffHeap) badges.push({ label: "OFF-HEAP MEMORY", color: "var(--info, #2980b9)" });
+  if (showStaleThreadLocals) badges.push({ label: "STALE THREADLOCALS", color: "var(--warning, #e67e22)" });
+
+  const dumpMs = ov.dump_creation ?? 0;
+  const src = ov.source_name ?? "";
+
+  const rowStyle: React.CSSProperties = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "0.5rem 1.5rem",
+    alignItems: "center",
+    margin: "0.3rem 0",
+  };
+  const labelStyle: React.CSSProperties = {
+    color: "var(--muted)",
+    fontSize: "0.8rem",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    marginRight: "0.25rem",
+  };
+  const badgeStyle = (color: string): React.CSSProperties => ({
+    display: "inline-block",
+    padding: "0.15rem 0.55rem",
+    borderRadius: "999px",
+    fontSize: "0.72rem",
+    fontWeight: 700,
+    letterSpacing: "0.06em",
+    color: "#fff",
+    background: color,
+  });
+
+  return (
+    <section className="card" id="exec-summary" style={{ margin: "0.75rem 0", padding: "0.9rem 1.1rem" }}>
+      {/* Line 1: Dump info */}
+      <div style={{ marginBottom: "0.45rem" }}>
+        {src && <><span style={labelStyle}>Source</span><code style={{ fontSize: "0.88rem" }}>{src}</code></>}
+        {dumpMs > 0 && (
+          <span style={{ marginLeft: src ? "1rem" : 0 }}>
+            <span style={labelStyle}>Captured</span>
+            <span title={formatEpochMs(dumpMs)}>{formatDateNice(dumpMs)}</span>
+          </span>
+        )}
+      </div>
+
+      {/* Line 2: Heap sizes */}
+      <div style={rowStyle}>
+        <span>
+          <span style={labelStyle}>Reachable heap</span>
+          <strong>{formatBytes(total)}</strong>
+        </span>
+        {unreachable > 0 && (
+          <span>
+            <span style={labelStyle}>Unreachable</span>
+            <strong>{formatBytes(unreachable)}</strong>
+          </span>
+        )}
+        {wasted > 0 && (
+          <span>
+            <span style={labelStyle}>Wasted</span>
+            <strong>{formatBytes(wasted)}</strong>
+          </span>
+        )}
+      </div>
+
+      {/* Line 3: Badge pills */}
+      {badges.length > 0 && (
+        <div style={{ ...rowStyle, margin: "0.4rem 0" }}>
+          {badges.map((b) => (
+            <span key={b.label} style={badgeStyle(b.color)}>{b.label}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Line 4: Top suspect */}
+      {top && (
+        <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
+          <span style={labelStyle}>Top suspect</span>
+          <code>{top.pretty_class}</code>
+          {" "}holds{" "}
+          <strong>{formatBytes(top.retained)}</strong>
+          {" "}({fmtPct(topRetainsPct)})
+        </div>
+      )}
+
+      {/* Line 5: Longest dominator chain (V25) */}
+      {chainDepth != null && chainDepth >= 2 && (
+        <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
+          <span style={labelStyle}>Longest dominator chain</span>
+          <strong>{fmtCount(chainDepth)}</strong> hops
+        </div>
+      )}
+    </section>
+  );
 }
 
 // Browser-friendly overrides for signals whose CLI-oriented text doesn't fit the web UI.
@@ -597,6 +732,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
   const [showLoader, setShowLoader] = React.useState(false);
+  const [groupLambdas, setGroupLambdas] = React.useState(true);
 
   // Only offer the loader toggle if at least one non-boot loader exists
   const hasNonBootLoader = React.useMemo(
@@ -613,6 +749,47 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
       return true;
     });
   }, [rows, filter, showAll, totalShallow]);
+
+  const LAMBDA_RE = /\$\$Lambda\$\d/;
+  const ANON_RE = /\$\d+(?:\/.*)?$/;
+
+  function lambdaPrefix(name: string): string {
+    const m = name.match(/^(.+?)(?:\$\$Lambda\$|\$\d)/);
+    return m ? m[1] : name;
+  }
+
+  const displayRows = React.useMemo(() => {
+    if (!groupLambdas) return filtered;
+    const result: HistRow[] = [];
+    const groups = new Map<string, HistRow[]>();
+    const order: string[] = [];
+    for (const r of filtered) {
+      if (LAMBDA_RE.test(r.pretty_class) || ANON_RE.test(r.pretty_class)) {
+        const prefix = lambdaPrefix(r.pretty_class);
+        if (!groups.has(prefix)) {
+          groups.set(prefix, []);
+          order.push(prefix);
+        }
+        groups.get(prefix)!.push(r);
+      } else {
+        result.push(r);
+      }
+    }
+    for (const prefix of order) {
+      const grp = groups.get(prefix)!;
+      const grouped: HistRow = {
+        pretty_class: `${prefix} [λ ×${grp.length}]`,
+        instances: grp.reduce((s, r) => s + r.instances, 0),
+        shallow: grp.reduce((s, r) => s + r.shallow, 0),
+        retained: grp.reduce((s, r) => s + r.shallow, 0), // shallow sum (retained not additive across groups)
+        max_instance_shallow: grp.reduce((mx, r) => Math.max(mx, r.max_instance_shallow), 0),
+        loader_id: grp[0].loader_id,
+        loader_label: grp[0].loader_label,
+      };
+      result.push(grouped);
+    }
+    return result;
+  }, [filtered, groupLambdas]);
 
   const columns: TableColumn<HistRow>[] = React.useMemo(() => {
     const cols: TableColumn<HistRow>[] = [
@@ -720,12 +897,15 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter histogram by class name"
         />
-        <span className="hint">{fmtCount(filtered.length)} shown</span>
+        <span className="hint">{fmtCount(displayRows.length)} shown</span>
         {hasNonBootLoader && (
           <button className="show-more-btn" onClick={() => setShowLoader(v => !v)}>
             {showLoader ? "Hide Loader" : "Show Loader"}
           </button>
         )}
+        <button className="show-more-btn" onClick={() => setGroupLambdas(v => !v)}>
+          {groupLambdas ? "Ungroup λ" : "Group λ"}
+        </button>
         {hiddenSmall > 0 && (
           <button className="show-more-btn" onClick={() => setShowAll(true)}>
             + {fmtCount(hiddenSmall)} rows &lt;0.1%
@@ -740,7 +920,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
       </div>
       <DataTable
         columns={columns}
-        data={filtered}
+        data={displayRows}
         keyField="pretty_class"
         defaultSortFieldId="retained"
         defaultSortAsc={false}
@@ -1356,7 +1536,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
       {(o.gc_roots_retained_by_type?.length ?? o.gc_roots_by_type.length) > 0 && (() => {
         const gcRows = o.gc_roots_retained_by_type?.length
           ? o.gc_roots_retained_by_type
-          : o.gc_roots_by_type.map((r) => ({ ...r, retained: 0 }));
+          : o.gc_roots_by_type.map((r) => ({ ...r, retained: 0, top_classes: [] as GcRootClassRow[] }));
         const maxCount = Math.max(...gcRows.map((r) => r.count), 1);
         const totalCount = gcRows.reduce((s, r) => s + r.count, 0);
         const totalRetained = gcRows.reduce((s, r) => s + r.retained, 0);
@@ -1374,6 +1554,23 @@ function SystemOverviewSection({ report }: { report: Report }) {
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count },
           { id: "pct", name: "%", right: true, width: "80px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count },
           { id: "retained", name: "Retained", right: true, width: "120px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained },
+          {
+            id: "top_classes", name: "Top retained classes", grow: 2,
+            cell: (r: GcRow) => {
+              const top = (r as GcRootRetainedRow).top_classes;
+              if (!top || top.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
+              return (
+                <span style={{ fontSize: "0.82em", lineHeight: 1.5 }}>
+                  {top.map((cc, j) => (
+                    <span key={cc.class_name}>
+                      {j > 0 ? ", " : ""}
+                      <code>{cc.class_name}</code> ×{fmtCount(cc.count)} ({fmtB(cc.retained)})
+                    </span>
+                  ))}
+                </span>
+              );
+            },
+          },
         ];
         return (
           <>
@@ -1389,6 +1586,9 @@ function SystemOverviewSection({ report }: { report: Report }) {
               <span style={{ width: "80px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100%</span>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
             </div>
+            {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
+              <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — likely a native code reference leak.</p>
+            )}
           </>
         );
       })()}
@@ -1408,10 +1608,30 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Class Loaders</h3>
           <p className="subtitle">
-            Classes grouped by the loader that defined them. Many loaders each holding heap — especially the same class
-            name under several loaders — can signal a class-loader leak.
+            Each tile is a class loader sized by retained heap. Click to inspect; use ← to go back.
           </p>
-          <LoaderRollupChart data={o.loader_rollup} />
+          {(() => {
+            type LoaderNode = LoaderRollup & { _children?: LoaderRollup[] };
+            const loaderRoot: LoaderNode = {
+              loader_label: "All Loaders",
+              loader_id: -1,
+              class_count: o.loader_rollup.reduce((s, r) => s + r.class_count, 0),
+              instances: o.loader_rollup.reduce((s, r) => s + r.instances, 0),
+              shallow: o.loader_rollup.reduce((s, r) => s + r.shallow, 0),
+              retained: o.loader_rollup.reduce((s, r) => s + r.retained, 0),
+              _children: o.loader_rollup,
+            };
+            return (
+              <ZoomableTreemap<LoaderNode>
+                root={loaderRoot}
+                getChildren={(n) => n._children ?? []}
+                getValue={(n) => n.retained}
+                getLabel={(n) => n.loader_label ?? `loader#${n.loader_id}`}
+                fmt={formatBytes}
+                height={280}
+              />
+            );
+          })()}
           <ClassLoadersTable rows={o.loader_rollup} />
         </>
       )}
@@ -1530,28 +1750,141 @@ function SysPropsTable({ rows }: { rows: { key: string; value: string }[] }) {
   return <StdTable columns={sysCols} data={rows} searchKeys={["key", "value"]} />;
 }
 
-// the dominator chain from a suspect
-// (first) up to its GC root (last), as a numbered list. The final step is annotated
-// with the GC-root type when known. Mirrors report.rs::render_root_path.
-function RootPathList({ steps }: { steps: RootPathStep[] }) {
+// RootPathChain — SVG chain visualisation of the dominator path from suspect
+// (step 0) down to its GC root (last step). Replaces the old numbered list.
+function RootPathChain({ steps }: { steps: RootPathStep[] }) {
   const [fmtB] = useFmtBytes();
+  const uid = React.useId();
+  const markerId = `rpc-arrow-${uid.replace(/:/g, "")}`;
   if (steps.length === 0) return null;
+
+  // Layout constants
+  const VB_W = 620;          // SVG viewBox width
+  const BOX_H = 44;          // box height px
+  const BOX_X = 10;          // left margin
+  const BOX_W = VB_W - 20;   // box width
+  const CONN_H = 36;         // vertical connector height between boxes
+  const R = 4;               // corner radius
+  const ARROW_HEAD = 7;      // arrowhead marker size
+  const PAD_X = 10;          // text padding inside box
   const last = steps.length - 1;
+
+  // Total SVG height: N boxes + (N-1) connectors
+  const svgH = steps.length * BOX_H + (steps.length - 1) * CONN_H;
+
   return (
-    <details>
-      <summary>Dominator chain to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
-      <ol className="accum-path">
-        {steps.map((p, i) => (
-          <li key={i}>
-            {p.field_edge && <span className="path-field">.{p.field_edge} → </span>}
-            <code>{p.display_class}</code>{" "}
-            <span className="path-ret">retains {fmtB(p.retained)}</span>
-            {i === last && p.root_type_label && (
-              <> — <strong>GC root: {p.root_type_label}</strong></>
-            )}
-          </li>
-        ))}
-      </ol>
+    <details open className="root-path-chain">
+      <summary>Root path to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
+      <svg
+        viewBox={`0 0 ${VB_W} ${svgH}`}
+        width="100%"
+        role="img"
+        aria-label="Root path chain"
+        style={{ display: "block", maxWidth: "100%", margin: "0.5rem 0" }}
+      >
+        <defs>
+          <marker id={markerId} markerWidth={ARROW_HEAD} markerHeight={ARROW_HEAD}
+            refX={ARROW_HEAD / 2} refY={ARROW_HEAD / 2}
+            orient="auto" markerUnits="userSpaceOnUse">
+            <path
+              d={`M0,0 L${ARROW_HEAD},${ARROW_HEAD / 2} L0,${ARROW_HEAD} Z`}
+              fill="var(--muted)"
+            />
+          </marker>
+        </defs>
+
+        {steps.map((step, i) => {
+          const boxY = i * (BOX_H + CONN_H);
+          const isFirst = i === 0;
+          const isLast = i === last;
+          const midX = BOX_X + BOX_W / 2;
+          const connTop = boxY + BOX_H;
+          const connBot = connTop + CONN_H - ARROW_HEAD;
+
+          // Truncate class name so it fits
+          const maxChars = 58;
+          const cls = step.display_class.length > maxChars
+            ? step.display_class.slice(0, maxChars - 1) + "…"
+            : step.display_class;
+
+          return (
+            <g key={i}>
+              {/* Box */}
+              {isLast ? (
+                // Double-border for GC root (two rects slightly inset)
+                <>
+                  <rect x={BOX_X} y={boxY} width={BOX_W} height={BOX_H}
+                    rx={R} ry={R}
+                    fill="var(--bg)" stroke="var(--accent)" strokeWidth={1.5} />
+                  <rect x={BOX_X + 3} y={boxY + 3} width={BOX_W - 6} height={BOX_H - 6}
+                    rx={R} ry={R}
+                    fill="none" stroke="var(--accent)" strokeWidth={1} />
+                </>
+              ) : isFirst ? (
+                // Bold border for suspect (step 0)
+                <rect x={BOX_X} y={boxY} width={BOX_W} height={BOX_H}
+                  rx={R} ry={R}
+                  fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
+              ) : (
+                // Normal box
+                <rect x={BOX_X} y={boxY} width={BOX_W} height={BOX_H}
+                  rx={R} ry={R}
+                  fill="var(--bg)" stroke="var(--border)" strokeWidth={1} />
+              )}
+
+              {/* Class name */}
+              <text
+                x={BOX_X + PAD_X}
+                y={boxY + BOX_H / 2}
+                dy="0.35em"
+                fontSize={12}
+                fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+                fill={isFirst || isLast ? "var(--accent)" : "var(--fg)"}
+                fontWeight={isFirst ? "700" : "400"}
+              >
+                {isFirst ? "SUSPECT  " : ""}{cls}
+              </text>
+
+              {/* Retained bytes — right side */}
+              <text
+                x={BOX_X + BOX_W - PAD_X}
+                y={boxY + BOX_H / 2}
+                dy="0.35em"
+                fontSize={11}
+                textAnchor="end"
+                fill="var(--muted)"
+              >
+                {isLast
+                  ? (step.root_type_label ? `GC Root: ${step.root_type_label}` : "GC Root")
+                  : `retains ${fmtB(step.retained)}`}
+              </text>
+
+              {/* Connector arrow to next step */}
+              {!isLast && (
+                <>
+                  <line
+                    x1={midX} y1={connTop}
+                    x2={midX} y2={connBot}
+                    stroke="var(--muted)" strokeWidth={1.5}
+                    markerEnd={`url(#${markerId})`}
+                  />
+                  {steps[i + 1].field_edge && (
+                    <text
+                      x={midX + 6}
+                      y={connTop + CONN_H / 2}
+                      dy="0.35em"
+                      fontSize={11}
+                      fill="var(--muted)"
+                    >
+                      .{steps[i + 1].field_edge}
+                    </text>
+                  )}
+                </>
+              )}
+            </g>
+          );
+        })}
+      </svg>
     </details>
   );
 }
@@ -1597,13 +1930,194 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
   );
 }
 
-function MergedPaths({ node }: { node: MergedPathNode }) {
+function MergedPathsFallback({ node }: { node: MergedPathNode }) {
   return (
-    <details>
+    <details open>
       <summary>Merged paths to GC roots</summary>
       <ul className="dom-subtree">
         <MergedPathsNode node={node} depth={0} />
       </ul>
+    </details>
+  );
+}
+
+// Flatten a MergedPathNode tree into sankey {nodes, links}.
+function mergedPathToSankey(root: MergedPathNode) {
+  const nodeMap = new Map<string, number>(); // display_class → index
+  const nodes: { name: string; retained: number; count: number }[] = [];
+  const links: { source: number; target: number; value: number }[] = [];
+
+  function visit(node: MergedPathNode, parentIdx: number | null) {
+    let idx = nodeMap.get(node.display_class);
+    if (idx === undefined) {
+      idx = nodes.length;
+      nodeMap.set(node.display_class, idx);
+      nodes.push({ name: node.display_class, retained: node.retained, count: node.object_count });
+    } else {
+      nodes[idx].retained = Math.max(nodes[idx].retained, node.retained);
+      nodes[idx].count = Math.max(nodes[idx].count, node.object_count);
+    }
+    if (parentIdx !== null) {
+      links.push({ source: parentIdx, target: idx, value: Math.max(node.retained, 1) });
+    }
+    for (const child of node.children) visit(child, idx);
+  }
+
+  visit(root, null);
+  return { nodes, links };
+}
+
+interface SNode { name: string; retained: number; count: number; _idx: number }
+interface SLink { source: number; target: number; value: number }
+
+// MergedPathSankey — horizontal d3-sankey diagram of merged retention paths.
+// Falls back to the old text tree when there are ≤1 nodes (degenerate case).
+function MergedPathSankey({ node }: { node: MergedPathNode }) {
+  const [fmtB] = useFmtBytes();
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(600);
+
+  React.useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      const bw = entries[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Cap visible nodes to keep the diagram readable; show top N by retained.
+  const MAX_NODES = 40;
+
+  // Consolidate all data-derived computations into one memo keyed on `node`.
+  // This ensures visibleNodes/visibleLinks/height/nodePad are stable across
+  // renders and the graph memo only recomputes when underlying data changes.
+  const { rawNodes, rawLinks, visibleNodes, visibleLinks, nodePad, height } = React.useMemo(() => {
+    const { nodes: rawNodes, links: rawLinks } = mergedPathToSankey(node);
+    const visibleNodes = rawNodes.length > MAX_NODES
+      ? rawNodes.slice().sort((a, b) => b.retained - a.retained).slice(0, MAX_NODES)
+      : rawNodes;
+    const visibleSet = new Set(visibleNodes.map((n) => n.name));
+    const visibleLinks = rawLinks.filter(
+      (l) => visibleSet.has(rawNodes[l.source]?.name) && visibleSet.has(rawNodes[l.target]?.name)
+    );
+    // Adaptive padding: reduce when many nodes so rects stay visible.
+    const nodePad = rawNodes.length > 30 ? 6 : rawNodes.length > 15 ? 10 : 12;
+    const height = Math.min(600, Math.max(200, visibleNodes.length * (14 + nodePad)));
+    return { rawNodes, rawLinks, visibleNodes, visibleLinks, nodePad, height };
+  }, [node]);
+
+  // Right-side label column — 220px cleared for class name text.
+  const LABEL_COL = 220;
+
+  const graph = React.useMemo(() => {
+    if (w < 60 || visibleNodes.length <= 1) return null;
+    // Build fresh arrays; d3-sankey mutates them so we must clone each render.
+    const nodes: SNode[] = visibleNodes.map((n, i) => ({ ...n, _idx: i }));
+    // Remap link indices to positions within visibleNodes.
+    const nameToIdx = new Map(nodes.map((n, i) => [n.name, i]));
+    const links: SLink[] = [];
+    for (const l of visibleLinks) {
+      const sName = rawNodes[l.source]?.name;
+      const tName = rawNodes[l.target]?.name;
+      const si = sName !== undefined ? nameToIdx.get(sName) : undefined;
+      const ti = tName !== undefined ? nameToIdx.get(tName) : undefined;
+      if (si !== undefined && ti !== undefined) {
+        links.push({ source: si, target: ti, value: Math.max(l.value, 1) });
+      }
+    }
+    if (links.length === 0) return null;
+    try {
+      const svgW = Math.max(1, w - LABEL_COL);
+      const layout = sankey<SNode, SLink>()
+        .nodeId((n) => n._idx)
+        .nodeWidth(16)
+        .nodePadding(nodePad)
+        .extent([[1, 1], [svgW - 1, height - 1]]);
+      return layout({ nodes, links });
+    } catch {
+      return null;
+    }
+  }, [w, visibleNodes, visibleLinks, height, nodePad, rawNodes]);
+
+  // All hooks above — safe to early-return now.
+  if (rawNodes.length <= 1) return <MergedPathsFallback node={node} />;
+  if (graph === null) return <MergedPathsFallback node={node} />;
+
+  // Count root chains (leaves of the tree) and total retained.
+  const totalRetained = node.retained;
+  let chainCount = 0;
+  function countLeaves(n: MergedPathNode) {
+    if (n.children.length === 0) { chainCount++; return; }
+    for (const c of n.children) countLeaves(c);
+  }
+  countLeaves(node);
+
+  const maxDepth = Math.max(...graph.nodes.map((x) => (x as unknown as { depth?: number }).depth ?? 0));
+  const nodeColor = (depth: number) => {
+    if (depth === 0) return "var(--accent)";
+    if (depth >= maxDepth) return "#9ca3af";
+    return "#6b7280";
+  };
+
+  const svgW = Math.max(1, w - LABEL_COL);
+
+  return (
+    <details open className="merged-path-sankey">
+      <summary>
+        Merged retention paths ({chainCount} chain{chainCount === 1 ? "" : "s"} · {fmtB(totalRetained)})
+        {rawNodes.length > MAX_NODES && (
+          <span style={{ color: "var(--muted)", fontSize: "0.78rem", marginLeft: "0.4rem" }}>
+            (top {MAX_NODES} of {rawNodes.length} nodes)
+          </span>
+        )}
+      </summary>
+      <div ref={containerRef} style={{ width: "100%" }}>
+        <svg
+          width={w}
+          height={height}
+          role="img"
+          aria-label="Merged retention paths sankey"
+          style={{ display: "block", overflow: "visible" }}
+        >
+          {/* Links — drawn inside the sankey column (svgW wide) */}
+          {graph.links.map((link, i) => (
+            <path
+              key={`sl-${i}`}
+              className="sankey-link"
+              d={sankeyLinkHorizontal()(link) ?? undefined}
+              stroke="var(--muted)"
+              strokeWidth={Math.max(1, link.width ?? 1)}
+              strokeOpacity={0.35}
+            />
+          ))}
+          {/* Nodes + labels; labels extend into the right label column */}
+          {graph.nodes.map((n, i) => {
+            type SN = SNode & { x0?: number; x1?: number; y0?: number; y1?: number; depth?: number };
+            const sn = n as unknown as SN;
+            const x0 = sn.x0 ?? 0;
+            const x1 = sn.x1 ?? 0;
+            const y0 = sn.y0 ?? 0;
+            const y1 = sn.y1 ?? 0;
+            const nodeH = Math.max(2, y1 - y0);
+            const midY = y0 + nodeH / 2;
+            const depth = sn.depth ?? 0;
+            const shortName = sn.name.length > 32 ? sn.name.slice(0, 31) + "…" : sn.name;
+            return (
+              <g key={`sn-${i}`} className="sankey-node">
+                <title>{sn.name + "\n" + fmtCount(sn.count) + " objects · " + fmtB(sn.retained)}</title>
+                <rect x={x0} y={y0} width={Math.max(2, x1 - x0)} height={nodeH} fill={nodeColor(depth)} />
+                {nodeH >= 8 && (
+                  <text x={svgW + 4} y={midY} dy="0.35em" fontSize={10} fill="var(--fg)" textAnchor="start">
+                    {shortName}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     </details>
   );
 }
@@ -1670,9 +2184,9 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           </details>
         );
       })()}
-      {s.root_path && <RootPathList steps={s.root_path} />}
+      {s.root_path && s.root_path.length > 0 && <RootPathChain steps={s.root_path} />}
       {s.dominator_tree && <DomSubtreeSvg node={s.dominator_tree} />}
-      {!s.is_single && s.merged_paths && <MergedPaths node={s.merged_paths} />}
+      {!s.is_single && s.merged_paths && <MergedPathSankey node={s.merged_paths} />}
     </div>
   );
 }
@@ -1965,6 +2479,65 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
   );
 }
 
+// ── Threads by Retained Heap table ────────────────────────────────────────────
+function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
+  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  if (threads.length === 0) return null;
+  const sorted = React.useMemo(
+    () => [...threads].sort((a, b) => b.retained - a.retained),
+    [threads],
+  );
+  const cols: TableColumn<ThreadInfo>[] = [
+    {
+      id: "name",
+      name: "Thread name",
+      grow: 1,
+      minWidth: "120px",
+      cell: (t) => <code>{t.name?.trim() || "(unnamed)"}</code>,
+      selector: (t) => t.name ?? "",
+    },
+    {
+      id: "state",
+      name: "State",
+      width: "145px",
+      selector: (t) => t.thread_state ?? "",
+      format: (t) => t.thread_state || "—",
+    },
+    {
+      id: "retained",
+      name: useKB ? "Retained (KB)" : "Retained",
+      right: true,
+      width: useKB ? "130px" : "110px",
+      sortable: true,
+      cell: byteCell((t) => t.retained, fmtB, useKB),
+      selector: (t) => t.retained,
+    },
+    {
+      id: "max_local_retained",
+      name: useKB ? "Max Local Retained (KB)" : "Max Local Retained",
+      right: true,
+      width: useKB ? "190px" : "165px",
+      sortable: true,
+      cell: byteCell((t) => t.max_local_retained, fmtB, useKB),
+      selector: (t) => t.max_local_retained,
+    },
+    {
+      id: "stack_depth",
+      name: "Stack depth",
+      right: true,
+      width: "105px",
+      selector: (t) => t.frames?.length ?? 0,
+      format: (t) => String(t.frames?.length ?? 0),
+    },
+  ];
+  return (
+    <>
+      <h3>Threads by Retained Heap</h3>
+      <StdTable columns={cols} data={sorted} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
+    </>
+  );
+}
+
 // ── Thread Overview table (always-on properties, mirrors MAT columns) ──────────
 function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
@@ -2015,6 +2588,7 @@ function ThreadsSection({ report }: { report: Report }) {
         <p>No thread call stacks were recorded in this dump.</p>
       ) : (
         <>
+          <ThreadsByRetainedTable threads={threads} />
           <ThreadOverviewTable threads={threads} />
           <div className="tools">
             <input
@@ -2409,6 +2983,136 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   );
 }
 
+// ── Collection Waste Budget ───────────────────────────────────────────────────
+// Aggregates all heap-waste sources (duplicate strings, dup prim arrays, boxed
+// numbers, tiny collection overhead) into one table sorted by wasted bytes.
+function CollectionWasteBudgetSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn, useKB] = useFmtBytes();
+
+  const ds = report.overview.duplicate_strings;
+  const dp = report.overview.duplicate_prim_arrays;
+  const bn = report.overview.boxed_numbers;
+  const ca = report.collection_attribution;
+
+  // Determine visibility: at least one source must have data.
+  const hasDs = (ds?.approx_wasted_bytes ?? 0) > 0;
+  const hasDp = (dp?.total_wasted_bytes ?? 0) > 0;
+  const hasBn = (bn?.reduce((s, r) => s + r.total_shallow, 0) ?? 0) > 0;
+  const hasTiny = (ca?.tiny_overhead?.some(r => r.overhead_bytes > 0)) ?? false;
+
+  if (!hasDs && !hasDp && !hasBn && !hasTiny) return null;
+
+  interface WasteRow {
+    id: number;
+    type: string;
+    wasted: number;
+    objects: number;
+    fix: string;
+  }
+
+  const rows: WasteRow[] = [];
+
+  if (hasDs && ds) {
+    rows.push({
+      id: rows.length,
+      type: "Duplicate Strings",
+      wasted: ds.approx_wasted_bytes,
+      objects: ds.total_string_instances - ds.distinct_values,
+      fix: "Use String.intern() or interning cache",
+    });
+  }
+
+  if (hasDp && dp) {
+    const objCount = dp.rows.reduce((s, r) => s + r.duplicated_groups, 0);
+    rows.push({
+      id: rows.length,
+      type: "Duplicate primitive arrays",
+      wasted: dp.total_wasted_bytes,
+      objects: objCount,
+      fix: "Deduplicate or use shared constants",
+    });
+  }
+
+  if (hasBn && bn) {
+    // total_shallow = full footprint, not reclaimable delta; labeled "(footprint)" in the table
+    const totalWasted = bn.reduce((s, r) => s + r.total_shallow, 0);
+    const totalObjs = bn.reduce((s, r) => s + r.instances, 0);
+    rows.push({
+      id: rows.length,
+      type: "Boxed primitives (footprint)*",
+      wasted: totalWasted,
+      objects: totalObjs,
+      fix: "Use primitive arrays or Eclipse Collections",
+    });
+  }
+
+  if (ca?.tiny_overhead) {
+    for (const row of ca.tiny_overhead) {
+      if (row.overhead_bytes > 0) {
+        rows.push({
+          id: rows.length,
+          type: `Empty/singleton ${row.container_kind} (${row.holder_class}#${row.field})`,
+          wasted: row.overhead_bytes,
+          objects: row.empty_count + row.singleton_count,
+          fix: "Use null or Collections.emptyList()",
+        });
+      }
+    }
+  }
+
+  // Sort by wasted descending.
+  rows.sort((a, b) => b.wasted - a.wasted);
+
+  const totalWasted = rows.reduce((s, r) => s + r.wasted, 0);
+  const totalObjects = rows.reduce((s, r) => s + r.objects, 0);
+
+  const cols: TableColumn<WasteRow>[] = [
+    { id: "type", name: "Waste type", grow: 2, selector: (r) => r.type, cell: (r) => <span>{r.type}</span> },
+    {
+      id: "wasted",
+      name: useKB ? "Wasted (KB)" : "Wasted",
+      right: true,
+      width: useKB ? "130px" : "120px",
+      cell: byteCell(r => r.wasted, fmtB, useKB),
+      selector: (r) => r.wasted,
+    },
+    {
+      id: "objects",
+      name: "Objects",
+      right: true,
+      width: "120px",
+      format: (r) => fmtCount(r.objects),
+      selector: (r) => r.objects,
+    },
+    { id: "fix", name: "Fix suggestion", grow: 2, selector: (r) => r.fix },
+  ];
+
+  const showCollectionsNote = !ca && (hasDs || hasDp);
+
+  return (
+    <section id="collection-waste-budget">
+      <h2>Collection Waste Budget</h2>
+      <p className="subtitle">
+        All heap waste sources aggregated and ranked by wasted bytes.
+      </p>
+      <StdTable columns={cols} data={rows} keyField="id" />
+      <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
+        <strong>Total: {fmtB(totalWasted)}</strong> wasted across{" "}
+        <strong>{fmtCount(totalObjects)}</strong> objects
+      </p>
+      {showCollectionsNote && (
+        <p className="subtitle">
+          Some waste categories require <code>--collections</code> to analyze.
+        </p>
+      )}
+      {hasBn && (
+        <p className="subtitle">* Boxed primitive footprint shown; reclaimable savings depend on usage.</p>
+      )}
+      {kbBtn}
+    </section>
+  );
+}
+
 // ── Container Attribution (Class#field) ──────────────────────────────────────
 // Which holder Class#field points at the most container memory. Absent when
 // --collections was off (data undefined → section not rendered). Mirrors
@@ -2718,6 +3422,14 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h3>{stats.kind} References</h3>
             <p className="subtitle">{kindCaption(stats.kind)}</p>
             <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
+            {stats.null_referent_count != null && stats.null_referent_count > 0 && (
+              <p className="subtitle">
+                {fmtCount(stats.null_referent_count)} of {fmtCount(stats.reference_instances)} {stats.kind} references have a null referent (GC'd but not yet cleaned up).
+                {stats.null_referent_count / stats.reference_instances > 0.5 && (
+                  <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue may not be drained.</span>
+                )}
+              </p>
+            )}
             <h4>Referent classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only-weakly retained (approximate)</h4>
@@ -2737,6 +3449,237 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 // Two dominator-tree sub-views: Big Drops (dominators where retained heap
 // concentrates) and Immediate Dominators (dominated-object rollup by dominator
 // class). Always-on; mirrors render_md.rs::render_dominator_analysis.
+// ── Who Holds This Class? (V5) ──────────────────────────────────────────────
+// Two-sided Sankey navigator built from immediate_dominators.pairs. Left column
+// shows classes that dominate the target; right column shows classes the target
+// dominates. Click any side node to pivot the focused class.
+interface WhoHoldsSankeyProps {
+  pairs: ImmDomPair[];
+  initialTarget: string;
+}
+
+// Display-friendly class name: drop package prefix (keep after last '.').
+function shortClass(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1) : name;
+}
+
+interface WhoHoldsNode {
+  id: string;
+  side: "L" | "C" | "R";
+  cls: string;
+}
+interface WhoHoldsLink {
+  source: string;
+  target: string;
+  value: number;
+}
+
+function WhoHoldsSankey({ pairs, initialTarget }: WhoHoldsSankeyProps) {
+  const [target, setTarget] = React.useState(initialTarget);
+  const [history, setHistory] = React.useState<string[]>([]);
+  const [search, setSearch] = React.useState("");
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(600);
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver((entries) => {
+      const bw = entries[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Who holds target? (left side): pairs where dominated_class == target
+  const holders = React.useMemo(() =>
+    pairs
+      .filter((p) => p.dominated_class === target)
+      .sort((a, b) => b.dominated_retained - a.dominated_retained)
+      .slice(0, 8),
+    [pairs, target]);
+
+  // What does target hold? (right side): pairs where dominator_class == target
+  const dominates = React.useMemo(() =>
+    pairs
+      .filter((p) => p.dominator_class === target)
+      .sort((a, b) => b.dominated_retained - a.dominated_retained)
+      .slice(0, 8),
+    [pairs, target]);
+
+  const classOptions = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const p of pairs) { seen.add(p.dominator_class); seen.add(p.dominated_class); }
+    return Array.from(seen).sort();
+  }, [pairs]);
+
+  const filtered = search.length >= 2
+    ? classOptions.filter((c) => c.toLowerCase().includes(search.toLowerCase())).slice(0, 10)
+    : [];
+
+  const pivot = React.useCallback((cls: string) => {
+    if (cls === target) return;
+    setHistory((h) => [...h, target]);
+    setTarget(cls);
+  }, [target]);
+
+  const selectClass = React.useCallback((cls: string) => {
+    setHistory([]);
+    setTarget(cls);
+    setSearch("");
+  }, []);
+
+  const goToHistory = React.useCallback((i: number) => {
+    setTarget(history[i]);
+    setHistory((h) => h.slice(0, i));
+  }, [history]);
+
+  const height = 220;
+  const padding = { top: 10, right: 10, bottom: 10, left: 10 };
+
+  // Build the sankey graph (3 columns). Dedup left/right classes and skip any
+  // that collide with the target itself to avoid self-referential nodes.
+  const graph = React.useMemo(() => {
+    if (w < 20 || (holders.length === 0 && dominates.length === 0)) return null;
+    const nodeMap = new Map<string, WhoHoldsNode>();
+    const centerId = "C:" + target;
+    nodeMap.set(centerId, { id: centerId, side: "C", cls: target });
+    const links: WhoHoldsLink[] = [];
+    for (const h of holders) {
+      if (h.dominator_class === target) continue;
+      const id = "L:" + h.dominator_class;
+      if (!nodeMap.has(id)) nodeMap.set(id, { id, side: "L", cls: h.dominator_class });
+      links.push({ source: id, target: centerId, value: Math.max(1, h.dominated_retained) });
+    }
+    for (const d of dominates) {
+      if (d.dominated_class === target) continue;
+      const id = "R:" + d.dominated_class;
+      if (!nodeMap.has(id)) nodeMap.set(id, { id, side: "R", cls: d.dominated_class });
+      links.push({ source: centerId, target: id, value: Math.max(1, d.dominated_retained) });
+    }
+    if (links.length === 0) return null;
+    const nodes = Array.from(nodeMap.values()).map((n) => ({ ...n }));
+    try {
+      const layout = sankey<WhoHoldsNode, WhoHoldsLink>()
+        .nodeId((n) => n.id)
+        .nodeWidth(12)
+        .nodePadding(8)
+        .extent([[padding.left, padding.top], [w - padding.right, height - padding.bottom]]);
+      return layout({ nodes, links });
+    } catch {
+      return null;
+    }
+  }, [w, holders, dominates, target]);
+
+  const nodeColor = (side: string) =>
+    side === "L" ? "var(--accent)" : side === "C" ? "var(--warn-border)" : "var(--ok, #27ae60)";
+
+  return (
+    <div>
+      {/* Class selector */}
+      <div style={{ position: "relative", maxWidth: 420, marginBottom: "0.75rem" }}>
+        <input
+          type="text"
+          value={search}
+          placeholder="Search for a class to focus…"
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ width: "100%", boxSizing: "border-box", padding: "0.4rem 0.6rem", fontSize: "0.9rem", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--fg)" }}
+        />
+        {filtered.length > 0 && (
+          <ul style={{ position: "absolute", zIndex: 10, listStyle: "none", margin: "2px 0 0", padding: 0, width: "100%", maxHeight: 240, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, background: "var(--card-bg, var(--bg))", boxShadow: "0 4px 12px rgba(0,0,0,0.15)" }}>
+            {filtered.map((c) => (
+              <li key={c}>
+                <button
+                  onClick={() => selectClass(c)}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "0.35rem 0.6rem", border: "none", background: "transparent", color: "var(--fg)", cursor: "pointer", fontSize: "0.85rem", fontFamily: "var(--mono, monospace)" }}
+                >
+                  {c}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Breadcrumb trail */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.25rem", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+        {history.map((h, i) => (
+          <React.Fragment key={`${h}-${i}`}>
+            <button
+              onClick={() => goToHistory(i)}
+              title={h}
+              style={{ border: "none", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: 0, fontSize: "0.85rem", textDecoration: "underline" }}
+            >
+              {shortClass(h)}
+            </button>
+            <span style={{ color: "var(--muted)" }}>›</span>
+          </React.Fragment>
+        ))}
+        <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
+      </div>
+
+      <div ref={ref} style={{ width: "100%" }}>
+        {graph === null ? (
+          <p className="subtitle">No pair data for this class.</p>
+        ) : (
+          <svg width={w} height={height} role="img" aria-label={`Who holds ${target}`}>
+            {/* Links */}
+            {graph.links.map((link, i) => (
+              <path
+                key={`link-${i}`}
+                d={sankeyLinkHorizontal()(link) ?? undefined}
+                fill="none"
+                stroke="var(--muted)"
+                strokeWidth={Math.max(1, link.width ?? 1)}
+                opacity={0.4}
+              />
+            ))}
+            {/* Nodes */}
+            {graph.nodes.map((n) => {
+              const x0 = n.x0 ?? 0;
+              const x1 = n.x1 ?? 0;
+              const y0 = n.y0 ?? 0;
+              const y1 = n.y1 ?? 0;
+              const midY = (y0 + y1) / 2;
+              const clickable = n.side !== "C";
+              let labelEl: React.ReactNode = null;
+              if (n.side === "L") {
+                labelEl = (
+                  <text x={x1 + 4} y={midY} dy="0.35em" textAnchor="start" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>
+                );
+              } else if (n.side === "R") {
+                labelEl = (
+                  <text x={x0 - 4} y={midY} dy="0.35em" textAnchor="end" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>
+                );
+              } else {
+                labelEl = (
+                  <text x={(x0 + x1) / 2} y={y0 - 4} textAnchor="middle" fontSize={11} fontWeight={600} fill="var(--fg)">{shortClass(n.cls)}</text>
+                );
+              }
+              return (
+                <g key={n.id}>
+                  <rect
+                    x={x0}
+                    y={y0}
+                    width={Math.max(1, x1 - x0)}
+                    height={Math.max(1, y1 - y0)}
+                    fill={nodeColor(n.side)}
+                    style={{ cursor: clickable ? "pointer" : "default" }}
+                    onClick={clickable ? () => pivot(n.cls) : undefined}
+                  >
+                    <title>{n.cls}</title>
+                  </rect>
+                  {labelEl}
+                </g>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
@@ -2808,6 +3751,22 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               <span style={{ width: useKB ? "150px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDomShallow)}</span>
               <span style={{ width: useKB ? "175px" : "155px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDominatedShallow)}</span>
             </div>
+          </>
+        );
+      })()}
+
+      {(() => {
+        const pairs = data?.immediate_dominators?.pairs ?? [];
+        // Use the top idom class (first row) as the initial focus target.
+        const initialTarget = idoms[0]?.dominator_class ?? "";
+        if (pairs.length === 0 || !initialTarget) return null;
+        return (
+          <>
+            <h3>Who Holds This Class? (Two-sided Navigator)</h3>
+            <p className="subtitle">
+              Select a class to see which classes dominate it (left) and which classes it dominates (right). Click any node to pivot.
+            </p>
+            <WhoHoldsSankey pairs={pairs} initialTarget={initialTarget} />
           </>
         );
       })()}
@@ -2930,11 +3889,94 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   );
 }
 
+// ── Off-Heap NIO Memory (V6) ───────────────────────────────────────────────────
+// DirectByteBuffer capacity card: shows native (OS) memory allocation for NIO buffers
+// which is not counted in JVM heap totals.
+function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
+  if (!indicators || (indicators.direct_byte_buffer_capacity_sum ?? 0) <= 0) return null;
+
+  const capacity = indicators.direct_byte_buffer_capacity_sum;
+  const bufferCount = indicators.direct_byte_buffer_count;
+  const isLarge = capacity > 256 * 1024 * 1024;
+
+  return (
+    <section id="off-heap-nio" tabIndex={-1}>
+      <h2>Off-Heap NIO Memory</h2>
+      <div className="card">
+        <p>
+          <strong>{formatBytes(capacity)}</strong>
+          {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} DirectByteBuffer objects`}
+        </p>
+        <p>
+          This memory is committed from native (OS) memory — it does NOT appear in the JVM heap totals above.
+        </p>
+        <p>
+          Check for NIO buffer pools or caches that are not releasing buffers. Common causes: Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
+        </p>
+        {isLarge && (
+          <p className="subtitle">
+            ⚠ Over 256 MB of off-heap NIO memory detected. This may cause OS-level memory pressure invisible to the JVM.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ── Allocation Sites ──────────────────────────────────────────────────────────
 // aggregated allocation sites. Honest note when the
 // dump carried no allocation stack-trace info. Mirrors report.rs::render_alloc_sites.
+
+// Frame-trie types and helpers (module-level, used by AllocSitesSection).
+interface FrameTrieNode {
+  label: string;
+  retained: number;
+  children: Map<string, FrameTrieNode>;
+}
+
+interface FrameTreeNode {
+  label: string;
+  retained: number;
+  children: FrameTreeNode[];
+}
+
+function trieToTree(node: FrameTrieNode): FrameTreeNode {
+  return {
+    label: node.label,
+    retained: node.retained,
+    children: Array.from(node.children.values())
+      .map(trieToTree)
+      .sort((a, b) => b.retained - a.retained),
+  };
+}
+
+function buildFrameTrie(sites: import("./types").AllocSite[]): FrameTrieNode {
+  const root: FrameTrieNode = { label: "(root)", retained: 0, children: new Map() };
+  for (const site of sites) {
+    if (site.frames.length === 0 || site.retained_total <= 0) continue;
+    const reversed = [...site.frames].reverse();
+    let cur = root;
+    cur.retained += site.retained_total;
+    for (const frame of reversed) {
+      let child = cur.children.get(frame);
+      if (!child) {
+        child = { label: frame, retained: 0, children: new Map() };
+        cur.children.set(frame, child);
+      }
+      child.retained += site.retained_total;
+      cur = child;
+    }
+  }
+  return root;
+}
+
 function AllocSitesSection({ data }: { data: AllocSites }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
+
+  const frameTree: FrameTreeNode = React.useMemo(() => {
+    return trieToTree(buildFrameTrie(data.sites));
+  }, [data.sites]);
+
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
@@ -2966,6 +4008,20 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
         const totalShallow = data.sites.reduce((s, r) => s + r.shallow_total, 0);
         return (
           <>
+            {frameTree.retained > 0 && (
+              <>
+                <h3>Retained Heap by Call Path</h3>
+                <p className="subtitle">Flamegraph sized by retained bytes. Click a frame to zoom in; the chart has a Treemap / Flame toggle.</p>
+                <ZoomableTreemap<FrameTreeNode>
+                  root={frameTree}
+                  getChildren={(n) => n.children}
+                  getValue={(n) => n.retained}
+                  getLabel={(n) => n.label}
+                  fmt={fmtB}
+                  height={260}
+                />
+              </>
+            )}
             <StdTable columns={allocCols} data={data.sites} searchKeys={[]} fmtBtn={kbBtn} />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
@@ -3095,6 +4151,13 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
         ];
         return <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />;
       })()}
+      {/* V26: Contextual NIO buffer triage hint when capacity exceeds 256 MB */}
+      {direct_byte_buffer_capacity_sum > 256 * 1024 * 1024 && (
+        <p className="subtitle" style={{ marginTop: "0.5rem" }}>
+          ⚠ NIO buffers exceed 256 MB — this is native memory not tracked by the JVM heap.
+          Check for pools not releasing buffers.
+        </p>
+      )}
     </section>
   );
 }
@@ -3191,6 +4254,426 @@ function CustomQueriesSection({ report }: { report: Report }) {
   );
 }
 
+// ── Type Reference Graph (TPFG, V13) ─────────────────────────────────────────
+
+function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
+  const [fmtB] = useFmtBytes();
+
+  const tableCols: TableColumn<TypeEdge>[] = [
+    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2 },
+    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2 },
+    { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, format: r => fmtCount(r.edge_count) },
+    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, format: r => fmtB(r.retained_weight) },
+  ];
+
+  return (
+    <StdTable
+      columns={tableCols}
+      data={edges}
+      searchKeys={["src_class", "dst_class"]}
+      defaultSortFieldId="retained_weight"
+      defaultSortAsc={false}
+    />
+  );
+}
+
+// ── Object Graph Explorer (V3 + V4) ──────────────────────────────────────────
+
+function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
+  const [tab, setTab] = React.useState<"explore" | "domtree">("explore");
+  const [nodeId, setNodeId] = React.useState<number | null>(null);
+  const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string }[]>([]);
+  const [page, setPage] = React.useState(0);
+  const [showSvg, setShowSvg] = React.useState(false);
+  const [fmtB] = useFmtBytes();
+
+  React.useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash;
+      const m = h.match(/^#(explore|domtree)\/(\d+)$/);
+      if (m) {
+        setTab(m[1] as "explore" | "domtree");
+        setNodeId(parseInt(m[2], 10));
+        setPage(0);
+        setShowSvg(false);
+      } else if (h === "#object-graph") {
+        setNodeId(null);
+        setBreadcrumb([]);
+      }
+    };
+    onHash();
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const navigate = (newTab: "explore" | "domtree", id: number, fieldLabel: string) => {
+    setBreadcrumb(prev => {
+      if (nodeId === null) return [];
+      return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId) }];
+    });
+    setPage(0);
+    window.location.hash = `${newTab}/${id}`;
+  };
+
+  const goToRoot = () => {
+    setBreadcrumb([]);
+    window.location.hash = "object-graph";
+  };
+
+  const currentNode: ObjGraphFlatNode | null =
+    nodeId !== null ? (data.nodes[String(nodeId)] ?? null) : null;
+  const currentEdges: ObjGraphEdge[] =
+    nodeId !== null ? (data.edges[String(nodeId)] ?? []) : [];
+  const currentDomChildren: number[] =
+    nodeId !== null ? (data.dom_children[String(nodeId)] ?? []) : [];
+
+  const totalHeap = Object.values(data.nodes).reduce(
+    (s, n) => (n.idom === undefined ? s + n.retained : s), 0
+  );
+
+  const PAGE_SIZE = 50;
+  const pagedEdges = currentEdges.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  // Find pre-built SVG tree for current node
+  const prebuiltTree = nodeId !== null
+    ? data.root_dom_trees?.find(([idx]) => idx === nodeId)?.[1]
+    : undefined;
+
+  // ── Root list ──────────────────────────────────────────────────────────────
+  if (nodeId === null) {
+    const rootNodes = data.roots
+      .map(id => ({ id, node: data.nodes[String(id)] }))
+      .filter(r => r.node != null)
+      .slice(0, 50);
+    return (
+      <div>
+        <p className="subtitle">
+          Significant objects (retained &ge; {fmtB(data.sig_floor_bytes)}).
+          Click <strong>&rarr;</strong> to explore outbound references or dominator children.
+        </p>
+        <table className="std-table">
+          <thead>
+            <tr>
+              <th>Navigate</th>
+              <th>Class</th>
+              <th>Shallow</th>
+              <th>Retained</th>
+              <th>% Heap</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rootNodes.map(({ id, node }) => (
+              <tr key={id}>
+                <td>
+                  <button
+                    className="btn-link"
+                    onClick={() => navigate("explore", id, node.display_class)}
+                  >
+                    &rarr;
+                  </button>
+                  {" "}
+                  <button
+                    className="btn-link"
+                    onClick={() => navigate("domtree", id, node.display_class)}
+                  >
+                    &boxur;
+                  </button>
+                </td>
+                <td><code>{node.display_class}</code></td>
+                <td>{fmtB(node.shallow)}</td>
+                <td>{fmtB(node.retained)}</td>
+                <td>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  // ── Node detail view ───────────────────────────────────────────────────────
+  if (!currentNode) {
+    return <p className="subtitle">Object {nodeId} not found in significant nodes.</p>;
+  }
+
+  const idomNode = currentNode.idom != null ? data.nodes[String(currentNode.idom)] : null;
+
+  return (
+    <div>
+      {/* Breadcrumb */}
+      {breadcrumb.length > 0 && (
+        <div className="breadcrumb">
+          <span className="breadcrumb-item" onClick={goToRoot}>Roots</span>
+          {breadcrumb.map((b, i) => (
+            <React.Fragment key={i}>
+              <span className="breadcrumb-sep">/</span>
+              <span
+                className="breadcrumb-item"
+                onClick={() => {
+                  setBreadcrumb(prev => prev.slice(0, i));
+                  window.location.hash = `${tab}/${b.nodeId}`;
+                }}
+              >
+                {b.label}
+              </span>
+            </React.Fragment>
+          ))}
+          <span className="breadcrumb-sep">/</span>
+          <span>{currentNode.display_class}</span>
+        </div>
+      )}
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+        <button
+          className={tab === "explore" ? "btn-active" : "btn-link"}
+          onClick={() => { setTab("explore"); window.location.hash = `explore/${nodeId}`; }}
+        >
+          Outbound Refs
+        </button>
+        <button
+          className={tab === "domtree" ? "btn-active" : "btn-link"}
+          onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}
+        >
+          Dominator Tree
+        </button>
+        <button className="btn-link" style={{ marginLeft: "auto" }} onClick={goToRoot}>
+          &larr; Roots
+        </button>
+      </div>
+
+      <div className="obj-explorer">
+        {/* Left panel */}
+        <div className="obj-explorer-left">
+          {tab === "explore" ? (
+            <>
+              <h4 style={{ margin: "0 0 0.4rem" }}>Outbound References</h4>
+              {currentNode.edges_unknown && (
+                <p className="subtitle" style={{ color: "var(--warn-border)" }}>
+                  &#9888; Outbound refs not captured for this object (not in top-10,000 by shallow heap).
+                </p>
+              )}
+              {currentNode.edges_truncated && (
+                <p className="subtitle">Showing first 100 of more edges.</p>
+              )}
+              {pagedEdges.length === 0 && !currentNode.edges_unknown && (
+                <p className="subtitle">No outbound references captured.</p>
+              )}
+              {pagedEdges.length > 0 && (
+                <table className="std-table">
+                  <thead>
+                    <tr>
+                      <th>Nav</th>
+                      <th>Field</th>
+                      <th>Child class</th>
+                      <th>Child retained</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedEdges.map((edge, i) => {
+                      const childNode = data.nodes[String(edge.child_idx)];
+                      const isShared = childNode && childNode.idom !== nodeId;
+                      return (
+                        <tr key={i}>
+                          <td>
+                            <button
+                              className="btn-link"
+                              onClick={() => navigate("explore", edge.child_idx, edge.child_class)}
+                            >
+                              &rarr;
+                            </button>
+                          </td>
+                          <td>
+                            <code>{edge.field_name || <em>(unnamed)</em>}</code>
+                          </td>
+                          <td><code>{edge.child_class}</code></td>
+                          <td>{fmtB(edge.child_retained)}</td>
+                          <td>
+                            {isShared && (
+                              <span className="shared-badge">&#8635; shared</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              {currentEdges.length > PAGE_SIZE && (
+                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem" }}>
+                  <button
+                    className="btn-link"
+                    disabled={page === 0}
+                    onClick={() => setPage(p => p - 1)}
+                  >
+                    &laquo; Prev
+                  </button>
+                  <span>
+                    {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, currentEdges.length)} of {currentEdges.length}
+                  </span>
+                  <button
+                    className="btn-link"
+                    disabled={(page + 1) * PAGE_SIZE >= currentEdges.length}
+                    onClick={() => setPage(p => p + 1)}
+                  >
+                    Next &raquo;
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <h4 style={{ margin: "0 0 0.4rem" }}>Immediate Dominator Children</h4>
+              <p className="subtitle" style={{ fontSize: "0.82rem" }}>
+                &#8505; Showing immediate dominator children only.
+              </p>
+              {currentDomChildren.length === 0 ? (
+                <p className="subtitle">No significant dominated children.</p>
+              ) : (
+                <table className="std-table">
+                  <thead>
+                    <tr>
+                      <th>Navigate</th>
+                      <th>Class</th>
+                      <th>Shallow</th>
+                      <th>Retained</th>
+                      <th>% Heap</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {currentDomChildren.map(childId => {
+                      const cn = data.nodes[String(childId)];
+                      if (!cn) return null;
+                      return (
+                        <tr key={childId}>
+                          <td>
+                            <button
+                              className="btn-link"
+                              onClick={() => navigate("domtree", childId, cn.display_class)}
+                            >
+                              into&nbsp;&rarr;
+                            </button>
+                          </td>
+                          <td><code>{cn.display_class}</code></td>
+                          <td>{fmtB(cn.shallow)}</td>
+                          <td>{fmtB(cn.retained)}</td>
+                          <td>
+                            {totalHeap > 0
+                              ? (cn.retained / totalHeap * 100).toFixed(1)
+                              : "—"}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              {prebuiltTree && (
+                <div style={{ marginTop: "0.75rem" }}>
+                  <button className="btn-link" onClick={() => setShowSvg(v => !v)}>
+                    {showSvg ? "Hide SVG tree" : "Show SVG tree"}
+                  </button>
+                  {showSvg && <DomSubtreeSvg node={prebuiltTree} />}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Right panel: node details */}
+        <div className="obj-explorer-right">
+          <h4 style={{ margin: "0 0 0.4rem" }}>Object Details</h4>
+          <table className="std-table">
+            <tbody>
+              <tr>
+                <th>Class</th>
+                <td><code>{currentNode.display_class}</code></td>
+              </tr>
+              <tr>
+                <th>Dense index</th>
+                <td>{nodeId}</td>
+              </tr>
+              <tr>
+                <th>Shallow</th>
+                <td>{fmtB(currentNode.shallow)}</td>
+              </tr>
+              <tr>
+                <th>Retained</th>
+                <td>{fmtB(currentNode.retained)}</td>
+              </tr>
+              <tr>
+                <th>% Heap</th>
+                <td>
+                  {totalHeap > 0
+                    ? (currentNode.retained / totalHeap * 100).toFixed(2)
+                    : "—"}%
+                </td>
+              </tr>
+              <tr>
+                <th>Immediate dominator</th>
+                <td>
+                  {currentNode.idom != null ? (
+                    <button
+                      className="btn-link"
+                      onClick={() => navigate("domtree", currentNode.idom!, idomNode?.display_class ?? `#${currentNode.idom}`)}
+                    >
+                      {idomNode?.display_class ?? `obj#${currentNode.idom}`}
+                    </button>
+                  ) : (
+                    <em>GC root</em>
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          {currentDomChildren.length > 0 && tab === "explore" && (
+            <div style={{ marginTop: "0.75rem" }}>
+              <h4 style={{ margin: "0 0 0.4rem" }}>Dominator children ({currentDomChildren.length})</h4>
+              <table className="std-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Class</th>
+                    <th>Retained</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentDomChildren.slice(0, 10).map(childId => {
+                    const cn = data.nodes[String(childId)];
+                    if (!cn) return null;
+                    return (
+                      <tr key={childId}>
+                        <td>
+                          <button
+                            className="btn-link"
+                            onClick={() => navigate("domtree", childId, cn.display_class)}
+                          >
+                            into&nbsp;&rarr;
+                          </button>
+                        </td>
+                        <td><code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code></td>
+                        <td>{fmtB(cn.retained)}</td>
+                      </tr>
+                    );
+                  })}
+                  {currentDomChildren.length > 10 && (
+                    <tr>
+                      <td colSpan={3} style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
+                        +{currentDomChildren.length - 10} more — switch to Dominator Tree tab
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
@@ -3266,14 +4749,34 @@ function SeriesTable({
     { id: "name", name: nameLabel, grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
     ...labels.map((lbl, i): TableColumn<SRow> => ({
       id: `r${i}`,
-      name: useKB ? `r${i + 1} (KB)` : `r${i + 1}`,
+      name: useKB ? `Retained r${i + 1} (KB)` : `Retained r${i + 1}`,
       right: true,
-      width: useKB ? "120px" : "100px",
+      width: useKB ? "140px" : "110px",
       cell: (r) => byteCell((row: SRow) => row.retained[i] ?? 0, fmtB, useKB)(r),
       selector: (r) => r.retained[i] ?? 0,
       sortable: true,
     })),
     { id: "delta", name: "Δ(r1→rN)", right: true, width: "110px", cell: (r) => fmtDeltaBytes(r.delta_retained, fmtB), selector: (r) => r.delta_retained, sortable: true },
+    {
+      id: "deltaPct",
+      name: "Δ %",
+      right: true,
+      width: "80px",
+      cell: (r: SRow) => {
+        const base = r.retained[0] ?? 0;
+        if (base === 0) return <span style={{ color: "var(--muted)" }}>new</span>;
+        const pct = (r.delta_retained / base) * 100;
+        if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
+        const sign = pct > 0 ? "+" : "";
+        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{pct.toFixed(1)}%</span>;
+      },
+      selector: (r: SRow) => {
+        const base = r.retained[0] ?? 0;
+        if (base === 0) return 0;
+        return (r.delta_retained / base) * 100;
+      },
+      sortable: true,
+    },
     ...(showNew ? [{
       id: "new",
       name: "New?",
@@ -3363,15 +4866,35 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
     { id: "name", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
     ...labels.map((lbl, i): TableColumn<SeriesClassRow> => ({
       id: `r${i}`,
-      name: useKB ? `r${i + 1} (KB)` : `r${i + 1}`,
+      name: useKB ? `Retained r${i + 1} (KB)` : `Retained r${i + 1}`,
       right: true,
-      width: useKB ? "120px" : "100px",
+      width: useKB ? "140px" : "110px",
       cell: (r) => byteCell((row: SeriesClassRow) => row.retained[i] ?? 0, fmtB, useKB)(r),
       selector: (r) => r.retained[i] ?? 0,
       sortable: true,
     })),
     { id: "peak", name: useKB ? "Peak (KB)" : "Peak", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.peak_retained, fmtB, useKB), selector: (r) => r.peak_retained, sortable: true },
     { id: "peakOverBaseline", name: "Peak−r1", right: true, width: "110px", cell: (r) => fmtDeltaBytes(r.peak_over_baseline, fmtB), selector: (r) => r.peak_over_baseline, sortable: true },
+    {
+      id: "deltaPct",
+      name: "Δ %",
+      right: true,
+      width: "80px",
+      cell: (r: SeriesClassRow) => {
+        const base = r.retained[0] ?? 0;
+        if (base === 0) return <span style={{ color: "var(--muted)" }}>new</span>;
+        const pct = (r.delta_retained / base) * 100;
+        if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
+        const sign = pct > 0 ? "+" : "";
+        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{pct.toFixed(1)}%</span>;
+      },
+      selector: (r: SeriesClassRow) => {
+        const base = r.retained[0] ?? 0;
+        if (base === 0) return 0;
+        return (r.delta_retained / base) * 100;
+      },
+      sortable: true,
+    },
   ];
   return <StdTable columns={spikeCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="peak" />;
 }
@@ -3412,6 +4935,11 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         </ul>
       </section>
 
+      {diff.growth_leaders.length > 0 && (
+        <section className="diff-section">
+          <RetainedGrowthChart rows={diff.growth_leaders} />
+        </section>
+      )}
       <DiffSection
         title="Growth Leaders (by Δ retained)"
         nameLabel="Class"
@@ -3503,6 +5031,7 @@ export default function App({ report }: { report: Report }) {
       </div>
       <Nav report={report} />
       <OomTriage report={report} />
+      <ExecSummaryCard report={report} />
       <WasteSummarySection report={report} />
       <KpiStrip report={report} />
       <SystemOverviewSection report={report} />
@@ -3521,6 +5050,7 @@ export default function App({ report }: { report: Report }) {
       ) : null}
       <ArraysBySizeSection data={report.arrays_by_size} totalShallow={report.overview.total_shallow} />
       <CollectionsSection data={report.collections} />
+      <CollectionWasteBudgetSection report={report} />
       {report.collection_attribution && (
         <CollectionAttributionSection data={report.collection_attribution} />
       )}
@@ -3531,12 +5061,30 @@ export default function App({ report }: { report: Report }) {
       {report.biggest_collections && <BiggestCollectionsSection data={report.biggest_collections} />}
       {report.collection_contents && <CollectionContentsSection data={report.collection_contents} />}
       <ReferencesSection data={report.references} />
+      <DirectByteBufferCard indicators={report.leak_indicators} />
       <UnreachableObjectsSection data={report.overview} />
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
       <RetentionConcentrationSection report={report} />
       <DominatorDepthSection report={report} />
       <LeakIndicatorsSection data={report.leak_indicators} />
       <CustomQueriesSection report={report} />
+      {report.obj_graph_flat && (
+        <section id="object-graph">
+          <h2>Object Graph Explorer</h2>
+          <p className="subtitle">
+            Interactive reference graph and dominator tree navigator.
+            Generated with <code>--obj-graph</code>.
+          </p>
+          <ObjectGraphExplorer data={report.obj_graph_flat} />
+        </section>
+      )}
+      {report.type_ref_graph && report.type_ref_graph.length > 0 && (
+        <section id="type-ref-graph" className="section">
+          <h2>Type Reference Graph</h2>
+          <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow.</p>
+          <TypeRefGraph edges={report.type_ref_graph} />
+        </section>
+      )}
       <GlossarySection />
       <BackToTop />
       <footer className="report-footer">

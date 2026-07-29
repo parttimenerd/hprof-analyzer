@@ -11,9 +11,10 @@ import {
   LinearScale,
   Tooltip,
   Legend,
+  Title,
 } from "chart.js";
 
-ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
+ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title);
 
 // Chart.js draws to <canvas> and cannot read CSS custom properties, so pull the
 // current theme colors from the document root at render time. Recomputed on each

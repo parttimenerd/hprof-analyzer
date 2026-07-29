@@ -146,6 +146,17 @@
     "leaks": {
       "$ref": "#/$defs/LeakSuspects"
     },
+    "obj_graph_flat": {
+      "description": "Flat object graph for V3/V4 navigation. None when --obj-graph not used.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ObjGraphFlat"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "overview": {
       "$ref": "#/$defs/SystemOverview"
     },
@@ -196,6 +207,13 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/TriageSignal"
+      }
+    },
+    "type_ref_graph": {
+      "description": "Type-level reference graph (TPFG). Present when --obj-graph is used.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TypeEdge"
       }
     },
     "waste_summary": {
@@ -1647,6 +1665,30 @@
         "wasted"
       ]
     },
+    "GcRootClassRow": {
+      "description": "One class entry within a GC-root-retained-by-type row.",
+      "type": "object",
+      "properties": {
+        "class_name": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "class_name",
+        "count",
+        "retained"
+      ]
+    },
     "GcRootRetainedRow": {
       "description": "One row of the GC-root-retained-by-type table.",
       "type": "object",
@@ -1663,6 +1705,13 @@
         },
         "root_type": {
           "type": "string"
+        },
+        "top_classes": {
+          "description": "Top-5 retained classes for this root type (class name, count, retained bytes).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GcRootClassRow"
+          }
         }
       },
       "required": [
@@ -2103,6 +2152,159 @@
         "object_count",
         "retained",
         "children"
+      ]
+    },
+    "ObjGraphEdge": {
+      "description": "Outbound edge from one object to another (Reference Graph Explorer / V3).",
+      "type": "object",
+      "properties": {
+        "child_class": {
+          "type": "string"
+        },
+        "child_idx": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "child_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "field_name": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "child_idx",
+        "child_class",
+        "child_retained"
+      ]
+    },
+    "ObjGraphFlat": {
+      "description": "Flat lookup table powering V3 + V4 navigation (object graph + dominator explorer).\nOnly present when --obj-graph is used.",
+      "type": "object",
+      "properties": {
+        "dom_children": {
+          "description": "Immediate dominator children for all significant nodes. Key = parent dense index.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "edges": {
+          "description": "Outbound edges for captured nodes. Key = dense index (u32).",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ObjGraphEdge"
+              }
+            }
+          }
+        },
+        "nodes": {
+          "description": "All significant nodes (retained >= sig_floor_bytes). Key = dense index (u32).",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ObjGraphFlatNode"
+            }
+          }
+        },
+        "root_dom_trees": {
+          "description": "Pre-built depth-3 dominator trees for top-20 root objects (for SVG mode in V4).",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              {
+                "$ref": "#/$defs/DomTreeNode"
+              }
+            ]
+          }
+        },
+        "roots": {
+          "description": "Dense indices of dominator roots (idom == vroot).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "sig_floor_bytes": {
+          "description": "Minimum retained bytes to be included as a significant node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "nodes",
+        "edges",
+        "dom_children",
+        "roots",
+        "sig_floor_bytes"
+      ]
+    },
+    "ObjGraphFlatNode": {
+      "description": "One node in the flat object graph lookup table.",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "edges_truncated": {
+          "type": "boolean",
+          "default": false
+        },
+        "edges_unknown": {
+          "type": "boolean",
+          "default": false
+        },
+        "idom": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "display_class",
+        "shallow",
+        "retained"
       ]
     },
     "ObjRow": {
@@ -2584,6 +2786,13 @@
       "properties": {
         "kind": {
           "type": "string"
+        },
+        "null_referent_count": {
+          "description": "Number of reference objects whose referent field is null (referent was GC'd).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         },
         "only_weakly_retained": {
           "type": "array",
@@ -3795,6 +4004,35 @@
         "severity",
         "title",
         "detail"
+      ]
+    },
+    "TypeEdge": {
+      "description": "One aggregated type-level reference edge for the TPFG (V13).",
+      "type": "object",
+      "properties": {
+        "dst_class": {
+          "type": "string"
+        },
+        "edge_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained_weight": {
+          "description": "Sum of src-object retained / out_degree for all instances of this edge type.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "src_class": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "src_class",
+        "dst_class",
+        "edge_count",
+        "retained_weight"
       ]
     },
     "UnreachableClassRow": {
