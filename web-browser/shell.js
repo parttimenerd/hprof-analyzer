@@ -348,8 +348,8 @@ const _ETA_BASE = {
 
 // Sub-phase fractions of total parse time (pass1_a + pass1_b + pass2 = 1.0)
 const _LOAD_PHASE_FRACS = { pass1_a: 0.33, pass1_b: 0.33, pass2: 0.34 };
-// Sub-phase fractions of total analysis time
-const _ANAL_PHASE_FRACS = { pass1: 0.05, pass2: 0.20, rpo: 0.05, inbound: 0.15, dominators: 0.40, retained: 0.15 };
+// Cumulative share of dominator-analysis time consumed after each phase fires.
+const _ANAL_PHASE_CUM_FRACS = { pass1: 0.03, pass2: 0.15, rpo: 0.25, inbound: 0.45, dominators: 0.80, retained: 0.95 };
 
 function _etaFactors() {
   try { return JSON.parse(localStorage.getItem(_ETA_KEY) || '{}'); } catch { return {}; }
@@ -395,11 +395,7 @@ function _fmtCount(n) {
   return String(n);
 }
 
-// Build a progress-bar controller.  Returns `{ setStage, onPhase }`.
-//   setStage(label, pct, blocking) — directly set label + bar pct
-//   onPhase(phase, fraction, phases, phasePcts, startPct, endPct) — called
-//     from a WASM phase callback; advances the bar proportionally within the
-//     [startPct, endPct] window based on how much of the phases are done.
+// Build a progress-bar controller.  Returns `{ setStage, enterBlocking, updateBlocking }`.
 function _makeProgress(labelId, barId) {
   // For non-blocking phases: quick JS-driven snap to a target pct.
   const setStage = (label, pct) => {
@@ -414,52 +410,54 @@ function _makeProgress(labelId, barId) {
     }
   };
 
+  // Shared helper: restart the CSS linear transition from currentPct to 99%
+  // so the bar reaches targetPct in exactly remainingMs.
+  // totalDur = remainingMs × (99 - currentPct) / (targetPct - currentPct)
+  const _restartTransition = (bar, currentPct, targetPct, remainingMs) => {
+    const range = Math.max(targetPct - currentPct, 0.1);
+    const totalDur = Math.round(remainingMs * (99 - currentPct) / range);
+    bar.style.transition = 'none';
+    bar.style.width = currentPct.toFixed(2) + '%';
+    void bar.offsetWidth;
+    bar.style.transition = `width ${totalDur}ms linear`;
+    bar.style.width = '99%';
+  };
+
   // Call before a synchronous blocking WASM call.
-  // Phase 1: CSS transition from `fromPct` → `toPct` over `etaMs` ms (compositor-driven).
-  // Phase 2: After etaMs, a slow CSS animation crawls the bar from `toPct` → 99%
-  //   over a fixed 5-minute window — so it never stops completely.
-  // Both survive a blocked JS main thread because they are handled by the browser compositor.
+  // CSS transitions are compositor-driven and survive a blocked JS main thread.
   const enterBlocking = (label, fromPct, toPct, etaMs) => new Promise(resolve => {
     const lbl = document.getElementById(labelId);
     const bar = document.getElementById(barId);
     if (lbl) lbl.textContent = label;
     if (bar) {
       bar.classList.remove('wasm-blocking');
-      // Snap to fromPct (no transition).
       bar.style.animation = 'none';
-      bar.style.transition = 'none';
-      bar.style.width = fromPct.toFixed(1) + '%';
-      void bar.offsetWidth; // force reflow
-      // Phase 1: fast ETA-based transition.
-      bar.style.transition = `width ${etaMs}ms linear`;
-      bar.style.width = toPct.toFixed(1) + '%';
-      // Phase 2: after ETA, continue crawling to 99% over 5 min using animation.
-      // We use negative animation-delay to start the animation mid-way, so it
-      // begins exactly at toPct and ends at 99%.
-      const rangeLeft = 99 - toPct;
-      const slowMs = 300_000; // 5 minutes for the entire 0→99 range
-      // Fraction of the slow animation already "consumed" by toPct.
-      const delayFrac = toPct / 99;
-      const delayMs = -(delayFrac * slowMs); // negative = start mid-animation
-      // We set the animation after the ETA transition completes.
-      // Since WASM blocks JS, we set it synchronously and let CSS handle sequencing.
-      // The trick: we set animation-fill-mode=forwards and a very long duration.
-      // The bar's width from the transition will hold while the animation hasn't started
-      // visually, but we set the animation-delay to fire after etaMs.
-      bar.style.setProperty('--bar-slow-from', toPct.toFixed(2) + '%');
-      bar.style.animationDelay = `${etaMs}ms`;
-      bar.style.animationDuration = `${slowMs * (rangeLeft / 99)}ms`;
-      bar.style.animationTimingFunction = 'linear';
-      bar.style.animationFillMode = 'forwards';
-      bar.style.animationName = 'progress-crawl';
+      _restartTransition(bar, fromPct, toPct, etaMs);
     }
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   });
 
-  // No-op kept for call sites that don't need the new ETA args.
+  // Call from inside a WASM progress callback to re-anchor the transition
+  // based on the updated remaining ETA.  Reads the bar's current rendered
+  // width so the bar never jumps backward.
+  const updateBlocking = (label, targetPct, remainingMs) => {
+    const lbl = document.getElementById(labelId);
+    const bar = document.getElementById(barId);
+    if (lbl && label) lbl.textContent = label;
+    if (!bar) return;
+    const wrap = bar.parentElement;
+    const wrapW = wrap ? wrap.getBoundingClientRect().width : 0;
+    const barW  = bar.getBoundingClientRect().width;
+    const currentPct = wrapW > 0 ? Math.min((barW / wrapW) * 100, 98.9) : parseFloat(bar.style.width) || 0;
+    if (remainingMs > 0) {
+      _restartTransition(bar, currentPct, targetPct, remainingMs);
+    }
+  };
+
+  // No-op kept for legacy call sites.
   const crawlTo = () => {};
 
-  return { setStage, crawlTo, enterBlocking };
+  return { setStage, crawlTo, enterBlocking, updateBlocking };
 }
 
 async function loadWasmSession(file) {
@@ -477,7 +475,7 @@ async function loadWasmSession(file) {
     statusEl.style.display = '';
   }
 
-  const { setStage, crawlTo, enterBlocking } = _makeProgress('wasm-load-label', 'wasm-load-bar');
+  const { setStage, crawlTo, enterBlocking, updateBlocking } = _makeProgress('wasm-load-label', 'wasm-load-bar');
 
   const fileMB = file.size / (1024 * 1024);
 
@@ -499,23 +497,18 @@ async function loadWasmSession(file) {
   const compBarEnd = totalLoadMs > 0
     ? Math.round((compEtaMs / totalLoadMs) * loadBarEnd)
     : 0;
-  const loadBarStart = compBarEnd;
 
   // Phase-aware label + bar during load_with_progress callbacks.
-  // Phases arrive in execution order: pass1_a, pass1_b, pass2, compress.
-  // We track how much estimated time has elapsed to move the bar proportionally.
+  // Re-anchors the CSS transition each time a phase completes (ETA update).
   let loadElapsedMs = 0;
   const onLoadPhase = (phase, _frac) => {
     const phaseMs = phase === 'compress'
       ? compEtaMs
       : Math.round(parseEtaMs * (_LOAD_PHASE_FRACS[phase] ?? 0));
     loadElapsedMs += phaseMs;
-    const barPct = totalLoadMs > 0
-      ? loadBarStart + Math.round((loadElapsedMs / totalLoadMs) * (loadBarEnd - loadBarStart))
-      : loadBarEnd;
     const remainMs = Math.max(0, totalLoadMs - loadElapsedMs);
     const label = _loadPhaseLabel(phase, remainMs, estInst);
-    setStage(label, Math.min(barPct, loadBarEnd), true);
+    updateBlocking(label, loadBarEnd, remainMs);
   };
 
   // Stream the file through CompressionStream (or read as-is if already gzip).
@@ -570,10 +563,12 @@ async function loadWasmSession(file) {
   } catch {}
   const domEtaMs = _etaPredict('dominator', instanceCount);
 
+  // _ANAL_PHASE_CUM_FRACS: cumulative share of domEtaMs consumed after each phase fires.
+  let analElapsedFrac = 0;
   const onAnalPhase = (phase, _frac) => {
-    // Phase callbacks fire inside the blocking WASM call — label update only.
-    const lbl = document.getElementById('wasm-load-label');
-    if (lbl) lbl.textContent = _analPhaseLabel(phase, 0, instanceCount);
+    analElapsedFrac = _ANAL_PHASE_CUM_FRACS[phase] ?? analElapsedFrac;
+    const remainMs = Math.max(0, Math.round(domEtaMs * (1 - analElapsedFrac)));
+    updateBlocking(_analPhaseLabel(phase, remainMs, instanceCount), 95, remainMs);
   };
 
   await enterBlocking(
@@ -609,7 +604,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
       </div>
     </div>`;
 
-  const { setStage, crawlTo, enterBlocking } = _makeProgress('wasm-progress-label', 'wasm-progress-bar');
+  const { setStage, crawlTo, enterBlocking, updateBlocking } = _makeProgress('wasm-progress-label', 'wasm-progress-bar');
 
   const fileMB = file.size / (1024 * 1024);
 
@@ -626,7 +621,6 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   const compBarEnd2 = totalLoadMs > 0
     ? Math.round((compEtaMs / totalLoadMs) * loadBarEnd)
     : 0;
-  const loadBarStart = compBarEnd2;
 
   let loadElapsedMs = 0;
   const onLoadPhase = (phase, _frac) => {
@@ -634,11 +628,8 @@ async function loadWasmSessionWithReport(file, opts = {}) {
       ? compEtaMs
       : Math.round(parseEtaMs * (_LOAD_PHASE_FRACS[phase] ?? 0));
     loadElapsedMs += phaseMs;
-    const barPct = totalLoadMs > 0
-      ? loadBarStart + Math.round((loadElapsedMs / totalLoadMs) * (loadBarEnd - loadBarStart))
-      : loadBarEnd;
     const remainMs = Math.max(0, totalLoadMs - loadElapsedMs);
-    setStage(_loadPhaseLabel(phase, remainMs, estInst), Math.min(barPct, loadBarEnd));
+    updateBlocking(_loadPhaseLabel(phase, remainMs, estInst), loadBarEnd, remainMs);
   };
 
   // Stream through CompressionStream so raw bytes never accumulate in JS.
@@ -682,9 +673,11 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   } catch {}
   const domEtaMs = _etaPredict('dominator', instanceCount);
 
-  const labelEl2 = document.getElementById('wasm-progress-label');
+  let analElapsedFrac2 = 0;
   const onAnalPhase = (phase, _frac) => {
-    if (labelEl2) labelEl2.textContent = _analPhaseLabel(phase, 0, instanceCount);
+    analElapsedFrac2 = _ANAL_PHASE_CUM_FRACS[phase] ?? analElapsedFrac2;
+    const remainMs = Math.max(0, Math.round(domEtaMs * (1 - analElapsedFrac2)));
+    updateBlocking(_analPhaseLabel(phase, remainMs, instanceCount), 90, remainMs);
   };
 
   await enterBlocking(`Computing dominators for ${_fmtCount(instanceCount)} objects…`, loadBarEnd, 90, domEtaMs);
