@@ -392,67 +392,42 @@ function _fmtCount(n) {
 //     from a WASM phase callback; advances the bar proportionally within the
 //     [startPct, endPct] window based on how much of the phases are done.
 function _makeProgress(labelId, barId) {
-  let _rafId = null;
-  let _startTime = null;
-  let _fromPct = 0;
-  let _toPct = 0;
-  let _durationMs = 0;
-
-  function _cancelAnim() {
-    if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
-  }
-
-  function _tick(now) {
-    const bar = document.getElementById(barId);
-    if (!bar) return;
-    const elapsed = now - _startTime;
-    const t = _durationMs > 0 ? Math.min(elapsed / _durationMs, 1) : 1;
-    // ease-out cubic
-    const ease = 1 - Math.pow(1 - t, 3);
-    const cur = _fromPct + (_toPct - _fromPct) * ease;
-    bar.style.width = cur.toFixed(2) + '%';
-    if (t < 1) _rafId = requestAnimationFrame(_tick);
-    else _rafId = null;
-  }
-
-  // Animate bar from current position to `pct` over `durationMs` ms.
-  function animateTo(pct, durationMs) {
-    _cancelAnim();
-    const bar = document.getElementById(barId);
-    const cur = bar ? parseFloat(bar.style.width) || 0 : 0;
-    _fromPct = cur;
-    _toPct = pct;
-    _durationMs = durationMs;
-    _startTime = performance.now();
-    _rafId = requestAnimationFrame(_tick);
-  }
-
-  const setStage = (label, pct, blocking = false) => {
+  // For non-blocking phases: quick JS-driven snap to a target pct.
+  const setStage = (label, pct) => {
     const lbl = document.getElementById(labelId);
     const bar = document.getElementById(barId);
     if (lbl) lbl.textContent = label;
     if (bar) {
-      if (blocking) {
-        bar.classList.add('wasm-blocking');
-      } else {
-        bar.classList.remove('wasm-blocking');
-        animateTo(pct, 300);
-      }
+      bar.classList.remove('wasm-blocking');
+      bar.style.transition = 'width 0.3s ease-out';
+      bar.style.width = pct.toFixed(1) + '%';
     }
   };
 
-  // Call before a synchronous blocking WASM call: sets indeterminate mode and
-  // returns a promise that resolves after two rAF ticks so the browser can paint.
-  const enterBlocking = (label) => new Promise(resolve => {
+  // Call before a synchronous blocking WASM call.
+  // Sets a CSS transition that animates from `fromPct` → `toPct` over `etaMs` ms.
+  // CSS transitions are compositor-driven and survive a blocked main thread.
+  // Returns a promise that resolves after two rAF ticks so the browser paints first.
+  const enterBlocking = (label, fromPct, toPct, etaMs) => new Promise(resolve => {
     const lbl = document.getElementById(labelId);
     const bar = document.getElementById(barId);
     if (lbl) lbl.textContent = label;
-    if (bar) bar.classList.add('wasm-blocking');
+    if (bar) {
+      bar.classList.remove('wasm-blocking');
+      // Snap to fromPct with no transition, then start the timed crawl.
+      bar.style.transition = 'none';
+      bar.style.width = fromPct.toFixed(1) + '%';
+      // Force reflow so the transition reset takes effect before we change width.
+      void bar.offsetWidth;
+      bar.style.transition = `width ${etaMs}ms linear`;
+      bar.style.width = toPct.toFixed(1) + '%';
+    }
+    // Two rAF ticks: first schedules paint, second confirms it was committed.
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   });
 
-  // Kept for API compat but no longer needed — marquee runs via CSS.
-  const crawlTo = (_toPct, _durationMs) => {};
+  // No-op kept for call sites that don't need the new ETA args.
+  const crawlTo = () => {};
 
   return { setStage, crawlTo, enterBlocking };
 }
@@ -472,7 +447,7 @@ async function loadWasmSession(file) {
     statusEl.style.display = '';
   }
 
-  const { setStage, crawlTo } = _makeProgress('wasm-load-label', 'wasm-load-bar');
+  const { setStage, crawlTo, enterBlocking } = _makeProgress('wasm-load-label', 'wasm-load-bar');
 
   const fileMB = file.size / (1024 * 1024);
 
@@ -543,7 +518,7 @@ async function loadWasmSession(file) {
   const tLoad0 = performance.now();
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
-    await enterBlocking(`Parsing ${escHtml(file.name)}…`);
+    await enterBlocking(`Parsing ${escHtml(file.name)}…`, compBarEnd, loadBarEnd, parseEtaMs);
     wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
     wasmSession._fileName = file.name;
   } catch (e) {
@@ -566,11 +541,14 @@ async function loadWasmSession(file) {
   const domEtaMs = _etaPredict('dominator', instanceCount);
 
   const onAnalPhase = (phase, _frac) => {
-    const label = _analPhaseLabel(phase, 0, instanceCount);
-    setStage(label, 0, true);
+    // Phase callbacks fire inside the blocking WASM call — label update only.
+    const lbl = document.getElementById('wasm-load-label');
+    if (lbl) lbl.textContent = _analPhaseLabel(phase, 0, instanceCount);
   };
 
-  await enterBlocking(`Computing dominators for ${_fmtCount(instanceCount)} objects…`);
+  await enterBlocking(
+    `Computing dominators for ${_fmtCount(instanceCount)} objects…`,
+    loadBarEnd, 95, domEtaMs);
 
   const tDom0 = performance.now();
   try {
@@ -630,7 +608,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
       ? loadBarStart + Math.round((loadElapsedMs / totalLoadMs) * (loadBarEnd - loadBarStart))
       : loadBarEnd;
     const remainMs = Math.max(0, totalLoadMs - loadElapsedMs);
-    setStage(_loadPhaseLabel(phase, remainMs, estInst), Math.min(barPct, loadBarEnd), true);
+    setStage(_loadPhaseLabel(phase, remainMs, estInst), Math.min(barPct, loadBarEnd));
   };
 
   // Stream through CompressionStream so raw bytes never accumulate in JS.
@@ -659,7 +637,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   const tParse0 = performance.now();
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
-    await enterBlocking(`Parsing ${escHtml(file.name)}…`);
+    await enterBlocking(`Parsing ${escHtml(file.name)}…`, compBarEnd2, loadBarEnd, parseEtaMs);
     wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
   } catch (e) {
     msg.innerHTML = _errorHtml('Loading', file.name, e);
@@ -674,11 +652,12 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   } catch {}
   const domEtaMs = _etaPredict('dominator', instanceCount);
 
+  const labelEl2 = document.getElementById('wasm-progress-label');
   const onAnalPhase = (phase, _frac) => {
-    setStage(_analPhaseLabel(phase, 0, instanceCount), 0, true);
+    if (labelEl2) labelEl2.textContent = _analPhaseLabel(phase, 0, instanceCount);
   };
 
-  await enterBlocking(`Computing dominators for ${_fmtCount(instanceCount)} objects…`);
+  await enterBlocking(`Computing dominators for ${_fmtCount(instanceCount)} objects…`, loadBarEnd, 90, domEtaMs);
 
   const tDom0 = performance.now();
   try {
@@ -1625,6 +1604,35 @@ function startTerminal() {
   window._hprofTerm = term;
   fitAddon.fit();
 
+  // ── Floating action strip (☆ Star / 📊 Viz) ──────────────────────────────
+  // Sits in the terminal-container corner; appears on hover when a result exists.
+  const termActions = document.createElement('div');
+  termActions.id = 'term-actions';
+  termActions.innerHTML = `
+    <button id="term-act-star" title="Star last result (save to Dashboard)">☆ Star</button>
+    <button id="term-act-viz"  title="Visualise last result as treemap / histogram">📊 Viz</button>`;
+  document.getElementById('terminal-container').appendChild(termActions);
+
+  function _updateTermActions() {
+    const has = !!lastResult;
+    termActions.classList.toggle('has-result', has);
+  }
+
+  document.getElementById('term-act-star').addEventListener('click', () => {
+    if (term && window._hprofRunQuery) window._hprofRunQuery('/star');
+    else if (term) {
+      term.paste('/star');
+    }
+  });
+  document.getElementById('term-act-viz').addEventListener('click', () => {
+    if (term && window._hprofRunQuery) window._hprofRunQuery('/viz');
+    else if (term) {
+      term.paste('/viz');
+    }
+  });
+
+  window._updateTermActions = _updateTermActions;
+
   const ro = new ResizeObserver(() => fitAddon.fit());
   ro.observe(document.getElementById('terminal-container'));
 
@@ -1640,7 +1648,13 @@ function startTerminal() {
     + '\x1b[0m');
   term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = history  ·  /help = commands  ·  /examples = OQL tour\x1b[0m');
   term.writeln('');
-  term.write(PROMPT);
+
+  // Wrapper: write prompt and refresh the floating action strip state.
+  const writePrompt = () => {
+    term.write(PROMPT);
+    if (window._updateTermActions) window._updateTermActions();
+  };
+  term.write(PROMPT); // initial prompt — lastResult not yet declared, skip _updateTermActions
 
   let line = '';
   let cursorPos = 0;  // index within line where the cursor sits
@@ -2239,7 +2253,7 @@ function startTerminal() {
         await runQuery(full);
         return;
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // Check for \ continuation
@@ -2269,18 +2283,18 @@ function startTerminal() {
       } else {
         printHelp();
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/examples' || cmd.startsWith('/examples ')) {
       const cat = cmd.replace('/examples', '').trim() || null;
       printExamples(cat);
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/clear') {
       term.clear();
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/q' || cmd === '/quit' || cmd === '/disconnect') {
@@ -2290,7 +2304,7 @@ function startTerminal() {
     if (cmd === '/analyze') {
       document.getElementById('btn-show-report').click();
       term.writeln('\x1b[33mopening report…\x1b[0m');
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/status') {
@@ -2298,7 +2312,7 @@ function startTerminal() {
         const st = hasRetained ? 'ready' : 'not_started';
         if (st === 'ready') term.writeln('\x1b[32m● Analysis ready — @retainedHeapSize queries available\x1b[0m');
         else term.writeln('\x1b[33m● Analysis not run yet — click "Run Analysis" in the toolbar\x1b[0m');
-        term.write(PROMPT); return;
+        writePrompt(); return;
       }
       try {
         const res = await fetch(serverUrl + '/status');
@@ -2316,14 +2330,14 @@ function startTerminal() {
       } catch (e) {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/describe ') || cmd === '/describe') {
       const cls = cmd.slice(9).trim();
       if (!cls) {
         term.writeln('\x1b[2musage: /describe <ClassName>  — show fields and instance count\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       term.write('\x1b[2m⠋ describing…\x1b[0m');
@@ -2391,7 +2405,7 @@ function startTerminal() {
         term.write('\r\x1b[K');
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/obj ') || cmd === '/obj') {
@@ -2399,14 +2413,14 @@ function startTerminal() {
       const arg = cmd.slice(4).trim();
       if (!arg) {
         term.writeln('\x1b[2musage: /obj <ClassName>#<idx>  — inspect a specific object by class + dense index\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       // Parse "<Class>#<n>" or "<Class> <n>" formats
       const m = arg.match(/^(.+?)#(\d+)$/) || arg.match(/^(.+?)\s+(\d+)$/);
       if (!m) {
         term.writeln('\x1b[2musage: /obj <ClassName>#<idx>  e.g. /obj java.lang.String#42\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const [, cls, idx] = m;
@@ -2424,7 +2438,7 @@ function startTerminal() {
         if (!res.ok) {
           const msg = res.error?.message || JSON.stringify(res.error) || 'unknown error';
           term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
-          term.write(PROMPT); return;
+          writePrompt(); return;
         }
         const r = res.result;
         if (r?.error) {
@@ -2461,7 +2475,7 @@ function startTerminal() {
         term.write('\r\x1b[K');
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/plan ') || cmd === '/plan' ||
@@ -2470,7 +2484,7 @@ function startTerminal() {
       const oql = cmd.slice(isPlan ? 5 : 8).trim();
       if (!oql) {
         term.writeln(`\x1b[2musage: /plan <oql>  — show query execution plan (no scan)\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       try {
@@ -2497,7 +2511,7 @@ function startTerminal() {
       } catch (e) {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/watch' || cmd.startsWith('/watch ')) {
@@ -2513,20 +2527,20 @@ function startTerminal() {
         } else {
           term.writeln('\x1b[2m(no active watch)\x1b[0m');
         }
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const m = args.match(/^(\d+(?:\.\d+)?)\s+(.+)$/s);
       if (!m) {
         term.writeln('\x1b[2musage: /watch <seconds> <oql>\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const secs = parseFloat(m[1]);
       const watchOql = m[2].trim();
       if (secs < 1) {
         term.writeln('\x1b[31mminimum interval is 1 second\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
@@ -2547,10 +2561,10 @@ function startTerminal() {
           const n = lastResult.rows.length;
           const m = lastResult.columns.length;
           term.writeln(`\x1b[32m${n.toLocaleString('en-US')}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
-          term.write(PROMPT); return;
+          writePrompt(); return;
         }
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       // If it looks like a full OQL query (has SELECT or FROM), wrap it in COUNT;
@@ -2593,7 +2607,7 @@ function startTerminal() {
         term.write('\r\x1b[K');
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/last') {
@@ -2603,7 +2617,7 @@ function startTerminal() {
         renderResult(lastResult);
         term.writeln(`\x1b[2m${lastResult.rows.length.toLocaleString('en-US')} rows (re-displayed)\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/wc' || cmd.startsWith('/wc ')) {
@@ -2626,7 +2640,7 @@ function startTerminal() {
           }
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/undo') {
@@ -2638,18 +2652,18 @@ function startTerminal() {
         term.writeln(`\x1b[32m✓ undone\x1b[0m  \x1b[2m(restored ${lastResult.rows.length.toLocaleString('en-US')} row${lastResult.rows.length !== 1 ? 's' : ''})\x1b[0m`);
         renderResult(lastResult);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/row ') || cmd === '/row') {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       if (lastResult.rows.length === 0) {
         term.writeln('\x1b[33m(result has no rows)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const arg = cmd.slice(4).trim();
@@ -2669,11 +2683,11 @@ function startTerminal() {
         n = parseInt(arg, 10);
         if (!isNaN(n) && (n < 1 || n > lastResult.rows.length)) {
           term.writeln(`\x1b[31mrow ${n} out of range\x1b[0m  \x1b[2mresult has ${lastResult.rows.length.toLocaleString('en-US')} rows\x1b[0m`);
-          term.write(PROMPT);
+          writePrompt();
           return;
         } else if (isNaN(n)) {
           term.writeln(`\x1b[2musage: /row [N|first|last|next|prev]  — show row as key=value pairs\x1b[0m`);
-          term.write(PROMPT);
+          writePrompt();
           return;
         }
         currentRowIdx = n - 1;
@@ -2692,7 +2706,7 @@ function startTerminal() {
         const valStr = cc ? `${cc}${val}\x1b[0m` : val;
         term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${key}\x1b[0m  ${valStr}`);
       });
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/limit ') || cmd === '/limit') {
@@ -2705,7 +2719,7 @@ function startTerminal() {
         const n = parseInt(arg, 10);
         if (isNaN(n) || n <= 0) {
           term.writeln('\x1b[2musage: /limit <N>  (0 or "unlimited" removes limit)\x1b[0m');
-          term.write(PROMPT);
+          writePrompt();
           return;
         }
         settings.rowLimit = n;
@@ -2716,7 +2730,7 @@ function startTerminal() {
         renderResult(lastResult);
         term.writeln(`\x1b[2m${lastResult.rows.length.toLocaleString('en-US')} rows\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/cols' || cmd === '/columns') {
@@ -2746,7 +2760,7 @@ function startTerminal() {
         });
         term.writeln(`\x1b[2m(${fields.length} column${fields.length !== 1 ? 's' : ''})\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/select ') || cmd === '/select') {
@@ -2791,7 +2805,7 @@ function startTerminal() {
           }
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/drop ') || cmd === '/drop') {
@@ -2833,7 +2847,7 @@ function startTerminal() {
           }
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/rename ') || cmd === '/rename') {
@@ -2856,7 +2870,7 @@ function startTerminal() {
           }
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/bookmark ') || cmd === '/bookmark' ||
@@ -2888,7 +2902,7 @@ function startTerminal() {
           term.writeln(`\x1b[32m✓ saved as "${rest}": \x1b[2m${toSave.length > 60 ? toSave.slice(0, 59) + '…' : toSave}\x1b[0m`);
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/forget ')) {
@@ -2901,7 +2915,7 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31mno bookmark named "${name}"\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // /store [name] — save last OQL query permanently in sidebar "My Queries"
@@ -2932,7 +2946,7 @@ function startTerminal() {
           term.writeln(`\x1b[32m✓ stored as "${rest}"\x1b[0m  \x1b[2m(visible in sidebar · /remove ${rest} to delete)\x1b[0m`);
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // /remove <name> — delete a stored query from My Queries
@@ -2947,7 +2961,7 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31mno stored query named "${name}"\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // /star [name] — star the last query+result for the dashboard
@@ -2956,12 +2970,12 @@ function startTerminal() {
       const toSave = history.find(h => !h.startsWith('/star') && !h.startsWith('/viz'));
       if (!toSave) {
         term.writeln('\x1b[33m(no query to star — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       if (!lastResult) {
         term.writeln('\x1b[33m(no result to star — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const starred = JSON.parse(localStorage.getItem(STARRED_KEY) || '[]');
@@ -2973,7 +2987,7 @@ function startTerminal() {
       if (starred.length > 20) starred.length = 20;
       localStorage.setItem(STARRED_KEY, JSON.stringify(starred));
       term.writeln(`\x1b[33m★\x1b[0m starred as \x1b[1m"${label}"\x1b[0m  \x1b[2m(/dashboard to view · /unstar "${label}" to remove)\x1b[0m`);
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // /unstar <name> — remove a starred result
@@ -2988,13 +3002,13 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31mno starred result named "${name}"\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // /dashboard — open the starred results panel
     if (cmd === '/dashboard') {
       openDashboard();
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // /viz [@N] [kind] [labelcol] [valuecol] — visualise last (or Nth previous) result
@@ -3017,7 +3031,7 @@ function startTerminal() {
               term.writeln(`  \x1b[33m@${i + 1}\x1b[0m  \x1b[2m${e.query.slice(0, 60)}${e.query.length > 60 ? '…' : ''}  (${e.result.rows.length} rows)\x1b[0m`);
             });
           }
-          term.write(PROMPT);
+          writePrompt();
           return;
         }
         srcResult = resultLog[idx].result;
@@ -3035,7 +3049,7 @@ function startTerminal() {
         } else {
           term.writeln('\x1b[33m(no result to visualise — run a query first)\x1b[0m');
         }
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
 
@@ -3081,13 +3095,13 @@ function startTerminal() {
         } else {
           term.writeln('\x1b[33m(no positive values found in auto-detected value column)\x1b[0m');
         }
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
 
       if (kind === 'table') {
         renderResult(srcResult);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
 
@@ -3104,7 +3118,7 @@ function startTerminal() {
       const valueIdx = resolveCol(autoValue, cols);
       if (labelIdx < 0 || valueIdx < 0) {
         term.writeln(`\x1b[31mcould not resolve columns — available: ${cols.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const slices = srcResult.rows
@@ -3118,23 +3132,23 @@ function startTerminal() {
         .slice(0, 50);
       if (!slices.length) {
         term.writeln('\x1b[33m(no positive values to chart)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       openVizOverlay(slices, kind, cols[valueIdx], srcQuery);
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/unique ') || cmd === '/unique') {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const rawArg = cmd.slice(7).trim();
       if (!rawArg) {
         term.writeln(`\x1b[2musage: /unique <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       // Parse optional top-N: "classname 10" or "classname top 10"
@@ -3144,7 +3158,7 @@ function startTerminal() {
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const colName = lastResult.columns[ci];
@@ -3183,19 +3197,19 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[2m(${totalDistinct.toLocaleString('en-US')} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length.toLocaleString('en-US')} rows)\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/pivot ') || cmd === '/pivot') {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const rawArg = cmd.slice(6).trim();
       if (!rawArg) {
         term.writeln(`\x1b[2musage: /pivot <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       let colArg = rawArg, topN = null;
@@ -3204,7 +3218,7 @@ function startTerminal() {
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const colName = lastResult.columns[ci];
@@ -3223,13 +3237,13 @@ function startTerminal() {
       renderResult(pivotResult);
       prevResult = lastResult;
       lastResult = pivotResult;
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/stats ') || cmd === '/stats') {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const colArgRaw = cmd.slice(6).trim();
@@ -3291,18 +3305,18 @@ function startTerminal() {
               }
             }
           }
-          term.write(PROMPT);
+          writePrompt();
           return;
         } else {
           term.writeln(`\x1b[2musage: /stats <col>  — no numeric columns found  available: ${lastResult.columns.join(', ')}\x1b[0m`);
-          term.write(PROMPT);
+          writePrompt();
           return;
         }
       }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const colName = lastResult.columns[ci];
@@ -3316,7 +3330,7 @@ function startTerminal() {
       const nullCount = allVals.length - vals.length;
       if (vals.length === 0) {
         term.writeln(`\x1b[33m(no numeric values in column "${colName}")\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const sum = vals.reduce((s, v) => s + v, 0);
@@ -3361,7 +3375,7 @@ function startTerminal() {
           });
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/top ') || cmd === '/top' ||
@@ -3383,7 +3397,7 @@ function startTerminal() {
         if (shown < total) prevResult = lastResult;
         lastResult = slicedResult;
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/tail ') || cmd === '/tail') {
@@ -3403,7 +3417,7 @@ function startTerminal() {
         if (shown < total) prevResult = lastResult;
         lastResult = slicedResult;
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/sort ') || cmd === '/sort') {
@@ -3411,7 +3425,7 @@ function startTerminal() {
       if (!lastResult || !args) {
         if (!lastResult) term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         else term.writeln(`\x1b[2musage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       // Parse comma-separated sort keys: "col1 desc, col2 asc, col3, -col4"
@@ -3436,7 +3450,7 @@ function startTerminal() {
         }
         specs.push({ ci, desc, name: lastResult.columns[ci] });
       }
-      if (!ok || specs.length === 0) { term.write(PROMPT); return; }
+      if (!ok || specs.length === 0) { writePrompt(); return; }
       const sorted = [...lastResult.rows].sort((a, b) => {
         for (const { ci, desc, name } of specs) {
           const av = a[ci], bv = b[ci];
@@ -3468,7 +3482,7 @@ function startTerminal() {
       renderResult(newResult);
       if (newResult.note === lastResult.note) { prevResult = savedPrev; }
       lastResult = newResult;
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/filter ') || cmd === '/filter' ||
@@ -3484,11 +3498,11 @@ function startTerminal() {
         let colIdx = null, pattern = rawPattern;
         if (rawPattern.startsWith('@')) {
           const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
-          if (!sp) { term.writeln('\x1b[2musage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          if (!sp) { term.writeln('\x1b[2musage: /filter @<col> <pattern>\x1b[0m'); writePrompt(); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
             term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
-            term.write(PROMPT); return;
+            writePrompt(); return;
           }
           pattern = sp[2];
         }
@@ -3496,7 +3510,7 @@ function startTerminal() {
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
           try { re = new RegExp(reMatch[1], reMatch[2]); }
-          catch (e) { term.writeln(`\x1b[31minvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
+          catch (e) { term.writeln(`\x1b[31minvalid regex: ${e.message}\x1b[0m`); writePrompt(); return; }
         }
         const test = re
           ? (s) => re.test(s)
@@ -3516,7 +3530,7 @@ function startTerminal() {
           lastResult = newResult;
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/not ') || cmd === '/not' ||
@@ -3532,11 +3546,11 @@ function startTerminal() {
         let colIdx = null, pattern = rawPattern;
         if (rawPattern.startsWith('@')) {
           const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
-          if (!sp) { term.writeln('\x1b[2musage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          if (!sp) { term.writeln('\x1b[2musage: /not @<col> <pattern>\x1b[0m'); writePrompt(); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
             term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
-            term.write(PROMPT); return;
+            writePrompt(); return;
           }
           pattern = sp[2];
         }
@@ -3544,7 +3558,7 @@ function startTerminal() {
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
           try { re = new RegExp(reMatch[1], reMatch[2]); }
-          catch (e) { term.writeln(`\x1b[31minvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
+          catch (e) { term.writeln(`\x1b[31minvalid regex: ${e.message}\x1b[0m`); writePrompt(); return; }
         }
         const test = re
           ? (s) => re.test(s)
@@ -3557,7 +3571,7 @@ function startTerminal() {
         const excluded = rows.length - kept.length;
         if (excluded === 0) {
           term.writeln(`\x1b[33m(no rows match "${pattern}" — nothing excluded)\x1b[0m`);
-          term.write(PROMPT); return;
+          writePrompt(); return;
         }
         const note = `${excluded.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows excluded "${pattern}"`;
         const newResult = { columns: [...columns], rows: kept, row_count: kept.length, note };
@@ -3565,7 +3579,7 @@ function startTerminal() {
         prevResult = lastResult;
         lastResult = newResult;
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd.startsWith('/sample ') || cmd === '/sample') {
@@ -3592,7 +3606,7 @@ function startTerminal() {
           lastResult = sampledResult;
         }
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/distinct' || cmd === '/dedup') {
@@ -3613,7 +3627,7 @@ function startTerminal() {
         if (removed > 0) { prevResult = lastResult; }
         lastResult = newResult;
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/classes' || cmd.startsWith('/classes ')) {
@@ -3644,7 +3658,7 @@ function startTerminal() {
         }
         term.writeln(`\x1b[2m(${matches.length.toLocaleString('en-US')} class${matches.length !== 1 ? 'es' : ''})\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/fields' || cmd.startsWith('/fields ')) {
@@ -3674,7 +3688,7 @@ function startTerminal() {
         }
         term.writeln(`\x1b[2m(${matches.length.toLocaleString('en-US')} field${matches.length !== 1 ? 's' : ''})\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/set' || cmd.startsWith('/set ')) {
@@ -3708,7 +3722,7 @@ function startTerminal() {
       } else if (args[0] === 'bytes') {
         if (args[1] === 'raw') { settings.bytesRaw = true; }
         else if (args[1] === 'human') { settings.bytesRaw = false; }
-        else { term.writeln('\x1b[2musage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
+        else { term.writeln('\x1b[2musage: /set bytes raw|human\x1b[0m'); writePrompt(); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32m✓ bytes: ${settings.bytesRaw ? 'raw (numbers)' : 'human (e.g. 4.3 KiB)'}\x1b[0m`);
         if (lastResult) { renderResult(lastResult); }
@@ -3720,20 +3734,20 @@ function startTerminal() {
       } else if (args[0] === 'color') {
         if (args[1] === 'off' || args[1] === 'false') { settings.color = false; }
         else if (args[1] === 'on' || args[1] === 'true' || !args[1]) { settings.color = true; }
-        else { term.writeln('\x1b[2musage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
+        else { term.writeln('\x1b[2musage: /set color on|off\x1b[0m'); writePrompt(); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32m✓ color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
         if (lastResult) { renderResult(lastResult); }
       } else {
         term.writeln(`\x1b[31munknown setting: ${args[0]}\x1b[0m  \x1b[2moptions: limit, bytes, color, null\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/export' || cmd.startsWith('/export ')) {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const fmt = cmd.slice(7).trim().toLowerCase() || 'csv';
@@ -3774,7 +3788,7 @@ function startTerminal() {
         mime = 'text/tab-separated-values'; ext = 'tsv';
       } else {
         term.writeln(`\x1b[31merror: unknown format "${fmt}" — use csv, tsv, or json\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       try {
@@ -3788,7 +3802,7 @@ function startTerminal() {
         URL.revokeObjectURL(url);
         term.writeln(`\x1b[32m✓ downloaded as query-result.${ext} (${lastResult.rows.length.toLocaleString('en-US')} rows)\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     if (cmd === '/history' || cmd.startsWith('/history ')) {
@@ -3797,7 +3811,7 @@ function startTerminal() {
         history.length = 0;
         localStorage.setItem(HISTORY_KEY, '[]');
         term.writeln('\x1b[32m✓ history cleared\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       // history[0] is the /history command itself; skip it for display
@@ -3819,7 +3833,7 @@ function startTerminal() {
         }
         term.writeln(`\x1b[2m  Use !N to re-run entry N  (1 = most recent)  ·  /history clear to wipe\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     // !N — re-run history entry; !name — run a bookmark
@@ -3830,7 +3844,7 @@ function startTerminal() {
         const n = parseInt(cmd.slice(1), 10) - 1;
         if (n < 0 || n >= realHistory.length) {
           term.writeln(`\x1b[31mno history entry ${cmd.slice(1)}\x1b[0m  \x1b[2m(have ${realHistory.length})\x1b[0m`);
-          term.write(PROMPT);
+          writePrompt();
         } else {
           const recalled = realHistory[n];
           const flat = recalled.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
@@ -3856,7 +3870,7 @@ function startTerminal() {
           await runQuery(oql);
         } else {
           term.writeln(`\x1b[31mno bookmark "!${name}" — use /bookmark to list\x1b[0m`);
-          term.write(PROMPT);
+          writePrompt();
         }
       }
       return;
@@ -3874,7 +3888,7 @@ function startTerminal() {
             term.writeln(`    \x1b[36m${q.name.padEnd(40)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
           });
         }
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const name = cmd.slice(5).trim();
@@ -3888,12 +3902,12 @@ function startTerminal() {
         if (close.length) {
           term.writeln(`\x1b[2m  did you mean: ${close.join(', ')}\x1b[0m`);
         }
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       if (q.needs_retained && !hasRetained) {
         term.writeln('\x1b[33mthis query requires full analysis — click \'Run Analysis\' in the toolbar first\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
       const maxEcho = term.cols - 6;
@@ -3924,7 +3938,7 @@ function startTerminal() {
       if (close.length > 0) {
         term.writeln(`\x1b[2m  did you mean: ${close.join(', ')}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
       return;
     }
     await runQuery(full.trim());
@@ -4262,7 +4276,7 @@ function startTerminal() {
         term.writeln(`\x1b[2m${fmtElapsed(queryMs)}\x1b[0m`);
       }
     }
-    term.write(PROMPT);
+    writePrompt();
   }
 
   async function runQuery(oql, { showHint = true } = {}) {
@@ -4319,7 +4333,7 @@ function startTerminal() {
         data = await res.json();
       } catch (_) {
         term.writeln(`\x1b[31merror: server returned non-JSON (HTTP ${res.status})\x1b[0m`);
-        term.write(PROMPT);
+        writePrompt();
         return;
       }
 
@@ -4333,7 +4347,7 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
-      term.write(PROMPT);
+      writePrompt();
     }
   }
 
@@ -4809,14 +4823,14 @@ function startTerminal() {
           clearInterval(watchTimer);
           watchTimer = null;
           term.writeln('\x1b[32m✓ query aborted, watch stopped\x1b[0m');
-          term.write(PROMPT);
+          writePrompt();
         }
       } else if (watchTimer) {
         clearInterval(watchTimer);
         watchTimer = null;
         term.writeln('^C');
         term.writeln('\x1b[32m✓ watch stopped\x1b[0m');
-        term.write(PROMPT);
+        writePrompt();
       } else {
         const hadPending = pendingLines.length > 0;
         term.writeln('^C');
@@ -4830,7 +4844,7 @@ function startTerminal() {
         }
         ghostText = '';
         popHide();
-        term.write(PROMPT);
+        writePrompt();
       }
       return;
     }

@@ -541,6 +541,38 @@ button:hover { background: var(--accent-hover); }
 .xterm { height: 100% !important; padding: 4px 8px; }
 .xterm-viewport { overflow-y: hidden !important; }
 
+/* Floating ☆ Star / 📊 Viz strip — appears on hover when a result exists */
+#term-actions {
+  position: absolute;
+  bottom: 10px;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  z-index: 100;
+}
+#terminal-container:hover #term-actions.has-result,
+#term-actions.has-result:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+#term-actions button {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: .78rem;
+  padding: 3px 9px;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0,0,0,.15);
+  transition: background .1s, border-color .1s;
+}
+#term-actions button:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+#term-act-star:hover { background: #d97706; border-color: #d97706; }
+
 /* Completion popover */
 #completion-popover {
   position: fixed;
