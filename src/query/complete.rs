@@ -156,6 +156,25 @@ pub fn complete(
     // ── Partial keyword / function typed ─────────────────────────────────────
     else if !typed.is_empty() {
         let lower = typed.to_ascii_lowercase();
+
+        // At the very start of a query (nothing before this token) only SELECT
+        // and class names are valid — suppress agg/scalar functions and clause
+        // keywords that can never open a statement.
+        if delim_pos == 0 {
+            let mut res: Vec<Completion> = Vec::new();
+            if "select".starts_with(&lower) {
+                res.push(kw("SELECT"));
+            }
+            if lower.len() >= 2 || lower.contains('.') {
+                for c in class_names {
+                    if c.to_ascii_lowercase().starts_with(&lower) {
+                        res.push(class(c));
+                    }
+                }
+            }
+            return dedup(res);
+        }
+
         let mut res: Vec<Completion> = Vec::new();
 
         // Keywords

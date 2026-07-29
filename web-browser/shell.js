@@ -1488,28 +1488,125 @@ async function pollAnalysisStatus() {
 })();
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
+// OQL syntax highlighter — returns an HTML string safe for innerHTML.
+function _oqlHighlight(oql) {
+  const KW = /\b(SELECT|FROM|WHERE|AS|INSTANCEOF|AND|OR|NOT|NULL|TRUE|FALSE|UNION|LIMIT|ORDER\s+BY|GROUP\s+BY|ASC|DESC|DISTINCT)\b/gi;
+  const AT = /@[a-zA-Z_][a-zA-Z0-9_]*/g;
+  const FN = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=\()/g;
+  const STR = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
+  const NUM = /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g;
+  const OP  = /[().,\[\]]/g;
+
+  // Tokenise by scanning left-to-right
+  const tokens = [];
+  let i = 0;
+  while (i < oql.length) {
+    // warn block [...]
+    if (oql[i] === '[') {
+      const end = oql.indexOf(']', i);
+      if (end !== -1) {
+        tokens.push({ cls: 'oql-warn', text: oql.slice(i, end + 1) });
+        i = end + 1; continue;
+      }
+    }
+    // string
+    if (oql[i] === '"' || oql[i] === "'") {
+      const q = oql[i]; let j = i + 1;
+      while (j < oql.length && oql[j] !== q) { if (oql[j] === '\\') j++; j++; }
+      tokens.push({ cls: 'oql-str', text: oql.slice(i, j + 1) });
+      i = j + 1; continue;
+    }
+    // @attr
+    if (oql[i] === '@') {
+      let j = i + 1;
+      while (j < oql.length && /[a-zA-Z0-9_]/.test(oql[j])) j++;
+      tokens.push({ cls: 'oql-at', text: oql.slice(i, j) });
+      i = j; continue;
+    }
+    // word: keyword or function call or identifier
+    if (/[a-zA-Z_]/.test(oql[i])) {
+      let j = i + 1;
+      while (j < oql.length && /[a-zA-Z0-9_]/.test(oql[j])) j++;
+      const word = oql.slice(i, j);
+      // skip whitespace to check for (
+      let k = j;
+      while (k < oql.length && oql[k] === ' ') k++;
+      const isKw = /^(SELECT|FROM|WHERE|AS|INSTANCEOF|AND|OR|NOT|NULL|TRUE|FALSE|UNION|LIMIT|ORDER|GROUP|ASC|DESC|DISTINCT|BY)$/i.test(word);
+      const isFn = oql[k] === '(' && !isKw;
+      tokens.push({ cls: isKw ? 'oql-kw' : isFn ? 'oql-fn' : 'oql-id', text: word });
+      i = j; continue;
+    }
+    // number
+    if (/[0-9]/.test(oql[i]) || (oql[i] === '-' && /[0-9]/.test(oql[i+1] || ''))) {
+      let j = i + 1;
+      while (j < oql.length && /[0-9._eE+\-]/.test(oql[j])) j++;
+      tokens.push({ cls: 'oql-num', text: oql.slice(i, j) });
+      i = j; continue;
+    }
+    // operator / punctuation
+    if (/[().,\[\]{}]/.test(oql[i])) {
+      tokens.push({ cls: 'oql-op', text: oql[i] });
+      i++; continue;
+    }
+    // everything else (whitespace, newlines, operators like =<>!*/)
+    tokens.push({ cls: null, text: oql[i] });
+    i++;
+  }
+
+  return tokens.map(t => {
+    const esc = t.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return t.cls ? `<span class="${t.cls}">${esc}</span>` : esc;
+  }).join('');
+}
+
 // Singleton OQL preview popup, created once and reused.
 const _nqPreview = (() => {
   const el = document.createElement('div');
   el.className = 'nq-oql-preview';
-  el.style.display = 'none';
+  el.innerHTML = `<div class="nq-preview-header"><div class="nq-preview-name"></div><div class="nq-preview-desc"></div></div><div class="nq-preview-code"></div>`;
   document.body.appendChild(el);
   return el;
 })();
 
-function _showNqPreview(card, oql) {
-  _nqPreview.textContent = oql;
-  _nqPreview.style.display = 'block';
-  const rect = card.getBoundingClientRect();
-  // Position to the right of the sidebar; fall back to left if no room.
-  const previewW = Math.min(420, window.innerWidth - rect.right - 16);
-  if (previewW >= 150) {
-    _nqPreview.style.left = (rect.right + 8) + 'px';
-  } else {
-    _nqPreview.style.left = Math.max(4, rect.left - 436) + 'px';
-  }
-  const top = Math.min(rect.top, window.innerHeight - 220);
-  _nqPreview.style.top = top + 'px';
+let _nqPreviewTimer = null;
+
+function _showNqPreview(card, oql, name, desc) {
+  clearTimeout(_nqPreviewTimer);
+  _nqPreviewTimer = setTimeout(() => {
+    const nameEl = _nqPreview.querySelector('.nq-preview-name');
+    const descEl = _nqPreview.querySelector('.nq-preview-desc');
+    const codeEl = _nqPreview.querySelector('.nq-preview-code');
+    if (nameEl) nameEl.textContent = name || '';
+    if (descEl) descEl.textContent = desc || '';
+    if (nameEl) nameEl.style.display = name ? '' : 'none';
+    if (descEl) descEl.style.display = desc ? '' : 'none';
+    const hdr = _nqPreview.querySelector('.nq-preview-header');
+    if (hdr) hdr.style.display = (name || desc) ? '' : 'none';
+    if (codeEl) codeEl.innerHTML = _oqlHighlight(oql);
+    _nqPreview.classList.remove('visible');
+    _nqPreview.style.display = 'flex';
+
+    const rect = card.getBoundingClientRect();
+    const previewW = 420;
+    const spaceRight = window.innerWidth - rect.right - 16;
+    const spaceLeft  = rect.left - 16;
+    if (spaceRight >= 200) {
+      _nqPreview.style.left = (rect.right + 8) + 'px';
+    } else {
+      _nqPreview.style.left = Math.max(4, rect.left - previewW - 8) + 'px';
+    }
+    const top = Math.min(rect.top, window.innerHeight - 300);
+    _nqPreview.style.top = Math.max(8, top) + 'px';
+    // trigger transition
+    requestAnimationFrame(() => _nqPreview.classList.add('visible'));
+  }, 120);
+}
+
+function _hideNqPreview() {
+  clearTimeout(_nqPreviewTimer);
+  _nqPreview.classList.remove('visible');
+  // hide after fade
+  setTimeout(() => { if (!_nqPreview.classList.contains('visible')) _nqPreview.style.display = 'none'; }, 130);
 }
 
 function buildSidebar(analysisReady) {
@@ -1537,10 +1634,10 @@ function buildSidebar(analysisReady) {
     row.appendChild(nameEl);
     row.appendChild(delBtn);
     card.appendChild(row);
-    card.addEventListener('mouseenter', () => _showNqPreview(card, oql));
-    card.addEventListener('mouseleave', () => { _nqPreview.style.display = 'none'; });
+    card.addEventListener('mouseenter', () => _showNqPreview(card, oql, name, ''));
+    card.addEventListener('mouseleave', _hideNqPreview);
     card.addEventListener('click', () => {
-      _nqPreview.style.display = 'none';
+      _hideNqPreview();
       if (term && window._hprofRunQuery) window._hprofRunQuery(oql);
       else if (term && window._hprofSetLine) window._hprofSetLine(oql);
     });
@@ -1590,11 +1687,11 @@ function buildSidebar(analysisReady) {
     const previewOql = disabled
       ? q.oql + '\n\n[Requires full analysis — click "Run Analysis" first]'
       : q.oql;
-    card.addEventListener('mouseenter', () => _showNqPreview(card, previewOql));
-    card.addEventListener('mouseleave', () => { _nqPreview.style.display = 'none'; });
+    card.addEventListener('mouseenter', () => _showNqPreview(card, previewOql, q.name, q.display));
+    card.addEventListener('mouseleave', _hideNqPreview);
     if (!disabled) {
       card.addEventListener('click', () => {
-        _nqPreview.style.display = 'none';
+        _hideNqPreview();
         if (term && window._hprofRunQuery) window._hprofRunQuery(q.oql);
         else if (term && window._hprofSetLine) window._hprofSetLine(q.oql);
       });
@@ -1725,16 +1822,17 @@ function startTerminal() {
       }
 
       const grpHtml = c.group ? `<span class="cp-group">${escHtml(c.group)}</span>` : '';
-      // Per-item syntax highlighting on the value span
+      // Per-item syntax highlighting on the value span — use CSS variables for theme-awareness
+      const cs = getComputedStyle(document.documentElement);
       let valColor;
       if (c.group === 'field' || val.startsWith('@')) {
-        valColor = '#c0a0ff';  // purple — @fields
+        valColor = cs.getPropertyValue('--cp-col-field').trim() || '#c0a0ff';
       } else if (c.group === 'keyword') {
-        valColor = '#f0d080';  // yellow — keywords
+        valColor = cs.getPropertyValue('--cp-col-kw').trim()    || '#f0d080';
       } else if (c.group === 'class' || val.includes('.') || /^[A-Z]/.test(val)) {
-        valColor = '#90c0f8';  // blue  — class names
+        valColor = cs.getPropertyValue('--cp-col-class').trim() || '#90c0f8';
       } else {
-        valColor = '#60c8e0';  // cyan  — default
+        valColor = cs.getPropertyValue('--cp-col-fn').trim()    || '#60c8e0';
       }
       div.innerHTML = `<span class="cp-value" style="color:${valColor}">${valHtml}</span>${grpHtml}`;
       div.addEventListener('mousedown', e => {
@@ -4231,7 +4329,7 @@ function startTerminal() {
     return { colNames, adjW, isNumeric };
   }
 
-  function handleQueryResponse(data, elapsedMs, showHint) {
+  function handleQueryResponse(data, elapsedMs, showHint, oql) {
     const fmtElapsed = ms => ms < 1 ? `${(ms * 1000).toFixed(0)}µs` : ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms / 1000).toFixed(2)}s`;
     if (!data.ok) {
       const msg = data.error?.message || JSON.stringify(data.error) || 'unknown error';
@@ -4337,7 +4435,7 @@ function startTerminal() {
             r.columns = r.columns.map(n => ({ name: n }));
           }
         }
-        return handleQueryResponse(data, elapsedMs, showHint);
+        return handleQueryResponse(data, elapsedMs, showHint, oql);
       }
 
       const res = await fetch(serverUrl + '/', {
@@ -4360,7 +4458,7 @@ function startTerminal() {
         return;
       }
 
-      handleQueryResponse(data, elapsedMs, showHint);
+      handleQueryResponse(data, elapsedMs, showHint, oql);
     } catch (e) {
       clearInterval(spinTimer);
       currentAbort = null;
