@@ -874,6 +874,11 @@ pub struct ImmediateDominators {
 pub struct DominatorAnalysis {
     pub big_drops: BigDrops,
     pub immediate_dominators: ImmediateDominators,
+    /// Longest path in the dominator tree (number of idom-hops from the virtual
+    /// root to the deepest node). A value > 10,000 indicates a linked-list-shaped
+    /// data structure. 0 for an empty heap. V25.
+    #[serde(default)]
+    pub longest_chain_depth: u32,
 }
 
 /// One bucket of a fill-ratio (used/capacity) histogram. Ratio expressed in

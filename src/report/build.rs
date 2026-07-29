@@ -1177,9 +1177,33 @@ fn build_dominator_analysis(
         pairs: pairs_vec,
     };
 
+    // Build children list for dominator tree
+    let vroot = g.n as u32;
+    let mut children: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
+    for i in 0..n {
+        let p = g.idom[i];
+        if p < vroot {
+            children[p as usize].push(i as u32);
+        } else if p == vroot {
+            children[n].push(i as u32);
+        }
+        // p == u32::MAX → unreachable, skip
+    }
+    // Iterative DFS from virtual root to find longest chain
+    let mut longest: u32 = 0;
+    let mut stack: Vec<(u32, u32)> = vec![(vroot, 0u32)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > longest { longest = depth; }
+        let idx = if node == vroot { n } else { node as usize };
+        for &child in &children[idx] {
+            stack.push((child, depth + 1));
+        }
+    }
+
     DominatorAnalysis {
         big_drops,
         immediate_dominators,
+        longest_chain_depth: longest,
     }
 }
 
