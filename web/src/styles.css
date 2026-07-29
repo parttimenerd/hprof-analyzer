@@ -55,21 +55,18 @@ tfoot tr { border-top: 2px solid var(--border); }
 body { background: var(--bg); color: var(--fg); width: 100%; }
 .app { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 /* Report page header — tool credit, date, links, self-contained note. */
-.report-header { margin-bottom: 1rem; }
-.report-header-top { margin-bottom: 0.35rem; }
-.report-header h1 { font-size: 1.6rem; margin: 0 0 0.2rem; }
-.report-date { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.35rem; }
-.report-date-iso { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82em; opacity: 0.7; }
-.report-tool-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 1.1rem; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.9rem; font-size: 0.82rem; color: var(--muted); }
-.report-tool-name { color: var(--fg); }
-.report-tool-name a { color: var(--accent); text-decoration: none; font-weight: 600; }
-.report-tool-name a:hover { text-decoration: underline; }
-.report-tool-links a { color: var(--accent); text-decoration: none; }
-.report-tool-links a:hover { text-decoration: underline; }
-.report-self-contained { cursor: default; }
-.report-sizes-note { margin-left: auto; }
+.report-header { margin-bottom: 1.25rem; }
+.report-header h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
+.report-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0; font-size: 0.82rem; color: var(--muted); margin: 0 0 0.2rem; }
+.report-meta a { color: var(--accent); text-decoration: none; }
+.report-meta a:hover { text-decoration: underline; }
+.report-meta-sep { margin: 0 0.5rem; opacity: 0.4; }
+.report-blurb { font-size: 0.82rem; color: var(--muted); margin: 0; }
+.report-blurb a { color: var(--accent); text-decoration: none; }
+.report-blurb a:hover { text-decoration: underline; }
 
-/* Waste summary — give the table rows a bit more vertical room. */
+/* Waste summary — give the table rows a bit more vertical room and space below. */
+.waste-summary-table { margin-bottom: 1.5rem; }
 .waste-summary-table table td, .waste-summary-table table th { padding: 0.5rem 0.6rem; }
 .waste-summary-table .bar-bg { display: inline-block; width: 100%; height: 10px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .waste-summary-table .bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
