@@ -90,7 +90,7 @@ const SAMPLE_DUMPS = [
     selectedFile = file;
     dropZone.classList.add('file-selected');
     document.getElementById('drop-zone-text').innerHTML =
-      `<strong>${file.name}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
+      `<strong>${escHtml(file.name)}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
     modeButtons.style.display = 'flex';
   }
 
@@ -682,7 +682,7 @@ function _analPhaseLabel(phase, remainMs, instanceCount) {
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // Open the full React-based HTML report in a new browser tab via a Blob URL.
