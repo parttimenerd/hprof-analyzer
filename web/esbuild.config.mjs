@@ -10,9 +10,9 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 762 KB minified bundle budget (raised from 760 KB to accommodate
-// V16 ThreadLocal Leak Analyzer table in the Threads section).
-const BUDGET_BYTES = 762 * 1024;
+// ≤ 764 KB minified bundle budget (raised from 762 KB to accommodate
+// V20 TPFG Diff table in the diff view).
+const BUDGET_BYTES = 764 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

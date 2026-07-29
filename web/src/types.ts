@@ -891,6 +891,19 @@ export interface TypeEdge {
   retained_weight: number;
 }
 
+// One directed type-level reference edge's growth between two dumps.
+// Mirrors TypeEdgeDiff in src/diff_reports.rs.
+export interface TypeEdgeDiff {
+  src_class: string;
+  dst_class: string;
+  count_first: number;
+  count_last: number;
+  delta_count: number;
+  weight_first: number;
+  weight_last: number;
+  delta_weight: number;
+}
+
 declare global {
   interface Window {
     __HPROF_DATA_B64__?: string;
@@ -943,6 +956,7 @@ export interface SeriesDiffResult {
   grown_suspects: SeriesSuspectRow[];
   shrunk_suspects: SeriesSuspectRow[];
   gone_suspects: SeriesSuspectRow[];
+  tpfg_diff?: TypeEdgeDiff[];
 }
 
 // Tagged envelope embedded by the HTML diff view so the shared bundle can tell

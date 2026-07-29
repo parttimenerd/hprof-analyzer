@@ -70,6 +70,26 @@ pub struct SeriesClassRow {
     pub peak_retained: u64,
 }
 
+/// One directed type-level reference edge's growth between two dumps.
+/// Only included when the edge is significant (present in either dump, count > 0).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TypeEdgeDiff {
+    pub src_class: String,
+    pub dst_class: String,
+    /// Edge count in the first (baseline) dump; 0 if absent.
+    pub count_first: u64,
+    /// Edge count in the last dump; 0 if absent.
+    pub count_last: u64,
+    /// count_last - count_first (signed).
+    pub delta_count: i64,
+    /// Retained weight in first dump (bytes); 0 if absent.
+    pub weight_first: u64,
+    /// Retained weight in last dump (bytes); 0 if absent.
+    pub weight_last: u64,
+    /// weight_last - weight_first (signed, bytes).
+    pub delta_weight: i64,
+}
+
 /// One joined leak-suspect row across N reports.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SeriesSuspectRow {
@@ -120,6 +140,11 @@ pub struct SeriesDiffResult {
     pub shrunk_suspects: Vec<SeriesSuspectRow>,
     /// Suspects present in the first report, absent in the last.
     pub gone_suspects: Vec<SeriesSuspectRow>,
+    /// TPFG diff: growing directed edges between class types (first→last).
+    /// Only populated when N ≥ 2 and both reports have a non-empty type_ref_graph.
+    /// Sorted by |delta_weight| desc, then |delta_count| desc, then src_class asc.
+    /// Capped at 500 entries (aligned with per-dump TPFG cap).
+    pub tpfg_diff: Vec<TypeEdgeDiff>,
 }
 
 /// Compute the N-way cross-dump time-series diff. Pure and deterministic:
@@ -334,6 +359,73 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
             .then_with(|| x.pretty_class.cmp(&y.pretty_class))
     });
 
+    // TPFG diff: join type_ref_graph from report[0] and report[N-1] by (src, dst).
+    let tpfg_diff: Vec<TypeEdgeDiff> = if n >= 2
+        && !reports[0].type_ref_graph.is_empty()
+        && !reports[last].type_ref_graph.is_empty()
+    {
+        use std::collections::HashMap;
+        let mut first_map: HashMap<(&str, &str), (u64, u64)> = HashMap::new();
+        for e in &reports[0].type_ref_graph {
+            first_map.insert(
+                (e.src_class.as_str(), e.dst_class.as_str()),
+                (e.edge_count, e.retained_weight),
+            );
+        }
+        let mut last_map: HashMap<(&str, &str), (u64, u64)> = HashMap::new();
+        for e in &reports[last].type_ref_graph {
+            last_map.insert(
+                (e.src_class.as_str(), e.dst_class.as_str()),
+                (e.edge_count, e.retained_weight),
+            );
+        }
+        // Union of all keys, deterministically ordered via BTreeSet.
+        let mut all_keys: std::collections::BTreeSet<(&str, &str)> =
+            std::collections::BTreeSet::new();
+        for k in first_map.keys() {
+            all_keys.insert(*k);
+        }
+        for k in last_map.keys() {
+            all_keys.insert(*k);
+        }
+        let mut rows: Vec<TypeEdgeDiff> = all_keys
+            .into_iter()
+            .map(|(src, dst)| {
+                let (count_first, weight_first) =
+                    first_map.get(&(src, dst)).copied().unwrap_or((0, 0));
+                let (count_last, weight_last) =
+                    last_map.get(&(src, dst)).copied().unwrap_or((0, 0));
+                TypeEdgeDiff {
+                    src_class: src.to_string(),
+                    dst_class: dst.to_string(),
+                    count_first,
+                    count_last,
+                    delta_count: count_last as i64 - count_first as i64,
+                    weight_first,
+                    weight_last,
+                    delta_weight: weight_last as i64 - weight_first as i64,
+                }
+            })
+            .collect();
+        // Sort by |delta_weight| desc, then |delta_count| desc, then src_class asc.
+        rows.sort_unstable_by(|a, b| {
+            b.delta_weight
+                .unsigned_abs()
+                .cmp(&a.delta_weight.unsigned_abs())
+                .then(
+                    b.delta_count
+                        .unsigned_abs()
+                        .cmp(&a.delta_count.unsigned_abs()),
+                )
+                .then(a.src_class.cmp(&b.src_class))
+        });
+        // Cap at 500 (aligned with per-dump TPFG cap).
+        rows.truncate(500);
+        rows
+    } else {
+        vec![]
+    };
+
     SeriesDiffResult {
         labels,
         total_objects,
@@ -350,6 +442,7 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         grown_suspects,
         shrunk_suspects,
         gone_suspects,
+        tpfg_diff,
     }
 }
 

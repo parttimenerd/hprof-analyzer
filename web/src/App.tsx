@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -4840,6 +4840,22 @@ function SeriesTable({
   return <StdTable columns={seriesCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="delta" />;
 }
 
+// A sortable table for the TPFG diff: growing directed type-level reference edges.
+function TpfgDiffTable({ rows, fmtB }: { rows: TypeEdgeDiff[]; fmtB: (n: number) => string }) {
+  const ok = "var(--ok, #22c55e)", mu = "var(--muted)";
+  const dc = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : ""}{n.toLocaleString()}</span>;
+  const dw = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : n < 0 ? "−" : ""}{fmtB(Math.abs(n))}{n < 0 ? " ▼" : n > 0 ? " ▲" : ""}</span>;
+  const cols: TableColumn<TypeEdgeDiff>[] = [
+    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <code>{r.src_class}</code>, grow: 2 },
+    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <code>{r.dst_class}</code>, grow: 2 },
+    { id: "cf", name: "Edges (first)", selector: r => r.count_first, sortable: true, right: true, cell: r => r.count_first.toLocaleString() },
+    { id: "cl", name: "Edges (last)", selector: r => r.count_last, sortable: true, right: true, cell: r => r.count_last.toLocaleString() },
+    { id: "dc", name: "Δ Edges", selector: r => r.delta_count, sortable: true, right: true, cell: r => dc(r.delta_count) },
+    { id: "dw", name: "Δ Retained Weight", selector: r => r.delta_weight, sortable: true, right: true, cell: r => dw(r.delta_weight) },
+  ];
+  return <StdTable columns={cols} data={rows} defaultSortFieldId="dw" defaultSortAsc={false} searchKeys={["src_class", "dst_class"]} />;
+}
+
 // One diff section: a heading, and either the sortable table or an empty note.
 function DiffSection({
   title,
@@ -5051,6 +5067,16 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <SeriesTable nameLabel="Suspect" labels={labels} rows={diff.gone_suspects} />
         )}
       </section>
+      {diff.tpfg_diff && diff.tpfg_diff.length > 0 && (
+        <section className="diff-section">
+          <h2>Type Reference Graph Diff</h2>
+          <p>
+            Growing directed edges between class types — a high Δ retained weight indicates
+            one class is accumulating more references to another. Sorted by |Δ retained weight|.
+          </p>
+          <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
+        </section>
+      )}
       <BackToTop />
     </div>
   );
