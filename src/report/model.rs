@@ -1482,6 +1482,12 @@ pub struct AnalysisFlags {
     /// `--collections` was passed (fill-ratio & waste analysis).
     #[serde(default)]
     pub collections: bool,
+    /// `--obj-graph` (or `--full-analysis`) was passed (reference/dominator graph capture).
+    #[serde(default)]
+    pub obj_graph: bool,
+    /// `--ref-paths` was passed (field-name labels on edges).
+    #[serde(default)]
+    pub ref_paths: bool,
 }
 
 /// One row of the merged Top Retainers table (§813).

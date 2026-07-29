@@ -1319,10 +1319,11 @@ All S-effort items that need only UI work:
 | Flag | Views gated | Rationale |
 |------|-------------|-----------|
 | (always-on) | V1,V2,V5,V6,V7,V8,V10,V12,V15,V18,V19,V22,V24,V25,V26 | Data present; no size cost |
-| `--collections` | V9 | Collection analysis is opt-in (Tier-B scan) |
-| `--obj-graph` | V3,V4,V13,V20 | Adds up to ~3 MB to report; opt-in for advanced users |
-| `--ref-paths` | V3 edge labels, V18 edge labels | ~100–500 MB extra RSS during analysis |
-| `--full-analysis` | V16 | Tier-B field-decode scans |
+| `--collections` | V9 | Collection analysis is opt-in (Tier-B scan, ~300 MB RSS) |
+| `--find-duplicates` | duplicate strings/arrays section | Tier-B hash scan; implied by `--full-analysis` |
+| `--obj-graph` | V3,V4,V13,V20 | Graph capture, ~30 MB RSS, up to ~3 MB report; implied by `--full-analysis` |
+| `--ref-paths` | V3 edge labels, V18 edge labels | ~100–500 MB extra RSS — intentionally excluded from `--full-analysis` |
+| `--full-analysis` | V3,V4,V9,V13,V16,V20 + duplicates | Implies `--obj-graph --collections --find-duplicates`. ~330 MB peak RSS. |
 | diff mode | V12, V20 | Only meaningful with two dumps |
 
 ---

@@ -112,6 +112,8 @@ pub fn build_model(
         analysis_flags: crate::report::AnalysisFlags {
             find_duplicates: opts.find_duplicates,
             collections: opts.collections,
+            obj_graph: opts.obj_graph,
+            ref_paths: opts.ref_paths,
         },
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.

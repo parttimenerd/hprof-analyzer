@@ -196,6 +196,23 @@ struct Cli {
     #[arg(long)]
     ref_paths: bool,
 
+    /// Enable all heavy opt-in analyses: equivalent to passing
+    /// --obj-graph --collections --find-duplicates together.
+    /// Adds ~330 MB peak RSS on large dumps (--obj-graph ~30 MB,
+    /// --collections ~300 MB). --ref-paths is excluded because it can add
+    /// 100–500 MB on top; pass it separately when field-name labels are needed.
+    /// Analyze-only.
+    #[arg(long)]
+    full_analysis: bool,
+
+    /// Capture the outbound-reference graph and dominator subtree for the top
+    /// retained objects. Enables the Reference Graph and Dominator Tree Explorer
+    /// views (V3+V4) and the Type-Level Reference Graph (V13) in the HTML report.
+    /// Adds ~1–3 MB to the report JSON; ~30 MB peak RSS freed after analysis.
+    /// Implied by --full-analysis. Analyze-only.
+    #[arg(long)]
+    obj_graph: bool,
+
     /// Emit Eclipse MAT-compatible binary index files into DIR while running
     /// the normal analysis (the report output is unaffected). The files are
     /// named `<dump>.<kind>.index` using the input basename as the prefix.
@@ -759,8 +776,8 @@ fn run_default(cli: Cli) {
         let fmt = resolve_format(cli.format, cli.output.as_deref());
         let opts = cli.detail.options();
         let opts = AnalyzeOptions {
-            find_duplicates: cli.find_duplicates,
-            collections: cli.collections,
+            find_duplicates: cli.find_duplicates || cli.full_analysis,
+            collections: cli.collections || cli.full_analysis,
             collection_config: cli.collection_config.clone(),
             coll_descs: crate::collection_config::load_collection_descs(
                 cli.collection_config.as_deref(),
@@ -772,6 +789,7 @@ fn run_default(cli: Cli) {
             // --all is the no-op default and stays off here.
             reachable_only: cli.reachable_only,
             ref_paths: cli.ref_paths,
+            obj_graph: cli.obj_graph || cli.full_analysis,
             ..opts
         };
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
