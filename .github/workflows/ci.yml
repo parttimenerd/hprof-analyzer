@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -49,6 +51,14 @@ jobs:
 
       - name: Test (unit + integration + parity)
         run: cargo test --release
+
+      - name: Upload binary artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hprof-analyzer-linux
+          path: target/release/hprof-analyzer
+          retention-days: 1
 
   # Cross-platform release build. Confirms the binary compiles on every target we
   # ship in the Releases; does not run the (Ubuntu-covered) test suite.
@@ -101,3 +111,71 @@ jobs:
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+
+  # Deploy GitHub Pages only on main push, after build-test passes.
+  # Re-uses the binary artifact from build-test to avoid a second full Rust build.
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build-test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hprof-analyzer-linux
+          path: target/release
+
+      - name: Make binary executable
+        run: chmod +x target/release/hprof-analyzer
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Generate sample reports
+        run: BIN=target/release/hprof-analyzer ./scripts/gen-samples.sh
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build browser REPL
+        run: bash scripts/build-browser.sh
+
+      - name: Install browser REPL as homepage
+        run: cp dist/hprof-analyzer-browser.html docs/index.html
+
+      - name: Copy sample hprof fixtures
+        run: |
+          cp tests/fixtures/dump_1_mnemonics.hprof    docs/samples/dump_1_mnemonics.hprof
+          cp tests/fixtures/dump_2_scala-doku.hprof   docs/samples/dump_2_scala-doku.hprof
+          cp tests/fixtures/dump_4_philosophers.hprof docs/samples/dump_4_philosophers.hprof
+          cp tests/fixtures/dump_7_gauss-mix.hprof    docs/samples/dump_7_gauss-mix.hprof
+
+      - name: Build OQL guide
+        run: bash scripts/build-oql-guide.sh
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4
