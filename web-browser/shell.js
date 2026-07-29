@@ -2,12 +2,21 @@
 // Outer scope provides: namedQueries, wasmReady, wasmComplete, HprofSession
 
 // ── Theme management ──────────────────────────────────────────────────────────
-const THEME_KEY = 'hprof-analyzer.theme';
+// Cycles auto → light → dark → auto, same as the React report viewer.
+// Persists in localStorage under the shared key "hprof-theme" so the shell,
+// report, and OQL pages all stay in sync.
+const THEME_KEY = 'hprof-theme';
+const _THEME_CYCLE = { auto: 'light', light: 'dark', dark: 'auto' };
+const _THEME_GLYPHS = { auto: '◐', light: '☀', dark: '☾' };
+
+function _currentThemeMode() {
+  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (_) { return 'auto'; }
+}
 
 function _isDark() {
-  const attr = document.documentElement.getAttribute('data-theme');
-  if (attr === 'dark') return true;
-  if (attr === 'light') return false;
+  const mode = _currentThemeMode();
+  if (mode === 'dark') return true;
+  if (mode === 'light') return false;
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
@@ -30,34 +39,34 @@ function termTheme() {
   };
 }
 
-function applyTheme(theme) {
-  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-  else if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
-  else document.documentElement.removeAttribute('data-theme');
-  const isDark = _isDark();
-  const icon = isDark ? '☀' : '🌙';
+function applyTheme(mode) {
+  const m = (mode === 'light' || mode === 'dark') ? mode : 'auto';
+  if (m === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', m);
+  const glyph = _THEME_GLYPHS[m];
+  const label = m.charAt(0).toUpperCase() + m.slice(1);
   for (const id of ['btn-theme-toggle', 'btn-theme-toggle-shell']) {
     const btn = document.getElementById(id);
-    if (btn) btn.textContent = icon;
+    if (btn) btn.textContent = `${glyph} Theme: ${label}`;
   }
-  // term is declared later in this file; guard via window property set after declaration
   if (window._hprofTerm) window._hprofTerm.options.theme = termTheme();
 }
 
 (function initTheme() {
-  const saved = localStorage.getItem(THEME_KEY);
-  applyTheme(saved || null);
+  applyTheme(_currentThemeMode());
 })();
 
 window.addEventListener('storage', e => {
-  if (e.key === THEME_KEY) applyTheme(e.newValue);
+  if (e.key === THEME_KEY) applyTheme(e.newValue || 'auto');
 });
 
 function _bindThemeToggle(id) {
   const btn = document.getElementById(id);
-  if (btn) btn.addEventListener('click', () => {
-    const next = _isDark() ? 'light' : 'dark';
-    localStorage.setItem(THEME_KEY, next);
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const cur = _currentThemeMode();
+    const next = _THEME_CYCLE[cur] || 'light';
+    try { if (next === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, next); } catch (_) {}
     applyTheme(next);
   });
 }
@@ -399,30 +408,51 @@ function _makeProgress(labelId, barId) {
     if (lbl) lbl.textContent = label;
     if (bar) {
       bar.classList.remove('wasm-blocking');
+      bar.style.animation = 'none';
       bar.style.transition = 'width 0.3s ease-out';
       bar.style.width = pct.toFixed(1) + '%';
     }
   };
 
   // Call before a synchronous blocking WASM call.
-  // Sets a CSS transition that animates from `fromPct` → `toPct` over `etaMs` ms.
-  // CSS transitions are compositor-driven and survive a blocked main thread.
-  // Returns a promise that resolves after two rAF ticks so the browser paints first.
+  // Phase 1: CSS transition from `fromPct` → `toPct` over `etaMs` ms (compositor-driven).
+  // Phase 2: After etaMs, a slow CSS animation crawls the bar from `toPct` → 99%
+  //   over a fixed 5-minute window — so it never stops completely.
+  // Both survive a blocked JS main thread because they are handled by the browser compositor.
   const enterBlocking = (label, fromPct, toPct, etaMs) => new Promise(resolve => {
     const lbl = document.getElementById(labelId);
     const bar = document.getElementById(barId);
     if (lbl) lbl.textContent = label;
     if (bar) {
       bar.classList.remove('wasm-blocking');
-      // Snap to fromPct with no transition, then start the timed crawl.
+      // Snap to fromPct (no transition).
+      bar.style.animation = 'none';
       bar.style.transition = 'none';
       bar.style.width = fromPct.toFixed(1) + '%';
-      // Force reflow so the transition reset takes effect before we change width.
-      void bar.offsetWidth;
+      void bar.offsetWidth; // force reflow
+      // Phase 1: fast ETA-based transition.
       bar.style.transition = `width ${etaMs}ms linear`;
       bar.style.width = toPct.toFixed(1) + '%';
+      // Phase 2: after ETA, continue crawling to 99% over 5 min using animation.
+      // We use negative animation-delay to start the animation mid-way, so it
+      // begins exactly at toPct and ends at 99%.
+      const rangeLeft = 99 - toPct;
+      const slowMs = 300_000; // 5 minutes for the entire 0→99 range
+      // Fraction of the slow animation already "consumed" by toPct.
+      const delayFrac = toPct / 99;
+      const delayMs = -(delayFrac * slowMs); // negative = start mid-animation
+      // We set the animation after the ETA transition completes.
+      // Since WASM blocks JS, we set it synchronously and let CSS handle sequencing.
+      // The trick: we set animation-fill-mode=forwards and a very long duration.
+      // The bar's width from the transition will hold while the animation hasn't started
+      // visually, but we set the animation-delay to fire after etaMs.
+      bar.style.setProperty('--bar-slow-from', toPct.toFixed(2) + '%');
+      bar.style.animationDelay = `${etaMs}ms`;
+      bar.style.animationDuration = `${slowMs * (rangeLeft / 99)}ms`;
+      bar.style.animationTimingFunction = 'linear';
+      bar.style.animationFillMode = 'forwards';
+      bar.style.animationName = 'progress-crawl';
     }
-    // Two rAF ticks: first schedules paint, second confirms it was committed.
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   });
 

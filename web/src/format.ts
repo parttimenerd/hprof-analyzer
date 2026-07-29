@@ -46,6 +46,16 @@ export function formatEpochMs(ms: number): string {
   return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+export function formatDateNice(ms: number): string {
+  if (ms <= 0) return "";
+  const d = new Date(ms);
+  return d.toLocaleDateString(undefined, {
+    year: "numeric", month: "long", day: "numeric",
+  }) + " at " + d.toLocaleTimeString(undefined, {
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
 // Compact display for a class-loader label. Labels are JVM-internal binary
 // names using '/' as the package separator (e.g.
 // "jdk/internal/loader/ClassLoaders$AppClassLoader"). We show just the final
