@@ -1741,6 +1741,38 @@ function TopConsumersSection({ report }: { report: Report }) {
             getLabel={(n) => n.name || "(default)"}
             fmt={formatBytes}
             height={320}
+            renderLeaf={(_node, pathLabels) => {
+              const pkgPrefix = pathLabels.join(".");
+              const histogram = report.overview.histogram;
+              const classes = histogram.filter((r) => {
+                if (!pkgPrefix) return true;
+                const dotPkg = pkgPrefix + ".";
+                if (r.pretty_class.startsWith(dotPkg)) {
+                  // must be in this exact package, not a sub-package
+                  const rest = r.pretty_class.slice(dotPkg.length);
+                  return !rest.includes(".");
+                }
+                return false;
+              }).sort((a, b) => b.retained - a.retained);
+              if (classes.length === 0) return <p className="subtitle" style={{ marginTop: "0.5rem" }}>No classes found in package <code>{pkgPrefix}</code>.</p>;
+              return (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <p className="subtitle" style={{ marginBottom: "0.3rem" }}>Classes in <code>{pkgPrefix || "(default)"}</code>:</p>
+                  <table className="tree-table">
+                    <thead><tr><th>Class</th><th className="num">Instances</th><th className="num">Retained</th></tr></thead>
+                    <tbody>
+                      {classes.map((r, i) => (
+                        <tr key={i}>
+                          <td><code>{r.pretty_class.slice((pkgPrefix ? pkgPrefix + "." : "").length)}</code></td>
+                          <td className="num">{fmtCount(r.instances)}</td>
+                          <td className="num">{formatBytes(r.retained)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }}
           />
           <details style={{ marginBottom: "1rem" }}>
             <summary style={{ cursor: "pointer", userSelect: "none" }}>Package tree detail</summary>

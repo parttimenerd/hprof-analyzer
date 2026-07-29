@@ -247,6 +247,7 @@ export function ZoomableTreemap<T>({
   getLabel,
   fmt,
   height = 320,
+  renderLeaf,
 }: {
   root: T;
   getChildren: (n: T) => T[];
@@ -254,6 +255,7 @@ export function ZoomableTreemap<T>({
   getLabel: (n: T) => string;
   fmt: (n: number) => string;
   height?: number;
+  renderLeaf?: (node: T, pathLabels: string[]) => React.ReactNode;
 }) {
   const [path, setPath] = React.useState<T[]>([]);
   const [mode, setMode] = React.useState<"treemap" | "flame">("treemap");
@@ -315,11 +317,12 @@ export function ZoomableTreemap<T>({
   );
 
   const zoomTo = (node: T) => {
-    if (getChildren(node).filter((c) => getValue(c) > 0).length === 0) return;
     setPath((prev) => [...prev, node]);
   };
 
   const crumbs = [root, ...path];
+  // Build the dotted package path for the current node (skip root's empty label)
+  const pathLabels = path.map((n) => getLabel(n)).filter(Boolean);
 
   if (children.length === 0 && path.length === 0) return null;
 
@@ -354,7 +357,7 @@ export function ZoomableTreemap<T>({
 
       {/* Treemap mode */}
       {mode === "treemap" && (
-        <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
+        <div style={{ position: "relative", width: "100%", height: children.length === 0 ? 60 : height, overflow: "hidden" }}>
           {nodes.map((leaf, i) => {
             const { x0, y0, x1, y1, data: ld } = leaf;
             const lw = x1 - x0;
@@ -364,22 +367,23 @@ export function ZoomableTreemap<T>({
             const val = ld.value;
             const pct = ((val / total) * 100).toFixed(1);
             const hasKids = getChildren(node).filter((c) => getValue(c) > 0).length > 0;
+            const isClickable = hasKids || !!renderLeaf;
             const bg = getColor(node);
             return (
               <div
                 key={i}
-                title={`${getLabel(node)}: ${fmt(val)} (${pct}%)${hasKids ? " — click to drill in" : ""}`}
-                onClick={hasKids ? () => zoomTo(node) : undefined}
+                title={`${getLabel(node)}: ${fmt(val)} (${pct}%)${hasKids ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
+                onClick={isClickable ? () => zoomTo(node) : undefined}
                 style={{
                   position: "absolute", left: x0, top: y0, width: lw, height: lh,
                   background: bg, opacity: 0.87, boxSizing: "border-box", overflow: "hidden",
-                  cursor: hasKids ? "zoom-in" : "default",
-                  border: hasKids ? "1px solid rgba(255,255,255,0.25)" : "none",
+                  cursor: isClickable ? (hasKids ? "zoom-in" : "pointer") : "default",
+                  border: isClickable ? "1px solid rgba(255,255,255,0.25)" : "none",
                 }}
               >
                 {lw > 44 && lh > 22 && (
                   <span style={{ display: "block", padding: "2px 4px", fontSize: Math.min(12, lw / 7), color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {getLabel(node)}{hasKids ? " ›" : ""}
+                    {getLabel(node)}{hasKids ? " ›" : (isClickable ? " ≡" : "")}
                   </span>
                 )}
                 {lw > 44 && lh > 38 && (
@@ -392,7 +396,7 @@ export function ZoomableTreemap<T>({
           })}
           {children.length === 0 && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)", fontSize: "0.9rem" }}>
-              No children to display
+              {renderLeaf ? <em>leaf package — classes below</em> : "No sub-packages"}
             </div>
           )}
         </div>
@@ -405,15 +409,16 @@ export function ZoomableTreemap<T>({
             <div key={lvl} className="flame-level">
               {level.map((cell, ci) => {
                 const hasKids = getChildren(cell.node).filter((c) => getValue(c) > 0).length > 0;
+                const isClickable = lvl > 0 && (hasKids || !!renderLeaf);
                 const val = getValue(cell.node);
                 const pct = ((val / getValue(currentNode)) * 100).toFixed(1);
                 return (
                   <div
                     key={ci}
-                    className={`flame-cell${!hasKids || lvl === 0 ? " flame-cell-leaf" : ""}`}
+                    className={`flame-cell${!isClickable ? " flame-cell-leaf" : ""}`}
                     style={{ width: `${cell.pct}%`, background: PALETTE[cell.colorIdx % PALETTE.length] }}
-                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct}%)${hasKids && lvl > 0 ? " — click to drill in" : ""}`}
-                    onClick={hasKids && lvl > 0 ? () => zoomTo(cell.node) : undefined}
+                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct}%)${hasKids && lvl > 0 ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
+                    onClick={isClickable ? () => zoomTo(cell.node) : undefined}
                   >
                     <span className="flame-label">{getLabel(cell.node)}</span>
                   </div>
@@ -423,6 +428,9 @@ export function ZoomableTreemap<T>({
           ))}
         </div>
       )}
+
+      {/* Leaf content (classes in this package) */}
+      {children.length === 0 && renderLeaf && renderLeaf(currentNode, pathLabels)}
     </div>
   );
 }
