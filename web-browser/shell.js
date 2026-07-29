@@ -2007,7 +2007,7 @@ function startTerminal() {
     // Only suggest inside OQL, not for / commands or ! bookmarks
     if (line.startsWith('/') || line.startsWith('!')) { ghostText = ''; popHide(); return; }
     try {
-      const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
+      const cs = JSON.parse(wasmSession && wasmSession.complete_query ? wasmSession.complete_query(line, cursorPos) : wasmComplete(line, cursorPos, classNames));
       if (cs.length === 1) {
         // Single match: show ghost text inline, no popover
         popHide();
@@ -2327,7 +2327,7 @@ function startTerminal() {
     }
     if (!wasmReady) return;
     try {
-      const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
+      const cs = JSON.parse(wasmSession && wasmSession.complete_query ? wasmSession.complete_query(line, cursorPos) : wasmComplete(line, cursorPos, classNames));
       if (cs.length === 0) { popHide(); return; }
       if (cs.length === 1) {
         // Complete to the single suggestion at cursor

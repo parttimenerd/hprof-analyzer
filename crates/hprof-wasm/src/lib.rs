@@ -33,6 +33,7 @@ fn call_progress(cb: &js_sys::Function, phase: &str, fraction: f32) {
 pub struct HprofSession {
     source: hprof_analyzer::HprofSource,
     class_names: Vec<String>,
+    field_index: hprof_analyzer::query::complete::ClassFieldIndex,
     retained: Vec<u64>,
     cache: Option<hprof_analyzer::query::run::ReplCache>,
     cached_report_html: Option<String>,
@@ -89,6 +90,7 @@ impl HprofSession {
                 Some(raw.replace('/', "."))
             })
             .collect();
+        let field_index = hprof_analyzer::query::complete::ClassFieldIndex::build(&cache.p1);
 
         // ── Step 3: reclaim the raw buffer (zero-copy) ───────────────────
         // Drop parse_source (refcount 3 → 2) and replace cache.source with a
@@ -115,6 +117,7 @@ impl HprofSession {
         Ok(HprofSession {
             source: compressed_source,
             class_names,
+            field_index,
             retained: Vec::new(),
             cache: Some(cache),
             cached_report_html: None,
@@ -376,6 +379,7 @@ impl HprofSession {
                 Some(raw.replace('/', "."))
             })
             .collect();
+        let field_index = hprof_analyzer::query::complete::ClassFieldIndex::build(&cache.p1);
 
         drop(parse_source);
         cache.source = hprof_analyzer::HprofSource::Path(String::new());
@@ -401,6 +405,7 @@ impl HprofSession {
         Ok(HprofSession {
             source: compressed_source,
             class_names,
+            field_index,
             retained: Vec::new(),
             cache: Some(cache),
             cached_report_html: None,
@@ -444,6 +449,33 @@ impl HprofSession {
         }
         Ok(())
     }
+
+    /// OQL tab-completion using the loaded session's class and field data.
+    ///
+    /// Returns the same JSON array format as the free `complete()` function but
+    /// uses the session's `ClassFieldIndex` so `alias.field` completions work.
+    pub fn complete_query(&self, line: &str, cursor_pos: usize) -> String {
+        let cs = hprof_analyzer::query::complete::complete(
+            line,
+            cursor_pos,
+            &self.class_names,
+            &self.field_index,
+        );
+        let arr: Vec<serde_json::Value> = cs
+            .iter()
+            .map(|c| {
+                let mut obj = serde_json::json!({
+                    "value": c.value,
+                    "display": c.display,
+                });
+                if let Some(ref g) = c.group {
+                    obj["group"] = serde_json::json!(g);
+                }
+                obj
+            })
+            .collect();
+        serde_json::Value::Array(arr).to_string()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -479,9 +511,17 @@ fn gzip_compress_owned(raw: Box<[u8]>) -> Vec<u8> {
 /// OQL tab-completion suggestions for a partial input line.
 ///
 /// Returns a JSON array: `[{"value":"...","display":"...","group":"..."},...]`
+///
+/// This free function has no access to the loaded session's field data.
+/// Use `HprofSession.complete_query()` instead when a session is loaded.
 #[wasm_bindgen]
 pub fn complete(line: &str, cursor_pos: usize, class_names: Vec<String>) -> String {
-    let cs = hprof_analyzer::query::complete::complete(line, cursor_pos, &class_names, &[]);
+    let cs = hprof_analyzer::query::complete::complete(
+        line,
+        cursor_pos,
+        &class_names,
+        &hprof_analyzer::query::complete::ClassFieldIndex::empty(),
+    );
     let arr: Vec<serde_json::Value> = cs
         .iter()
         .map(|c| {

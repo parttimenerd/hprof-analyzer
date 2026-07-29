@@ -853,7 +853,7 @@ impl Completer for OqlCompleter {
                 upto,
                 pos,
                 &self.class_names,
-                &self.field_names,
+                &crate::query::complete::ClassFieldIndex::empty(),
             )
             .into_iter()
             .map(|c| Suggestion {
