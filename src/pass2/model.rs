@@ -452,6 +452,99 @@ pub struct Graph {
     /// objects). Consumed by `build_system_overview`; a bounded per-class
     /// aggregate, so it carries no per-object RSS into the report phase.
     pub unreachable_retained: Option<crate::unreachable_retained::UnreachableRetained>,
+    /// Bounded outbound-edge snapshot for object-graph click-through.
+    /// Captured before `fwd_offsets`/`fwd_targets` are consumed during inbound
+    /// CSR construction. `None` until `capture_obj_graph_edges` is called.
+    pub obj_graph_edges: Option<ObjGraphCapture>,
+}
+
+// ── Object-graph click-through capture ──────────────────────────────────────
+
+/// Bounded snapshot of outbound edges for the top-N objects by shallow heap,
+/// captured before the forward-edge CSR is consumed during inbound construction.
+pub struct ObjGraphCapture {
+    /// src dense-idx → [(dst dense-idx, field_name_pool_idx)].
+    /// field_name_pool_idx 0 means unnamed (array element, class edge, synthetic).
+    pub edges: std::collections::HashMap<u32, Vec<(u32, u16)>>,
+    /// Deduped field-name strings; index 0 is always "" (unnamed).
+    pub field_name_pool: Vec<String>,
+    /// Dense indices that were captured as sources (top-K by shallow heap).
+    pub captured: std::collections::HashSet<u32>,
+}
+
+impl ObjGraphCapture {
+    pub fn empty() -> Self {
+        Self {
+            edges: Default::default(),
+            field_name_pool: vec![String::new()],
+            captured: Default::default(),
+        }
+    }
+}
+
+/// Capture outbound edges for the top-`top_n` objects by shallow heap, storing
+/// at most `edge_cap` edges per source node. Must be called while `g.fwd_offsets`
+/// and `g.fwd_targets` are still alive (before inbound CSR construction consumes
+/// them). Field names are included when `g.fwd_field_name_idx` is populated
+/// (`--ref-paths`); otherwise all edges are stored as unnamed (index 0).
+pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjGraphCapture {
+    let n = g.shallow.len();
+    if n == 0 || g.fwd_offsets.is_empty() {
+        return ObjGraphCapture::empty();
+    }
+
+    // Sort indices by shallow size descending, keep top_n.
+    let mut indices: Vec<u32> = (0..n as u32).collect();
+    indices.sort_unstable_by(|&a, &b| {
+        g.shallow[b as usize].cmp(&g.shallow[a as usize])
+    });
+    indices.truncate(top_n);
+
+    let mut cap = ObjGraphCapture::empty();
+    // name_str → pool index (0 reserved for "").
+    let mut name_map: std::collections::HashMap<String, u16> =
+        std::collections::HashMap::new();
+    name_map.insert(String::new(), 0u16);
+
+    let fwd_names = g.fwd_field_name_idx.as_ref();
+    let name_pool = g.field_name_pool.as_ref();
+
+    for src in &indices {
+        let src = *src;
+        let s = src as usize;
+        let start = g.fwd_offsets[s] as usize;
+        let end   = g.fwd_offsets[s + 1] as usize;
+        cap.captured.insert(src);
+        let mut row: Vec<(u32, u16)> = Vec::with_capacity((end - start).min(edge_cap));
+        for pos in start..end {
+            if row.len() >= edge_cap {
+                break;
+            }
+            let dst = g.fwd_targets.get(pos);
+            let name_idx: u16 = match (fwd_names, name_pool) {
+                (Some(idx_vec), Some(pool)) => {
+                    let ni = idx_vec[pos] as usize;
+                    let name: &str = if ni < pool.len() { &pool[ni] } else { "" };
+                    if name.is_empty() {
+                        0u16
+                    } else {
+                        let next = name_map.len() as u16;
+                        let idx = *name_map.entry(name.to_owned()).or_insert(next);
+                        if idx as usize >= cap.field_name_pool.len() {
+                            cap.field_name_pool.push(name.to_owned());
+                        }
+                        idx
+                    }
+                }
+                _ => 0u16,
+            };
+            row.push((dst, name_idx));
+        }
+        if !row.is_empty() {
+            cap.edges.insert(src, row);
+        }
+    }
+    cap
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything
