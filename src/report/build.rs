@@ -52,8 +52,10 @@ fn build_obj_graph_flat(
     let n = g.n;
     let vroot = n as u32;
     let total_shallow: u64 = g.shallow.iter().map(|&s| s as u64).sum();
-    let sig_floor: u64 = (total_shallow / 1000).max(1_048_576);
-    let root_floor: u64 = (total_shallow / 100).max(10_000_000);
+    // Show objects retaining >= 0.1% of total heap, but at least 64 KB so tiny
+    // heaps (test fixtures) still produce visible nodes.
+    let sig_floor: u64 = (total_shallow / 1000).max(65_536);
+    let root_floor: u64 = (total_shallow / 100).max(1_048_576);
 
     let dom_children_of = |node: u32| -> &[u32] {
         let idx = node as usize;

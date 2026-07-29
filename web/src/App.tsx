@@ -4380,7 +4380,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     nodeId !== null ? (data.dom_children[String(nodeId)] ?? []) : [];
 
   const totalHeap = Object.values(data.nodes).reduce(
-    (s, n) => (n.idom === undefined ? s + n.retained : s), 0
+    (s, n) => (n.idom == null ? s + n.retained : s), 0
   );
 
   const PAGE_SIZE = 50;
@@ -4428,7 +4428,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     className="btn-link"
                     onClick={() => navigate("domtree", id, node.display_class)}
                   >
-                    &boxur;
+                    ⌞
                   </button>
                 </td>
                 <td><code>{node.display_class}</code></td>
