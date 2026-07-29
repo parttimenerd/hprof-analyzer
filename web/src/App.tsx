@@ -2586,7 +2586,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
 }
 
 // ── Framework Auto-Analysis ───────────────────────────────────────────────────
-function FrameworkAnalysisSection({ items }: { items: FrameworkAnalysis[] }) {
+function FrameworkAnalysisSection({ items }: { items?: FrameworkAnalysis[] }) {
   if (!items || items.length === 0) return null;
   const detected = items.map(i => i.framework).join(' · ');
   return (
@@ -5097,9 +5097,7 @@ export default function App({ report }: { report: Report }) {
       <HeaderOverheadSection report={report} />
       <DominatorAnalysisSection data={report.dominator_analysis} />
       <ThreadsSection report={report} />
-      {(report.framework_analysis?.length ?? 0) > 0 && (
-        <FrameworkAnalysisSection items={report.framework_analysis!} />
-      )}
+      <FrameworkAnalysisSection items={report.framework_analysis} />
       {report.top_components?.components?.length ? (
         <TopComponentsSection data={report.top_components} />
       ) : null}

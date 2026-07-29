@@ -13,15 +13,13 @@ static SENTINELS: &[(&str, &str)] = &[
     ("com/zaxxer/hikari/pool/HikariPool", "HikariCP"),
 ];
 
-/// Scan objects of each sentinel class (or its exact name match in class_names).
-/// For each detected framework: count instances and sum retained heap.
-/// Requires `g.retained` to be populated (called from build_model after retained stage).
+/// Requires `g.retained` to be populated (call after the retained-size stage).
 pub fn scan_frameworks(g: &Graph) -> Vec<FrameworkAnalysis> {
     let mut results = Vec::new();
 
     for &(sentinel, label) in SENTINELS {
-        // Find class index rows matching the sentinel (may be multiple due to class loaders)
-        let matching_ci: Vec<u32> = g
+        // Collect matching class indices — may be >1 when multiple class loaders define the same class.
+        let ci_set: Vec<u32> = g
             .class_names
             .iter()
             .enumerate()
@@ -29,11 +27,9 @@ pub fn scan_frameworks(g: &Graph) -> Vec<FrameworkAnalysis> {
             .map(|(i, _)| i as u32)
             .collect();
 
-        if matching_ci.is_empty() {
+        if ci_set.is_empty() {
             continue;
         }
-        let ci_set: std::collections::HashSet<u32> =
-            matching_ci.into_iter().collect();
 
         // Count objects and sum retained
         let mut count = 0u32;
@@ -41,6 +37,7 @@ pub fn scan_frameworks(g: &Graph) -> Vec<FrameworkAnalysis> {
 
         for (obj_idx, &ci) in g.class_idx.iter().enumerate() {
             if ci_set.contains(&ci) {
+
                 count += 1;
                 if let Some(&r) = g.retained.get(obj_idx) {
                     total_retained += r;
