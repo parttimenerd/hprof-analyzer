@@ -121,7 +121,7 @@ jobs:
           echo "ASSET=$staging.zip" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
@@ -133,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
@@ -150,17 +150,29 @@ jobs:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Delete existing nightly release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          echo "NIGHTLY_DATE=$(date -u '+%Y-%m-%d')" >> "$GITHUB_ENV"
 
       - name: Publish rolling nightly
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
-          name: Nightly
+          name: "Nightly (${{ env.NIGHTLY_DATE }})"
           prerelease: true
           files: artifacts/*
-          body: "Rolling nightly build from the latest commit on main."
+          body: |
+            Rolling nightly build from the latest commit on main.
+            Commit: ${{ github.sha }}
