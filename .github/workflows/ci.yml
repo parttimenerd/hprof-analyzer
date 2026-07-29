@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Nightly at 02:17 UTC — cross-platform builds run once per day if main changed
+    - cron: '17 2 * * *'
 
 permissions:
   contents: read
@@ -17,6 +20,7 @@ jobs:
   # Lint + full test suite (unit + integration + parity). Ubuntu only: the tests
   # are platform-independent and the parity fixtures are the same everywhere.
   build-test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -60,10 +64,11 @@ jobs:
           path: target/release/hprof-analyzer
           retention-days: 1
 
-  # Cross-platform release build. Confirms the binary compiles on every target we
-  # ship in the Releases; does not run the (Ubuntu-covered) test suite.
+  # Cross-platform release builds — run nightly only to avoid burning CI minutes
+  # on every push. Confirms the binary compiles on every target we ship.
   cross-build:
     name: build (${{ matrix.target }})
+    if: github.event_name == 'schedule'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

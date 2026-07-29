@@ -68,7 +68,9 @@
     <span class="sep">·</span>
     <a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     <span class="sep">·</span>
-    <span>CLI: <code>cargo install hprof-analyzer</code></span>
+    <span>CLI: <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener"><code>cargo install hprof-analyzer</code></a></span>
+    <span class="sep">·</span>
+    <button id="btn-theme-toggle" title="Toggle light/dark theme" class="footer-theme-btn">🌙</button>
   </div>
 </div>
 
@@ -105,6 +107,7 @@
     <button id="btn-to-shell" title="Switch to OQL shell (Ctrl+Shift+R)">⌨ OQL Shell</button>
     <button id="btn-open-report" title="Open full interactive report in a new tab">⧉ Full Report</button>
     <button id="btn-download-report" title="Download self-contained HTML report file" style="display:none">⬇ Download</button>
+    <button id="btn-theme-toggle" title="Toggle light/dark theme">🌙</button>
   </div>
   <div id="report-container">
     <p id="report-message"></p>
@@ -122,6 +125,7 @@
         Show Report
       </button>
       <span id="analyze-status"></span>
+      <button id="btn-theme-toggle-shell" title="Toggle light/dark theme">🌙</button>
       <button id="btn-disconnect">✕ Disconnect</button>
     </div>
   </div>

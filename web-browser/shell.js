@@ -1,6 +1,78 @@
 // shell.js — injected into index.html after WASM init block.
 // Outer scope provides: namedQueries, wasmReady, wasmComplete, HprofSession
 
+// ── Theme management ──────────────────────────────────────────────────────────
+const THEME_KEY = 'hprof-analyzer.theme';
+
+function _isDark() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark') return true;
+  if (attr === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function termTheme() {
+  if (_isDark()) {
+    return {
+      background: '#0a0a14', foreground: '#c8c8dc', cursor: '#7ab4ff',
+      selectionBackground: '#2a3a5a', black: '#1a1a2a', brightBlack: '#3a3a5a',
+      cyan: '#60c8e0', brightCyan: '#80e0f8', green: '#70d080', brightGreen: '#90f0a0',
+      yellow: '#d0b060', brightYellow: '#f0d080', blue: '#5080d0', brightBlue: '#70a0f8',
+      red: '#d06060', brightRed: '#f08080',
+    };
+  }
+  return {
+    background: '#f8f9fc', foreground: '#1a1a2e', cursor: '#2563eb',
+    selectionBackground: '#bfd7ff', black: '#e8eaf0', brightBlack: '#6b7280',
+    cyan: '#0e7490', brightCyan: '#0891b2', green: '#166534', brightGreen: '#15803d',
+    yellow: '#854d0e', brightYellow: '#a16207', blue: '#1d4ed8', brightBlue: '#2563eb',
+    red: '#9b1c1c', brightRed: '#dc2626',
+  };
+}
+
+function applyTheme(theme) {
+  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  else if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  const isDark = _isDark();
+  const icon = isDark ? '☀' : '🌙';
+  for (const id of ['btn-theme-toggle', 'btn-theme-toggle-shell']) {
+    const btn = document.getElementById(id);
+    if (btn) btn.textContent = icon;
+  }
+  // term is declared later in this file; guard via window property set after declaration
+  if (window._hprofTerm) window._hprofTerm.options.theme = termTheme();
+}
+
+(function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  applyTheme(saved || null);
+})();
+
+window.addEventListener('storage', e => {
+  if (e.key === THEME_KEY) applyTheme(e.newValue);
+});
+
+function _bindThemeToggle(id) {
+  const btn = document.getElementById(id);
+  if (btn) btn.addEventListener('click', () => {
+    const next = _isDark() ? 'light' : 'dark';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    _bindThemeToggle('btn-theme-toggle');
+    _bindThemeToggle('btn-theme-toggle-shell');
+  });
+} else {
+  _bindThemeToggle('btn-theme-toggle');
+  _bindThemeToggle('btn-theme-toggle-shell');
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 const PROMPT = 'oql> ';
 const HISTORY_KEY = 'hprof-analyzer.oql-history';
 const SETTINGS_KEY = 'hprof-analyzer.settings';
@@ -1547,24 +1619,7 @@ function buildSidebar(analysisReady) {
 function startTerminal() {
   if (term) { term.dispose(); term = null; }
   term = new Terminal({
-    theme: {
-      background: '#0a0a14',
-      foreground: '#c8c8dc',
-      cursor: '#7ab4ff',
-      selectionBackground: '#2a3a5a',
-      black: '#1a1a2a',
-      brightBlack: '#3a3a5a',
-      cyan: '#60c8e0',
-      brightCyan: '#80e0f8',
-      green: '#70d080',
-      brightGreen: '#90f0a0',
-      yellow: '#d0b060',
-      brightYellow: '#f0d080',
-      blue: '#5080d0',
-      brightBlue: '#70a0f8',
-      red: '#d06060',
-      brightRed: '#f08080',
-    },
+    theme: termTheme(),
     cursorBlink: true,
     fontSize: 13,
     fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace",
@@ -1574,6 +1629,7 @@ function startTerminal() {
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(document.getElementById('terminal-container'));
+  window._hprofTerm = term;
   fitAddon.fit();
 
   const ro = new ResizeObserver(() => fitAddon.fit());
