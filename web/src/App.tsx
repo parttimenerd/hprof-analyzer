@@ -338,17 +338,28 @@ function BackToTop() {
 // Dumb formatter over report.triage (rules are evaluated once in Rust; see
 // src/report/triage.rs). Mirrors render_markdown's render_oom_triage.
 
-// Split a detail string on backtick code spans, rendering `x` as <code>x</code>.
+// Render inline markdown: `code` → <code>, _text_ → <em>.
 function InlineCode({ text }: { text: string }) {
-  const parts = text.split("`");
-  return (
-    <>
-      {parts.map((p, i) =>
-        i % 2 === 1 ? <code key={i}>{p}</code> : <React.Fragment key={i}>{p}</React.Fragment>,
-      )}
-    </>
-  );
+  // Tokenize: backtick spans, underscore-italic spans, plain text.
+  const tokens: React.ReactNode[] = [];
+  const re = /`([^`]+)`|_([^_]+)_/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) tokens.push(<React.Fragment key={key++}>{text.slice(last, m.index)}</React.Fragment>);
+    if (m[1] !== undefined) tokens.push(<code key={key++}>{m[1]}</code>);
+    else tokens.push(<em key={key++}>{m[2]}</em>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) tokens.push(<React.Fragment key={key++}>{text.slice(last)}</React.Fragment>);
+  return <>{tokens}</>;
 }
+
+// Browser-friendly overrides for signals whose CLI-oriented text doesn't fit the web UI.
+const SIGNAL_DETAIL_OVERRIDES: Record<string, string> = {
+  "collections-not-analyzed": "_Collection waste not analyzed — run Full Analysis to check for wasted capacity._",
+};
 
 function OomTriage({ report }: { report: Report }) {
   const signals = report.triage ?? [];
@@ -357,17 +368,20 @@ function OomTriage({ report }: { report: Report }) {
       <h2>Memory Triage</h2>
       <p className="subtitle">Where the reachable heap is concentrated, at a glance.</p>
       <ul>
-        {signals.map((s, i) => (
-          <li key={i}>
-            <strong>{s.title}:</strong> <InlineCode text={s.detail} />
-            {s.anchor && s.anchor_label ? (
-              <>
-                {" "}
-                See <a href={`#${s.anchor}`}>{s.anchor_label}</a>.
-              </>
-            ) : null}
-          </li>
-        ))}
+        {signals.map((s, i) => {
+          const detail = SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail;
+          return (
+            <li key={i}>
+              <strong>{s.title}:</strong> <InlineCode text={detail} />
+              {s.anchor && s.anchor_label ? (
+                <>
+                  {" "}
+                  See <a href={`#${s.anchor}`}>{s.anchor_label}</a>.
+                </>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -1741,29 +1755,37 @@ function TopConsumersSection({ report }: { report: Report }) {
             getLabel={(n) => n.name || "(default)"}
             fmt={formatBytes}
             height={320}
+            extraLeaves={(_node, pathLabels) => {
+              const pkgPrefix = pathLabels.join(".");
+              const dotPkg = pkgPrefix ? pkgPrefix + "." : "";
+              return report.overview.histogram
+                .filter((r) => {
+                  if (!dotPkg) return false; // skip at root — too many classes
+                  if (!r.pretty_class.startsWith(dotPkg)) return false;
+                  return !r.pretty_class.slice(dotPkg.length).includes(".");
+                })
+                .sort((a, b) => b.retained - a.retained)
+                .slice(0, 40) // cap to avoid overwhelming the layout
+                .map((r) => ({ label: r.pretty_class.slice(dotPkg.length), value: r.retained }));
+            }}
             renderLeaf={(_node, pathLabels) => {
               const pkgPrefix = pathLabels.join(".");
-              const histogram = report.overview.histogram;
-              const classes = histogram.filter((r) => {
-                if (!pkgPrefix) return true;
-                const dotPkg = pkgPrefix + ".";
-                if (r.pretty_class.startsWith(dotPkg)) {
-                  // must be in this exact package, not a sub-package
-                  const rest = r.pretty_class.slice(dotPkg.length);
-                  return !rest.includes(".");
-                }
-                return false;
+              const dotPkg = pkgPrefix ? pkgPrefix + "." : "";
+              const classes = report.overview.histogram.filter((r) => {
+                if (!dotPkg) return true;
+                if (!r.pretty_class.startsWith(dotPkg)) return false;
+                return !r.pretty_class.slice(dotPkg.length).includes(".");
               }).sort((a, b) => b.retained - a.retained);
               if (classes.length === 0) return <p className="subtitle" style={{ marginTop: "0.5rem" }}>No classes found in package <code>{pkgPrefix}</code>.</p>;
               return (
-                <div style={{ marginTop: "0.5rem" }}>
-                  <p className="subtitle" style={{ marginBottom: "0.3rem" }}>Classes in <code>{pkgPrefix || "(default)"}</code>:</p>
+                <div style={{ marginTop: "0.75rem" }}>
+                  <h3 style={{ margin: "0 0 0.4rem" }}>Classes in <code>{pkgPrefix || "(default)"}</code></h3>
                   <table className="tree-table">
                     <thead><tr><th>Class</th><th className="num">Instances</th><th className="num">Retained</th></tr></thead>
                     <tbody>
                       {classes.map((r, i) => (
                         <tr key={i}>
-                          <td><code>{r.pretty_class.slice((pkgPrefix ? pkgPrefix + "." : "").length)}</code></td>
+                          <td><code>{r.pretty_class.slice(dotPkg.length)}</code></td>
                           <td className="num">{fmtCount(r.instances)}</td>
                           <td className="num">{formatBytes(r.retained)}</td>
                         </tr>
@@ -1774,9 +1796,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               );
             }}
           />
-          <details style={{ marginBottom: "1rem" }}>
-            <summary style={{ cursor: "pointer", userSelect: "none" }}>Package tree detail</summary>
-          <table className="tree-table" style={{ marginTop: "0.5rem" }}>
+          <table className="tree-table" style={{ marginTop: "0.75rem" }}>
             <thead>
               <tr>
                 <th>Package</th>
@@ -1791,7 +1811,6 @@ function TopConsumersSection({ report }: { report: Report }) {
               ))}
             </tbody>
           </table>
-          </details>
         </>
       )}
     </section>
@@ -3481,6 +3500,15 @@ export default function App({ report }: { report: Report }) {
       <CustomQueriesSection report={report} />
       <GlossarySection />
       <BackToTop />
+      <footer className="report-footer">
+        Generated by{" "}
+        <a href="https://github.com/parttimenerd/hprof-analyzer" target="_blank" rel="noopener noreferrer">
+          hprof-analyzer
+        </a>
+        {" "}(<a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener noreferrer">cargo install hprof-analyzer</a>)
+        {report.generated ? ` · ${report.generated}` : null}
+        {" · "}This report is a self-contained HTML file — no server required.
+      </footer>
     </div>
     </TableExpansionCtx.Provider>
   );

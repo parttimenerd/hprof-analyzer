@@ -27,6 +27,10 @@ pub(crate) const UNREACHABLE_HISTOGRAM_CAP: usize = 30;
 const BIG_DROPS_CAP: usize = 25;
 /// Cap on the number of rows in the "Immediate Dominators" class rollup.
 const IMMEDIATE_DOMINATORS_CAP: usize = 30;
+/// Cap on the number of (dominator_class, dominated_class) pairs emitted for
+/// the V5 two-sided sankey. 20k covers ~10 dominator pairs per class for heaps
+/// with up to ~2000 significant classes, enabling the full pivot navigation.
+const IMDOM_PAIRS_CAP: usize = 20_000;
 /// Cap on the TOTAL number of nodes emitted across a group suspect's merged
 /// shortest-paths-to-GC-roots prefix tree. Once reached, existing matching
 /// nodes keep accumulating counts/retained (so totals stay meaningful) but no
@@ -1085,11 +1089,19 @@ fn build_dominator_analysis(
     // children; count p once in dominator_count and add its shallow. Class
     // keys are folded through `class_row_remap` so they match the main
     // histogram.
+    //
+    // Simultaneously build a (dominator_class, dominated_class) pair map for
+    // the V5 two-sided sankey. The pair map uses (remapped_parent_ci,
+    // remapped_child_ci) as the key and accumulates (pair_count,
+    // dominated_shallow, dominated_retained).
     let remap = class_row_remap(g);
     let mut dom_count = vec![0u64; class_count]; // #dominator objects of this class
     let mut domd_count = vec![0u64; class_count]; // #objects immediately dominated
     let mut dom_shallow = vec![0u64; class_count];
     let mut domd_shallow = vec![0u64; class_count];
+    // pair_map: (parent_remapped_ci, child_remapped_ci) -> (count, shallow, retained)
+    let mut pair_map: std::collections::HashMap<(u32, u32), (u64, u64, u64)> =
+        std::collections::HashMap::new();
     for p in 0..n {
         if g.idom[p] == undef {
             continue;
@@ -1106,8 +1118,18 @@ fn build_dominator_analysis(
         dom_count[pci] += 1;
         dom_shallow[pci] += g.shallow[p] as u64;
         for &c in kids {
+            let cu = c as usize;
             domd_count[pci] += 1;
-            domd_shallow[pci] += g.shallow[c as usize] as u64;
+            domd_shallow[pci] += g.shallow[cu] as u64;
+            // pair aggregation
+            let cci_raw = g.class_idx[cu] as usize;
+            if cci_raw < class_count {
+                let cci = remap[cci_raw];
+                let e = pair_map.entry((pci as u32, cci)).or_insert((0, 0, 0));
+                e.0 += 1;
+                e.1 += g.shallow[cu] as u64;
+                e.2 += g.retained[cu];
+            }
         }
     }
     let mut order: Vec<usize> = (0..class_count)
@@ -1130,7 +1152,28 @@ fn build_dominator_analysis(
             dominated_shallow: domd_shallow[ci],
         })
         .collect();
-    let immediate_dominators = ImmediateDominators { rows };
+    // Sort pairs by dominated_retained desc, cap.
+    let mut pairs_vec: Vec<ImmDomPair> = pair_map
+        .into_iter()
+        .map(|((pci, cci), (cnt, shl, ret))| ImmDomPair {
+            dominator_class: pretty_class_name(&g.class_names[pci as usize]),
+            dominated_class: pretty_class_name(&g.class_names[cci as usize]),
+            pair_count: cnt,
+            dominated_shallow: shl,
+            dominated_retained: ret,
+        })
+        .collect();
+    pairs_vec.sort_unstable_by(|a, b| {
+        b.dominated_retained
+            .cmp(&a.dominated_retained)
+            .then(a.dominator_class.cmp(&b.dominator_class))
+            .then(a.dominated_class.cmp(&b.dominated_class))
+    });
+    pairs_vec.truncate(IMDOM_PAIRS_CAP);
+    let immediate_dominators = ImmediateDominators {
+        rows,
+        pairs: pairs_vec,
+    };
 
     DominatorAnalysis {
         big_drops,

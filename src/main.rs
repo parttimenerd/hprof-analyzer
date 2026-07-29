@@ -2250,6 +2250,18 @@ fn run(
     } else {
         None
     };
+
+    // Capture outbound edges for top objects before fwd CSR is consumed (MAT or non-MAT).
+    if opts.obj_graph {
+        const GRAPH_CAPTURE_TOP_N: usize = 10_000;
+        const GRAPH_EDGE_CAP: usize = 100;
+        g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
+            &g,
+            GRAPH_CAPTURE_TOP_N,
+            GRAPH_EDGE_CAP,
+        ));
+    }
+
     let (inb_block_off, inb_data) = if mat.is_some() {
         // Drop fwd_targets BEFORE calling build_mat_scan so that inb_flat
         // allocation (6 GB) does not coexist with fwd_targets (8 GB).

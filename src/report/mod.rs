@@ -233,6 +233,7 @@ mod tests {
             node_kv: None,
             fwd_field_name_idx: None,
             field_name_pool: None,
+            obj_graph_edges: None,
         };
         (g, dc_off, dc_tgt)
     }

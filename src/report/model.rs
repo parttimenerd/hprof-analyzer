@@ -834,6 +834,23 @@ pub struct ImmediateDominatorRow {
     pub dominated_shallow: u64,
 }
 
+/// One (dominator_class, dominated_class) pair for the V5 two-sided sankey.
+/// Powers "who holds X" (rows where dominated_class == target) and
+/// "what does X hold" (rows where dominator_class == target) from a single dataset.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ImmDomPair {
+    pub dominator_class: String,
+    pub dominated_class: String,
+    /// Number of (dominator, dominated) object pairs counted.
+    pub pair_count: u64,
+    /// Aggregate retained heap of the dominated objects.
+    pub dominated_retained: u64,
+    /// Aggregate shallow heap of the dominated objects.
+    pub dominated_shallow: u64,
+}
+
 /// The "Immediate Dominators" view: dominated-object rollup keyed by the
 /// dominator's class. Additive; not parity-compared.
 #[derive(
@@ -842,6 +859,11 @@ pub struct ImmediateDominatorRow {
 pub struct ImmediateDominators {
     /// Rows sorted by dominated_shallow descending, capped.
     pub rows: Vec<ImmediateDominatorRow>,
+    /// Per-(dominator_class, dominated_class) pairs for the two-sided sankey.
+    /// Sorted by dominated_retained descending, capped at IMDOM_PAIRS_CAP.
+    /// Additive; defaults to empty for round-trip with older JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pairs: Vec<ImmDomPair>,
 }
 
 /// Always-on dominator-tree analysis grouping Big Drops (#1) and Immediate

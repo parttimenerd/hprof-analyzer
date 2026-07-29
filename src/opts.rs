@@ -50,6 +50,10 @@ pub struct AnalyzeOptions {
     /// `ParentClass.fieldName → ChildClass`. Gated: adds ~2 bytes per edge
     /// (~100–500 MB extra RSS on multi-GB dumps).
     pub ref_paths: bool,
+    /// Capture outbound-reference graph + dominator subtree for the top biggest
+    /// objects. Enables click-through in the HTML report. Adds ~1-3 MB to the
+    /// report JSON; captured in ~30 MB of peak RAM freed after build_model.
+    pub obj_graph: bool,
     /// Skip build_model + render. Used by `mat caches` which discards the report.
     pub skip_report: bool,
 }
@@ -96,6 +100,7 @@ impl DetailLevel {
             query_path_depth: DEFAULT_QUERY_PATH_DEPTH,
             reachable_only: false,
             ref_paths: false,
+            obj_graph: false,
             skip_report: false,
         }
     }

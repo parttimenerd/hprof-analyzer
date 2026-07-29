@@ -495,15 +495,12 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
 
     // Sort indices by shallow size descending, keep top_n.
     let mut indices: Vec<u32> = (0..n as u32).collect();
-    indices.sort_unstable_by(|&a, &b| {
-        g.shallow[b as usize].cmp(&g.shallow[a as usize])
-    });
+    indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
     indices.truncate(top_n);
 
     let mut cap = ObjGraphCapture::empty();
     // name_str → pool index (0 reserved for "").
-    let mut name_map: std::collections::HashMap<String, u16> =
-        std::collections::HashMap::new();
+    let mut name_map: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
     name_map.insert(String::new(), 0u16);
 
     let fwd_names = g.fwd_field_name_idx.as_ref();
@@ -513,7 +510,7 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         let src = *src;
         let s = src as usize;
         let start = g.fwd_offsets[s] as usize;
-        let end   = g.fwd_offsets[s + 1] as usize;
+        let end = g.fwd_offsets[s + 1] as usize;
         cap.captured.insert(src);
         let mut row: Vec<(u32, u16)> = Vec::with_capacity((end - start).min(edge_cap));
         for pos in start..end {

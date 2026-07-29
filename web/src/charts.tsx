@@ -248,6 +248,7 @@ export function ZoomableTreemap<T>({
   fmt,
   height = 320,
   renderLeaf,
+  extraLeaves,
 }: {
   root: T;
   getChildren: (n: T) => T[];
@@ -256,6 +257,8 @@ export function ZoomableTreemap<T>({
   fmt: (n: number) => string;
   height?: number;
   renderLeaf?: (node: T, pathLabels: string[]) => React.ReactNode;
+  /** Extra non-navigable tiles to mix into the treemap alongside real children (e.g. direct classes). */
+  extraLeaves?: (node: T, pathLabels: string[]) => { label: string; value: number }[];
 }) {
   const [path, setPath] = React.useState<T[]>([]);
   const [mode, setMode] = React.useState<"treemap" | "flame">("treemap");
@@ -277,6 +280,8 @@ export function ZoomableTreemap<T>({
 
   const currentNode = path.length > 0 ? path[path.length - 1] : root;
   const children = getChildren(currentNode).filter((c) => getValue(c) > 0);
+  // Build the dotted package path for the current node (skip root's empty label)
+  const pathLabels = path.map((n) => getLabel(n)).filter(Boolean);
 
   // Color map: keyed by top-level-child label of the ORIGINAL root (stable across zooms)
   const colorMap = React.useMemo(
@@ -289,26 +294,34 @@ export function ZoomableTreemap<T>({
     return PALETTE[(colorMap.get(lbl) ?? 0) % PALETTE.length];
   };
 
-  // d3 treemap layout for treemap mode
+  // d3 treemap layout for treemap mode — includes both sub-package children and extra class tiles
+  const extras = React.useMemo(
+    () => extraLeaves ? extraLeaves(currentNode, pathLabels) : [],
+    [extraLeaves, currentNode, pathLabels],
+  );
   const nodes = React.useMemo(() => {
-    if (children.length === 0 || w < 10) return [];
-    type Leaf = { node: T; value: number };
-    const leaves: Leaf[] = children.map((c) => ({ node: c, value: getValue(c) }));
-    const hierarchyRoot = hierarchy<{ node: T | null; value: number; children?: Leaf[] }>(
-      { node: null, value: 0, children: leaves },
+    const hasAny = children.length > 0 || extras.length > 0;
+    if (!hasAny || w < 10) return [];
+    type Leaf = { node: T | null; extra: { label: string; value: number } | null; value: number };
+    const leaves: Leaf[] = [
+      ...children.map((c) => ({ node: c, extra: null, value: getValue(c) })),
+      ...extras.map((e) => ({ node: null, extra: e, value: e.value })),
+    ];
+    const hierarchyRoot = hierarchy<{ node: T | null; extra: { label: string; value: number } | null; value: number; children?: Leaf[] }>(
+      { node: null, extra: null, value: 0, children: leaves },
       (d) => d.children,
     )
       .sum((d) => (d.children ? 0 : d.value))
       .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
-    treemap<{ node: T | null; value: number }>()
+    treemap<{ node: T | null; extra: { label: string; value: number } | null; value: number }>()
       .tile(treemapSquarify)
       .size([w, height])
       .paddingOuter(2)
       .paddingInner(1)(hierarchyRoot as never);
     return hierarchyRoot.leaves() as unknown as (ReturnType<typeof hierarchy> & { x0: number; y0: number; x1: number; y1: number; data: Leaf })[];
-  }, [children, w, height]);
+  }, [children, extras, w, height]);
 
-  const total = children.reduce((s, c) => s + getValue(c), 0) || 1;
+  const total = (children.reduce((s, c) => s + getValue(c), 0) + extras.reduce((s, e) => s + e.value, 0)) || 1;
 
   // Flame levels
   const flameLevels = React.useMemo(
@@ -321,8 +334,6 @@ export function ZoomableTreemap<T>({
   };
 
   const crumbs = [root, ...path];
-  // Build the dotted package path for the current node (skip root's empty label)
-  const pathLabels = path.map((n) => getLabel(n)).filter(Boolean);
 
   if (children.length === 0 && path.length === 0) return null;
 
@@ -357,12 +368,42 @@ export function ZoomableTreemap<T>({
 
       {/* Treemap mode */}
       {mode === "treemap" && (
-        <div style={{ position: "relative", width: "100%", height: children.length === 0 ? 60 : height, overflow: "hidden" }}>
+        <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
           {nodes.map((leaf, i) => {
             const { x0, y0, x1, y1, data: ld } = leaf;
             const lw = x1 - x0;
             const lh = y1 - y0;
             if (lw < 1 || lh < 1) return null;
+            // Extra (class) tile
+            if (ld.extra !== null) {
+              const val = ld.extra.value;
+              const pct = ((val / total) * 100).toFixed(1);
+              const bg = getColor(currentNode);
+              return (
+                <div
+                  key={`x${i}`}
+                  title={`${ld.extra.label}: ${fmt(val)} (${pct}%) — class`}
+                  style={{
+                    position: "absolute", left: x0, top: y0, width: lw, height: lh,
+                    background: bg, opacity: 0.55, boxSizing: "border-box", overflow: "hidden",
+                    cursor: "default",
+                    border: "1px dashed rgba(255,255,255,0.3)",
+                  }}
+                >
+                  {lw > 44 && lh > 18 && (
+                    <span style={{ display: "block", padding: "2px 4px", fontSize: Math.min(11, lw / 7), color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {ld.extra.label}
+                    </span>
+                  )}
+                  {lw > 44 && lh > 34 && (
+                    <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(10, lw / 8), color: "rgba(255,255,255,0.75)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {fmt(val)}
+                    </span>
+                  )}
+                </div>
+              );
+            }
+            // Sub-package tile
             const node = ld.node as T;
             const val = ld.value;
             const pct = ((val / total) * 100).toFixed(1);
@@ -394,9 +435,30 @@ export function ZoomableTreemap<T>({
               </div>
             );
           })}
-          {children.length === 0 && (
+          {children.length === 0 && extras.length === 0 && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)", fontSize: "0.9rem" }}>
-              {renderLeaf ? <em>leaf package — classes below</em> : "No sub-packages"}
+              No sub-packages
+            </div>
+          )}
+          {children.length === 0 && (extras.length > 0 || nodes.length === 0) && extras.length === 0 && (
+            // Pure leaf with no children and no extras: single full-size tile
+            <div
+              style={{
+                position: "absolute", left: 0, top: 0, width: "100%", height: "100%",
+                background: getColor(currentNode), opacity: 0.87, boxSizing: "border-box",
+                overflow: "hidden",
+              }}
+            >
+              {w > 44 && height > 22 && (
+                <span style={{ display: "block", padding: "2px 4px", fontSize: 12, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {getLabel(currentNode)}
+                </span>
+              )}
+              {w > 44 && height > 38 && (
+                <span style={{ display: "block", padding: "0 4px", fontSize: 11, color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {fmt(getValue(currentNode))}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -426,11 +488,29 @@ export function ZoomableTreemap<T>({
               })}
             </div>
           ))}
+          {extras.length > 0 && (
+            <div className="flame-level">
+              {extras.map((e, ci) => {
+                const pct = ((e.value / (getValue(currentNode) || 1)) * 100).toFixed(1);
+                const bg = getColor(currentNode);
+                return (
+                  <div
+                    key={ci}
+                    className="flame-cell flame-cell-leaf"
+                    style={{ width: `${((e.value / (getValue(currentNode) || 1)) * 100)}%`, background: bg, opacity: 0.6 }}
+                    title={`${e.label}: ${fmt(e.value)} (${pct}%) — class`}
+                  >
+                    <span className="flame-label">{e.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Leaf content (classes in this package) */}
-      {children.length === 0 && renderLeaf && renderLeaf(currentNode, pathLabels)}
+      {/* Classes in this package (shown at any level when renderLeaf is provided) */}
+      {renderLeaf && renderLeaf(currentNode, pathLabels)}
     </div>
   );
 }

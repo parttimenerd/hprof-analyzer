@@ -1238,6 +1238,7 @@ impl Pass2 {
                 None
             },
             unreachable_retained: None,
+            obj_graph_edges: None,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

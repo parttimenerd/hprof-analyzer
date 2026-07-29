@@ -1,3 +1,5 @@
+    Finished `release` profile [optimized] target(s) in 0.35s
+     Running `target/release/hprof-analyzer dev emit-schema`
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Report",
@@ -1789,6 +1791,43 @@
         "loader_id"
       ]
     },
+    "ImmDomPair": {
+      "description": "One (dominator_class, dominated_class) pair for the V5 two-sided sankey.\nPowers \"who holds X\" (rows where dominated_class == target) and\n\"what does X hold\" (rows where dominator_class == target) from a single dataset.",
+      "type": "object",
+      "properties": {
+        "dominated_class": {
+          "type": "string"
+        },
+        "dominated_retained": {
+          "description": "Aggregate retained heap of the dominated objects.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominated_shallow": {
+          "description": "Aggregate shallow heap of the dominated objects.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominator_class": {
+          "type": "string"
+        },
+        "pair_count": {
+          "description": "Number of (dominator, dominated) object pairs counted.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "dominator_class",
+        "dominated_class",
+        "pair_count",
+        "dominated_retained",
+        "dominated_shallow"
+      ]
+    },
     "ImmediateDominatorRow": {
       "description": "One row of the immediate-dominator class rollup: for each dominator class,\nhow many objects it immediately dominates and their aggregate shallow heap.",
       "type": "object",
@@ -1833,6 +1872,13 @@
       "description": "The \"Immediate Dominators\" view: dominated-object rollup keyed by the\ndominator's class. Additive; not parity-compared.",
       "type": "object",
       "properties": {
+        "pairs": {
+          "description": "Per-(dominator_class, dominated_class) pairs for the two-sided sankey.\nSorted by dominated_retained descending, capped at IMDOM_PAIRS_CAP.\nAdditive; defaults to empty for round-trip with older JSON.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImmDomPair"
+          }
+        },
         "rows": {
           "description": "Rows sorted by dominated_shallow descending, capped.",
           "type": "array",
