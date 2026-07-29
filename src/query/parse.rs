@@ -247,7 +247,7 @@ where
 }
 
 #[allow(clippy::type_complexity)]
-fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
+pub(crate) fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
@@ -574,6 +574,7 @@ where
             .map(|i| i.is_some())
             .then(
                 any_ident()
+                    .labelled("class name")
                     .map(|name| (name, false))
                     .or(select! { Token::Str(s) => (s, true) }.labelled("class regex")),
             )
@@ -829,6 +830,7 @@ where
                 .foldl(ident_ci("OR").ignore_then(and).repeated(), |l, r| {
                     Predicate::Or(Box::new(l), Box::new(r))
                 })
+                .labelled("predicate expression")
         });
 
         // CASE WHEN <pred> THEN <expr> [WHEN <pred> THEN <expr>]* [ELSE <expr>] END
@@ -949,6 +951,7 @@ where
             base_item
                 .then(alias_name.or_not())
                 .map(|((item, _), alias)| (item, alias))
+                .labelled("expression")
         });
 
         // Collect aliased items, then unzip into parallel vecs.
@@ -1917,6 +1920,50 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
             Err(buf.join("\n"))
         }
     }
+}
+
+/// Completion context extracted by parsing `src[..cursor_pos]` and inspecting
+/// what the parser expected at the end.
+pub struct CompletionContext {
+    /// Labels from `.labelled("xyz")` parsers that were expected at the cursor.
+    pub labels: Vec<String>,
+    /// Specific `Token` variants that were expected at the cursor.
+    pub tokens: Vec<Token>,
+}
+
+/// Parse `src[..cursor_pos]` and collect what the grammar expected next.
+/// Returns an empty context on tokenisation failure.
+pub fn parse_for_complete(src: &str, cursor_pos: usize) -> CompletionContext {
+    let prefix = &src[..cursor_pos.min(src.len())];
+    let toks = match tokenize_spanned(prefix) {
+        Ok(t) => t,
+        Err(_) => return CompletionContext { labels: vec![], tokens: vec![] },
+    };
+    let eoi_span: SimpleSpan = (cursor_pos..cursor_pos).into();
+    let stream = Stream::from_iter(toks).map(eoi_span, |(t, s)| (t, s));
+    let (_output, errors) = parser().parse(stream).into_output_errors();
+
+    let mut labels: Vec<String> = Vec::new();
+    let mut tokens: Vec<Token> = Vec::new();
+    for err in &errors {
+        // Only look at errors at or near the end of input
+        if err.span().end + 1 < cursor_pos {
+            continue;
+        }
+        for pat in err.expected() {
+            match pat {
+                chumsky::error::RichPattern::Label(s) => {
+                    let s = s.to_string();
+                    if !labels.contains(&s) { labels.push(s); }
+                }
+                chumsky::error::RichPattern::Token(t) => {
+                    if !tokens.contains(&**t) { tokens.push((**t).clone()); }
+                }
+                _ => {}
+            }
+        }
+    }
+    CompletionContext { labels, tokens }
 }
 
 #[cfg(test)]

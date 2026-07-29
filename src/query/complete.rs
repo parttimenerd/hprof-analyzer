@@ -1,18 +1,11 @@
 //! Grammar-aware OQL completion.
 //!
-//! The completer tokenises the prefix up to the cursor and uses the last few
-//! tokens to decide which completion category to offer.  The categories are:
-//!
-//! - Class position    — after FROM / INSTANCEOF / UNION SELECT … FROM
-//! - Alias position    — first bare identifier after a class name in FROM
-//! - Select position   — after SELECT / DISTINCT / comma in select list
-//! - Predicate position — after WHERE / AND / OR / NOT / HAVING
-//! - Attribute prefix  — starts with `@`
-//! - Function prefix   — user started typing a known function name
-//! - Keyword prefix    — partial match against clause keywords
-//! - Empty / fallback  — offer SELECT to start
+//! Uses the chumsky parser to determine what tokens are expected at the cursor
+//! position, then maps those to completion candidates.  A fallback heuristic
+//! (upper_tokens + state-machine) covers gaps where chumsky returns nothing.
 
-use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, RESERVED};
+use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS};
+use crate::query::parse::{parse_for_complete, CompletionContext, Token};
 
 pub struct Completion {
     pub value: String,
@@ -90,7 +83,7 @@ pub fn complete(
 ) -> Vec<Completion> {
     let prefix = &line[..cursor_pos.min(line.len())];
 
-    // /run <name> completion
+    // /run <name> completion — unchanged
     if let Some(typed) = prefix.strip_prefix("/run ") {
         return crate::named_queries::NAMED_QUERIES
             .iter()
@@ -103,105 +96,30 @@ pub fn complete(
             .collect();
     }
 
-    // Split prefix into: tokens before current word, and the current partial word
+    // Split into prefix-before-typed and the current partial word
     let delim_pos = prefix
         .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
         .map(|i| i + 1)
         .unwrap_or(0);
     let typed = &prefix[delim_pos..];
-    let typed_up = typed.to_ascii_uppercase();
-    let _ = typed_up; // used for future uppercase matching
+    let prefix_before_typed = &prefix[..delim_pos];
 
-    // All complete tokens (uppercase) before the current partial word
-    let toks = upper_tokens(&prefix[..delim_pos]);
-    let n = toks.len();
-
-    // ── Determine context ──────────────────────────────────────────────────────
-
-    // ── Class name position ───────────────────────────────────────────────────
-    // After FROM, INSTANCEOF, or FROM INSTANCEOF (possibly with partial typed)
-    let in_class_pos = n > 0 && {
-        let last = &toks[n - 1];
-        last == "FROM" || last == "INSTANCEOF"
-    };
-
-    if in_class_pos || (n > 1 && toks[n - 1] == "INSTANCEOF" && toks[n - 2] == "FROM") {
-        let lower = typed.to_ascii_lowercase();
-        let mut res: Vec<Completion> = class_names
+    // @attribute prefix — unchanged
+    if typed.starts_with('@') {
+        return ATTRIBUTES
             .iter()
-            .filter(|c| c.to_ascii_lowercase().starts_with(&lower) || lower.is_empty())
-            .map(|c| class(c))
-            .collect();
-        // Also offer INSTANCEOF after FROM (if not already typed)
-        if toks.last().map(|s| s.as_str()) == Some("FROM")
-            && "INSTANCEOF"
-                .to_ascii_lowercase()
-                .starts_with(&typed.to_ascii_lowercase())
-        {
-            res.insert(0, kw("INSTANCEOF"));
-        }
-        dedup(res)
-    }
-    // ── @attribute prefix ─────────────────────────────────────────────────────
-    else if typed.starts_with('@') {
-        ATTRIBUTES
-            .iter()
-            .filter(|a| {
-                a.to_ascii_lowercase()
-                    .starts_with(&typed.to_ascii_lowercase())
-            })
+            .filter(|a| a.to_ascii_lowercase().starts_with(&typed.to_ascii_lowercase()))
             .map(|a| attr(a))
-            .collect()
+            .collect();
     }
-    // ── Partial keyword / function typed ─────────────────────────────────────
-    else if !typed.is_empty() {
+
+    // At query start with no tokens yet
+    if delim_pos == 0 {
         let lower = typed.to_ascii_lowercase();
-
-        // At the very start of a query (nothing before this token) only SELECT
-        // and class names are valid — suppress agg/scalar functions and clause
-        // keywords that can never open a statement.
-        if delim_pos == 0 {
-            let mut res: Vec<Completion> = Vec::new();
-            if "select".starts_with(&lower) {
-                res.push(kw("SELECT"));
-            }
-            if lower.len() >= 2 || lower.contains('.') {
-                for c in class_names {
-                    if c.to_ascii_lowercase().starts_with(&lower) {
-                        res.push(class(c));
-                    }
-                }
-            }
-            return dedup(res);
+        let mut res = Vec::new();
+        if "select".starts_with(&lower) {
+            res.push(kw("SELECT"));
         }
-
-        let mut res: Vec<Completion> = Vec::new();
-
-        // Keywords
-        for kw_str in KEYWORDS.iter().chain(RESERVED.iter()).copied() {
-            if kw_str.to_ascii_lowercase().starts_with(&lower) {
-                res.push(kw(kw_str));
-            }
-        }
-        // Aggregate functions
-        for f in AGG_FUNCS.iter().copied() {
-            if f.to_ascii_lowercase().starts_with(&lower) {
-                res.push(agg(f));
-            }
-        }
-        // Scalar functions
-        for f in FUNCS.iter().copied() {
-            if f.to_ascii_lowercase().starts_with(&lower) {
-                res.push(func(f));
-            }
-        }
-        // Attributes
-        for a in ATTRIBUTES.iter().copied() {
-            if a.to_ascii_lowercase().starts_with(&lower) {
-                res.push(attr(a));
-            }
-        }
-        // Class names (only when there's enough of a prefix to be useful)
         if lower.len() >= 2 || lower.contains('.') {
             for c in class_names {
                 if c.to_ascii_lowercase().starts_with(&lower) {
@@ -209,13 +127,194 @@ pub fn complete(
                 }
             }
         }
-        dedup(res)
+        return dedup(res);
     }
-    // ── Cursor after a space with no partial word ─────────────────────────────
-    else {
-        // typed is empty — context-driven suggestions
-        empty_context_completions(&toks, class_names)
+
+    // Parse prefix_before_typed (i.e., everything up to and including the last delimiter)
+    // to get what the grammar expects next.
+    let ctx = parse_for_complete(prefix_before_typed, prefix_before_typed.len());
+    let candidates = completions_from_context(&ctx, typed, class_names);
+
+    if !candidates.is_empty() {
+        // Chumsky told us what's valid — trust it, skip fallback heuristic.
+        return dedup(candidates);
     }
+
+    let lower = typed.to_ascii_lowercase();
+
+    // Fallback: chumsky returned nothing, use old heuristic
+    let toks = upper_tokens(prefix_before_typed);
+
+    // When typed is non-empty, scan all keyword/function/attribute slices
+    // (original behaviour: a partial keyword anywhere mid-query filters globally).
+    if !lower.is_empty() {
+        let mut res: Vec<Completion> = Vec::new();
+        use crate::query::parse::{KEYWORDS, RESERVED};
+        for kw_str in KEYWORDS.iter().chain(RESERVED.iter()).copied() {
+            if kw_str.to_ascii_lowercase().starts_with(&lower) {
+                res.push(kw(kw_str));
+            }
+        }
+        for f in AGG_FUNCS.iter().copied() {
+            if f.to_ascii_lowercase().starts_with(&lower) {
+                res.push(agg(f));
+            }
+        }
+        for f in FUNCS.iter().copied() {
+            if f.to_ascii_lowercase().starts_with(&lower) {
+                res.push(func(f));
+            }
+        }
+        for a in ATTRIBUTES.iter().copied() {
+            if a.to_ascii_lowercase().starts_with(&lower) {
+                res.push(attr(a));
+            }
+        }
+        if lower.len() >= 2 || lower.contains('.') {
+            for c in class_names {
+                if c.to_ascii_lowercase().starts_with(&lower) {
+                    res.push(class(c));
+                }
+            }
+        }
+        return dedup(res);
+    }
+
+    // typed is empty — context-driven suggestions from token history
+    dedup(empty_context_completions(&toks, class_names))
+}
+
+fn completions_from_context(
+    ctx: &CompletionContext,
+    typed: &str,
+    class_names: &[String],
+) -> Vec<Completion> {
+    let lower = typed.to_ascii_lowercase();
+    let mut res = Vec::new();
+
+    for label in &ctx.labels {
+        match label.as_str() {
+            "class name" => {
+                // In a class-name context, offer classes even with empty prefix
+                // (chumsky told us a class is valid here, so min-length guard is relaxed).
+                if lower.is_empty() || lower.len() >= 2 || lower.contains('.') {
+                    res.extend(
+                        class_names
+                            .iter()
+                            .filter(|c| {
+                                lower.is_empty()
+                                    || c.to_ascii_lowercase().starts_with(&lower)
+                            })
+                            .map(|c| class(c)),
+                    );
+                }
+            }
+            // "attribute" is the label on the `attr` parser — means a field or @attr is expected.
+            "attribute" => {
+                // Offer all @attributes and scalar functions (field names can't be
+                // enumerated without live data, but attrs and funcs cover the common cases).
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+                res.extend(
+                    FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| func(f)),
+                );
+            }
+            "expression" => {
+                res.extend(
+                    AGG_FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| agg(f)),
+                );
+                res.extend(
+                    FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| func(f)),
+                );
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+                if "*".starts_with(&lower) {
+                    res.push(Completion {
+                        value: "*".into(),
+                        display: "*".into(),
+                        group: Some("operator".into()),
+                    });
+                }
+            }
+            "predicate expression" => {
+                res.extend(
+                    FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| func(f)),
+                );
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+                if "not".starts_with(&lower) {
+                    res.push(kw("NOT"));
+                }
+                if "exists".starts_with(&lower) {
+                    res.push(kw("EXISTS"));
+                }
+            }
+            // Keywords labelled by ident_ci (e.g. "FROM", "WHERE", "ORDER", "BY", etc.)
+            s => {
+                let up = s.to_ascii_uppercase();
+                if up.to_ascii_lowercase().starts_with(&lower) {
+                    res.push(kw(&up));
+                }
+            }
+        }
+    }
+
+    // Map expected Token variants to completions
+    for tok in &ctx.tokens {
+        match tok {
+            Token::Ident(s) if !s.is_empty() => {
+                let sup = s.to_ascii_uppercase();
+                if sup.to_ascii_lowercase().starts_with(&lower) {
+                    res.push(kw(&sup));
+                }
+            }
+            Token::At(_) => {
+                // Grammar expects an @attribute — offer all matching attributes
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+            }
+            Token::Star => {
+                if "*".starts_with(&lower) {
+                    res.push(Completion {
+                        value: "*".into(),
+                        display: "*".into(),
+                        group: Some("operator".into()),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    res
 }
 
 /// Suggestions when the cursor is right after a space (typed token is empty).
@@ -756,5 +855,37 @@ mod tests {
         // dedup only works on consecutive, use a set
         let set: std::collections::HashSet<_> = v.iter().copied().collect();
         assert_eq!(set.len(), v.len(), "no duplicate values in completions");
+    }
+
+    // ── Chumsky-driven tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn chumsky_after_select_no_from() {
+        // After SELECT <expr> space, grammar expects FROM
+        let cs = complete("SELECT * ", 9, &classes(), &[]);
+        let v = vals(&cs);
+        assert!(v.contains(&"FROM"), "SELECT * space → FROM");
+        assert!(!v.contains(&"WHERE"), "no WHERE before FROM");
+    }
+
+    #[test]
+    fn chumsky_after_where_no_class_flood() {
+        let line = "SELECT * FROM java.lang.String s WHERE ";
+        let cs = complete(line, line.len(), &classes(), &[]);
+        assert!(
+            !cs.iter().any(|c| c.group.as_deref() == Some("class")),
+            "no class names after WHERE"
+        );
+    }
+
+    #[test]
+    fn chumsky_select_star_from_class_space_suggests_where() {
+        let cs = complete("SELECT * FROM java.lang.String s ", 33, &classes(), &[]);
+        let v = vals(&cs);
+        assert!(v.contains(&"WHERE"), "after alias → WHERE");
+        assert!(
+            v.contains(&"ORDER BY") || cs.iter().any(|c| c.value == "ORDER"),
+            "after alias → ORDER-related"
+        );
     }
 }
