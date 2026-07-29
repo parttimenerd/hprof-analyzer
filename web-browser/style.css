@@ -695,24 +695,37 @@ button:hover { background: var(--accent-hover); }
   background: var(--prog-bg);
   border-radius: 3px;
   overflow: hidden;
+  position: relative;
 }
 .wasm-progress-bar {
   height: 100%;
   width: 0%;
   background: linear-gradient(90deg, var(--prog-fill1), var(--prog-fill2));
   border-radius: 3px;
-  transition: width 0.4s ease;
+  transition: width 0.3s ease-out;
+  position: relative;
 }
-/* During blocking WASM phases the bar width is fixed but a shimmer shows activity */
+/* Indeterminate marquee — runs off the main thread via GPU-composited transform.
+   Activated when WASM blocks. The ::after stripe travels across the fixed-width bar. */
 .wasm-progress-bar.wasm-blocking {
-  transition: width 0.4s ease;
-  background: linear-gradient(90deg, var(--prog-fill1) 0%, var(--prog-fill2) 40%, #a0c8ff 50%, var(--prog-fill2) 60%, var(--prog-fill1) 100%);
-  background-size: 200% 100%;
-  animation: wasm-shimmer 1.6s linear infinite;
+  width: 100% !important;
+  transition: none;
+  background: var(--prog-bg);
+  overflow: hidden;
 }
-@keyframes wasm-shimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+.wasm-progress-bar.wasm-blocking::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--prog-fill2), var(--prog-fill1), var(--prog-fill2), transparent);
+  animation: wasm-marquee 1.4s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes wasm-marquee {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
 }
 
 /* Report nav bar */

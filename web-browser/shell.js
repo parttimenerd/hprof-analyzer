@@ -427,21 +427,34 @@ function _makeProgress(labelId, barId) {
     _rafId = requestAnimationFrame(_tick);
   }
 
-  const setStage = (label, pct, blocking = false, animMs = 300) => {
+  const setStage = (label, pct, blocking = false) => {
     const lbl = document.getElementById(labelId);
     const bar = document.getElementById(barId);
     if (lbl) lbl.textContent = label;
     if (bar) {
-      bar.classList.toggle('wasm-blocking', blocking);
-      animateTo(pct, animMs);
+      if (blocking) {
+        bar.classList.add('wasm-blocking');
+      } else {
+        bar.classList.remove('wasm-blocking');
+        animateTo(pct, 300);
+      }
     }
   };
 
-  // Start a slow crawl animation from `fromPct` toward `toPct` over `durationMs`.
-  // Used to make the bar visually advance during a blocking WASM call.
-  const crawlTo = (toPct, durationMs) => animateTo(toPct, durationMs);
+  // Call before a synchronous blocking WASM call: sets indeterminate mode and
+  // returns a promise that resolves after two rAF ticks so the browser can paint.
+  const enterBlocking = (label) => new Promise(resolve => {
+    const lbl = document.getElementById(labelId);
+    const bar = document.getElementById(barId);
+    if (lbl) lbl.textContent = label;
+    if (bar) bar.classList.add('wasm-blocking');
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
 
-  return { setStage, crawlTo };
+  // Kept for API compat but no longer needed — marquee runs via CSS.
+  const crawlTo = (_toPct, _durationMs) => {};
+
+  return { setStage, crawlTo, enterBlocking };
 }
 
 async function loadWasmSession(file) {
@@ -530,8 +543,7 @@ async function loadWasmSession(file) {
   const tLoad0 = performance.now();
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
-    // Crawl the bar across the parse range while WASM blocks the thread.
-    crawlTo(loadBarEnd, parseEtaMs);
+    await enterBlocking(`Parsing ${escHtml(file.name)}…`);
     wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
     wasmSession._fileName = file.name;
   } catch (e) {
@@ -553,25 +565,15 @@ async function loadWasmSession(file) {
   } catch {}
   const domEtaMs = _etaPredict('dominator', instanceCount);
 
-  let domElapsedMs = 0;
   const onAnalPhase = (phase, _frac) => {
-    const phaseMs = Math.round(domEtaMs * (_ANAL_PHASE_FRACS[phase] ?? 0));
-    domElapsedMs += phaseMs;
-    const barPct = domEtaMs > 0
-      ? loadBarEnd + Math.round((domElapsedMs / domEtaMs) * (100 - loadBarEnd))
-      : 95;
-    const remainMs = Math.max(0, domEtaMs - domElapsedMs);
-    const label = _analPhaseLabel(phase, remainMs, instanceCount);
-    setStage(label, Math.min(barPct, 95), true);
+    const label = _analPhaseLabel(phase, 0, instanceCount);
+    setStage(label, 0, true);
   };
 
-  setStage(`Computing dominators for ${_fmtCount(instanceCount)} objects… (${_fmtEta(domEtaMs)})`, loadBarEnd, true);
-  await new Promise(r => setTimeout(r, 20));
+  await enterBlocking(`Computing dominators for ${_fmtCount(instanceCount)} objects…`);
 
   const tDom0 = performance.now();
   try {
-    // Crawl the bar across the analysis range while WASM blocks the thread.
-    crawlTo(95, domEtaMs);
     wasmSession.run_full_analysis_with_progress(onAnalPhase);
     hasRetained = true;
   } catch (e) {
@@ -599,7 +601,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
       </div>
     </div>`;
 
-  const { setStage, crawlTo } = _makeProgress('wasm-progress-label', 'wasm-progress-bar');
+  const { setStage, crawlTo, enterBlocking } = _makeProgress('wasm-progress-label', 'wasm-progress-bar');
 
   const fileMB = file.size / (1024 * 1024);
 
@@ -657,7 +659,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   const tParse0 = performance.now();
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
-    crawlTo(loadBarEnd, parseEtaMs);
+    await enterBlocking(`Parsing ${escHtml(file.name)}…`);
     wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
   } catch (e) {
     msg.innerHTML = _errorHtml('Loading', file.name, e);
@@ -672,23 +674,14 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   } catch {}
   const domEtaMs = _etaPredict('dominator', instanceCount);
 
-  let domElapsedMs = 0;
   const onAnalPhase = (phase, _frac) => {
-    const phaseMs = Math.round(domEtaMs * (_ANAL_PHASE_FRACS[phase] ?? 0));
-    domElapsedMs += phaseMs;
-    const barPct = domEtaMs > 0
-      ? loadBarEnd + Math.round((domElapsedMs / domEtaMs) * (100 - loadBarEnd))
-      : 90;
-    const remainMs = Math.max(0, domEtaMs - domElapsedMs);
-    setStage(_analPhaseLabel(phase, remainMs, instanceCount), Math.min(barPct, 90), true);
+    setStage(_analPhaseLabel(phase, 0, instanceCount), 0, true);
   };
 
-  setStage(`Computing dominators for ${_fmtCount(instanceCount)} objects… (${_fmtEta(domEtaMs)})`, loadBarEnd, true);
-  await new Promise(r => setTimeout(r, 20));
+  await enterBlocking(`Computing dominators for ${_fmtCount(instanceCount)} objects…`);
 
   const tDom0 = performance.now();
   try {
-    crawlTo(90, domEtaMs);
     wasmSession.run_full_analysis_with_options_and_progress(
       !!(opts.findDuplicates), !!(opts.collections), onAnalPhase);
     _etaRecord('dominator', domEtaMs, performance.now() - tDom0);
