@@ -625,7 +625,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
       {top && (
         <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
           <span style={labelStyle}>Top suspect</span>
-          <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /></span>
+          <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /></span>
           {" "}holds{" "}
           <strong>{formatBytes(top.retained)}</strong>
           {" "}({fmtPct(topRetainsPct)})
@@ -757,8 +757,7 @@ function KpiStrip({ report }: { report: Report }) {
     verdict = (
       <>
         <strong>Likely problem:</strong>{" "}
-        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /></span>
-        {" "}retains {fmtPct(pct)} of the reachable heap
+        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /></span>
         — investigate this first.
       </>
     );
@@ -1390,7 +1389,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
 
 function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
   const cols: TableColumn<StringHolder>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "String refs", right: true, width: "120px", format: (h) => fmtCount(h.string_refs), selector: (h) => h.string_refs, sortable: true },
   ];
   return (
@@ -1437,7 +1436,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
 function DupArrayHoldersTable({ rows }: { rows: DupArrayHolder[] }) {
   const cols: TableColumn<DupArrayHolder>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "Array refs", right: true, width: "120px", format: (h) => fmtCount(h.array_refs), selector: (h) => h.array_refs, sortable: true },
   ];
   return (
@@ -1585,7 +1584,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   ];
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "Boxed refs", right: true, width: "120px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
   ];
   return (
@@ -1926,6 +1925,8 @@ function AccumulationPath({ s }: { s: Suspect }) {
               <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(p.display_class)}>{p.display_class}</code>
               <CopyBtn text={p.display_class} />
               <PivotBtn cls={p.display_class} />
+              <OqlBtn cls={p.display_class} />
+              <ExploreBtn denseIdx={p.obj_index_1based - 1} label={p.display_class} />
             </span>{" "}
             <span className="path-ret">retains {fmtB(p.retained)}</span>
           </li>
@@ -1939,7 +1940,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (rows.length === 0) return null;
   const cols: TableColumn<HistRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -1970,6 +1971,7 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
   const [fmtB] = useFmtBytes();
   const uid = React.useId();
   const markerId = `rpc-arrow-${uid.replace(/:/g, "")}`;
+  const nodes = React.useContext(ObjGraphCtx);
   if (steps.length === 0) return null;
 
   // Layout constants
@@ -2014,6 +2016,8 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
           const midX = BOX_X + BOX_W / 2;
           const connTop = boxY + BOX_H;
           const connBot = connTop + CONN_H - ARROW_HEAD;
+          const denseIdx = step.obj_index_1based - 1;
+          const inGraph = nodes != null && nodes[String(denseIdx)] != null;
 
           // Truncate class name so it fits
           const maxChars = 58;
@@ -2022,7 +2026,13 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
             : step.display_class;
 
           return (
-            <g key={i}>
+            <g key={i}
+              style={inGraph ? { cursor: "pointer" } : undefined}
+              onClick={inGraph ? () => { window.location.hash = `explore/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); } : undefined}
+              role={inGraph ? "button" : undefined}
+              aria-label={inGraph ? `Explore ${step.display_class} in Object Graph` : undefined}
+            >
+              <title>{inGraph ? `Click to open ${step.display_class} in Object Graph Explorer` : step.display_class}</title>
               {/* Box */}
               {isLast ? (
                 // Double-border for GC root (two rects slightly inset)
@@ -2061,7 +2071,7 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
 
               {/* Retained bytes — right side */}
               <text
-                x={BOX_X + BOX_W - PAD_X}
+                x={BOX_X + BOX_W - PAD_X - (inGraph ? 16 : 0)}
                 y={boxY + BOX_H / 2}
                 dy="0.35em"
                 fontSize={11}
@@ -2072,6 +2082,21 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
                   ? (step.root_type_label ? `GC Root: ${step.root_type_label}` : "GC Root")
                   : `retains ${fmtB(step.retained)}`}
               </text>
+
+              {/* Explore badge for objects in graph */}
+              {inGraph && (
+                <text
+                  x={BOX_X + BOX_W - PAD_X}
+                  y={boxY + BOX_H / 2}
+                  dy="0.35em"
+                  fontSize={12}
+                  textAnchor="end"
+                  fill="var(--accent)"
+                  opacity={0.7}
+                >
+                  ⬡
+                </text>
+              )}
 
               {/* Connector arrow to next step */}
               {!isLast && (
@@ -2440,7 +2465,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <AccumulationPath s={s} />
       {s.dominated.length > 0 && (() => {
         const domCols: TableColumn<import("./types").DominatedRow>[] = [
-          { id: "class", name: "Class", grow: 1, cell: (d) => <span className="copy-cell"><code>{d.display_class}</code><PivotBtn cls={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
+          { id: "class", name: "Class", grow: 1, cell: (d) => <span className="copy-cell"><code>{d.display_class}</code><PivotBtn cls={d.display_class} /><OqlBtn cls={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(d => d.shallow, fmtB, useKB), selector: (d) => d.shallow, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(d => d.retained, fmtB, useKB), selector: (d) => d.retained, sortable: true },
         ];
@@ -3774,7 +3799,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
 function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<RefStatClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained ?? 0, fmtB, useKB), selector: (r) => r.retained ?? 0, sortable: true },
@@ -4398,7 +4423,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <p className="subtitle">No significant drops.</p>
       ) : (() => {
         const dropCols: TableColumn<import("./types").BigDropRow>[] = [
-          { id: "object", name: "Object", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
+          { id: "object", name: "Object", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
           { id: "largest_child", name: "Largest Child", grow: 1, cell: (r) => r.largest_child_class ? <span className="copy-cell"><code>{r.largest_child_class}</code><PivotBtn cls={r.largest_child_class} /></span> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
           { id: "child_ret", name: useKB ? "Child Ret. (KB)" : "Child Ret.", right: true, width: useKB ? "140px" : "110px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
@@ -5370,7 +5395,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <tbody>
               <tr>
                 <th>Class</th>
-                <td><span className="copy-cell"><code>{currentNode.display_class}</code><PivotBtn cls={currentNode.display_class} /></span></td>
+                <td><span className="copy-cell"><code>{currentNode.display_class}</code><PivotBtn cls={currentNode.display_class} /><OqlBtn cls={currentNode.display_class} /></span></td>
               </tr>
               <tr>
                 <th>Object #</th>
@@ -5432,6 +5457,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
                             </button>
                             <PivotBtn cls={cn.display_class} />
+                            <OqlBtn cls={cn.display_class} />
                           </span>
                         </td>
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(cn.retained)}</td>
