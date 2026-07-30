@@ -4800,16 +4800,57 @@ function fmtCell(v: QueryValue): string {
   }
 }
 
+// Rich cell renderer for a single QueryValue — adds copy/pivot/navigate for obj_ref.
+function QueryCell({ val, colName, hasObjGraph }: { val: QueryValue; colName: string; hasObjGraph: boolean }) {
+  if (val.kind === "str") return <ExpandableText text={val.v} label={colName} />;
+  if (val.kind === "obj_ref") {
+    const { class: cls, index: idx } = val.v;
+    return (
+      <span className="copy-cell">
+        <code>{cls}</code>
+        <span className="muted" style={{ fontSize: "0.78rem" }}>@{idx}</span>
+        <CopyBtn text={`${cls}@${idx}`} />
+        <PivotBtn cls={cls} />
+        {hasObjGraph && (
+          <a href={`#explore/${idx}`} className="copy-btn" title="Open in Object Graph Explorer" style={{ textDecoration: "none", visibility: "visible" }}>⬡↗</a>
+        )}
+      </span>
+    );
+  }
+  return <span>{fmtCell(val)}</span>;
+}
+
+function downloadQueryCsv(q: QueryResult) {
+  const escape = (s: string) => /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const header = q.columns.map(c => escape(c.name)).join(",");
+  const body = q.rows.map(row => row.map(v => escape(fmtCell(v))).join(",")).join("\n");
+  const blob = new Blob([header + "\n" + body], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = (q.name || "query").replace(/[^a-z0-9_-]/gi, "_") + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function CustomQueriesSection({ report }: { report: Report }) {
   const queries = report.queries;
   if (!queries?.length) return null;
+  const hasObjGraph = !!report.obj_graph_flat;
   return (
     <section id="custom-queries">
       <h2>Custom Queries</h2>
       <p className="subtitle">Results of the OQL queries supplied on the command line.</p>
       {queries.map((q: QueryResult, qi) => (
         <div key={qi}>
-          <h3>{q.name}</h3>
+          <h3 style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
+            {q.name}
+            {!q.error && q.rows.length > 0 && (
+              <button className="theme-toggle" style={{ fontSize: "0.75rem", padding: "1px 8px" }}
+                title="Download results as CSV"
+                onClick={() => downloadQueryCsv(q)}>⬇ CSV</button>
+            )}
+          </h3>
           <pre>{q.oql}</pre>
           {q.error ? (
             <p className="subtitle">
@@ -4824,11 +4865,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
                   grow: 1,
                   minWidth: "80px",
                   maxWidth: "500px",
-                  cell: (row) => {
-                    const val = row[ci];
-                    const text = fmtCell(val);
-                    return val.kind === "str" ? <ExpandableText text={text} label={c.name} /> : <span>{text}</span>;
-                  },
+                  cell: (row) => <QueryCell val={row[ci]} colName={c.name} hasObjGraph={hasObjGraph} />,
                   selector: (row) => fmtCell(row[ci]),
                   sortable: true,
                 }));
