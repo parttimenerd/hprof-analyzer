@@ -459,36 +459,35 @@ const SECTION_LABELS: Record<string, string> = {
 };
 
 function NavBreadcrumb() {
-  const [history, setHistory] = React.useState<{ hash: string; label: string }[]>([]);
+  // Store raw hashes only; resolve labels at render time so ObjGraphCtx
+  // loading order doesn't drop entries recorded before context was ready.
+  const [history, setHistory] = React.useState<string[]>([]);
   const objNodes = React.useContext(ObjGraphCtx);
 
   React.useEffect(() => {
     const onHashChange = () => {
       const raw = window.location.hash.slice(1);
       const objMatch = raw.match(/^(explore|domtree)\/(\d+)$/);
-      if (objMatch) {
-        const idx = objMatch[2];
-        const node = objNodes?.[idx];
-        const shortCls = node ? (node.display_class.split(".").pop() ?? node.display_class) : `#${idx}`;
-        const label = `${objMatch[1] === "domtree" ? "⌞ " : "→ "}${shortCls}`;
-        setHistory(prev => {
-          const last = prev[prev.length - 1];
-          if (last?.hash === raw) return prev;
-          return [...prev.slice(-7), { hash: raw, label }];
-        });
-        return;
-      }
-      const label = SECTION_LABELS[raw];
-      if (!label) return;
+      if (!objMatch && !SECTION_LABELS[raw]) return;
       setHistory(prev => {
         const last = prev[prev.length - 1];
-        if (last?.hash === raw) return prev;
-        return [...prev.slice(-7), { hash: raw, label }];
+        if (last === raw) return prev;
+        return [...prev.slice(-7), raw];
       });
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [objNodes]);
+  }, []);
+
+  function labelFor(hash: string): string {
+    const m = hash.match(/^(explore|domtree)\/(\d+)$/);
+    if (m) {
+      const node = objNodes?.[m[2]];
+      const shortCls = node ? (node.display_class.split(".").pop() ?? node.display_class) : `#${m[2]}`;
+      return `${m[1] === "domtree" ? "⌞ " : "→ "}${shortCls}`;
+    }
+    return SECTION_LABELS[hash] ?? hash;
+  }
 
   // Show the last 4 entries (excluding current) as breadcrumb trail
   const trail = history.slice(-5, -1);
@@ -497,17 +496,17 @@ function NavBreadcrumb() {
   return (
     <div className="nav-breadcrumb">
       <span className="nav-bc-label">History:</span>
-      {trail.map((entry, i) => (
+      {trail.map((hash, i) => (
         <React.Fragment key={i}>
           {i > 0 && <span className="nav-bc-sep">›</span>}
-          <a href={`#${entry.hash}`} className="nav-bc-link"
-            title={`Go back to ${entry.label}`}>
-            {entry.label}
+          <a href={`#${hash}`} className="nav-bc-link"
+            title={`Go back to ${labelFor(hash)}`}>
+            {labelFor(hash)}
           </a>
         </React.Fragment>
       ))}
       <a href="#" className="nav-bc-link nav-bc-back"
-        onClick={e => { e.preventDefault(); history.length > 1 && (window.location.hash = history[history.length - 2].hash); }}>
+        onClick={e => { e.preventDefault(); history.length > 1 && (window.location.hash = history[history.length - 2]); }}>
         ← Back
       </a>
     </div>
