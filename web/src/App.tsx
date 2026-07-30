@@ -4220,7 +4220,11 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
           <span style={{ color: "var(--muted)" }}>›</span>
         </React.Fragment>
       ))}
-      <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
+      <span className="copy-cell">
+        <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
+        <CopyBtn text={target} />
+        <OqlBtn cls={target} />
+      </span>
     </div>
   );
 
