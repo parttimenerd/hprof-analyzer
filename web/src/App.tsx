@@ -123,7 +123,7 @@ const HasDomDataCtx = React.createContext(false);
 
 // ── Object-graph availability context ────────────────────────────────────────
 // Carries the obj_graph_flat node map so ExploreBtns can check per-index.
-const ObjGraphCtx = React.createContext<Record<string, unknown> | null>(null);
+const ObjGraphCtx = React.createContext<Record<string, import("./types").ObjGraphFlatNode> | null>(null);
 
 // ── Navigation history ────────────────────────────────────────────────────────
 // Tracks the last few section hash fragments so a back-button can appear
@@ -460,17 +460,21 @@ const SECTION_LABELS: Record<string, string> = {
 
 function NavBreadcrumb() {
   const [history, setHistory] = React.useState<{ hash: string; label: string }[]>([]);
+  const objNodes = React.useContext(ObjGraphCtx);
 
   React.useEffect(() => {
     const onHashChange = () => {
       const raw = window.location.hash.slice(1);
-      // Skip non-section hashes (explore/domtree go straight to object-graph)
-      if (/^(explore|domtree)\/\d+$/.test(raw)) {
+      const objMatch = raw.match(/^(explore|domtree)\/(\d+)$/);
+      if (objMatch) {
+        const idx = objMatch[2];
+        const node = objNodes?.[idx];
+        const shortCls = node ? (node.display_class.split(".").pop() ?? node.display_class) : `#${idx}`;
+        const label = `${objMatch[1] === "domtree" ? "⌞ " : "→ "}${shortCls}`;
         setHistory(prev => {
           const last = prev[prev.length - 1];
-          const entry = { hash: "object-graph", label: "Object Graph" };
-          if (last?.hash === entry.hash) return prev;
-          return [...prev.slice(-7), entry];
+          if (last?.hash === raw) return prev;
+          return [...prev.slice(-7), { hash: raw, label }];
         });
         return;
       }
@@ -484,7 +488,7 @@ function NavBreadcrumb() {
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [objNodes]);
 
   // Show the last 4 entries (excluding current) as breadcrumb trail
   const trail = history.slice(-5, -1);
@@ -2479,7 +2483,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <AccumulationPath s={s} />
       {s.dominated.length > 0 && (() => {
         const domCols: TableColumn<import("./types").DominatedRow>[] = [
-          { id: "class", name: "Class", grow: 1, cell: (d) => <span className="copy-cell"><code>{d.display_class}</code><PivotBtn cls={d.display_class} /><OqlBtn cls={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
+          { id: "class", name: "Class", grow: 1, cell: (d) => <span className="copy-cell"><code>{d.display_class}</code><PivotBtn cls={d.display_class} /><OqlBtn cls={d.display_class} /><ExploreBtn denseIdx={d.obj_index_1based - 1} label={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(d => d.shallow, fmtB, useKB), selector: (d) => d.shallow, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(d => d.retained, fmtB, useKB), selector: (d) => d.retained, sortable: true },
         ];
@@ -2766,7 +2770,7 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (objs.length === 0) return null;
   const cols: TableColumn<ThreadLocalObj>[] = [
-    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code>{o.display_class}</code><CopyBtn text={o.display_class} /><PivotBtn cls={o.display_class} /><OqlBtn cls={o.display_class} /></span>, selector: (o) => o.display_class, sortable: true },
+    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code>{o.display_class}</code><CopyBtn text={o.display_class} /><PivotBtn cls={o.display_class} /><OqlBtn cls={o.display_class} /><ExploreBtn denseIdx={o.obj_index_1based - 1} label={o.display_class} /></span>, selector: (o) => o.display_class, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.retained, fmtB, useKB), selector: (o) => o.retained, sortable: true },
   ];
@@ -3201,7 +3205,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const hasOwner = individual.some((r) => r.owner != null);
     const totalIndivShallow = individual.reduce((s, r) => s + r.shallow, 0);
     const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
-      { id: "class", name: "Array class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
       ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "120px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—", sortable: true } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
@@ -5211,7 +5215,6 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <OqlBtn cls={node.display_class} />
                 </td>
                 <td>{fmtB(node.shallow)}</td>
-                <td>{fmtB(node.shallow)}</td>
                 <td>{fmtB(node.retained)}</td>
                 <td>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
               </tr>
@@ -5537,8 +5540,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   })}
                   {currentDomChildren.length > 10 && (
                     <tr>
-                      <td colSpan={2} style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
-                        +{currentDomChildren.length - 10} more — switch to Dominator Tree tab
+                      <td colSpan={2} style={{ fontSize: "0.8rem" }}>
+                        <button className="btn-link" style={{ fontSize: "0.8rem" }}
+                          onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
+                          +{currentDomChildren.length - 10} more — view all in Dominator Tree tab →
+                        </button>
                       </td>
                     </tr>
                   )}
