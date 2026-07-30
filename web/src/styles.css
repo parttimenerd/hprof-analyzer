@@ -71,7 +71,7 @@ a { color: var(--accent); }
 .report-blurb a:hover { text-decoration: underline; }
 
 /* Waste summary — give the table rows a bit more vertical room and space below. */
-.waste-summary-table { margin-bottom: 1.5rem; }
+.waste-summary-table { margin-bottom: 1.5rem; padding-bottom: 0.75rem; }
 .waste-summary-table table td, .waste-summary-table table th { padding: 0.5rem 0.6rem; }
 .waste-summary-table .bar-bg { display: inline-block; width: 100%; height: 10px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .waste-summary-table .bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
@@ -444,9 +444,12 @@ dialog.text-modal::backdrop {
   --rdt-color-btn: var(--muted);
   --rdt-color-btn-disabled: var(--border);
 }
-/* Direct override for code/span inside RDT rows — CSS vars may lose to inherited color */
+/* Direct override for code/span inside RDT rows — needs !important because RDT sets
+   --rdt-color-text-primary as an inline style on .rdt_headSeparator, which wins over
+   stylesheet custom-property declarations on :root. */
 [data-theme="dark"] .rdt_TableRow code,
-[data-theme="dark"] .rdt_TableRow span { color: var(--fg); }
+[data-theme="dark"] .rdt_TableRow span { color: var(--fg) !important; }
+[data-theme="dark"] .rdt_headSeparator { --rdt-color-text-primary: var(--fg) !important; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --rdt-color-text-primary: var(--fg);
@@ -458,5 +461,6 @@ dialog.text-modal::backdrop {
     --rdt-color-btn-disabled: var(--border);
   }
   :root:not([data-theme="light"]) .rdt_TableRow code,
-  :root:not([data-theme="light"]) .rdt_TableRow span { color: var(--fg); }
+  :root:not([data-theme="light"]) .rdt_TableRow span { color: var(--fg) !important; }
+  :root:not([data-theme="light"]) .rdt_headSeparator { --rdt-color-text-primary: var(--fg) !important; }
 }
