@@ -4445,7 +4445,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
   // ── Node detail view ───────────────────────────────────────────────────────
   if (!currentNode) {
-    return <p className="subtitle">Object {nodeId} not found in significant nodes.</p>;
+    return (
+      <div>
+        <button className="btn-link" style={{ marginBottom: "0.5rem" }} onClick={goToRoot}>← Roots</button>
+        <p className="subtitle">Object {nodeId} not found in significant nodes (outside the top-N capture threshold).</p>
+      </div>
+    );
   }
 
   const idomNode = currentNode.idom != null ? data.nodes[String(currentNode.idom)] : null;
