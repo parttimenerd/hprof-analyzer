@@ -41,6 +41,24 @@ const PALETTE = [
 ];
 const color = (i: number) => PALETTE[i % PALETTE.length];
 
+// ── Chart download wrapper ────────────────────────────────────────────────────
+function ChartDownloadWrap({ children }: { children: React.ReactNode }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  return (
+    <div ref={ref} className="chart-download-wrap">
+      {children}
+      <button className="chart-dl-btn" title="Download chart as PNG" onClick={() => {
+        const c = ref.current?.querySelector("canvas");
+        if (!c) return;
+        const a = document.createElement("a");
+        a.href = c.toDataURL("image/png");
+        a.download = "chart.png";
+        a.click();
+      }}>⬇ PNG</button>
+    </div>
+  );
+}
+
 // ── FlatTreemap — lightweight squarify treemap for flat slice data ───────────
 // Used in place of pie charts: shows proportions + labels without wasted space.
 function FlatTreemap({
@@ -566,9 +584,11 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
     },
   };
   return (
-    <div key={themeKey} className="chart-wrap" role="img" aria-label="Pie chart" style={{ position: "relative", height: 240, maxWidth: 520 }}>
-      <ChartPie data={chartData} options={options} />
-    </div>
+    <ChartDownloadWrap>
+      <div key={themeKey} className="chart-wrap" role="img" aria-label="Pie chart" style={{ position: "relative", height: 240, maxWidth: 520 }}>
+        <ChartPie data={chartData} options={options} />
+      </div>
+    </ChartDownloadWrap>
   );
 }
 
@@ -619,9 +639,11 @@ function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: 
   };
   const height = Math.max(140, data.length * 26 + 40);
   return (
-    <div key={themeKey} className="chart-wrap" role="img" aria-label="Horizontal bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
-      <ChartBar data={chartData} options={options} />
-    </div>
+    <ChartDownloadWrap>
+      <div key={themeKey} className="chart-wrap" role="img" aria-label="Horizontal bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
+        <ChartBar data={chartData} options={options} />
+      </div>
+    </ChartDownloadWrap>
   );
 }
 
@@ -676,9 +698,11 @@ function VBar({
     },
   };
   return (
-    <div key={themeKey} className="chart-wrap" role="img" aria-label="Bar chart" style={{ position: "relative", height: 200, maxWidth: 720 }}>
-      <ChartBar data={chartData} options={options} />
-    </div>
+    <ChartDownloadWrap>
+      <div key={themeKey} className="chart-wrap" role="img" aria-label="Bar chart" style={{ position: "relative", height: 200, maxWidth: 720 }}>
+        <ChartBar data={chartData} options={options} />
+      </div>
+    </ChartDownloadWrap>
   );
 }
 
@@ -833,9 +857,11 @@ function StackedBar({ segments, fmt }: {
     },
   };
   return (
-    <div key={themeKey} className="chart-wrap" role="img" aria-label="Stacked bar chart" style={{ position: "relative", height: 90, maxWidth: 720 }}>
-      <ChartBar data={chartData} options={options} />
-    </div>
+    <ChartDownloadWrap>
+      <div key={themeKey} className="chart-wrap" role="img" aria-label="Stacked bar chart" style={{ position: "relative", height: 90, maxWidth: 720 }}>
+        <ChartBar data={chartData} options={options} />
+      </div>
+    </ChartDownloadWrap>
   );
 }
 

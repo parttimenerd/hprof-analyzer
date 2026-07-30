@@ -110,6 +110,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .summary-grid dt { color: var(--muted); }
 .summary-grid dd { margin: 0; }
 .chart-wrap { margin: 0.5rem 0 1rem; }
+.chart-download-wrap { position: relative; }
+.chart-dl-btn { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity 0.15s; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; font-size: 0.72rem; padding: 2px 6px; z-index: 2; }
+.chart-download-wrap:hover .chart-dl-btn, .chart-dl-btn:focus { opacity: 1; outline: none; }
+.chart-dl-btn:hover { color: var(--accent); border-color: var(--accent); }
 details { margin: 0.5rem 0; }
 summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .suspect { border-left: 3px solid var(--accent); padding-left: 0.9rem; margin: 1rem 0; }
@@ -214,7 +218,7 @@ th.sortable.active { color: var(--accent); }
 .copy-cell code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-btn { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.15rem; line-height: 1; border-radius: 3px; }
 .copy-btn:hover, .copy-btn:focus { color: var(--accent); visibility: visible; outline: none; }
-td:hover .copy-btn, .rdt_TableRow:hover .copy-btn, .copy-cell:focus-within .copy-btn { visibility: visible; }
+td:hover .copy-btn, .rdt_TableRow:hover .copy-btn, .copy-cell:focus-within .copy-btn, li:hover .copy-btn, h3:hover .copy-btn { visibility: visible; }
 
 /* Print: hide interactive chrome, expand collapsibles, avoid mid-card breaks. */
 @media print {

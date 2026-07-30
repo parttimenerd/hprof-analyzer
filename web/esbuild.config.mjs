@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 792 KB minified bundle budget (raised from 768 KB to accommodate WhoHoldsSankey multi-hop + fullscreen + popover).
-const BUDGET_BYTES = 792 * 1024;
+// ≤ 796 KB minified bundle budget (raised from 792 KB to accommodate chart PNG download + Save HTML buttons).
+const BUDGET_BYTES = 796 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

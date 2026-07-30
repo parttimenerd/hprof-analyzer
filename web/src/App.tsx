@@ -547,7 +547,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
       {top && (
         <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
           <span style={labelStyle}>Top suspect</span>
-          <code>{top.pretty_class}</code>
+          <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /></span>
           {" "}holds{" "}
           <strong>{formatBytes(top.retained)}</strong>
           {" "}({fmtPct(topRetainsPct)})
@@ -678,7 +678,9 @@ function KpiStrip({ report }: { report: Report }) {
   if (top && pct >= 50) {
     verdict = (
       <>
-        <strong>Likely problem:</strong> <code>{top.pretty_class}</code> retains {fmtPct(pct)} of the reachable heap
+        <strong>Likely problem:</strong>{" "}
+        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /></span>
+        {" "}retains {fmtPct(pct)} of the reachable heap
         — investigate this first.
       </>
     );
@@ -1023,6 +1025,13 @@ function pivotClass(cls: string) {
 }
 
 // Small "⬡" button shown next to class names in any table that triggers the pivot.
+function saveHtml(filename: string) {
+  const blob = new Blob(["<!DOCTYPE html>" + document.documentElement.outerHTML], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
 function PivotBtn({ cls }: { cls: string }) {
   const hasDomData = React.useContext(HasDomDataCtx);
   if (!hasDomData) return null;
@@ -1297,7 +1306,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<DupPrimArrayRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "type", name: "Array type", grow: 1, cell: (r) => <code>{r.array_class}</code>, selector: (r) => r.array_class, sortable: true },
+    { id: "type", name: "Array type", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
     { id: "groups", name: "Dup groups", right: true, width: "120px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.wasted_bytes, fmtB, useKB), selector: (r) => r.wasted_bytes, sortable: true },
   ];
@@ -1797,7 +1806,11 @@ function AccumulationPath({ s }: { s: Suspect }) {
       <ol className="accum-path">
         {s.path.map((p, i) => (
           <li key={i}>
-            <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(p.display_class)}>{p.display_class}</code>{" "}
+            <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
+              <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(p.display_class)}>{p.display_class}</code>
+              <CopyBtn text={p.display_class} />
+              <PivotBtn cls={p.display_class} />
+            </span>{" "}
             <span className="path-ret">retains {fmtB(p.retained)}</span>
           </li>
         ))}
@@ -1985,7 +1998,10 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
   const label = (
     <>
       {node.field_edge && <span className="path-field">.{node.field_edge} → </span>}
-      <code>{node.display_class}</code>{" "}
+      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
+        <code>{node.display_class}</code>
+        <PivotBtn cls={node.display_class} />
+      </span>{" "}
       <span className="path-ret">
         {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {fmtB(node.retained)}
       </span>
@@ -2254,7 +2270,11 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
     <div className="suspect" id={`suspect-${rank}`}>
       <h3 style={{ margin: "0 0 0.25rem" }}>
         <span className="rank">Suspect #{rank}</span>{" "}
-        <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(s.pretty_class)}>{s.pretty_class}</code>
+        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
+          <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(s.pretty_class)}>{s.pretty_class}</code>
+          <CopyBtn text={s.pretty_class} />
+          <PivotBtn cls={s.pretty_class} />
+        </span>
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
@@ -2761,7 +2781,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
       <h3>ThreadLocal Variables</h3>
       <StdTable
         columns={[
-          { id: "vc", name: "Value Class", grow: 1, cell: (r) => <code>{r.value_class}</code>, selector: (r) => r.value_class, sortable: true },
+          { id: "vc", name: "Value Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.value_class}</code><PivotBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
           { id: "cnt", name: "Entries", right: true, width: "90px", format: (r) => fmtCount(r.entry_count), selector: (r) => r.entry_count, sortable: true },
           { id: "stl", name: "Stale", right: true, width: "100px",
             cell: (r) => r.stale_count > 0 ? <span style={{color:"var(--warning,#e67e22)"}}>{"⚠"} {fmtCount(r.stale_count)}</span> : <span>0</span>,
@@ -3016,14 +3036,14 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const hasOwner = individual.some((r) => r.owner != null);
     const totalIndivShallow = individual.reduce((s, r) => s + r.shallow, 0);
     const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
-      { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
       ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "120px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—", sortable: true } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
-      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: (r: import("./types").TopArrayRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
+      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: (r: import("./types").TopArrayRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><PivotBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
     ];
     const byClassCols: TableColumn<import("./types").TopArrayClassRow>[] = [
-      { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
     ];
@@ -3213,7 +3233,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         <p className="subtitle">None.</p>
       ) : (() => {
         const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
-          { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code>, selector: (r) => r.array_class, sortable: true },
+          { id: "class", name: "Array class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
           { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
           { id: "value", name: "Value", right: true, width: "90px", format: (r) => String(r.value), selector: (r) => r.value, sortable: true },
           { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
@@ -5526,6 +5546,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         Cross-dump growth across a time series (first = baseline, last = current).
       </p>
       <div className="theme-toggle-wrap">
+        <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml("heap-comparison.html")}>⬇ Save HTML</button>
         <ThemeToggle />
       </div>
 
@@ -5661,6 +5682,7 @@ export default function App({ report }: { report: Report }) {
         <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
           {expandAllTables ? "⊟ Collapse tables" : "⊞ Expand all tables"}
         </button>
+        <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml((report.overview.source_name || "heap-report").replace(/[^a-z0-9._-]/gi, "_") + ".html")}>⬇ Save HTML</button>
         <ThemeToggle />
       </div>
       <Nav report={report} />
