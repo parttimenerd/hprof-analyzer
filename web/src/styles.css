@@ -442,7 +442,7 @@ dialog.text-modal::backdrop {
 /* ── Object Graph Explorer (V3 + V4) ────────────────────────────────────── */
 .obj-explorer { display: flex; gap: 1rem; flex-wrap: wrap; }
 .obj-explorer-left { flex: 1.5; min-width: 0; min-width: 300px; }
-.obj-explorer-right { flex: 1; min-width: 220px; }
+.obj-explorer-right { flex: 1; min-width: 260px; overflow: hidden; }
 .obj-nav-row { display: flex; align-items: center; gap: 0.4rem; padding: 2px 0; }
 .shared-badge { font-size: 0.75rem; color: var(--muted); }
 .breadcrumb { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.5rem; font-size: 0.85rem; }

@@ -5422,6 +5422,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         <tr key={childId}>
                           <td>
                             <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                              <button className="btn-link" title="Open refs"
+                                onClick={() => navigate("explore", childId, cn.display_class)}
+                                style={{ opacity: 0.7 }}>
+                                →
+                              </button>
                               <button
                                 className="btn-link"
                                 onClick={() => navigate("domtree", childId, cn.display_class)}
@@ -5510,45 +5515,43 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {currentDomChildren.length > 0 && tab === "explore" && (
             <div style={{ marginTop: "0.75rem" }}>
               <h4 style={{ margin: "0 0 0.4rem" }}>Dominator children ({currentDomChildren.length})</h4>
-              <table className="std-table">
-                <thead>
-                  <tr>
-                    <th>Class (click to enter)</th>
-                    <th style={{ textAlign: "right" }}>Retained</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {currentDomChildren.slice(0, 10).map(childId => {
-                    const cn = data.nodes[String(childId)];
-                    if (!cn) return null;
-                    return (
-                      <tr key={childId}>
-                        <td>
-                          <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                            <button className="btn-link"
-                              onClick={() => navigate("domtree", childId, cn.display_class)}>
-                              <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
-                            </button>
-                            <PivotBtn cls={cn.display_class} />
-                            <OqlBtn cls={cn.display_class} />
-                          </span>
-                        </td>
-                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(cn.retained)}</td>
-                      </tr>
-                    );
-                  })}
-                  {currentDomChildren.length > 10 && (
-                    <tr>
-                      <td colSpan={2} style={{ fontSize: "0.8rem" }}>
-                        <button className="btn-link" style={{ fontSize: "0.8rem" }}
-                          onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
-                          +{currentDomChildren.length - 10} more — view all in Dominator Tree tab →
-                        </button>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 80px", fontSize: "0.84rem", gap: "0 0" }}>
+                <div style={{ fontWeight: 600, padding: "2px 4px", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Class (click to enter)</div>
+                <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Retained</div>
+                {currentDomChildren.slice(0, 10).map(childId => {
+                  const cn = data.nodes[String(childId)];
+                  if (!cn) return null;
+                  return (
+                    <React.Fragment key={childId}>
+                      <div style={{ overflow: "hidden", padding: "1px 2px" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", minWidth: 0 }}>
+                          <button className="btn-link" title="Open refs"
+                            style={{ flexShrink: 0 }}
+                            onClick={() => navigate("explore", childId, cn.display_class)}>
+                            →
+                          </button>
+                          <button className="btn-link" title={cn.display_class}
+                            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+                            onClick={() => navigate("domtree", childId, cn.display_class)}>
+                            <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
+                          </button>
+                          <PivotBtn cls={cn.display_class} />
+                          <OqlBtn cls={cn.display_class} />
+                        </span>
+                      </div>
+                      <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px" }} title={`${cn.retained} B`}>{fmtB(cn.retained)}</div>
+                    </React.Fragment>
+                  );
+                })}
+                {currentDomChildren.length > 10 && (
+                  <div style={{ gridColumn: "1/-1", fontSize: "0.8rem", padding: "2px 2px" }}>
+                    <button className="btn-link" style={{ fontSize: "0.8rem" }}
+                      onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
+                      +{currentDomChildren.length - 10} more — view all in Dominator Tree tab →
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
