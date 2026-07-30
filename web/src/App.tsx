@@ -488,12 +488,20 @@ function NavBreadcrumb() {
 
   return (
     <div className="nav-breadcrumb">
+      <span className="nav-bc-label">History:</span>
       {trail.map((entry, i) => (
-        <a key={i} href={`#${entry.hash}`} className="nav-bc-link"
-          title={`Go back to ${entry.label}`}>
-          {i === trail.length - 1 ? "← " : ""}{entry.label}
-        </a>
+        <React.Fragment key={i}>
+          {i > 0 && <span className="nav-bc-sep">›</span>}
+          <a href={`#${entry.hash}`} className="nav-bc-link"
+            title={`Go back to ${entry.label}`}>
+            {entry.label}
+          </a>
+        </React.Fragment>
       ))}
+      <a href="#" className="nav-bc-link nav-bc-back"
+        onClick={e => { e.preventDefault(); history.length > 1 && (window.location.hash = history[history.length - 2].hash); }}>
+        ← Back
+      </a>
     </div>
   );
 }
@@ -935,6 +943,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
             <code style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0, background: "none", padding: 0 }}>{r.pretty_class}</code>
             <CopyBtn text={r.pretty_class} />
             <PivotBtn cls={r.pretty_class} />
+            <OqlBtn cls={r.pretty_class} />
           </span>
         ),
         sortable: true,
@@ -2142,6 +2151,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
       <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
         <code>{node.display_class}</code>
         <PivotBtn cls={node.display_class} />
+        <OqlBtn cls={node.display_class} />
       </span>{" "}
       <span className="path-ret">
         {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {fmtB(node.retained)}
@@ -2620,6 +2630,7 @@ function TopConsumersSection({ report }: { report: Report }) {
         <span className="copy-cell">
           <code title={o.display_class}>{o.display_class}</code>
           <PivotBtn cls={o.display_class} />
+          <OqlBtn cls={o.display_class} />
           {inGraph && (
             <button className="copy-btn" title="Explore outbound references in Object Graph"
               onClick={() => { window.location.hash = `explore/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); }}>
@@ -2645,6 +2656,7 @@ function TopConsumersSection({ report }: { report: Report }) {
         <span className="copy-cell">
           <ExpandableText text={text} label="Held via" />
           {cls && <PivotBtn cls={cls} />}
+          {cls && <OqlBtn cls={cls} />}
           {o.held_via && !o.owner && <span className="muted"> (stack)</span>}
         </span>
       ) : <span>—</span>;
@@ -3651,6 +3663,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
           <code>{r.container_class}</code>
           {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
           <PivotBtn cls={r.container_class} />
+          <OqlBtn cls={r.container_class} />
         </span>
       ),
       selector: ({ row: r }) => r.container_class,
@@ -4960,6 +4973,7 @@ function QueryCell({ val, colName, hasObjGraph }: { val: QueryValue; colName: st
         <span className="muted" style={{ fontSize: "0.78rem" }}>@{idx}</span>
         <CopyBtn text={`${cls}@${idx}`} />
         <PivotBtn cls={cls} />
+        <OqlBtn cls={cls} />
         {hasObjGraph && (
           <a href={`#explore/${idx}`} className="copy-btn" title="Open in Object Graph Explorer" style={{ textDecoration: "none", visibility: "visible" }}>⬡↗</a>
         )}
@@ -5155,6 +5169,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     ⌞
                   </button>
                   <PivotBtn cls={node.display_class} />
+                  <OqlBtn cls={node.display_class} />
                 </td>
                 <td>{fmtB(node.shallow)}</td>
                 <td>{fmtB(node.shallow)}</td>
