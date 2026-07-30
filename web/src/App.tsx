@@ -2449,9 +2449,15 @@ function TopConsumersSection({ report }: { report: Report }) {
     ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, minWidth: "160px", maxWidth: "600px", cell: (o: ObjRow) => o.owner ? <ExpandableText text={o.owner} label="Held via" /> : o.held_via ? <><ExpandableText text={o.held_via} label="Held via" /> <span className="muted">(stack)</span></> : <span>—</span> } as TableColumn<ObjRow>] : []),
   ];
 
+  const maxClsRetained = React.useMemo(
+    () => t.biggest_classes.reduce((m, c) => Math.max(m, c.retained), 0),
+    [t.biggest_classes],
+  );
+
   const clsTableCols: TableColumn<ClassRow>[] = [
     { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
+    { id: "bar", name: "", width: "80px", cell: (c) => <span className="bar-bg"><span className="bar-fill" style={{ width: `${maxClsRetained > 0 ? (c.retained / maxClsRetained) * 100 : 0}%` }} /></span> },
     { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "130px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
   ];
@@ -2587,7 +2593,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
       </summary>
       <div className="thread-body">
         <div className="thread-meta-row">
-          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code>{cls}</code></span>
+          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code>{cls}</code><PivotBtn cls={cls} /></span>
           <span className="thread-meta-item"><span className="thread-meta-label">shallow</span>{fmtB(t.shallow)}</span>
           <span className="thread-meta-item"><span className="thread-meta-label">retained</span>{fmtB(t.retained)}</span>
           <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span>{fmtB(t.max_local_retained)}</span>
@@ -4888,8 +4894,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         <table className="std-table">
           <thead>
             <tr>
-              <th title="→ Outbound Refs  ⌞ Dominator Tree">Navigate</th>
-              <th>Class</th>
+              <th>Class (click → refs, ⌞ → dom tree)</th>
               <th>Shallow</th>
               <th>Retained</th>
               <th>% Heap</th>
@@ -4898,24 +4903,24 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <tbody>
             {rootNodes.map(({ id, node }) => (
               <tr key={id}>
-                <td>
-                  <button
-                    className="btn-link"
-                    title="Explore outbound references"
-                    onClick={() => navigate("explore", id, node.display_class)}
-                  >
-                    &rarr;
+                <td style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <button className="btn-link" title="Explore outbound references"
+                    onClick={() => navigate("explore", id, node.display_class)}>
+                    <code>{node.display_class}</code>
                   </button>
                   {" "}
-                  <button
-                    className="btn-link"
-                    title="Open dominator tree"
+                  <button className="btn-link" title="Open dominator tree"
                     onClick={() => navigate("domtree", id, node.display_class)}
-                  >
+                    style={{ opacity: 0.6, flexShrink: 0 }}>
                     ⌞
                   </button>
                 </td>
-                <td><code>{node.display_class}</code></td>
+                <td>
+                  <button className="btn-link" title="Explore outbound references"
+                    onClick={() => navigate("explore", id, node.display_class)}>
+                    <code>{node.display_class}</code>
+                  </button>
+                </td>
                 <td>{fmtB(node.shallow)}</td>
                 <td>{fmtB(node.retained)}</td>
                 <td>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
@@ -5028,10 +5033,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <table className="std-table">
                   <thead>
                     <tr>
-                      <th>Nav</th>
                       <th>Field</th>
-                      <th>Child class</th>
-                      <th>Child retained</th>
+                      <th>Child class (click to explore)</th>
+                      <th>Retained</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -5042,18 +5046,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       return (
                         <tr key={i}>
                           <td>
-                            <button
-                              className="btn-link"
-                              onClick={() => navigate("explore", edge.child_idx, edge.child_class)}
-                            >
-                              &rarr;
-                            </button>
+                            <code>{edge.field_name || <em style={{ color: "var(--muted)" }}>(unnamed)</em>}</code>
                           </td>
                           <td>
-                            <code>{edge.field_name || <em>(unnamed)</em>}</code>
+                            <button className="btn-link"
+                              onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
+                              <code>{edge.child_class}</code>
+                            </button>
                           </td>
-                          <td><code>{edge.child_class}</code></td>
-                          <td>{fmtB(edge.child_retained)}</td>
+                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.child_retained)}</td>
                           <td>
                             {isShared && (
                               <span className="shared-badge">&#8635; shared</span>
@@ -5092,7 +5093,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               <h4 style={{ margin: "0 0 0.4rem" }}>Immediate Dominator Children</h4>
               <p className="subtitle" style={{ fontSize: "0.82rem" }}>
                 &#8505; One level at a time: shows objects <em>directly</em> dominated by this node.
-                Click <strong>into &rarr;</strong> to descend into a child's subtree.
+                Click class name to descend into a child's subtree.
               </p>
               {currentDomChildren.length === 0 ? (
                 <p className="subtitle">No significant dominated children.</p>
@@ -5100,8 +5101,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <table className="std-table">
                   <thead>
                     <tr>
-                      <th>Navigate</th>
-                      <th>Class</th>
+                      <th>Class (click to enter)</th>
                       <th>Shallow</th>
                       <th>Retained</th>
                       <th>% Heap</th>
@@ -5118,10 +5118,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               className="btn-link"
                               onClick={() => navigate("domtree", childId, cn.display_class)}
                             >
-                              into&nbsp;&rarr;
+                              <code>{cn.display_class}</code>
                             </button>
                           </td>
-                          <td><code>{cn.display_class}</code></td>
                           <td>{fmtB(cn.shallow)}</td>
                           <td>{fmtB(cn.retained)}</td>
                           <td>
@@ -5199,9 +5198,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               <table className="std-table">
                 <thead>
                   <tr>
-                    <th></th>
-                    <th>Class</th>
-                    <th>Retained</th>
+                    <th>Class (click to enter)</th>
+                    <th style={{ textAlign: "right" }}>Retained</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5211,21 +5209,18 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     return (
                       <tr key={childId}>
                         <td>
-                          <button
-                            className="btn-link"
-                            onClick={() => navigate("domtree", childId, cn.display_class)}
-                          >
-                            into&nbsp;&rarr;
+                          <button className="btn-link"
+                            onClick={() => navigate("domtree", childId, cn.display_class)}>
+                            <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
                           </button>
                         </td>
-                        <td><code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code></td>
-                        <td>{fmtB(cn.retained)}</td>
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(cn.retained)}</td>
                       </tr>
                     );
                   })}
                   {currentDomChildren.length > 10 && (
                     <tr>
-                      <td colSpan={3} style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
+                      <td colSpan={2} style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
                         +{currentDomChildren.length - 10} more — switch to Dominator Tree tab
                       </td>
                     </tr>
@@ -5607,6 +5602,11 @@ export default function App({ report }: { report: Report }) {
   React.useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (!hash) return;
+    // explore/domtree hashes are handled by ObjectGraphExplorer itself
+    if (/^(explore|domtree)\/\d+$/.test(hash)) {
+      document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
     requestAnimationFrame(() => {
       document.getElementById(hash)?.scrollIntoView({ behavior: "smooth" });
     });
