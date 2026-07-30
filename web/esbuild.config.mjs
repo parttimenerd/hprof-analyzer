@@ -10,9 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 764 KB minified bundle budget (raised from 762 KB to accommodate
-// V20 TPFG Diff table in the diff view).
-const BUDGET_BYTES = 764 * 1024;
+// ≤ 765 KB minified bundle budget (raised from 764 KB to accommodate dark mode RDT CSS overrides).
+const BUDGET_BYTES = 765 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

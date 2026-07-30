@@ -672,6 +672,7 @@ button:hover { background: var(--accent-hover); }
 .cp-value { color: var(--cp-value); flex-shrink: 0; }
 .cp-value .cp-match { color: var(--cp-match); font-weight: bold; }
 .cp-group { color: var(--cp-group); font-size: 11px; flex-shrink: 0; }
+.cp-desc  { color: var(--cp-group); font-size: 11px; flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 6px; opacity: 0.75; }
 .cp-more { padding: 3px 10px; color: var(--cp-group); font-size: 11px; font-style: italic; }
 
 /* ── Report screen ──────────────────────────────────────────────────────────── */

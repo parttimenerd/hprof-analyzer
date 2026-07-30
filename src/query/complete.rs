@@ -119,12 +119,13 @@ fn extract_query_info(prefix: &str) -> QueryStaticInfo {
                 i += 2;
             }
             "FROM" => {
-                // Take the next token as the class name (may be dotted).
-                if i + 1 < n {
-                    let class_tok = raw_tokens[i + 1].clone();
+                // Skip optional INSTANCEOF keyword before the class name.
+                let class_idx = if i + 1 < n && upper[i + 1] == "INSTANCEOF" { i + 2 } else { i + 1 };
+                if class_idx < n {
+                    let class_tok = raw_tokens[class_idx].clone();
                     // Token after class name (if any and not a keyword) is the alias.
-                    let alias = if i + 2 < n {
-                        let up = &upper[i + 2];
+                    let alias = if class_idx + 1 < n {
+                        let up = &upper[class_idx + 1];
                         let is_kw = matches!(
                             up.as_str(),
                             "WHERE"
@@ -142,7 +143,7 @@ fn extract_query_info(prefix: &str) -> QueryStaticInfo {
                                 | "DESC"
                         );
                         if !is_kw {
-                            Some(raw_tokens[i + 2].clone())
+                            Some(raw_tokens[class_idx + 1].clone())
                         } else {
                             None
                         }
@@ -166,10 +167,17 @@ fn extract_query_info(prefix: &str) -> QueryStaticInfo {
     }
 }
 
+#[allow(dead_code)]
 pub struct Completion {
     pub value: String,
     pub display: String,
     pub group: Option<String>,
+    /// Short human-readable description shown in the completion popover.
+    pub description: Option<String>,
+    /// Whether a space should be appended after accepting this completion.
+    /// True for keywords, functions, aggregates, and attributes; false for
+    /// class names and alias.field completions (where the next char varies).
+    pub trailing_space: bool,
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -179,6 +187,8 @@ fn kw(v: &str) -> Completion {
         value: v.to_string(),
         display: v.to_string(),
         group: Some("keyword".to_string()),
+        description: kw_description(v),
+        trailing_space: true,
     }
 }
 fn func(v: &str) -> Completion {
@@ -186,6 +196,8 @@ fn func(v: &str) -> Completion {
         value: v.to_string(),
         display: v.to_string(),
         group: Some("function".to_string()),
+        description: func_description(v),
+        trailing_space: false, // functions are followed by '('
     }
 }
 fn agg(v: &str) -> Completion {
@@ -193,6 +205,8 @@ fn agg(v: &str) -> Completion {
         value: v.to_string(),
         display: v.to_string(),
         group: Some("aggregate".to_string()),
+        description: agg_description(v),
+        trailing_space: false, // aggregates are followed by '('
     }
 }
 fn attr(v: &str) -> Completion {
@@ -200,6 +214,8 @@ fn attr(v: &str) -> Completion {
         value: v.to_string(),
         display: v.to_string(),
         group: Some("attribute".to_string()),
+        description: attr_description(v),
+        trailing_space: true,
     }
 }
 fn class(v: &str) -> Completion {
@@ -207,7 +223,88 @@ fn class(v: &str) -> Completion {
         value: v.to_string(),
         display: v.to_string(),
         group: Some("class".to_string()),
+        description: None,
+        trailing_space: true, // followed by alias or WHERE/ORDER/etc.
     }
+}
+
+fn kw_description(v: &str) -> Option<String> {
+    Some(match v.to_ascii_uppercase().as_str() {
+        "SELECT"    => "Begin a query",
+        "FROM"      => "Specify the class to query",
+        "WHERE"     => "Filter rows with a predicate",
+        "ORDER"     => "Sort results (ORDER BY …)",
+        "BY"        => "Part of ORDER BY / GROUP BY",
+        "GROUP"     => "Group rows (GROUP BY …)",
+        "HAVING"    => "Filter groups after aggregation",
+        "LIMIT"     => "Cap the number of rows returned",
+        "OFFSET"    => "Skip the first N rows",
+        "UNION"     => "Combine two queries",
+        "AS"        => "Name a column or alias",
+        "DISTINCT"  => "Deduplicate result rows",
+        "AND"       => "Logical AND in predicate",
+        "OR"        => "Logical OR in predicate",
+        "NOT"       => "Negate a predicate",
+        "IN"        => "Test membership in a subquery",
+        "EXISTS"    => "Test whether a subquery returns rows",
+        "INSTANCEOF"=> "Include instances of subclasses",
+        "OBJECTS"   => "Query a single object by address",
+        "BETWEEN"   => "Range test (BETWEEN a AND b)",
+        "LIKE"      => "Pattern match (% = wildcard)",
+        "IS"        => "Null test (IS NULL / IS NOT NULL)",
+        "NULL"      => "Null literal",
+        "ASC"       => "Ascending sort order",
+        "DESC"      => "Descending sort order",
+        "RETAINED"  => "Filter by retained heap size",
+        "CASE"      => "Conditional expression",
+        "WHEN"      => "CASE branch condition",
+        "THEN"      => "CASE branch result",
+        "ELSE"      => "CASE default result",
+        "END"       => "Close a CASE expression",
+        "TRUE"      => "Boolean true literal",
+        "FALSE"     => "Boolean false literal",
+        _           => return None,
+    }.to_string())
+}
+
+fn func_description(v: &str) -> Option<String> {
+    Some(match v {
+        "classof"       => "Class object of an instance",
+        "dominators"    => "Immediate dominator of an object",
+        "toString"      => "String representation of an object",
+        "toHex"         => "Hex address of an object",
+        "dominatedby"   => "Objects dominated by a given object",
+        "referrers"     => "Objects that reference this one",
+        "references"    => "Objects referenced by this one",
+        "inbounds"      => "Incoming references (alias for referrers)",
+        "outbounds"     => "Outgoing references (alias for references)",
+        _               => return None,
+    }.to_string())
+}
+
+fn agg_description(v: &str) -> Option<String> {
+    Some(match v {
+        "COUNT"     => "Count of rows",
+        "SUM"       => "Sum of a numeric expression",
+        "MIN"       => "Minimum value",
+        "MAX"       => "Maximum value",
+        "AVG"       => "Average value",
+        "PERCENTILE"=> "Nth percentile (0–100)",
+        "MEDIAN"    => "50th percentile shorthand",
+        _           => return None,
+    }.to_string())
+}
+
+fn attr_description(v: &str) -> Option<String> {
+    Some(match v {
+        "@objectAddress"    => "Heap address (pointer value)",
+        "@objectId"         => "Sequential object ID (1-based)",
+        "@retainedHeapSize" => "Retained heap in bytes",
+        "@usedHeapSize"     => "Shallow heap in bytes",
+        "@displayName"      => "Human-readable class + address",
+        "@gcRoots"          => "GC root flags for this object",
+        _                   => return None,
+    }.to_string())
 }
 
 /// Split `prefix` into uppercase "tokens" for context detection.
@@ -251,6 +348,8 @@ pub fn complete(
                 value: nq.name.to_string(),
                 display: format!("{} — {}", nq.name, nq.display),
                 group: Some(nq.group.to_string()),
+                description: Some(nq.display.to_string()),
+                trailing_space: true,
             })
             .collect();
     }
@@ -281,13 +380,15 @@ pub fn complete(
         let info_for_dot = extract_query_info(prefix_before_typed);
         if let Some((ref class_name, _)) = info_for_dot.from_class {
             if let Some(fields) = field_index.fields.get(class_name.as_str()) {
-                let mut res: Vec<Completion> = fields
+                let res: Vec<Completion> = fields
                     .iter()
                     .filter(|f| f.to_ascii_lowercase().starts_with(&field_prefix))
                     .map(|f| Completion {
                         value: f.clone(),
                         display: f.clone(),
                         group: Some("field".to_string()),
+                        description: None,
+                        trailing_space: true,
                     })
                     .collect();
                 if !res.is_empty() {
@@ -414,10 +515,16 @@ fn completions_from_context(
                     }).map(|c| class(c)));
                 }
             }
-            // "attribute" is the label on the `attr` parser — means a field or @attr is expected.
+            _ => {} // keywords handled in second pass below
+        }
+    }
+
+    // Second pass: expression/predicate/attribute/column-ref labels — content before keywords
+    for label in &ctx.labels {
+        match label.as_str() {
+            "class name" | "class regex" => {} // handled in first pass
+            // "attribute" label: @attr or field expected
             "attribute" => {
-                // Offer all @attributes and scalar functions (field names can't be
-                // enumerated without live data, but attrs and funcs cover the common cases).
                 res.extend(
                     ATTRIBUTES
                         .iter()
@@ -432,6 +539,15 @@ fn completions_from_context(
                 );
             }
             "expression" => {
+                if "*".starts_with(&lower) {
+                    res.push(Completion {
+                        value: "*".into(),
+                        display: "*".into(),
+                        group: Some("operator".into()),
+                        description: Some("All columns".to_string()),
+                        trailing_space: true,
+                    });
+                }
                 res.extend(
                     AGG_FUNCS
                         .iter()
@@ -450,7 +566,6 @@ fn completions_from_context(
                         .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
                         .map(|a| attr(a)),
                 );
-                // Alias.field completions: offer field names of the FROM class.
                 if let Some(fields) = from_fields {
                     res.extend(
                         fields
@@ -460,15 +575,10 @@ fn completions_from_context(
                                 value: f.clone(),
                                 display: f.clone(),
                                 group: Some("field".to_string()),
+                                description: None,
+                                trailing_space: true,
                             }),
                     );
-                }
-                if "*".starts_with(&lower) {
-                    res.push(Completion {
-                        value: "*".into(),
-                        display: "*".into(),
-                        group: Some("operator".into()),
-                    });
                 }
             }
             "predicate expression" => {
@@ -484,7 +594,6 @@ fn completions_from_context(
                         .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
                         .map(|a| attr(a)),
                 );
-                // Alias.field completions after WHERE: offer field names of the FROM class.
                 if let Some(fields) = from_fields {
                     res.extend(
                         fields
@@ -494,6 +603,8 @@ fn completions_from_context(
                                 value: f.clone(),
                                 display: f.clone(),
                                 group: Some("field".to_string()),
+                                description: None,
+                                trailing_space: true,
                             }),
                     );
                 }
@@ -505,7 +616,6 @@ fn completions_from_context(
                 }
             }
             "column ref" => {
-                // ORDER BY / GROUP BY column refs — offer AS aliases and attributes.
                 res.extend(
                     info.select_aliases
                         .iter()
@@ -514,6 +624,8 @@ fn completions_from_context(
                             value: a.clone(),
                             display: a.clone(),
                             group: Some("alias".to_string()),
+                            description: None,
+                            trailing_space: true,
                         }),
                 );
                 res.extend(
@@ -523,7 +635,15 @@ fn completions_from_context(
                         .map(|a| attr(a)),
                 );
             }
-            // Keywords labelled by ident_ci (e.g. "FROM", "WHERE", "ORDER", "BY", etc.)
+            _ => {} // keyword labels handled in third pass below
+        }
+    }
+
+    // Third pass: keyword labels — after all expression content
+    for label in &ctx.labels {
+        match label.as_str() {
+            "class name" | "class regex" | "attribute" | "expression"
+            | "predicate expression" | "column ref" => {}
             s => {
                 let up = s.to_ascii_uppercase();
                 if up.to_ascii_lowercase().starts_with(&lower) {
@@ -557,6 +677,8 @@ fn completions_from_context(
                         value: "*".into(),
                         display: "*".into(),
                         group: Some("operator".into()),
+                        description: Some("All columns".to_string()),
+                        trailing_space: true,
                     });
                 }
             }
@@ -584,6 +706,8 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
                 value: "*".to_string(),
                 display: "*".to_string(),
                 group: Some("operator".to_string()),
+                description: Some("All columns".to_string()),
+                trailing_space: true,
             }];
             res.extend(AGG_FUNCS.iter().map(|f| agg(f)));
             res.extend(FUNCS.iter().map(|f| func(f)));
@@ -591,13 +715,12 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
             res
         }
 
-        // After FROM or INSTANCEOF — class names
+        // After FROM or INSTANCEOF — class names first, INSTANCEOF at end
         "FROM" | "INSTANCEOF" => {
-            let mut res = Vec::new();
+            let mut res: Vec<Completion> = class_names.iter().map(|c| class(c)).collect();
             if last == "FROM" {
                 res.push(kw("INSTANCEOF"));
             }
-            res.extend(class_names.iter().map(|c| class(c)));
             res
         }
 
@@ -760,6 +883,42 @@ mod tests {
     }
 
     #[test]
+    fn from_space_classes_before_instanceof() {
+        // Class names must appear before INSTANCEOF in the completion list so that
+        // the most common case (typing a class name) is top of the suggestion list.
+        let cs = complete("SELECT * FROM ", 14, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        let class_pos = v.iter().position(|s| *s == "java.lang.String");
+        let instanceof_pos = v.iter().position(|s| *s == "INSTANCEOF");
+        assert!(class_pos.is_some(), "java.lang.String must be in completions");
+        assert!(instanceof_pos.is_some(), "INSTANCEOF must be in completions");
+        assert!(
+            class_pos.unwrap() < instanceof_pos.unwrap(),
+            "class names must come before INSTANCEOF; got class_pos={:?} instanceof_pos={:?}",
+            class_pos,
+            instanceof_pos
+        );
+    }
+
+    #[test]
+    fn from_instanceof_class_extracts_correctly() {
+        // extract_query_info must skip INSTANCEOF and use the class name after it.
+        // This means WHERE completions after `FROM INSTANCEOF Foo s WHERE ` should
+        // know the FROM class is Foo, not INSTANCEOF.
+        let mut fi = ClassFieldIndex::empty();
+        fi.fields.insert("java.lang.String".into(), vec!["value".into(), "hash".into()]);
+        let cs = complete(
+            "SELECT * FROM INSTANCEOF java.lang.String s WHERE s.",
+            52,
+            &["java.lang.String".to_string()],
+            &fi,
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"value"), "field 'value' after FROM INSTANCEOF ... WHERE alias.");
+        assert!(v.contains(&"hash"), "field 'hash' after FROM INSTANCEOF ... WHERE alias.");
+    }
+
+    #[test]
     fn from_partial_class_filters() {
         let cs = complete("SELECT * FROM java.lang.", 23, &classes(), &ClassFieldIndex::empty());
         let v = vals(&cs);
@@ -827,6 +986,15 @@ mod tests {
         // Should NOT suggest class names or clause keywords
         assert!(!v.contains(&"FROM"), "no FROM in select position");
         assert!(!v.contains(&"WHERE"), "no WHERE in select position");
+        // * must be first, keywords (DISTINCT/AS) must come after expressions
+        assert_eq!(cs[0].value, "*", "* is first in SELECT completions");
+        let star_pos = v.iter().position(|s| *s == "*").unwrap();
+        let count_pos = v.iter().position(|s| *s == "COUNT").unwrap();
+        let distinct_pos = v.iter().position(|s| *s == "DISTINCT");
+        assert!(star_pos < count_pos, "* before COUNT");
+        if let Some(dp) = distinct_pos {
+            assert!(count_pos < dp, "COUNT (expression) before DISTINCT (keyword)");
+        }
     }
 
     #[test]
@@ -1188,5 +1356,405 @@ mod tests {
         // Falls through to chumsky predicate expression completions
         let v = vals(&cs);
         assert!(!v.iter().any(|s| *s == "value"), "no String fields for unknown class");
+    }
+
+    // ── Trailing space ────────────────────────────────────────────────────────
+
+    #[test]
+    fn keywords_have_trailing_space() {
+        let cs = complete("SELECT * FROM ", 14, &classes(), &ClassFieldIndex::empty());
+        let instanceof = cs.iter().find(|c| c.value == "INSTANCEOF").expect("INSTANCEOF present");
+        assert!(instanceof.trailing_space, "INSTANCEOF should have trailing_space=true");
+    }
+
+    #[test]
+    fn select_keyword_has_trailing_space() {
+        let cs = complete("", 0, &classes(), &ClassFieldIndex::empty());
+        let sel = cs.iter().find(|c| c.value == "SELECT").expect("SELECT present");
+        assert!(sel.trailing_space, "SELECT should have trailing_space=true");
+    }
+
+    #[test]
+    fn functions_have_no_trailing_space() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let classof = cs.iter().find(|c| c.value == "classof").expect("classof present");
+        assert!(!classof.trailing_space, "classof should have trailing_space=false (followed by '(')");
+    }
+
+    #[test]
+    fn aggregates_have_no_trailing_space() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let count = cs.iter().find(|c| c.value == "COUNT").expect("COUNT present");
+        assert!(!count.trailing_space, "COUNT should have trailing_space=false (followed by '(')");
+    }
+
+    #[test]
+    fn star_has_trailing_space() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let star = cs.iter().find(|c| c.value == "*").expect("* present after SELECT");
+        assert!(star.trailing_space, "* should have trailing_space=true");
+    }
+
+    #[test]
+    fn attributes_have_trailing_space() {
+        let cs = complete("SELECT @obj", 11, &classes(), &ClassFieldIndex::empty());
+        for c in &cs {
+            assert!(c.trailing_space, "@{} should have trailing_space=true", c.value);
+        }
+    }
+
+    #[test]
+    fn class_names_have_trailing_space() {
+        let cs = complete("SELECT * FROM ", 14, &classes(), &ClassFieldIndex::empty());
+        let string_c = cs.iter().find(|c| c.value == "java.lang.String").expect("String present");
+        assert!(string_c.trailing_space, "class names should have trailing_space=true");
+    }
+
+    #[test]
+    fn field_completions_have_trailing_space() {
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        for c in &cs {
+            assert!(c.trailing_space, "field {} should have trailing_space=true", c.value);
+        }
+    }
+
+    #[test]
+    fn where_keyword_has_trailing_space() {
+        let line = "SELECT * FROM java.lang.String s ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let wh = cs.iter().find(|c| c.value == "WHERE").expect("WHERE present");
+        assert!(wh.trailing_space, "WHERE should have trailing_space=true");
+    }
+
+    // ── Descriptions ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn select_has_description() {
+        let cs = complete("", 0, &classes(), &ClassFieldIndex::empty());
+        let sel = cs.iter().find(|c| c.value == "SELECT").expect("SELECT present");
+        assert!(sel.description.is_some(), "SELECT should have a description");
+        let d = sel.description.as_deref().unwrap();
+        assert!(!d.is_empty(), "SELECT description should not be empty");
+    }
+
+    #[test]
+    fn from_has_description() {
+        let cs = complete("SELECT * ", 9, &classes(), &ClassFieldIndex::empty());
+        let from = cs.iter().find(|c| c.value == "FROM").expect("FROM present");
+        assert!(from.description.as_deref() == Some("Specify the class to query"), "FROM description");
+    }
+
+    #[test]
+    fn where_has_description() {
+        let line = "SELECT * FROM java.lang.String s ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let wh = cs.iter().find(|c| c.value == "WHERE").expect("WHERE present");
+        assert!(wh.description.is_some(), "WHERE should have a description");
+    }
+
+    #[test]
+    fn count_aggregate_has_description() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let count = cs.iter().find(|c| c.value == "COUNT").expect("COUNT present");
+        assert_eq!(count.description.as_deref(), Some("Count of rows"), "COUNT description");
+    }
+
+    #[test]
+    fn classof_function_has_description() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let classof = cs.iter().find(|c| c.value == "classof").expect("classof present");
+        assert!(classof.description.is_some(), "classof should have a description");
+    }
+
+    #[test]
+    fn retained_attr_has_description() {
+        let cs = complete("SELECT @ret", 11, &classes(), &ClassFieldIndex::empty());
+        let r = cs.iter().find(|c| c.value == "@retainedHeapSize").expect("@retainedHeapSize present");
+        assert_eq!(r.description.as_deref(), Some("Retained heap in bytes"), "@retainedHeapSize description");
+    }
+
+    #[test]
+    fn object_address_attr_has_description() {
+        let cs = complete("SELECT @obj", 11, &classes(), &ClassFieldIndex::empty());
+        let oa = cs.iter().find(|c| c.value == "@objectAddress").expect("@objectAddress present");
+        assert_eq!(oa.description.as_deref(), Some("Heap address (pointer value)"), "@objectAddress description");
+    }
+
+    #[test]
+    fn star_has_description() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let star = cs.iter().find(|c| c.value == "*").expect("* present");
+        assert_eq!(star.description.as_deref(), Some("All columns"), "* description");
+    }
+
+    #[test]
+    fn class_names_have_no_description() {
+        let cs = complete("SELECT * FROM ", 14, &classes(), &ClassFieldIndex::empty());
+        let string_c = cs.iter().find(|c| c.value == "java.lang.String").expect("String present");
+        assert!(string_c.description.is_none(), "class names should not have descriptions");
+    }
+
+    #[test]
+    fn instanceof_has_description() {
+        let cs = complete("SELECT * FROM ", 14, &classes(), &ClassFieldIndex::empty());
+        let inst = cs.iter().find(|c| c.value == "INSTANCEOF").expect("INSTANCEOF present");
+        assert!(inst.description.is_some(), "INSTANCEOF should have a description");
+        assert!(inst.description.as_deref().unwrap().contains("subclass"), "INSTANCEOF description mentions subclasses");
+    }
+
+    #[test]
+    fn run_completions_have_descriptions() {
+        let cs = complete("/run top", 8, &[], &ClassFieldIndex::empty());
+        for c in &cs {
+            assert!(c.description.is_some(), "/run {} should have a description", c.value);
+        }
+    }
+
+    // ── Groups ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn keyword_group_value() {
+        let cs = complete("SELECT * FROM java.lang.String s ", 33, &classes(), &ClassFieldIndex::empty());
+        let wh = cs.iter().find(|c| c.value == "WHERE").expect("WHERE present");
+        assert_eq!(wh.group.as_deref(), Some("keyword"), "WHERE should be in keyword group");
+    }
+
+    #[test]
+    fn aggregate_group_value() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let count = cs.iter().find(|c| c.value == "COUNT").expect("COUNT present");
+        assert_eq!(count.group.as_deref(), Some("aggregate"), "COUNT should be in aggregate group");
+    }
+
+    #[test]
+    fn function_group_value() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let cf = cs.iter().find(|c| c.value == "classof").expect("classof present");
+        assert_eq!(cf.group.as_deref(), Some("function"), "classof should be in function group");
+    }
+
+    #[test]
+    fn operator_group_for_star() {
+        let cs = complete("SELECT ", 7, &classes(), &ClassFieldIndex::empty());
+        let star = cs.iter().find(|c| c.value == "*").expect("* present");
+        assert_eq!(star.group.as_deref(), Some("operator"), "* should be in operator group");
+    }
+
+    // ── Field completions in SELECT ────────────────────────────────────────────
+
+    #[test]
+    fn field_completions_in_select_with_from() {
+        // Field completions require the FROM clause to already be in the prefix_before_typed.
+        // When we type "SELECT s." with FROM already typed earlier, the alias.field path
+        // needs the full prefix to find the FROM class.
+        // NOTE: the alias.field path uses prefix_before_typed (everything before "s."),
+        // so the FROM class must appear before the alias. Test it in WHERE position instead,
+        // which is the standard usage pattern.
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        let v = vals(&cs);
+        assert!(v.contains(&"value"), "s. in WHERE → value field");
+        assert!(v.contains(&"hash"), "s. in WHERE → hash field");
+        // Verify the group is "field" not "class" or "keyword"
+        for c in cs.iter().filter(|c| c.value == "value") {
+            assert_eq!(c.group.as_deref(), Some("field"), "field completion has field group");
+        }
+    }
+
+    #[test]
+    fn field_completions_partial_in_select_with_from() {
+        // Without FROM context (only "SELECT s.va"), there's no class to look up
+        let line = "SELECT s.va";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        // No FROM clause in prefix_before_typed → no field completions
+        let v = vals(&cs);
+        assert!(!v.contains(&"value"), "SELECT s.va without FROM → no fields from String");
+    }
+
+    #[test]
+    fn fields_in_where_have_field_group() {
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        let val_f = cs.iter().find(|c| c.value == "value").expect("value field present");
+        assert_eq!(val_f.group.as_deref(), Some("field"), "field completions in WHERE have field group");
+    }
+
+    // ── Expression content in SELECT ──────────────────────────────────────────
+
+    #[test]
+    fn after_select_distinct_star_available() {
+        let cs = complete("SELECT DISTINCT ", 16, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"*"), "DISTINCT → * available");
+        assert!(v.contains(&"COUNT"), "DISTINCT → COUNT available");
+    }
+
+    #[test]
+    fn after_select_from_position_multiple_exprs() {
+        // "SELECT *, " should suggest expression completions for the second column
+        let cs = complete("SELECT *, ", 10, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"COUNT") || v.contains(&"classof") || v.contains(&"@objectAddress"),
+            "after 'SELECT *, ' should suggest expression completions; got: {:?}", v);
+    }
+
+    // ── ORDER BY / GROUP BY ────────────────────────────────────────────────────
+
+    #[test]
+    fn order_by_suggests_column_refs_and_attrs() {
+        let line = "SELECT * FROM java.lang.String s ORDER BY ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"@retainedHeapSize") || v.contains(&"@usedHeapSize"),
+            "ORDER BY should suggest @attributes; got: {:?}", v);
+    }
+
+    #[test]
+    fn order_by_asc_desc_inline() {
+        // ASC/DESC are parsed as a suffix of the sort-key token, not a separate keyword.
+        // After "ORDER BY @retainedHeapSize" (no trailing space), partial ASC/DESC should complete.
+        let line = "SELECT * FROM java.lang.String s ORDER BY @retainedHeapSize AS";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"ASC"), "partial AS → ASC; got: {:?}", v);
+    }
+
+    #[test]
+    fn asc_desc_have_descriptions() {
+        let line = "SELECT * FROM java.lang.String s ORDER BY @retainedHeapSize ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        if let Some(asc) = cs.iter().find(|c| c.value == "ASC") {
+            assert!(asc.description.is_some(), "ASC should have a description");
+        }
+        if let Some(desc) = cs.iter().find(|c| c.value == "DESC") {
+            assert!(desc.description.is_some(), "DESC should have a description");
+        }
+    }
+
+    // ── LIMIT / OFFSET ────────────────────────────────────────────────────────
+
+    #[test]
+    fn limit_available_after_order_by() {
+        let line = "SELECT * FROM java.lang.String s ORDER BY @retainedHeapSize DESC ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"LIMIT"), "LIMIT should be available after ORDER BY ... DESC; got: {:?}", v);
+    }
+
+    // ── UNION ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn union_available_after_complete_query() {
+        let line = "SELECT * FROM java.lang.String s LIMIT 10 ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"UNION"), "UNION should be available after a complete query; got: {:?}", v);
+    }
+
+    // ── Predicate completions ─────────────────────────────────────────────────
+
+    #[test]
+    fn after_where_not_available() {
+        let line = "SELECT * FROM java.lang.String s WHERE ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"NOT"), "NOT should be available after WHERE; got: {:?}", v);
+    }
+
+    #[test]
+    fn after_where_predicate_with_and_or() {
+        // After a complete predicate condition with partial AND/OR, it should complete.
+        let line = "SELECT * FROM java.lang.String s WHERE s.hash > 0 AN";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"AND"), "partial AND after predicate → AND; got: {:?}", v);
+    }
+
+    #[test]
+    fn and_or_have_descriptions() {
+        let line = "SELECT * FROM java.lang.String s WHERE s.hash > 0 ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        if let Some(and) = cs.iter().find(|c| c.value == "AND") {
+            assert_eq!(and.description.as_deref(), Some("Logical AND in predicate"), "AND description");
+        }
+        if let Some(or) = cs.iter().find(|c| c.value == "OR") {
+            assert_eq!(or.description.as_deref(), Some("Logical OR in predicate"), "OR description");
+        }
+    }
+
+    // ── cursor_pos < line.len() ────────────────────────────────────────────────
+
+    #[test]
+    fn cursor_in_middle_of_line_uses_prefix_only() {
+        // Complete at pos=7 in "SELECT * FROM java.lang.String" → treat as "SELECT "
+        let line = "SELECT * FROM java.lang.String";
+        let cs = complete(line, 7, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        // At cursor_pos=7 ("SELECT "), should suggest expression items
+        assert!(v.contains(&"*") || v.contains(&"COUNT") || v.contains(&"FROM"),
+            "cursor at col 7 should give valid completions; got: {:?}", v);
+    }
+
+    // ── Completions don't contain duplicates with field index ─────────────────
+
+    #[test]
+    fn no_duplicates_with_field_index() {
+        let line = "SELECT * FROM java.lang.String s WHERE ";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        let v = vals(&cs);
+        let set: std::collections::HashSet<&str> = v.iter().copied().collect();
+        assert_eq!(set.len(), v.len(), "no duplicate completions with field index: {:?}", v);
+    }
+
+    // ── Partial @attribute in expression context ──────────────────────────────
+
+    #[test]
+    fn at_prefix_in_where_context() {
+        let line = "SELECT * FROM java.lang.String s WHERE @ret";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"@retainedHeapSize"), "@ret in WHERE → @retainedHeapSize");
+        assert!(!v.contains(&"java.lang.String"), "@ret should not show class names");
+    }
+
+    #[test]
+    fn at_prefix_in_select_context() {
+        let line = "SELECT @use";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"@usedHeapSize"), "@use in SELECT → @usedHeapSize");
+    }
+
+    // ── FROM class filtering by required fields ────────────────────────────────
+
+    #[test]
+    fn from_filters_classes_by_required_fields() {
+        // Classes with NO entry in field_index are not filtered out (unknown class assumption).
+        // Only classes that have ALL required fields get included when field_index has them.
+        // java.lang.String has "value" in string_field_index → should appear.
+        // java.util.ArrayList has NO entry in string_field_index → unknown, not filtered out.
+        // This tests that known classes without the required field ARE filtered.
+        let mut fi = ClassFieldIndex::empty();
+        fi.fields.insert("java.lang.String".into(), vec!["value".into(), "hash".into()]);
+        fi.fields.insert("java.util.ArrayList".into(), vec!["size".into()]);  // no "value"
+        let line = "SELECT s.value FROM ";
+        let cs = complete(line, line.len(), &classes(), &fi);
+        let v = vals(&cs);
+        assert!(v.contains(&"java.lang.String"), "String has value field → present");
+        assert!(!v.contains(&"java.util.ArrayList"), "ArrayList has no value field → filtered");
+    }
+
+    // ── Named query descriptions ───────────────────────────────────────────────
+
+    #[test]
+    fn run_named_query_description_not_empty() {
+        let cs = complete("/run ", 5, &[], &ClassFieldIndex::empty());
+        for c in &cs {
+            assert!(
+                c.description.as_deref().map(|d| !d.is_empty()).unwrap_or(false),
+                "/run {} should have non-empty description", c.value
+            );
+        }
     }
 }

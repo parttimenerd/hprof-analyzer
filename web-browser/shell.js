@@ -1822,6 +1822,7 @@ function startTerminal() {
       }
 
       const grpHtml = c.group ? `<span class="cp-group">${escHtml(c.group)}</span>` : '';
+      const descHtml = c.description ? `<span class="cp-desc">${escHtml(c.description)}</span>` : '';
       // Per-item syntax highlighting on the value span — use CSS variables for theme-awareness
       const cs = getComputedStyle(document.documentElement);
       let valColor;
@@ -1834,7 +1835,7 @@ function startTerminal() {
       } else {
         valColor = cs.getPropertyValue('--cp-col-fn').trim()    || '#60c8e0';
       }
-      div.innerHTML = `<span class="cp-value" style="color:${valColor}">${valHtml}</span>${grpHtml}`;
+      div.innerHTML = `<span class="cp-value" style="color:${valColor}">${valHtml}</span>${grpHtml}${descHtml}`;
       div.addEventListener('mousedown', e => {
         e.preventDefault();
         popAccept(i);
@@ -1910,8 +1911,8 @@ function startTerminal() {
     const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
     const tokenStart = lastDelim >= 0 ? lastDelim + 1 : 0;
     const suffix = line.slice(cursorPos);
-    line = line.slice(0, tokenStart) + c.value + suffix;
-    cursorPos = tokenStart + c.value.length;
+    line = line.slice(0, tokenStart) + c.value + (c.trailing_space ? ' ' : '') + suffix;
+    cursorPos = tokenStart + c.value.length + (c.trailing_space ? 1 : 0);
     ghostText = '';
     popHide();
     redrawLine();
@@ -2014,10 +2015,10 @@ function startTerminal() {
         const prefix = line.slice(0, cursorPos);
         const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
         const typedToken = lastDelim >= 0 ? prefix.slice(lastDelim + 1) : prefix;
-        const suffix = cs[0].value.startsWith(typedToken)
+        const valSuffix = cs[0].value.startsWith(typedToken)
           ? cs[0].value.slice(typedToken.length)
           : '';
-        ghostText = suffix;
+        ghostText = valSuffix + (cs[0].trailing_space && valSuffix !== '' ? ' ' : '');
       } else if (cs.length > 1) {
         // Multiple matches: show popover, no ghost
         ghostText = '';

@@ -467,9 +467,13 @@ impl HprofSession {
                 let mut obj = serde_json::json!({
                     "value": c.value,
                     "display": c.display,
+                    "trailing_space": c.trailing_space,
                 });
                 if let Some(ref g) = c.group {
                     obj["group"] = serde_json::json!(g);
+                }
+                if let Some(ref d) = c.description {
+                    obj["description"] = serde_json::json!(d);
                 }
                 obj
             })

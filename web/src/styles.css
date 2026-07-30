@@ -93,7 +93,9 @@ h3 { font-size: 1.02rem; margin: 1.25rem 0 0.5rem; }
 .kpi-value { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kpi-value code { font-size: 0.95rem; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 .kpi-label { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--card); padding: 0.05rem 0.3rem; border-radius: 4px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--card); color: var(--fg); padding: 0.05rem 0.3rem; border-radius: 4px; }
+a { color: var(--accent); }
+a:visited { color: var(--accent); }
 code.loader { font-size: 0.78rem; color: var(--muted); }
 table { border-collapse: collapse; width: 100%; font-size: 0.86rem; margin: 0.5rem 0 1rem; }
 th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }
@@ -431,3 +433,30 @@ dialog.text-modal::backdrop {
 .framework-card { background: var(--card, #f8f9fa); border: 1px solid var(--border, #dee2e6); border-radius: 6px; padding: 0.75rem 1rem; min-width: 200px; }
 .framework-card-name { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
 .framework-card-stats { font-size: 0.85rem; color: var(--muted, #6c757d); }
+
+/* ── Dark mode: override react-data-table-component CSS custom properties ── */
+[data-theme="dark"] {
+  --rdt-color-text-primary: var(--fg);
+  --rdt-color-text-secondary: var(--muted);
+  --rdt-color-striped-text: var(--fg);
+  --rdt-color-selected-text: var(--fg);
+  --rdt-color-highlight-text: var(--fg);
+  --rdt-color-btn: var(--muted);
+  --rdt-color-btn-disabled: var(--border);
+}
+/* Direct override for code/span inside RDT rows — CSS vars may lose to inherited color */
+[data-theme="dark"] .rdt_TableRow code,
+[data-theme="dark"] .rdt_TableRow span { color: var(--fg); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --rdt-color-text-primary: var(--fg);
+    --rdt-color-text-secondary: var(--muted);
+    --rdt-color-striped-text: var(--fg);
+    --rdt-color-selected-text: var(--fg);
+    --rdt-color-highlight-text: var(--fg);
+    --rdt-color-btn: var(--muted);
+    --rdt-color-btn-disabled: var(--border);
+  }
+  :root:not([data-theme="light"]) .rdt_TableRow code,
+  :root:not([data-theme="light"]) .rdt_TableRow span { color: var(--fg); }
+}
