@@ -440,10 +440,7 @@ const SECTION_LABELS: Record<string, string> = {
   "leak-suspects": "Leak Suspects",
   "top-consumers": "Top Consumers",
   "dominator-analysis": "Dominator Analysis",
-  "dominator-nav": "Dominator Nav",
   "object-graph": "Object Graph",
-  "biggest-classes": "Biggest Classes",
-  "biggest-packages": "Biggest Packages",
   "references": "References",
   "threads": "Threads",
   "collections": "Collections",
@@ -458,7 +455,7 @@ const SECTION_LABELS: Record<string, string> = {
   "container-attribution-classfield": "Container Attribution",
   "collection-waste-budget": "Waste Budget",
   "biggest-collections": "Biggest Collections",
-  "duplicate-strings": "Duplicate Strings",
+  "duplicate-strings-approximate": "Duplicate Strings",
 };
 
 function NavBreadcrumb() {

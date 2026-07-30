@@ -151,7 +151,7 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .render-error pre { overflow-x: auto; padding: 1rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; white-space: pre-wrap; }
 
 /* Fixed back-to-top button, visible after scrolling down. */
-.back-to-top { position: fixed; right: 1rem; bottom: 1rem; z-index: 10; background: var(--card); color: var(--accent); border: 1px solid var(--border); border-radius: 999px; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 1rem; line-height: 1; }
+.back-to-top { position: fixed; right: 1rem; bottom: 2.8rem; z-index: 10; background: var(--card); color: var(--accent); border: 1px solid var(--border); border-radius: 999px; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 1rem; line-height: 1; }
 
 /* Navigation breadcrumb — fixed bottom bar, appears after hash navigation. */
 .nav-breadcrumb {
