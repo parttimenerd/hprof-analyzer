@@ -2581,7 +2581,7 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (objs.length === 0) return null;
   const cols: TableColumn<ThreadLocalObj>[] = [
-    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code>{o.display_class}</code><CopyBtn text={o.display_class} /></span>, selector: (o) => o.display_class, sortable: true },
+    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code>{o.display_class}</code><CopyBtn text={o.display_class} /><PivotBtn cls={o.display_class} /></span>, selector: (o) => o.display_class, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.retained, fmtB, useKB), selector: (o) => o.retained, sortable: true },
   ];
@@ -2650,7 +2650,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                   <ul>
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
-                        <code>{loc.display_class}</code>{" "}
+                        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{loc.display_class}</code><PivotBtn cls={loc.display_class} /></span>{" "}
                         <span className="path-ret">retains {fmtB(loc.retained)} ({fmtPct(loc.pct)} of thread retained)</span>
                       </li>
                     ))}
@@ -2903,7 +2903,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
           {c.top_classes.map((cc, j) => (
             <span key={j}>
               {j > 0 ? ", " : ""}
-              <code>{cc.pretty_class}</code> ({fmtB(cc.retained)})
+              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{cc.pretty_class}</code><PivotBtn cls={cc.pretty_class} /></span> ({fmtB(cc.retained)})
             </span>
           ))}
         </>
@@ -3368,7 +3368,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
 function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<import("./types").TinyCollectionRow>[] = [
-    { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+    { id: "field", name: "Class#field", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
     { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
     { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count, sortable: true },
     { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count, sortable: true },
@@ -3488,12 +3488,12 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
       sortable: true,
     },
     { id: "elements", name: "Elements", right: true, width: "100px", format: ({ row: r, count }) => count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements), selector: ({ row: r }) => r.elements, sortable: true },
-    ...(hasValue ? [{ id: "value", name: "Value Type", grow: 1, cell: ({ row: r }: CoalescedRow) => r.dominant_value_type ? <code>{r.dominant_value_type}</code> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasValue ? [{ id: "value", name: "Value Type", grow: 1, cell: ({ row: r }: CoalescedRow) => r.dominant_value_type ? <span className="copy-cell"><code>{r.dominant_value_type}</code><PivotBtn cls={r.dominant_value_type} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasBreakdown ? [{
       id: "breakdown", name: "Value Types (top)", grow: 2,
       cell: ({ row: r }: CoalescedRow) => !r.value_type_breakdown || r.value_type_breakdown.length === 0
         ? <span>—</span>
-        : <>{r.value_type_breakdown.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}</span>)}</>,
+        : <>{r.value_type_breakdown.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{s.type_name}</code><PivotBtn cls={s.type_name} /></span> ×{fmtCount(s.count)}</span>)}</>,
     } as TableColumn<CoalescedRow>] : []),
     ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: ({ row: r }: CoalescedRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><PivotBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? (useKB ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : fmtB(r.retained)) : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0, sortable: true } as TableColumn<CoalescedRow>] : []),
@@ -5147,12 +5147,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       return (
                         <tr key={childId}>
                           <td>
-                            <button
-                              className="btn-link"
-                              onClick={() => navigate("domtree", childId, cn.display_class)}
-                            >
-                              <code>{cn.display_class}</code>
-                            </button>
+                            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                              <button
+                                className="btn-link"
+                                onClick={() => navigate("domtree", childId, cn.display_class)}
+                              >
+                                <code>{cn.display_class}</code>
+                              </button>
+                              <PivotBtn cls={cn.display_class} />
+                            </span>
                           </td>
                           <td>{fmtB(cn.shallow)}</td>
                           <td>{fmtB(cn.retained)}</td>
@@ -5242,10 +5245,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     return (
                       <tr key={childId}>
                         <td>
-                          <button className="btn-link"
-                            onClick={() => navigate("domtree", childId, cn.display_class)}>
-                            <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
-                          </button>
+                          <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                            <button className="btn-link"
+                              onClick={() => navigate("domtree", childId, cn.display_class)}>
+                              <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
+                            </button>
+                            <PivotBtn cls={cn.display_class} />
+                          </span>
                         </td>
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(cn.retained)}</td>
                       </tr>
@@ -5389,8 +5395,8 @@ function TpfgDiffTable({ rows, fmtB }: { rows: TypeEdgeDiff[]; fmtB: (n: number)
   const dc = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : ""}{n.toLocaleString()}</span>;
   const dw = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : n < 0 ? "−" : ""}{fmtB(Math.abs(n))}{n < 0 ? " ▼" : n > 0 ? " ▲" : ""}</span>;
   const cols: TableColumn<TypeEdgeDiff>[] = [
-    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <code>{r.src_class}</code>, grow: 2 },
-    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <code>{r.dst_class}</code>, grow: 2 },
+    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <span className="copy-cell"><code>{r.src_class}</code><PivotBtn cls={r.src_class} /></span>, grow: 2 },
+    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><PivotBtn cls={r.dst_class} /></span>, grow: 2 },
     { id: "cf", name: "Edges (first)", selector: r => r.count_first, sortable: true, right: true, cell: r => r.count_first.toLocaleString() },
     { id: "cl", name: "Edges (last)", selector: r => r.count_last, sortable: true, right: true, cell: r => r.count_last.toLocaleString() },
     { id: "dc", name: "Δ Edges", selector: r => r.delta_count, sortable: true, right: true, cell: r => dc(r.delta_count) },
