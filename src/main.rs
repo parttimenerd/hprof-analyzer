@@ -213,6 +213,13 @@ struct Cli {
     #[arg(long)]
     obj_graph: bool,
 
+    /// Embed the React app bundle as plain readable JS in the HTML report
+    /// (no deflate/base64). The report is ~750 KB larger but the JS is visible
+    /// and editable in browser DevTools — useful for iterating on the UI.
+    /// Implies --format html. Analyze-only.
+    #[arg(long)]
+    dev: bool,
+
     /// Emit Eclipse MAT-compatible binary index files into DIR while running
     /// the normal analysis (the report output is unaffected). The files are
     /// named `<dump>.<kind>.index` using the input basename as the prefix.
@@ -773,7 +780,13 @@ fn run_default(cli: Cli) {
             ProgressWhen::Auto => !cli.verbose && !cli.trace_rss && std::io::stderr().is_terminal(),
         };
         progress::set_enabled(show_progress);
-        let fmt = resolve_format(cli.format, cli.output.as_deref());
+        let fmt = if cli.dev {
+            // --dev implies HTML unless an explicit format or .html extension already means HTML.
+            let base = resolve_format(cli.format, cli.output.as_deref());
+            if base != OutputFormat::Html { OutputFormat::Html } else { base }
+        } else {
+            resolve_format(cli.format, cli.output.as_deref())
+        };
         let opts = cli.detail.options();
         let opts = AnalyzeOptions {
             find_duplicates: cli.find_duplicates || cli.full_analysis,
@@ -790,6 +803,7 @@ fn run_default(cli: Cli) {
             reachable_only: cli.reachable_only,
             ref_paths: cli.ref_paths,
             obj_graph: cli.obj_graph || cli.full_analysis,
+            dev_report: cli.dev,
             ..opts
         };
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
@@ -3086,7 +3100,11 @@ fn run(
             js
         }
         OutputFormat::Html => {
-            let h = html::render_html(&report);
+            let h = if opts.dev_report {
+                html::render_html_dev(&report)
+            } else {
+                html::render_html(&report)
+            };
             crate::trace::probe("report: after render_html");
             h
         }

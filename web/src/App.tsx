@@ -207,6 +207,7 @@ function StdTable<T extends object>({
   columns, data, searchKeys = [], keyField,
   defaultSortFieldId, defaultSortAsc = false,
   fmtBtn, extraBtns, cap = TABLE_CAP,
+  onRowClicked, onRowContextMenu, rowClickTitle,
 }: {
   columns: TableColumn<T>[];
   data: T[];
@@ -217,6 +218,9 @@ function StdTable<T extends object>({
   fmtBtn?: React.ReactNode;
   extraBtns?: React.ReactNode;
   cap?: number;
+  onRowClicked?: (row: T) => void;
+  onRowContextMenu?: (row: T, e: React.MouseEvent) => void;
+  rowClickTitle?: string;
 }) {
   const [filter, setFilter] = React.useState("");
   const filtered = React.useMemo(() => {
@@ -226,6 +230,18 @@ function StdTable<T extends object>({
   }, [data, filter, searchKeys]);
   const { visible, extra, showAll, setShowAll } = useCapped(filtered, cap);
   const hasToolbar = searchKeys.length > 0 || fmtBtn || extraBtns;
+  // Track last-hovered row for context menu — updated via onRowClicked and mouse events.
+  const tableWrapRef = React.useRef<HTMLDivElement>(null);
+  const handleContextMenu = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onRowContextMenu) return;
+    // Find which row was right-clicked by walking up from the event target.
+    const rdtRow = (e.target as Element | null)?.closest(".rdt_TableRow") as HTMLElement | null;
+    if (!rdtRow || !tableWrapRef.current) return;
+    const rowIndex = Array.from(tableWrapRef.current.querySelectorAll(".rdt_TableRow")).indexOf(rdtRow);
+    if (rowIndex >= 0 && rowIndex < visible.length) {
+      onRowContextMenu(visible[rowIndex], e);
+    }
+  }, [onRowContextMenu, visible]);
   return (
     <>
       {hasToolbar && (
@@ -241,9 +257,14 @@ function StdTable<T extends object>({
           {fmtBtn}
         </div>
       )}
-      <DataTable columns={columns} data={visible} keyField={keyField}
-        defaultSortFieldId={defaultSortFieldId} defaultSortAsc={defaultSortAsc}
-        customStyles={histogramTableStyles} dense highlightOnHover />
+      <div ref={tableWrapRef} title={rowClickTitle} onContextMenu={onRowContextMenu ? handleContextMenu : undefined}>
+        <DataTable columns={columns} data={visible} keyField={keyField}
+          defaultSortFieldId={defaultSortFieldId} defaultSortAsc={defaultSortAsc}
+          customStyles={histogramTableStyles} dense highlightOnHover
+          onRowClicked={onRowClicked}
+          pointerOnHover={!!onRowClicked}
+        />
+      </div>
       {extra > 0 && (
         <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
           {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
@@ -288,8 +309,8 @@ function Nav({ report }: { report: Report }) {
     if (!dataGroupSet) { items.push([id, label, "Data", badge]); dataGroupSet = true; }
     else items.push([id, label, undefined, badge]);
   };
-  if (report.overview.duplicate_strings) addData("duplicate-strings-approximate", "Duplicate Strings");
-  if (report.overview.duplicate_prim_arrays) addData("duplicate-prim-arrays", "Duplicate Prim Arrays");
+  addData("duplicate-strings-approximate", "Duplicate Strings");
+  addData("duplicate-prim-arrays", "Duplicate Prim Arrays");
   if (report.overview.boxed_numbers?.length) addData("boxed-numbers", "Boxed Numbers");
   if (report.overview.header_overhead?.length) addData("object-header-overhead", "Header Overhead");
   if (report.top_components?.components?.length) addData("top-components", "Top Components");
@@ -309,7 +330,7 @@ function Nav({ report }: { report: Report }) {
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
   if ((report.leak_indicators?.direct_byte_buffer_capacity_sum ?? 0) > 0) addData("off-heap-nio", "Off-Heap NIO");
-  if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
+  if (report.alloc_sites) addData("allocation-sites", "Allocation Sites");
   if (report.queries?.length) addData("custom-queries", "Custom Queries", String(report.queries.length));
   if (report.obj_graph_flat) addData("object-graph", "Object Graph");
   if (report.type_ref_graph?.length) addData("type-ref-graph", "Type Graph");
@@ -3508,6 +3529,10 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 interface WhoHoldsSankeyProps {
   pairs: ImmDomPair[];
   initialTarget: string;
+  /** When set, the component is controlled from outside: target = externalTarget. */
+  externalTarget?: string;
+  /** Called when the user wants to pivot to a new class (internal or external). */
+  onPivot?: (cls: string) => void;
 }
 
 // Display-friendly class name: drop package prefix (keep after last '.').
@@ -3516,10 +3541,19 @@ function shortClass(name: string): string {
   return dot >= 0 ? name.slice(dot + 1) : name;
 }
 
+type SankeyColCount = 3 | 5 | 7;
+
+// side encodes column position: L2/L1 = left hops, C = center, R1/R2 = right hops
+type SankeyColSide = "L2" | "L1" | "C" | "R1" | "R2" | "L3" | "R3";
+
 interface WhoHoldsNode {
   id: string;
-  side: "L" | "C" | "R";
+  side: SankeyColSide;
   cls: string;
+  // aggregated pair info for popover
+  totalRetained: number;
+  totalShallow: number;
+  pairCount: number;
 }
 interface WhoHoldsLink {
   source: string;
@@ -3527,12 +3561,145 @@ interface WhoHoldsLink {
   value: number;
 }
 
-function WhoHoldsSankey({ pairs, initialTarget }: WhoHoldsSankeyProps) {
-  const [target, setTarget] = React.useState(initialTarget);
+// Aggregate pair stats for a class appearing in the graph
+function aggregateStats(pairs: ImmDomPair[], cls: string): { totalRetained: number; totalShallow: number; pairCount: number } {
+  let totalRetained = 0, totalShallow = 0, pairCount = 0;
+  for (const p of pairs) {
+    if (p.dominator_class === cls || p.dominated_class === cls) {
+      totalRetained += p.dominated_retained;
+      totalShallow += p.dominated_shallow ?? 0;
+      pairCount += p.pair_count ?? 1;
+    }
+  }
+  return { totalRetained, totalShallow, pairCount };
+}
+
+// Build multi-hop nodes for N-column layout (cols = 3|5|7 → hops = 1|2|3 each side)
+function buildSankeyGraph(
+  pairs: ImmDomPair[],
+  target: string,
+  cols: SankeyColCount,
+  w: number,
+  height: number,
+  padding: { top: number; right: number; bottom: number; left: number },
+) {
+  if (w < 20) return null;
+  const hops = (cols - 1) / 2;  // 1 for 3-col, 2 for 5-col, 3 for 7-col
+  const maxPerHop = hops >= 3 ? 4 : hops >= 2 ? 6 : 8;
+
+  const nodeMap = new Map<string, WhoHoldsNode>();
+  const links: WhoHoldsLink[] = [];
+
+  const makeNode = (id: string, side: SankeyColSide, cls: string): WhoHoldsNode => {
+    const stats = aggregateStats(pairs, cls);
+    const n: WhoHoldsNode = { id, side, cls, ...stats };
+    nodeMap.set(id, n);
+    return n;
+  };
+
+  const centerId = "C:" + target;
+  makeNode(centerId, "C", target);
+
+  // Expand one hop: classes that hold `cls` (left) or are held by `cls` (right)
+  const expandLeft = (cls: string, prevId: string, side: SankeyColSide) => {
+    const holders = pairs
+      .filter((p) => p.dominated_class === cls && p.dominator_class !== cls)
+      .sort((a, b) => b.dominated_retained - a.dominated_retained)
+      .slice(0, maxPerHop);
+    for (const h of holders) {
+      const id = side + ":" + h.dominator_class;
+      if (!nodeMap.has(id)) makeNode(id, side, h.dominator_class);
+      // Avoid duplicate links
+      if (!links.find(l => l.source === id && l.target === prevId)) {
+        links.push({ source: id, target: prevId, value: Math.max(1, h.dominated_retained) });
+      }
+    }
+    return holders;
+  };
+
+  const expandRight = (cls: string, prevId: string, side: SankeyColSide) => {
+    const dominated = pairs
+      .filter((p) => p.dominator_class === cls && p.dominated_class !== cls)
+      .sort((a, b) => b.dominated_retained - a.dominated_retained)
+      .slice(0, maxPerHop);
+    for (const d of dominated) {
+      const id = side + ":" + d.dominated_class;
+      if (!nodeMap.has(id)) makeNode(id, side, d.dominated_class);
+      if (!links.find(l => l.source === prevId && l.target === id)) {
+        links.push({ source: prevId, target: id, value: Math.max(1, d.dominated_retained) });
+      }
+    }
+    return dominated;
+  };
+
+  const hop1L = expandLeft(target, centerId, "L1");
+  const hop1R = expandRight(target, centerId, "R1");
+
+  if (hops >= 2) {
+    for (const h of hop1L) {
+      const prevId = "L1:" + h.dominator_class;
+      expandLeft(h.dominator_class, prevId, "L2");
+    }
+    for (const d of hop1R) {
+      const prevId = "R1:" + d.dominated_class;
+      expandRight(d.dominated_class, prevId, "R2");
+    }
+  }
+
+  if (hops >= 3) {
+    const l2nodes = Array.from(nodeMap.values()).filter(n => n.side === "L2");
+    for (const n of l2nodes) {
+      expandLeft(n.cls, n.id, "L3");
+    }
+    const r2nodes = Array.from(nodeMap.values()).filter(n => n.side === "R2");
+    for (const n of r2nodes) {
+      expandRight(n.cls, n.id, "R3");
+    }
+  }
+
+  if (links.length === 0) return null;
+  const nodes = Array.from(nodeMap.values()).map(n => ({ ...n }));
+
+  try {
+    const layout = sankey<WhoHoldsNode, WhoHoldsLink>()
+      .nodeId((n) => n.id)
+      .nodeWidth(12)
+      .nodePadding(hops >= 3 ? 4 : hops >= 2 ? 6 : 8)
+      .extent([[padding.left, padding.top], [w - padding.right, height - padding.bottom]]);
+    return layout({ nodes, links });
+  } catch {
+    return null;
+  }
+}
+
+// Popover shown on node hover
+interface NodePopover {
+  nodeId: string;
+  x: number;
+  y: number;
+}
+
+function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHoldsSankeyProps) {
+  const [target, setTarget] = React.useState(externalTarget ?? initialTarget);
   const [history, setHistory] = React.useState<string[]>([]);
   const [search, setSearch] = React.useState("");
   const ref = React.useRef<HTMLDivElement>(null);
   const [w, setW] = React.useState(600);
+  const [svgHeight, setSvgHeight] = React.useState(220);
+  const [cols, setCols] = React.useState<SankeyColCount>(3);
+  const [fullscreen, setFullscreen] = React.useState(false);
+  const [popover, setPopover] = React.useState<NodePopover | null>(null);
+
+  // When a table row drives an external pivot, reset history and jump to it.
+  const prevExternal = React.useRef(externalTarget);
+  React.useEffect(() => {
+    if (externalTarget && externalTarget !== prevExternal.current) {
+      setHistory([]);
+      setTarget(externalTarget);
+    }
+    prevExternal.current = externalTarget;
+  }, [externalTarget]);
+
   React.useLayoutEffect(() => {
     if (!ref.current) return;
     const ro = new ResizeObserver((entries) => {
@@ -3543,21 +3710,21 @@ function WhoHoldsSankey({ pairs, initialTarget }: WhoHoldsSankeyProps) {
     return () => ro.disconnect();
   }, []);
 
-  // Who holds target? (left side): pairs where dominated_class == target
-  const holders = React.useMemo(() =>
-    pairs
-      .filter((p) => p.dominated_class === target)
-      .sort((a, b) => b.dominated_retained - a.dominated_retained)
-      .slice(0, 8),
-    [pairs, target]);
+  // Esc closes fullscreen
+  React.useEffect(() => {
+    if (!fullscreen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setFullscreen(false); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [fullscreen]);
 
-  // What does target hold? (right side): pairs where dominator_class == target
-  const dominates = React.useMemo(() =>
-    pairs
-      .filter((p) => p.dominator_class === target)
-      .sort((a, b) => b.dominated_retained - a.dominated_retained)
-      .slice(0, 8),
-    [pairs, target]);
+  // Click outside closes popover
+  React.useEffect(() => {
+    if (!popover) return;
+    const handler = () => setPopover(null);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [!!popover]);
 
   const classOptions = React.useMemo(() => {
     const seen = new Set<string>();
@@ -3573,108 +3740,144 @@ function WhoHoldsSankey({ pairs, initialTarget }: WhoHoldsSankeyProps) {
     if (cls === target) return;
     setHistory((h) => [...h, target]);
     setTarget(cls);
+    setPopover(null);
+    // Don't call onPivot — internal SVG navigation stays internal.
   }, [target]);
 
   const selectClass = React.useCallback((cls: string) => {
     setHistory([]);
     setTarget(cls);
+    onPivot?.(cls);
     setSearch("");
-  }, []);
+  }, [onPivot]);
 
   const goToHistory = React.useCallback((i: number) => {
     setTarget(history[i]);
+    onPivot?.(history[i]);
     setHistory((h) => h.slice(0, i));
-  }, [history]);
+  }, [history, onPivot]);
 
-  const height = 220;
   const padding = { top: 10, right: 10, bottom: 10, left: 10 };
 
-  // Build the sankey graph (3 columns). Dedup left/right classes and skip any
-  // that collide with the target itself to avoid self-referential nodes.
-  const graph = React.useMemo(() => {
-    if (w < 20 || (holders.length === 0 && dominates.length === 0)) return null;
-    const nodeMap = new Map<string, WhoHoldsNode>();
-    const centerId = "C:" + target;
-    nodeMap.set(centerId, { id: centerId, side: "C", cls: target });
-    const links: WhoHoldsLink[] = [];
-    for (const h of holders) {
-      if (h.dominator_class === target) continue;
-      const id = "L:" + h.dominator_class;
-      if (!nodeMap.has(id)) nodeMap.set(id, { id, side: "L", cls: h.dominator_class });
-      links.push({ source: id, target: centerId, value: Math.max(1, h.dominated_retained) });
-    }
-    for (const d of dominates) {
-      if (d.dominated_class === target) continue;
-      const id = "R:" + d.dominated_class;
-      if (!nodeMap.has(id)) nodeMap.set(id, { id, side: "R", cls: d.dominated_class });
-      links.push({ source: centerId, target: id, value: Math.max(1, d.dominated_retained) });
-    }
-    if (links.length === 0) return null;
-    const nodes = Array.from(nodeMap.values()).map((n) => ({ ...n }));
-    try {
-      const layout = sankey<WhoHoldsNode, WhoHoldsLink>()
-        .nodeId((n) => n.id)
-        .nodeWidth(12)
-        .nodePadding(8)
-        .extent([[padding.left, padding.top], [w - padding.right, height - padding.bottom]]);
-      return layout({ nodes, links });
-    } catch {
-      return null;
-    }
-  }, [w, holders, dominates, target]);
+  const graph = React.useMemo(
+    () => buildSankeyGraph(pairs, target, cols, w, svgHeight, padding),
+    [pairs, target, cols, w, svgHeight],
+  );
 
-  const nodeColor = (side: string) =>
-    side === "L" ? "var(--accent)" : side === "C" ? "var(--warn-border)" : "var(--ok, #27ae60)";
+  const nodeColor = (side: SankeyColSide) => {
+    if (side === "C") return "var(--warn-border)";
+    if (side === "L1" || side === "L2" || side === "L3") return "var(--accent)";
+    return "var(--ok, #27ae60)";
+  };
 
-  return (
-    <div>
-      {/* Class selector */}
-      <div style={{ position: "relative", maxWidth: 420, marginBottom: "0.75rem" }}>
-        <input
-          type="text"
-          value={search}
-          placeholder="Search for a class to focus…"
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ width: "100%", boxSizing: "border-box", padding: "0.4rem 0.6rem", fontSize: "0.9rem", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--fg)" }}
-        />
-        {filtered.length > 0 && (
-          <ul style={{ position: "absolute", zIndex: 10, listStyle: "none", margin: "2px 0 0", padding: 0, width: "100%", maxHeight: 240, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, background: "var(--card-bg, var(--bg))", boxShadow: "0 4px 12px rgba(0,0,0,0.15)" }}>
-            {filtered.map((c) => (
-              <li key={c}>
-                <button
-                  onClick={() => selectClass(c)}
-                  style={{ display: "block", width: "100%", textAlign: "left", padding: "0.35rem 0.6rem", border: "none", background: "transparent", color: "var(--fg)", cursor: "pointer", fontSize: "0.85rem", fontFamily: "var(--mono, monospace)" }}
-                >
-                  {c}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+  // Drag-to-resize handle
+  const dragStartY = React.useRef<number | null>(null);
+  const dragStartH = React.useRef(svgHeight);
+  const onDragStart = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragStartY.current = e.clientY;
+    dragStartH.current = svgHeight;
+    const onMove = (mv: MouseEvent) => {
+      if (dragStartY.current === null) return;
+      const delta = mv.clientY - dragStartY.current;
+      setSvgHeight(Math.max(120, Math.min(800, dragStartH.current + delta)));
+    };
+    const onUp = () => {
+      dragStartY.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [svgHeight]);
 
-      {/* Breadcrumb trail */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.25rem", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
-        {history.map((h, i) => (
-          <React.Fragment key={`${h}-${i}`}>
-            <button
-              onClick={() => goToHistory(i)}
-              title={h}
-              style={{ border: "none", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: 0, fontSize: "0.85rem", textDecoration: "underline" }}
-            >
-              {shortClass(h)}
-            </button>
-            <span style={{ color: "var(--muted)" }}>›</span>
-          </React.Fragment>
-        ))}
-        <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
-      </div>
+  // Find node by id for popover lookup
+  const nodeById = React.useMemo(() => {
+    if (!graph) return new Map<string, WhoHoldsNode & { x0?: number; x1?: number; y0?: number; y1?: number }>();
+    const m = new Map<string, WhoHoldsNode & { x0?: number; x1?: number; y0?: number; y1?: number }>();
+    for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph]);
 
-      <div ref={ref} style={{ width: "100%" }}>
-        {graph === null ? (
-          <p className="subtitle">No pair data for this class.</p>
-        ) : (
-          <svg width={w} height={height} role="img" aria-label={`Who holds ${target}`}>
+  const popoverNode = popover ? nodeById.get(popover.nodeId) : null;
+
+  const toolbar = (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+      {/* Column selector */}
+      <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Columns:</span>
+      {([3, 5, 7] as SankeyColCount[]).map(c => (
+        <button
+          key={c}
+          onClick={() => setCols(c)}
+          style={{
+            padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)",
+            borderRadius: 4, cursor: "pointer",
+            background: cols === c ? "var(--accent)" : "transparent",
+            color: cols === c ? "#fff" : "var(--fg)",
+          }}
+        >{c}</button>
+      ))}
+      <span style={{ flex: 1 }} />
+      {/* Fullscreen button */}
+      <button
+        onClick={() => setFullscreen(f => !f)}
+        title={fullscreen ? "Exit fullscreen (Esc)" : "Expand fullscreen"}
+        style={{ padding: "0.2rem 0.5rem", fontSize: "0.85rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
+      >{fullscreen ? "⛶ Exit" : "⛶ Fullscreen"}</button>
+    </div>
+  );
+
+  const searchBox = (
+    <div style={{ position: "relative", maxWidth: 420, marginBottom: "0.75rem" }}>
+      <input
+        type="text"
+        value={search}
+        placeholder="Search for a class to focus…"
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ width: "100%", boxSizing: "border-box", padding: "0.4rem 0.6rem", fontSize: "0.9rem", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--fg)" }}
+      />
+      {filtered.length > 0 && (
+        <ul style={{ position: "absolute", zIndex: 10, listStyle: "none", margin: "2px 0 0", padding: 0, width: "100%", maxHeight: 240, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, background: "var(--card-bg, var(--bg))", boxShadow: "0 4px 12px rgba(0,0,0,0.15)" }}>
+          {filtered.map((c) => (
+            <li key={c}>
+              <button
+                onClick={() => selectClass(c)}
+                style={{ display: "block", width: "100%", textAlign: "left", padding: "0.35rem 0.6rem", border: "none", background: "transparent", color: "var(--fg)", cursor: "pointer", fontSize: "0.85rem", fontFamily: "var(--mono, monospace)" }}
+              >{c}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  const breadcrumb = (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.25rem", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+      {history.map((h, i) => (
+        <React.Fragment key={`${h}-${i}`}>
+          <button
+            onClick={() => goToHistory(i)}
+            title={h}
+            style={{ border: "none", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: 0, fontSize: "0.85rem", textDecoration: "underline" }}
+          >{shortClass(h)}</button>
+          <span style={{ color: "var(--muted)" }}>›</span>
+        </React.Fragment>
+      ))}
+      <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
+    </div>
+  );
+
+  const svgEl = (
+    <div ref={ref} style={{ width: "100%", position: "relative" }}>
+      {graph === null ? (
+        <p className="subtitle">No pair data for this class.</p>
+      ) : (
+        <>
+          <svg
+            width={w} height={svgHeight}
+            role="img" aria-label={`Who holds ${target}`}
+            onClick={() => setPopover(null)}
+          >
             {/* Links */}
             {graph.links.map((link, i) => (
               <path
@@ -3694,41 +3897,125 @@ function WhoHoldsSankey({ pairs, initialTarget }: WhoHoldsSankeyProps) {
               const y1 = n.y1 ?? 0;
               const midY = (y0 + y1) / 2;
               const clickable = n.side !== "C";
+              const isPopoverOpen = popover?.nodeId === n.id;
+
               let labelEl: React.ReactNode = null;
-              if (n.side === "L") {
-                labelEl = (
-                  <text x={x1 + 4} y={midY} dy="0.35em" textAnchor="start" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>
-                );
-              } else if (n.side === "R") {
-                labelEl = (
-                  <text x={x0 - 4} y={midY} dy="0.35em" textAnchor="end" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>
-                );
+              const isLeft = n.side === "L1" || n.side === "L2" || n.side === "L3";
+              const isRight = n.side === "R1" || n.side === "R2" || n.side === "R3";
+              if (isLeft) {
+                labelEl = <text x={x1 + 4} y={midY} dy="0.35em" textAnchor="start" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>;
+              } else if (isRight) {
+                labelEl = <text x={x0 - 4} y={midY} dy="0.35em" textAnchor="end" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>;
               } else {
-                labelEl = (
-                  <text x={(x0 + x1) / 2} y={y0 - 4} textAnchor="middle" fontSize={11} fontWeight={600} fill="var(--fg)">{shortClass(n.cls)}</text>
-                );
+                labelEl = <text x={(x0 + x1) / 2} y={y0 - 4} textAnchor="middle" fontSize={11} fontWeight={600} fill="var(--fg)">{shortClass(n.cls)}</text>;
               }
+
               return (
                 <g key={n.id}>
                   <rect
-                    x={x0}
-                    y={y0}
+                    x={x0} y={y0}
                     width={Math.max(1, x1 - x0)}
                     height={Math.max(1, y1 - y0)}
                     fill={nodeColor(n.side)}
+                    stroke={isPopoverOpen ? "var(--fg)" : "none"}
+                    strokeWidth={1}
                     style={{ cursor: clickable ? "pointer" : "default" }}
-                    onClick={clickable ? () => pivot(n.cls) : undefined}
-                  >
-                    <title>{n.cls}</title>
-                  </rect>
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isPopoverOpen) { setPopover(null); return; }
+                      setPopover({ nodeId: n.id, x: e.clientX, y: e.clientY });
+                    }}
+                  />
                   {labelEl}
                 </g>
               );
             })}
           </svg>
-        )}
-      </div>
+          {/* Resize handle */}
+          <div
+            onMouseDown={onDragStart}
+            style={{
+              height: 6, cursor: "ns-resize", background: "var(--border)", borderRadius: 3,
+              marginTop: 2, opacity: 0.6,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+            title="Drag to resize"
+          >
+            <span style={{ fontSize: 8, color: "var(--muted)", letterSpacing: 2, userSelect: "none" }}>⠿</span>
+          </div>
+        </>
+      )}
     </div>
+  );
+
+  // Popover rendering (fixed position so it works in both normal and fullscreen)
+  const popoverEl = popoverNode ? (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        left: Math.min(popover!.x + 8, window.innerWidth - 280),
+        top: Math.min(popover!.y + 8, window.innerHeight - 160),
+        zIndex: 99999,
+        background: "var(--card-bg, var(--bg))",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+        padding: "0.6rem 0.8rem",
+        minWidth: 240,
+        maxWidth: 320,
+        fontSize: "0.82rem",
+      }}
+    >
+      <div style={{ fontFamily: "var(--mono, monospace)", fontSize: "0.78rem", color: "var(--fg)", wordBreak: "break-all", marginBottom: "0.4rem", fontWeight: 600 }}>
+        {popoverNode.cls}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.15rem 0.6rem", color: "var(--fg)" }}>
+        <span style={{ color: "var(--muted)" }}>Pairs:</span><span>{fmtCount(popoverNode.pairCount)}</span>
+        <span style={{ color: "var(--muted)" }}>Total retained:</span><span>{fmtExactBytes(popoverNode.totalRetained)}</span>
+        {popoverNode.totalShallow > 0 && (
+          <><span style={{ color: "var(--muted)" }}>Total shallow:</span><span>{fmtExactBytes(popoverNode.totalShallow)}</span></>
+        )}
+        <span style={{ color: "var(--muted)" }}>Role:</span><span style={{ textTransform: "capitalize" }}>
+          {popoverNode.side === "C" ? "Focus class" : (popoverNode.side.startsWith("L") ? "Dominates (holds)" : "Dominated (held)")}
+        </span>
+      </div>
+      {popoverNode.side !== "C" && (
+        <button
+          onClick={() => { pivot(popoverNode.cls); setPopover(null); }}
+          style={{ marginTop: "0.5rem", width: "100%", padding: "0.3rem", border: "1px solid var(--accent)", borderRadius: 4, background: "transparent", color: "var(--accent)", cursor: "pointer", fontSize: "0.82rem" }}
+        >
+          Focus on this class →
+        </button>
+      )}
+    </div>
+  ) : null;
+
+  const inner = (
+    <>
+      {toolbar}
+      {searchBox}
+      {breadcrumb}
+      {svgEl}
+    </>
+  );
+
+  if (fullscreen) {
+    return (
+      <>
+        <div style={{ position: "fixed", inset: 0, zIndex: 9998, background: "var(--bg)", display: "flex", flexDirection: "column", padding: "1rem", overflow: "auto" }}>
+          {inner}
+        </div>
+        {popoverEl}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div>{inner}</div>
+      {popoverEl}
+    </>
   );
 }
 
@@ -3738,9 +4025,47 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   const threshold = data?.big_drops?.threshold ?? 0;
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
   const idoms = data?.immediate_dominators?.rows ?? [];
+  const pairs = data?.immediate_dominators?.pairs ?? [];
+
+  // Navigator state lifted so tables can drive it.
+  const [navTarget, setNavTarget] = React.useState<string | null>(null);
+  const navigatorRef = React.useRef<HTMLDivElement>(null);
+
+  const pivotToClass = React.useCallback((cls: string) => {
+    setNavTarget(cls);
+    // Scroll the navigator into view after state update.
+    setTimeout(() => navigatorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  }, []);
+
+  // Context menu state.
+  const [ctxMenu, setCtxMenu] = React.useState<{ x: number; y: number; cls: string } | null>(null);
+  React.useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", close); };
+  }, [!!ctxMenu]);
+
+  const hasPairs = pairs.length > 0 && idoms.length > 0;
+  const effectiveNavTarget = navTarget ?? (idoms[0]?.dominator_class ?? "");
+
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
+
+      {/* Context menu */}
+      {ctxMenu && (
+        <div style={{ position: "fixed", left: ctxMenu.x, top: ctxMenu.y, zIndex: 9999, background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 6, boxShadow: "0 4px 14px rgba(0,0,0,0.18)", padding: "0.25rem 0", minWidth: 190 }}>
+          <div style={{ padding: "0.3rem 0.8rem 0.15rem", fontSize: "0.78rem", color: "var(--muted)", fontFamily: "var(--mono, monospace)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{ctxMenu.cls}</div>
+          <button
+            onClick={() => { pivotToClass(ctxMenu.cls); setCtxMenu(null); }}
+            style={{ display: "block", width: "100%", textAlign: "left", padding: "0.4rem 0.8rem", border: "none", background: "transparent", color: "var(--fg)", cursor: "pointer", fontSize: "0.9rem" }}
+          >
+            View in Navigator
+          </button>
+        </div>
+      )}
 
       <h3>Big Drops</h3>
       <p className="subtitle">
@@ -3762,7 +4087,12 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         const totalDropBytes = drops.reduce((s, r) => s + r.drop_bytes, 0);
         return (
           <>
-            <StdTable columns={dropCols} data={drops} searchKeys={["display_class"]} fmtBtn={kbBtn} />
+            <StdTable
+              columns={dropCols} data={drops} searchKeys={["display_class"]} fmtBtn={kbBtn}
+              onRowClicked={hasPairs ? (r) => pivotToClass(r.display_class) : undefined}
+              onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.display_class }); } : undefined}
+              rowClickTitle={hasPairs ? "Click to view in Navigator" : undefined}
+            />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropRetained)}</span>
@@ -3778,6 +4108,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       <p className="subtitle">
         Objects immediately dominated, rolled up by the dominator's class; a heavy dominated shallow heap under one
         class flags a retention hub.
+        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
       </p>
       {idoms.length === 0 ? (
         <p className="subtitle">No immediate dominators.</p>
@@ -3795,7 +4126,12 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         const totalDominatedShallow = idoms.reduce((s, r) => s + r.dominated_shallow, 0);
         return (
           <>
-            <StdTable columns={idomCols} data={idoms} searchKeys={["dominator_class"]} fmtBtn={kbBtn} />
+            <StdTable
+              columns={idomCols} data={idoms} searchKeys={["dominator_class"]} fmtBtn={kbBtn}
+              onRowClicked={hasPairs ? (r) => pivotToClass(r.dominator_class) : undefined}
+              onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.dominator_class }); } : undefined}
+              rowClickTitle={hasPairs ? "Click to view in Navigator" : undefined}
+            />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "132px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalDomCount)}</span>
@@ -3807,21 +4143,20 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         );
       })()}
 
-      {(() => {
-        const pairs = data?.immediate_dominators?.pairs ?? [];
-        // Use the top idom class (first row) as the initial focus target.
-        const initialTarget = idoms[0]?.dominator_class ?? "";
-        if (pairs.length === 0 || !initialTarget) return null;
-        return (
-          <>
-            <h3>Who Holds This Class? (Two-sided Navigator)</h3>
-            <p className="subtitle">
-              Select a class to see which classes dominate it (left) and which classes it dominates (right). Click any node to pivot.
-            </p>
-            <WhoHoldsSankey pairs={pairs} initialTarget={initialTarget} />
-          </>
-        );
-      })()}
+      {hasPairs && (
+        <div ref={navigatorRef}>
+          <h3>Who Holds This Class? (Two-sided Navigator)</h3>
+          <p className="subtitle">
+            Select a class to see which classes dominate it (left) and which classes it dominates (right). Click any node or table row to pivot.
+          </p>
+          <WhoHoldsSankey
+            pairs={pairs}
+            initialTarget={effectiveNavTarget}
+            externalTarget={navTarget ?? undefined}
+            onPivot={setNavTarget}
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -4226,6 +4561,8 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
         Merged ranking of <code>Class#field</code> references and stack-frame locals by total
         retained heap. Fields come from collection attribution; stack frames from thread-local
         analysis (<code>--thread-locals</code>).
+        {" "}Totals may exceed heap size for fields in linked structures (e.g. <code>List#next</code>),
+        where each node's retained heap includes its entire tail — treat as a relative ranking, not an absolute measure.
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [

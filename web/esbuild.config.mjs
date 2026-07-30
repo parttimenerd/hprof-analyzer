@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 765 KB minified bundle budget (raised from 764 KB to accommodate dark mode RDT CSS overrides).
-const BUDGET_BYTES = 765 * 1024;
+// ≤ 792 KB minified bundle budget (raised from 768 KB to accommodate WhoHoldsSankey multi-hop + fullscreen + popover).
+const BUDGET_BYTES = 792 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

@@ -54,6 +54,10 @@ pub struct AnalyzeOptions {
     /// objects. Enables click-through in the HTML report. Adds ~1-3 MB to the
     /// report JSON; captured in ~30 MB of peak RAM freed after build_model.
     pub obj_graph: bool,
+    /// Embed the React bundle as an uncompressed inline <script> in the HTML
+    /// report so it is human-readable and editable in DevTools. Output is much
+    /// larger but easier to inspect/modify. Implies HTML output format.
+    pub dev_report: bool,
     /// Skip build_model + render. Used by `mat caches` which discards the report.
     pub skip_report: bool,
 }
@@ -101,6 +105,7 @@ impl DetailLevel {
             reachable_only: false,
             ref_paths: false,
             obj_graph: false,
+            dev_report: false,
             skip_report: false,
         }
     }

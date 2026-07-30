@@ -1390,3 +1390,310 @@ All peaks are well under typical JVM analysis machine RAM (8–32 GB). The large
 | V21 | ✗ skipped | String interning ROI. Duplicate strings section already covers this. |
 | V23 | ✗ skipped | Inner class orphan detector. Less relevant for modern server-side Java. |
 | V26 | ✓ Sprint 1 (folded) | Triage hints: contextual single-line signals in the relevant section (histogram, GC, threads, V6, V7). Not a dedicated view, not an OOM badge. |
+
+---
+
+## 26. Chumsky-Error-Driven OQL Autocomplete with Static Analysis
+
+### Motivation
+
+The current `src/query/complete.rs` hand-tracks token positions with `upper_tokens()` to guess which completion category applies. This requires maintaining a parallel state machine as the grammar evolves and misses cases. The replacement has two layers:
+
+1. **Chumsky-driven grammar awareness**: parse the prefix with chumsky, extract `Rich<Token>::expected()` at the cursor, map those to completion candidates — exactly what the grammar knows is valid next.
+2. **Static analysis of the partial query**: extract the `AS` aliases already defined in the SELECT list and surface them in `ORDER BY` / `GROUP BY` / `HAVING` / `WHERE` position; extract the FROM class and alias, then use per-class field data (from the loaded dump) to suggest `alias.fieldname` completions — and filter the class list so only classes that actually have all the field names already referenced in the SELECT list are offered.
+
+### Data structures
+
+#### `ClassFieldIndex` — passed into `complete()` alongside `class_names`
+
+```rust
+/// Per-class field metadata extracted from Pass1 and passed into the completer.
+/// Maps dot-separated class name → sorted list of instance field names.
+/// Built once at session load from Pass1::class_map + Pass1::strings.
+pub struct ClassFieldIndex {
+    pub fields: HashMap<String, Vec<String>>,  // "java.lang.String" → ["value","hash","coder",…]
+}
+```
+
+The WASM binding already passes `class_names` from `Pass1`; add `field_index: ClassFieldIndex` built the same way. The CLI REPL and server pass it too. The current `_field_names: &[String]` parameter is replaced by `field_index: &ClassFieldIndex`.
+
+#### `QueryStaticInfo` — extracted by scanning the prefix
+
+```rust
+/// Information extracted from a partially-typed OQL query by static analysis.
+struct QueryStaticInfo {
+    /// AS aliases defined in the SELECT list so far: ("bytes", "count", "class", …).
+    /// Used to seed ORDER BY / GROUP BY / HAVING completions.
+    select_aliases: Vec<String>,
+    /// FROM clause class and its alias, if parseable from the prefix.
+    /// e.g. "SELECT … FROM java.lang.String s" → Some(("java.lang.String", Some("s")))
+    from_class: Option<(String, Option<String>)>,
+    /// Field accesses already present in the SELECT list (without the alias prefix):
+    /// e.g. "SELECT x.value, x.hash FROM …" → ["value", "hash"]
+    /// Used to filter class candidates to those that have ALL these fields.
+    required_fields: Vec<String>,
+}
+```
+
+#### `CompletionContext` — from chumsky errors
+
+```rust
+pub struct CompletionContext {
+    pub labels: Vec<String>,   // from .labelled() calls
+    pub tokens: Vec<Token>,    // specific Token variants expected
+}
+
+pub fn parse_for_complete(src: &str, cursor_pos: usize) -> CompletionContext
+```
+
+### Static analysis: `extract_query_info(prefix: &str) -> QueryStaticInfo`
+
+Scan the tokenised prefix (not a full parse — use `upper_tokens` already present plus a small state machine) to extract:
+
+1. **`select_aliases`**: collect every `AS <ident>` pair that appears before `FROM` in the token stream.
+2. **`from_class`**: find the `FROM` token (not preceded by `UNION`), take the next dotted identifier as the class name, and the identifier after that (if it's not a keyword) as the alias.
+3. **`required_fields`**: in the token stream, find any `<ident> . <ident>` sequences before `FROM`; collect the right-hand identifiers as required field names. For example `x.value` → `"value"`.
+
+This scan deliberately ignores nested subqueries — it is a heuristic for the top-level FROM and SELECT.
+
+### Chumsky layer: `parse_for_complete` and `.labelled()` additions
+
+Four strategic labels cover the grammar positions that need non-token completions:
+
+| Location in `src/query/parse.rs` | Label |
+|---|---|
+| `from_class`'s `any_ident()` arm | `.labelled("class name")` |
+| `select_item` recursive parser | `.labelled("expression")` |
+| `predicate` recursive parser | `.labelled("predicate expression")` |
+| `order_by` / `group_by` column ref arm | `.labelled("column ref")` |
+
+`parse_for_complete` steps:
+1. Tokenize `src[..cursor_pos]` with `tokenize_spanned`; return empty on failure.
+2. Build a chumsky stream with EOI at `cursor_pos`.
+3. Run `parser().parse(stream)`, keep both output and errors.
+4. Collect errors with `span.end >= cursor_pos - 1` (at/near the cursor).
+5. From each, iterate `err.expected()`:
+   - `RichPattern::Label(s)` → `labels`
+   - `RichPattern::Token(t)` → `tokens`
+
+### Label → Completion mapping
+
+```rust
+fn completions_from_context(
+    ctx: &CompletionContext,
+    info: &QueryStaticInfo,
+    typed: &str,
+    class_names: &[String],
+    field_index: &ClassFieldIndex,
+) -> Vec<Completion> {
+    let lower = typed.to_ascii_lowercase();
+    let mut res = Vec::new();
+
+    for label in &ctx.labels {
+        match label.as_str() {
+            "class name" => {
+                // Filter classes to those that have all required_fields.
+                // required_fields is empty until the user types alias.field in SELECT,
+                // so this degrades gracefully to all classes when unknown.
+                if lower.len() >= 2 || lower.contains('.') {
+                    let candidates = class_names.iter().filter(|c| {
+                        c.to_ascii_lowercase().starts_with(&lower)
+                        && info.required_fields.iter().all(|f| {
+                            field_index.fields.get(*c)
+                                .map_or(true, |fs| fs.iter().any(|fn_| fn_ == f))
+                        })
+                    });
+                    res.extend(candidates.map(|c| class(c)));
+                }
+            }
+            "expression" => {
+                // Offer SELECT-position completions:
+                // built-in attrs/funcs/agg + alias.field if FROM class known
+                res.extend(AGG_FUNCS.iter().filter(|f| f.to_ascii_lowercase().starts_with(&lower)).map(|f| agg(f)));
+                res.extend(FUNCS.iter().filter(|f| f.to_ascii_lowercase().starts_with(&lower)).map(|f| func(f)));
+                res.extend(ATTRIBUTES.iter().filter(|a| a.to_ascii_lowercase().starts_with(&lower)).map(|a| attr(a)));
+                if let Some((ref class_name, Some(ref alias))) = info.from_class {
+                    if let Some(fields) = field_index.fields.get(class_name.as_str()) {
+                        let prefix_dot = format!("{}.", alias);
+                        for field in fields {
+                            let full = format!("{}.{}", alias, field);
+                            if full.to_ascii_lowercase().starts_with(&lower) || lower.is_empty() {
+                                res.push(Completion { value: full.clone(), display: full, group: Some("field".into()) });
+                            }
+                        }
+                        // If typing just the alias, offer alias. as a trigger
+                        if alias.to_ascii_lowercase().starts_with(&lower) && !lower.is_empty() {
+                            res.push(Completion { value: format!("{}.", alias), display: format!("{}.<field>", alias), group: Some("field".into()) });
+                        }
+                    }
+                }
+                if "*".starts_with(&lower) { res.push(star()); }
+            }
+            "predicate expression" => {
+                res.extend(FUNCS.iter().filter(|f| f.to_ascii_lowercase().starts_with(&lower)).map(|f| func(f)));
+                res.extend(ATTRIBUTES.iter().filter(|a| a.to_ascii_lowercase().starts_with(&lower)).map(|a| attr(a)));
+                // Field access in WHERE: alias.field
+                if let Some((ref class_name, Some(ref alias))) = info.from_class {
+                    if let Some(fields) = field_index.fields.get(class_name.as_str()) {
+                        for field in fields {
+                            let full = format!("{}.{}", alias, field);
+                            if full.to_ascii_lowercase().starts_with(&lower) || lower.is_empty() {
+                                res.push(Completion { value: full.clone(), display: full, group: Some("field".into()) });
+                            }
+                        }
+                    }
+                }
+                if "not".starts_with(&lower) { res.push(kw("NOT")); }
+                if "exists".starts_with(&lower) { res.push(kw("EXISTS")); }
+            }
+            "column ref" => {
+                // ORDER BY / GROUP BY position: offer SELECT aliases first, then attrs
+                for alias in &info.select_aliases {
+                    if alias.to_ascii_lowercase().starts_with(&lower) {
+                        res.push(Completion { value: alias.clone(), display: alias.clone(), group: Some("column".into()) });
+                    }
+                }
+                res.extend(ATTRIBUTES.iter().filter(|a| a.to_ascii_lowercase().starts_with(&lower)).map(|a| attr(a)));
+                res.extend(FUNCS.iter().filter(|f| f.to_ascii_lowercase().starts_with(&lower)).map(|f| func(f)));
+            }
+            _ => {}
+        }
+    }
+
+    for tok in &ctx.tokens {
+        if let Token::Ident(s) = tok {
+            let sup = s.to_ascii_uppercase();
+            if sup.starts_with(&typed.to_ascii_uppercase()) { res.push(kw(&sup)); }
+        }
+        if matches!(tok, Token::Star) && "*".starts_with(&lower) { res.push(star()); }
+    }
+    res
+}
+```
+
+### Verify step
+
+```rust
+fn verify_candidate(prefix_without_typed: &str, candidate: &str) -> bool {
+    let with = format!("{}{} ", prefix_without_typed, candidate);
+    let base = first_parse_error_pos(prefix_without_typed);
+    let new  = first_parse_error_pos(&with);
+    new >= base  // accept if error did not move left
+}
+
+fn first_parse_error_pos(src: &str) -> usize {
+    match parse::tokenize_spanned(src) {
+        Err(_) => 0,
+        Ok(toks) => {
+            let eoi = (src.len()..src.len()).into();
+            let stream = Stream::from_iter(toks).map(eoi, |(t, s)| (t, s));
+            let (_, errs) = parser().parse(stream).into_output_errors();
+            errs.iter().map(|e| e.span().start).min().unwrap_or(src.len())
+        }
+    }
+}
+```
+
+Verification runs on all candidates **except** class names and field names (too many; their position is confirmed by label context).
+
+### Updated `complete()` signature and structure
+
+```rust
+pub fn complete(
+    line: &str,
+    cursor_pos: usize,
+    class_names: &[String],
+    field_index: &ClassFieldIndex,   // replaces _field_names: &[String]
+) -> Vec<Completion> {
+    // 1. /run shortcut — unchanged
+    // 2. @prefix shortcut — unchanged
+    // 3. delim_pos == 0 guard — unchanged (query start: SELECT + classes only)
+    // 4. Static analysis of the partial query
+    let info = extract_query_info(prefix);
+    // 5. Chumsky-driven grammar context
+    let ctx = parse::parse_for_complete(prefix, cursor_pos);
+    let mut candidates = completions_from_context(&ctx, &info, typed, class_names, field_index);
+    // 6. Fallback: if chumsky returns nothing and typed is empty, use old upper_tokens path
+    if candidates.is_empty() && typed.is_empty() {
+        candidates = empty_context_completions(&upper_tokens(prefix_before_typed), class_names);
+    }
+    // 7. Verify non-class, non-field candidates (error pos must not move left)
+    candidates.retain(|c| {
+        matches!(c.group.as_deref(), Some("class") | Some("field") | Some("column"))
+        || verify_candidate(prefix_before_typed, &c.value)
+    });
+    dedup(candidates)
+}
+```
+
+### WASM and server wiring
+
+`ClassFieldIndex` must be built at session load time and passed wherever `complete()` is called:
+
+**In `crates/hprof-wasm/src/lib.rs`**:
+```rust
+// In HprofSession::load / load_with_progress, after class_names is built:
+let field_index = ClassFieldIndex::build(&cache.p1);
+// Store on HprofSession; pass to complete() in the complete() free function.
+```
+
+`ClassFieldIndex::build(p1: &Pass1) -> ClassFieldIndex`:
+```rust
+pub fn build(p1: &Pass1) -> ClassFieldIndex {
+    let mut fields: HashMap<String, Vec<String>> = HashMap::new();
+    for ci in p1.class_map.values() {
+        let Some(class_name) = p1.strings.get(&ci.name_id) else { continue };
+        if class_name.starts_with('[') { continue }
+        let class_name = class_name.replace('/', ".");
+        let field_names: Vec<String> = ci.fields.iter()
+            .filter_map(|(name_id, _)| p1.strings.get(name_id).cloned())
+            .collect();
+        fields.insert(class_name, field_names);
+    }
+    ClassFieldIndex { fields }
+}
+```
+
+The `complete` WASM free function gains a `field_index_json: &str` parameter (a JSON object mapping class → [field, …]) so the JS shell can pass it. Alternatively, store `ClassFieldIndex` on `HprofSession` and expose a `complete_query(line, cursor_pos)` method that uses it internally — **preferred** since it avoids serialising all field data on every keystroke.
+
+**Preferred WASM API**:
+```rust
+// On HprofSession:
+pub fn complete_query(&self, line: &str, cursor_pos: usize) -> String {
+    // calls complete::complete(line, cursor_pos, &self.class_names, &self.field_index)
+    // returns same JSON array as the existing `complete` free function
+}
+```
+
+The existing free-function `complete(line, cursor_pos, class_names)` stays for callers without a session (e.g. before a file is loaded); it passes `ClassFieldIndex::empty()` internally.
+
+### Critical Files
+
+| File | Change |
+|---|---|
+| `src/query/parse.rs` | Add `CompletionContext` + `parse_for_complete()`; add `.labelled()` at 4 grammar positions |
+| `src/query/complete.rs` | Add `ClassFieldIndex`, `QueryStaticInfo`, `extract_query_info()`, `completions_from_context()`, `verify_candidate()`, `first_parse_error_pos()`; update `complete()` signature; all 35 existing tests pass + new tests for alias, field, and class-filter cases |
+| `crates/hprof-wasm/src/lib.rs` | Build and store `ClassFieldIndex` in `HprofSession`; add `complete_query()` method; keep free-function `complete()` for pre-load use |
+| `web-browser/shell.js` | Call `session.complete_query(line, cursor)` when a session is loaded; fall back to free-function `complete()` before load |
+
+### Verification
+
+```bash
+cargo test -p hprof-analyzer query::complete    # all 35+ tests pass
+cargo build --release -p hprof-analyzer
+wasm-pack build crates/hprof-wasm --target web --release
+python3 web-browser/assemble.py
+# Browser tests:
+# - "S"                                    → only SELECT (not SUM/STDDEV)
+# - "SELECT "                              → *, COUNT, classof, @objectAddress; NOT FROM/WHERE
+# - "SELECT * FROM "                       → INSTANCEOF + classes; NOT SELECT/WHERE
+# - "SELECT * FROM java.lang."             → filtered classes only
+# - "SELECT * FROM java.lang.String s "    → WHERE, ORDER BY, GROUP BY, LIMIT, AS
+# - "SELECT * FROM java.lang.String s WHERE " → funcs + attrs + s.<fields>; NOT classes
+# - "SELECT * FROM java.lang.String s WHERE s." → only String fields (value, hash, coder, …)
+# - "SELECT @ret"                          → @retainedHeapSize
+# - "SELECT s.value FROM java.lang."       → only classes with a 'value' field
+# - "SELECT SUM(@usedHeapSize) AS bytes FROM … ORDER BY " → 'bytes' first, then attrs
+# - "SELECT COUNT(*) AS cnt, SUM(@usedHeapSize) AS sz FROM … GROUP BY " → cnt, sz
+# - "/run top"                             → only top-* named queries
+```

@@ -49,6 +49,7 @@ fn main() {
     }
 
     compress_bundle(&bundle);
+    copy_raw_bundle(&bundle);
 }
 
 /// Raw-deflate compress `web/dist/bundle.js` into `$OUT_DIR/bundle.deflate`.
@@ -62,6 +63,14 @@ fn compress_bundle(bundle: &Path) {
     enc.write_all(&src).expect("deflate write");
     let compressed = enc.finish().expect("deflate finish");
     std::fs::write(&dest, &compressed).expect("write bundle.deflate");
+}
+
+/// Copy `web/dist/bundle.js` into `$OUT_DIR/bundle.js` for `--dev` mode.
+/// Embedded uncompressed so the HTML report has a readable, editable script tag.
+fn copy_raw_bundle(bundle: &Path) {
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
+    let dest = Path::new(&out_dir).join("bundle.js");
+    std::fs::copy(bundle, &dest).expect("copy bundle.js to OUT_DIR");
 }
 
 /// True if `bundle` exists and is up-to-date.
