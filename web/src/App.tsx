@@ -1265,7 +1265,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
 
 function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
   const cols: TableColumn<StringHolder>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (h) => <code>{h.class_name}</code>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "String refs", right: true, width: "120px", format: (h) => fmtCount(h.string_refs), selector: (h) => h.string_refs, sortable: true },
   ];
   return (
@@ -1312,7 +1312,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
 function DupArrayHoldersTable({ rows }: { rows: DupArrayHolder[] }) {
   const cols: TableColumn<DupArrayHolder>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (h) => <code>{h.class_name}</code>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "Array refs", right: true, width: "120px", format: (h) => fmtCount(h.array_refs), selector: (h) => h.array_refs, sortable: true },
   ];
   return (
@@ -1460,7 +1460,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   ];
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "Boxed refs", right: true, width: "120px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
   ];
   return (
@@ -1486,7 +1486,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
   if (!rows?.length) return null;
   const cols: TableColumn<import("./types").HeaderOverheadRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "hdr", name: "Header/obj", right: true, width: "105px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
     { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "150px" : "130px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
@@ -1649,7 +1649,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                   {top.map((cc, j) => (
                     <span key={cc.class_name}>
                       {j > 0 ? ", " : ""}
-                      <code>{cc.class_name}</code> ×{fmtCount(cc.count)} ({fmtB(cc.retained)})
+                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{cc.class_name}</code><PivotBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} ({fmtB(cc.retained)})
                     </span>
                   ))}
                 </span>
@@ -1769,12 +1769,12 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
           {d.per_loader && d.per_loader.length > 0 ? (
             <details>
               <summary>
-                <code>{d.pretty_class}</code>
+                <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{d.pretty_class}</code><PivotBtn cls={d.pretty_class} /></span>
               </summary>
               <DataTable columns={loaderDetailCols} data={d.per_loader} customStyles={histogramTableStyles} dense />
             </details>
           ) : (
-            <code>{d.pretty_class}</code>
+            <span className="copy-cell"><code>{d.pretty_class}</code><PivotBtn cls={d.pretty_class} /></span>
           )}
         </span>
       ),
@@ -2288,7 +2288,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       )}
       {s.accumulation_class && (
         <p style={{ margin: "0.25rem 0", color: "var(--muted)", fontSize: "0.86rem" }}>
-          Accumulation point: <code>{s.accumulation_class}</code>
+          Accumulation point: <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{s.accumulation_class}</code><PivotBtn cls={s.accumulation_class} /></span>
           {s.accumulation_retained != null && <> retaining {fmtB(s.accumulation_retained)}</>}.
         </p>
       )}
@@ -2296,7 +2296,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <AccumulationPath s={s} />
       {s.dominated.length > 0 && (() => {
         const domCols: TableColumn<import("./types").DominatedRow>[] = [
-          { id: "class", name: "Class", grow: 1, cell: (d) => <code>{d.display_class}</code>, selector: (d) => d.display_class, sortable: true },
+          { id: "class", name: "Class", grow: 1, cell: (d) => <span className="copy-cell"><code>{d.display_class}</code><PivotBtn cls={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(d => d.shallow, fmtB, useKB), selector: (d) => d.shallow, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(d => d.retained, fmtB, useKB), selector: (d) => d.retained, sortable: true },
         ];
@@ -2469,7 +2469,17 @@ function TopConsumersSection({ report }: { report: Report }) {
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: (o) => <span title={fmtExactBytes(o.retained)}>{fmtB(o.retained)}</span>, selector: (o) => o.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (o) => fmtPct(pctOf(o.retained, total)), selector: (o) => o.pct_bp, sortable: true },
-    ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, minWidth: "160px", maxWidth: "600px", cell: (o: ObjRow) => o.owner ? <ExpandableText text={o.owner} label="Held via" /> : o.held_via ? <><ExpandableText text={o.held_via} label="Held via" /> <span className="muted">(stack)</span></> : <span>—</span> } as TableColumn<ObjRow>] : []),
+    ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, minWidth: "160px", maxWidth: "600px", cell: (o: ObjRow) => {
+      const text = o.owner ?? o.held_via ?? null;
+      const cls = text ? text.split("#")[0] : null;
+      return text ? (
+        <span className="copy-cell">
+          <ExpandableText text={text} label="Held via" />
+          {cls && <PivotBtn cls={cls} />}
+          {o.held_via && !o.owner && <span className="muted"> (stack)</span>}
+        </span>
+      ) : <span>—</span>;
+    } } as TableColumn<ObjRow>] : []),
   ];
 
   const maxClsRetained = React.useMemo(
@@ -3620,7 +3630,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
 function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<RefStatClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained ?? 0, fmtB, useKB), selector: (r) => r.retained ?? 0, sortable: true },
@@ -4422,7 +4432,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
             {(() => {
               const unreachCols: TableColumn<UnreachableClassRow>[] = [
-                { id: "class", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
+                { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
                 { id: "objects", name: "Objects", right: true, width: "110px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
                 { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
                 { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -4823,8 +4833,8 @@ function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
   const [fmtB] = useFmtBytes();
 
   const tableCols: TableColumn<TypeEdge>[] = [
-    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2 },
-    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2 },
+    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><PivotBtn cls={r.src_class} /></span> },
+    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><PivotBtn cls={r.dst_class} /></span> },
     { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, format: r => fmtCount(r.edge_count) },
     { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, format: r => fmtB(r.retained_weight) },
   ];
@@ -4938,13 +4948,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     style={{ opacity: 0.6, flexShrink: 0 }}>
                     ⌞
                   </button>
+                  <PivotBtn cls={node.display_class} />
                 </td>
-                <td>
-                  <button className="btn-link" title="Explore outbound references"
-                    onClick={() => navigate("explore", id, node.display_class)}>
-                    <code>{node.display_class}</code>
-                  </button>
-                </td>
+                <td>{fmtB(node.shallow)}</td>
                 <td>{fmtB(node.shallow)}</td>
                 <td>{fmtB(node.retained)}</td>
                 <td>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
@@ -5073,10 +5079,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             <code>{edge.field_name || <em style={{ color: "var(--muted)" }}>(unnamed)</em>}</code>
                           </td>
                           <td>
-                            <button className="btn-link"
-                              onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
-                              <code>{edge.child_class}</code>
-                            </button>
+                            <span className="copy-cell">
+                              <button className="btn-link"
+                                onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
+                                <code>{edge.child_class}</code>
+                              </button>
+                              <PivotBtn cls={edge.child_class} />
+                            </span>
                           </td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.child_retained)}</td>
                           <td>
@@ -5177,7 +5186,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <tbody>
               <tr>
                 <th>Class</th>
-                <td><code>{currentNode.display_class}</code></td>
+                <td><span className="copy-cell"><code>{currentNode.display_class}</code><PivotBtn cls={currentNode.display_class} /></span></td>
               </tr>
               <tr>
                 <th>Object #</th>
@@ -5331,7 +5340,7 @@ function SeriesTable({
   const n = labels.length;
   type SRow = SeriesClassRow | SeriesSuspectRow;
   const seriesCols: TableColumn<SRow>[] = [
-    { id: "name", name: nameLabel, grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "name", name: nameLabel, grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     ...labels.map((lbl, i): TableColumn<SRow> => ({
       id: `r${i}`,
       name: useKB ? `Retained r${i + 1} (KB)` : `Retained r${i + 1}`,
@@ -5465,7 +5474,7 @@ function diffVerdict(diff: SeriesDiffResult, fmtB: (n: number) => string): strin
 function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const spikeCols: TableColumn<SeriesClassRow>[] = [
-    { id: "name", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "name", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     ...labels.map((lbl, i): TableColumn<SeriesClassRow> => ({
       id: `r${i}`,
       name: useKB ? `Retained r${i + 1} (KB)` : `Retained r${i + 1}`,
