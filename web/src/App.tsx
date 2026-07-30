@@ -2440,9 +2440,32 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const objHasOwner = t.biggest_objects.some((o) => !!o.owner || !!o.held_via);
 
+  const hasObjGraph = !!report.obj_graph_flat;
+
   const objTableCols: TableColumn<ObjRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (o) => <span className="copy-cell"><code title={o.display_class}>{o.display_class}</code><PivotBtn cls={o.display_class} /></span> },
+    { id: "class", name: "Class", grow: 1, cell: (o) => {
+      const denseIdx = o.obj_index_1based - 1;
+      const inGraph = hasObjGraph && report.obj_graph_flat!.nodes[String(denseIdx)] != null;
+      return (
+        <span className="copy-cell">
+          <code title={o.display_class}>{o.display_class}</code>
+          <PivotBtn cls={o.display_class} />
+          {inGraph && (
+            <button className="copy-btn" title="Explore outbound references in Object Graph"
+              onClick={() => { window.location.hash = `explore/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); }}>
+              →
+            </button>
+          )}
+          {inGraph && (
+            <button className="copy-btn" title="Open dominator tree in Object Graph"
+              onClick={() => { window.location.hash = `domtree/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); }}>
+              ⌞
+            </button>
+          )}
+        </span>
+      );
+    }},
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: (o) => <span title={fmtExactBytes(o.retained)}>{fmtB(o.retained)}</span>, selector: (o) => o.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (o) => fmtPct(pctOf(o.retained, total)), selector: (o) => o.pct_bp, sortable: true },
@@ -3362,7 +3385,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">None.</p>
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
-          { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+          { id: "field", name: "Class#field", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
           { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
           { id: "containers", name: "Containers", right: true, width: "120px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count, sortable: true },
           { id: "holders", name: "Holder Instances", right: true, width: "140px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
@@ -3378,8 +3401,8 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">None.</p>
       ) : (() => {
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
-          { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-          { id: "container", name: "Container Class", grow: 1, cell: (r) => <code>{r.container_class}</code>, selector: (r) => r.container_class, sortable: true },
+          { id: "field", name: "Class#field", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+          { id: "container", name: "Container Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.container_class}</code><PivotBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
           { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "100px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
           { id: "capacity", name: "Capacity", right: true, width: "100px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
@@ -3445,10 +3468,11 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
     {
       id: "class", name: "Container Class", grow: 1,
       cell: ({ row: r, count }) => (
-        <>
+        <span className="copy-cell">
           <code>{r.container_class}</code>
           {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
-        </>
+          <PivotBtn cls={r.container_class} />
+        </span>
       ),
       selector: ({ row: r }) => r.container_class,
       sortable: true,
@@ -3461,7 +3485,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
         ? <span>—</span>
         : <>{r.value_type_breakdown.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}</span>)}</>,
     } as TableColumn<CoalescedRow>] : []),
-    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: ({ row: r }: CoalescedRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: ({ row: r }: CoalescedRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><PivotBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? (useKB ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : fmtB(r.retained)) : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0, sortable: true } as TableColumn<CoalescedRow>] : []),
   ];
   return (
@@ -3504,14 +3528,14 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
   if (!data) return null;
   const rows = data.rows ?? [];
   const cols: TableColumn<import("./types").CollectionContentsRow>[] = [
-    { id: "class", name: "Collection Class", grow: 1, cell: (r) => <code>{r.collection_class}</code>, selector: (r) => r.collection_class, sortable: true },
+    { id: "class", name: "Collection Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.collection_class}</code><PivotBtn cls={r.collection_class} /></span>, selector: (r) => r.collection_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "values", name: "Total Values", right: true, width: "120px", format: (r) => fmtCount(r.total_values), selector: (r) => r.total_values, sortable: true },
     {
       id: "types", name: "Top Value Types", grow: 2,
       cell: (r) => r.top_value_types.length === 0
         ? <span>—</span>
-        : <>{r.top_value_types.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}</span>)}</>,
+        : <>{r.top_value_types.map((s, j) => <span key={j} className="copy-cell" style={{ marginRight: j < r.top_value_types.length - 1 ? "0.5rem" : 0 }}>{j > 0 ? "" : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}<PivotBtn cls={s.type_name} /></span>)}</>,
     },
   ];
   return (
@@ -3546,8 +3570,8 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const hasElements = rows.some((r) => (r.elements ?? 0) > 0);
   type FBSRow = import("./types").FieldBySizeRow;
   const cols: TableColumn<FBSRow>[] = [
-    { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-    { id: "pointee", name: "Runtime Pointee Type", grow: 1, cell: (r) => <code>{r.pointee_type}</code>, selector: (r) => r.pointee_type, sortable: true },
+    { id: "field", name: "Class#field", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+    { id: "pointee", name: "Runtime Pointee Type", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pointee_type}</code><PivotBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
     { id: "category", name: "Category", width: "100px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—", sortable: true },
     { id: "pointees", name: "Pointees", right: true, width: "100px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
     ...(hasElements ? [{ id: "elements", name: "Elements", right: true, width: "100px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
@@ -4220,9 +4244,9 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <p className="subtitle">No significant drops.</p>
       ) : (() => {
         const dropCols: TableColumn<import("./types").BigDropRow>[] = [
-          { id: "object", name: "Object", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
+          { id: "object", name: "Object", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
-          { id: "largest_child", name: "Largest Child", grow: 1, cell: (r) => r.largest_child_class ? <code>{r.largest_child_class}</code> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
+          { id: "largest_child", name: "Largest Child", grow: 1, cell: (r) => r.largest_child_class ? <span className="copy-cell"><code>{r.largest_child_class}</code><PivotBtn cls={r.largest_child_class} /></span> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
           { id: "child_ret", name: useKB ? "Child Ret. (KB)" : "Child Ret.", right: true, width: useKB ? "140px" : "110px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
           { id: "drop", name: useKB ? "Drop (KB)" : "Drop", right: true, width: useKB ? "120px" : "110px", cell: byteCell(r => r.drop_bytes, fmtB, useKB), selector: (r) => r.drop_bytes, sortable: true },
         ];
@@ -4259,7 +4283,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <p className="subtitle">No immediate dominators.</p>
       ) : (() => {
         const idomCols: TableColumn<import("./types").ImmediateDominatorRow>[] = [
-          { id: "dominator_class", name: "Dominator Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /></span>, selector: (r) => r.dominator_class, sortable: true },
+          { id: "dominator_class", name: "Dominator Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /><PivotBtn cls={r.dominator_class} /></span>, selector: (r) => r.dominator_class, sortable: true },
           { id: "dominator_count", name: "#Dominators", right: true, width: "132px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count, sortable: true },
           { id: "dominated_count", name: "#Dominated", right: true, width: "120px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count, sortable: true },
           { id: "dominator_shallow", name: useKB ? "Dominator Shallow (KB)" : "Dominator Shallow", right: true, width: useKB ? "178px" : "162px", cell: byteCell(r => r.dominator_shallow, fmtB, useKB), selector: (r) => r.dominator_shallow, sortable: true },
@@ -4713,7 +4737,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
-          { id: "name", name: "Name", grow: 1, cell: (r) => <code>{r.name}</code>, selector: (r) => r.name, sortable: true },
+          { id: "name", name: "Name", grow: 1, cell: (r) => { const cls = r.name.split("#")[0]; return <span className="copy-cell"><code>{r.name}</code><CopyBtn text={r.name} /><PivotBtn cls={cls} /></span>; }, selector: (r) => r.name, sortable: true },
           { id: "kind", name: "Kind", width: "120px", selector: (r) => r.kind, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "120px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
         ];
