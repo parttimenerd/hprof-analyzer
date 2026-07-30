@@ -5090,6 +5090,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [page, setPage] = React.useState(0);
   const [showSvg, setShowSvg] = React.useState(false);
   const [jumpInput, setJumpInput] = React.useState("");
+  const [pendingLabel, setPendingLabel] = React.useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
   const [fmtB] = useFmtBytes();
 
   React.useEffect(() => {
@@ -5116,7 +5118,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       if (nodeId === null) return [];
       return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId) }];
     });
+    setPendingLabel(fieldLabel);
     setPage(0);
+    setExpandedGroups(new Set());
     window.location.hash = `${newTab}/${id}`;
   };
 
@@ -5146,6 +5150,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     count: number;
     total_retained: number;
     any_shared: boolean;
+    members: ObjGraphEdge[];  // all raw edges in this group
+    groupKey: string;
   }
   const groupedEdges: EdgeGroup[] = React.useMemo(() => {
     const map = new Map<string, EdgeGroup>();
@@ -5155,7 +5161,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       const childNode = data.nodes[String(edge.child_idx)];
       const isShared = !!(childNode && childNode.idom !== nodeId);
       if (!existing) {
-        map.set(key, { field_name: edge.field_name, child_class: edge.child_class, child_idx: edge.child_idx, count: 1, total_retained: edge.child_retained, any_shared: isShared });
+        map.set(key, { field_name: edge.field_name, child_class: edge.child_class, child_idx: edge.child_idx, count: 1, total_retained: edge.child_retained, any_shared: isShared, members: [edge], groupKey: key });
       } else {
         existing.count++;
         existing.total_retained += edge.child_retained;
@@ -5163,6 +5169,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           existing.child_idx = edge.child_idx;
         }
         if (isShared) existing.any_shared = true;
+        existing.members.push(edge);
       }
     }
     return Array.from(map.values());
@@ -5261,12 +5268,20 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <button className="btn-link" onClick={goToRoot}>⌂ Roots</button>
         </div>
         <div style={{ padding: "0.75rem 1rem", background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 6 }}>
-          <p style={{ margin: "0 0 0.4rem", fontWeight: 600 }}>Object #{nodeId} — not in captured graph</p>
-          <p className="subtitle" style={{ margin: 0 }}>
+          <p style={{ margin: "0 0 0.4rem", fontWeight: 600 }}>
+            {pendingLabel ? <><code>{pendingLabel}</code> #{nodeId}</> : <>Object #{nodeId}</>}{" "}— not in captured graph
+          </p>
+          <p className="subtitle" style={{ margin: "0 0 0.4rem" }}>
             This object was referenced from the edge above but is below the significance threshold
             (top 10,000 by shallow heap, ≥{fmtB(data.sig_floor_bytes)} retained).
             Re-run with a larger <code>--top-n</code> to include it.
           </p>
+          {pendingLabel && (
+            <span className="copy-cell">
+              <OqlBtn cls={pendingLabel} />
+              <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Copy OQL to query all {pendingLabel.split(".").pop()} instances</span>
+            </span>
+          )}
         </div>
       </div>
     );
@@ -5378,39 +5393,81 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {pagedEdges.map((edge, i) => (
-                      <tr key={i}>
-                        <td>
-                          <code>{edge.field_name || <em style={{ color: "var(--muted)" }}>(unnamed)</em>}</code>
-                          {edge.count > 1 && (
-                            <span style={{ marginLeft: "0.35rem", fontSize: "0.75rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 4, padding: "0 4px" }}>
-                              ×{edge.count}
+                    {pagedEdges.flatMap((edge, i) => {
+                      const isExpanded = expandedGroups.has(edge.groupKey);
+                      const rows: React.ReactNode[] = [];
+                      rows.push(
+                        <tr key={i}>
+                          <td>
+                            <code>{edge.field_name || <em style={{ color: "var(--muted)" }}>(unnamed)</em>}</code>
+                            {edge.count > 1 && (
+                              <button
+                                className="btn-link"
+                                style={{ marginLeft: "0.35rem", fontSize: "0.75rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 4, padding: "0 4px" }}
+                                title={isExpanded ? "Collapse individual entries" : "Expand to see all individual entries"}
+                                onClick={() => setExpandedGroups(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(edge.groupKey)) next.delete(edge.groupKey); else next.add(edge.groupKey);
+                                  return next;
+                                })}
+                              >
+                                {isExpanded ? "▾" : "▸"}×{edge.count}
+                              </button>
+                            )}
+                          </td>
+                          <td>
+                            <span className="copy-cell">
+                              <button className="btn-link"
+                                onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
+                                <code>{edge.child_class}</code>
+                              </button>
+                              <button className="btn-link" title="Open dominator tree"
+                                style={{ opacity: 0.6, flexShrink: 0 }}
+                                onClick={() => navigate("domtree", edge.child_idx, edge.child_class)}>
+                                ⌞
+                              </button>
+                              <PivotBtn cls={edge.child_class} />
+                              <OqlBtn cls={edge.child_class} />
                             </span>
-                          )}
-                        </td>
-                        <td>
-                          <span className="copy-cell">
-                            <button className="btn-link"
-                              onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
-                              <code>{edge.child_class}</code>
-                            </button>
-                            <button className="btn-link" title="Open dominator tree"
-                              style={{ opacity: 0.6, flexShrink: 0 }}
-                              onClick={() => navigate("domtree", edge.child_idx, edge.child_class)}>
-                              ⌞
-                            </button>
-                            <PivotBtn cls={edge.child_class} />
-                            <OqlBtn cls={edge.child_class} />
-                          </span>
-                        </td>
-                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.total_retained)}</td>
-                        <td>
-                          {edge.any_shared && (
-                            <span className="shared-badge">&#8635; shared</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.total_retained)}</td>
+                          <td>
+                            {edge.any_shared && (
+                              <span className="shared-badge">&#8635; shared</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                      if (isExpanded) {
+                        const sorted = [...edge.members].sort((a, b) => b.child_retained - a.child_retained);
+                        for (const m of sorted) {
+                          const mShared = !!(data.nodes[String(m.child_idx)] && data.nodes[String(m.child_idx)]!.idom !== nodeId);
+                          rows.push(
+                            <tr key={`${i}-${m.child_idx}`} style={{ background: "var(--hover-bg, rgba(0,0,0,0.03))" }}>
+                              <td style={{ paddingLeft: "1.5rem", color: "var(--muted)", fontSize: "0.8rem" }}>
+                                #{m.child_idx}
+                              </td>
+                              <td>
+                                <span className="copy-cell" style={{ paddingLeft: "0.5rem" }}>
+                                  <button className="btn-link" style={{ fontSize: "0.8rem" }}
+                                    onClick={() => navigate("explore", m.child_idx, m.child_class)}>
+                                    <code>{m.child_class}</code>
+                                  </button>
+                                  <button className="btn-link" title="Open dominator tree"
+                                    style={{ opacity: 0.6, flexShrink: 0, fontSize: "0.8rem" }}
+                                    onClick={() => navigate("domtree", m.child_idx, m.child_class)}>
+                                    ⌞
+                                  </button>
+                                </span>
+                              </td>
+                              <td style={{ textAlign: "right", whiteSpace: "nowrap", fontSize: "0.8rem" }}>{fmtB(m.child_retained)}</td>
+                              <td>{mShared && <span className="shared-badge" style={{ fontSize: "0.75rem" }}>&#8635;</span>}</td>
+                            </tr>
+                          );
+                        }
+                      }
+                      return rows;
+                    })}
                   </tbody>
                 </table>
               )}
@@ -5514,7 +5571,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               </tr>
               <tr>
                 <th>Object #</th>
-                <td title="1-based dense index in captured node set">{nodeId}</td>
+                <td>
+                  <span className="copy-cell">
+                    <span title="0-based dense index; use in 'Go to obj #' to navigate here">{nodeId}</span>
+                    <CopyBtn text={String(nodeId)} />
+                  </span>
+                </td>
               </tr>
               <tr>
                 <th>Shallow</th>
