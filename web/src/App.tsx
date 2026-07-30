@@ -5291,6 +5291,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 <code>{edge.child_class}</code>
                               </button>
                               <PivotBtn cls={edge.child_class} />
+                              <OqlBtn cls={edge.child_class} />
                             </span>
                           </td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.child_retained)}</td>
@@ -5361,6 +5362,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 <code>{cn.display_class}</code>
                               </button>
                               <PivotBtn cls={cn.display_class} />
+                              <OqlBtn cls={cn.display_class} />
                             </span>
                           </td>
                           <td>{fmtB(cn.shallow)}</td>
