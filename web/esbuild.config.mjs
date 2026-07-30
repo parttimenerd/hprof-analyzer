@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 796 KB minified bundle budget (raised from 792 KB to accommodate chart PNG download + Save HTML buttons).
-const BUDGET_BYTES = 796 * 1024;
+// ≤ 800 KB minified bundle budget (raised to accommodate OqlBtn, ExploreBtn, NavBreadcrumb).
+const BUDGET_BYTES = 800 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

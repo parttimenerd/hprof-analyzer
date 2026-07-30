@@ -121,6 +121,20 @@ const TableExpansionCtx = React.createContext(false);
 // True when the report has dominator pairs — controls whether PivotBtns appear.
 const HasDomDataCtx = React.createContext(false);
 
+// ── Object-graph availability context ────────────────────────────────────────
+// Carries the obj_graph_flat node map so ExploreBtns can check per-index.
+const ObjGraphCtx = React.createContext<Record<string, unknown> | null>(null);
+
+// ── Navigation history ────────────────────────────────────────────────────────
+// Tracks the last few section hash fragments so a back-button can appear
+// after the user pivots away from a section.
+interface NavEntry { hash: string; label: string }
+const NavHistoryCtx = React.createContext<{
+  push: (entry: NavEntry) => void;
+  back: () => void;
+  canBack: boolean;
+}>({ push: () => {}, back: () => {}, canBack: false });
+
 // ── Per-table KB toggle ───────────────────────────────────────────────────────
 // Returns [fmtB, toggleBtn, useKB] — the byte formatter, a button that switches
 // between auto-scaled (1.2 MB) and always-KB display, and the current mode flag.
@@ -418,7 +432,71 @@ function BackToTop() {
   );
 }
 
-// ── OOM Triage lead-in ──────────────────────────────────────────────────────
+// ── Navigation history breadcrumb ─────────────────────────────────────────────
+// Tracks the last 8 meaningful hash-navigations so users can step back after
+// pivoting from one section to another. Shows a thin bar with "← label" links.
+// Only section-level hashes (no explore/domtree/<id>) are pushed.
+const SECTION_LABELS: Record<string, string> = {
+  "leak-suspects": "Leak Suspects",
+  "top-consumers": "Top Consumers",
+  "dominator-analysis": "Dominator Analysis",
+  "object-graph": "Object Graph",
+  "references": "References",
+  "threads": "Threads",
+  "collections": "Collections",
+  "type-ref-graph": "Type Graph",
+  "custom-queries": "Custom Queries",
+  "waste-summary": "Waste Summary",
+  "system-overview": "System Overview",
+  "allocation-sites": "Allocation Sites",
+  "unreachable-objects": "Unreachable Objects",
+  "top-retainers": "Top Retainers",
+  "fields-by-retained-size-classfield": "Fields by Size",
+};
+
+function NavBreadcrumb() {
+  const [history, setHistory] = React.useState<{ hash: string; label: string }[]>([]);
+
+  React.useEffect(() => {
+    const onHashChange = () => {
+      const raw = window.location.hash.slice(1);
+      // Skip non-section hashes (explore/domtree go straight to object-graph)
+      if (/^(explore|domtree)\/\d+$/.test(raw)) {
+        setHistory(prev => {
+          const last = prev[prev.length - 1];
+          const entry = { hash: "object-graph", label: "Object Graph" };
+          if (last?.hash === entry.hash) return prev;
+          return [...prev.slice(-7), entry];
+        });
+        return;
+      }
+      const label = SECTION_LABELS[raw];
+      if (!label) return;
+      setHistory(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.hash === raw) return prev;
+        return [...prev.slice(-7), { hash: raw, label }];
+      });
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // Show the last 4 entries (excluding current) as breadcrumb trail
+  const trail = history.slice(-5, -1);
+  if (trail.length === 0) return null;
+
+  return (
+    <div className="nav-breadcrumb">
+      {trail.map((entry, i) => (
+        <a key={i} href={`#${entry.hash}`} className="nav-bc-link"
+          title={`Go back to ${entry.label}`}>
+          {i === trail.length - 1 ? "← " : ""}{entry.label}
+        </a>
+      ))}
+    </div>
+  );
+}
 // Dumb formatter over report.triage (rules are evaluated once in Rust; see
 // src/report/triage.rs). Mirrors render_markdown's render_oom_triage.
 
@@ -1060,6 +1138,44 @@ function CopyBtn({ text }: { text: string }) {
   return (
     <button className="copy-btn" onClick={copy} title="Copy class name" aria-label="Copy class name">
       {copied ? "✓" : "⎘"}
+    </button>
+  );
+}
+
+// Copies "SELECT * FROM ClassName LIMIT 20" to clipboard — quick OQL shortcut.
+function OqlBtn({ cls }: { cls: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const oql = `SELECT * FROM ${cls} LIMIT 20`;
+  const click = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(oql).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    });
+  };
+  return (
+    <button className="copy-btn" onClick={click} title={`Copy OQL: ${oql}`} aria-label="Copy OQL query for this class">
+      {copied ? "✓" : "⌗"}
+    </button>
+  );
+}
+
+// Links to the Object Graph explorer for a given dense index.
+// Only renders when the index exists in the captured graph data.
+function ExploreBtn({ denseIdx, label }: { denseIdx: number; label?: string }) {
+  const nodes = React.useContext(ObjGraphCtx);
+  if (!nodes || nodes[String(denseIdx)] == null) return null;
+  const click = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    window.location.hash = `explore/${denseIdx}`;
+    document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+  };
+  return (
+    <button className="copy-btn" onClick={click}
+      title={label ? `Open "${label}" in Object Graph Explorer` : "Open in Object Graph Explorer"}
+      aria-label="Open in Object Graph Explorer"
+      style={{ visibility: "visible", opacity: 0.7 }}>
+      ⬡↗
     </button>
   );
 }
@@ -2274,6 +2390,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(s.pretty_class)}>{s.pretty_class}</code>
           <CopyBtn text={s.pretty_class} />
           <PivotBtn cls={s.pretty_class} />
+          <OqlBtn cls={s.pretty_class} />
         </span>
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
@@ -2308,7 +2425,14 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       )}
       {s.accumulation_class && (
         <p style={{ margin: "0.25rem 0", color: "var(--muted)", fontSize: "0.86rem" }}>
-          Accumulation point: <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{s.accumulation_class}</code><PivotBtn cls={s.accumulation_class} /></span>
+          Accumulation point:{" "}
+          <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
+            <code>{s.accumulation_class}</code>
+            <PivotBtn cls={s.accumulation_class} />
+            <OqlBtn cls={s.accumulation_class} />
+            {s.accumulation_obj_1based != null &&
+              <ExploreBtn denseIdx={s.accumulation_obj_1based - 1} label={s.accumulation_class} />}
+          </span>
           {s.accumulation_retained != null && <> retaining {fmtB(s.accumulation_retained)}</>}.
         </p>
       )}
@@ -2508,7 +2632,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   );
 
   const clsTableCols: TableColumn<ClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /><OqlBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
     { id: "bar", name: "", width: "80px", cell: (c) => <span className="bar-bg"><span className="bar-fill" style={{ width: `${maxClsRetained > 0 ? (c.retained / maxClsRetained) * 100 : 0}%` }} /></span> },
     { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "130px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
@@ -5692,6 +5816,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 export default function App({ report }: { report: Report }) {
   const [expandAllTables, setExpandAllTables] = React.useState(false);
   const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
+  const objGraphNodes = report.obj_graph_flat?.nodes ?? null;
 
   // Scroll to the URL hash once the DOM has been painted after initial render.
   // The browser fires the native hash-scroll before React mounts, so we must
@@ -5711,6 +5836,7 @@ export default function App({ report }: { report: Report }) {
 
   return (
     <HasDomDataCtx.Provider value={hasDomData}>
+    <ObjGraphCtx.Provider value={objGraphNodes}>
     <TableExpansionCtx.Provider value={expandAllTables}>
     <div className="app">
       <a href="#memory-triage" className="skip-link">Skip to content</a>
@@ -5723,6 +5849,7 @@ export default function App({ report }: { report: Report }) {
         <ThemeToggle />
       </div>
       <Nav report={report} />
+      <NavBreadcrumb />
       <OomTriage report={report} />
       <ExecSummaryCard report={report} />
       <WasteSummarySection report={report} />
@@ -5792,6 +5919,7 @@ export default function App({ report }: { report: Report }) {
       </footer>
     </div>
     </TableExpansionCtx.Provider>
+    </ObjGraphCtx.Provider>
     </HasDomDataCtx.Provider>
   );
 }
