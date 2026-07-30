@@ -214,7 +214,7 @@ th.sortable.active { color: var(--accent); }
 .copy-cell code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-btn { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.15rem; line-height: 1; border-radius: 3px; }
 .copy-btn:hover, .copy-btn:focus { color: var(--accent); visibility: visible; outline: none; }
-td:hover .copy-btn, .copy-cell:focus-within .copy-btn { visibility: visible; }
+td:hover .copy-btn, .rdt_TableRow:hover .copy-btn, .copy-cell:focus-within .copy-btn { visibility: visible; }
 
 /* Print: hide interactive chrome, expand collapsibles, avoid mid-card breaks. */
 @media print {

@@ -117,6 +117,10 @@ function ReportHeader({ report }: { report: Report }) {
 // A global toggle that makes every capped table expand all its rows at once.
 const TableExpansionCtx = React.createContext(false);
 
+// ── Dominator data availability context ──────────────────────────────────────
+// True when the report has dominator pairs — controls whether PivotBtns appear.
+const HasDomDataCtx = React.createContext(false);
+
 // ── Per-table KB toggle ───────────────────────────────────────────────────────
 // Returns [fmtB, toggleBtn, useKB] — the byte formatter, a button that switches
 // between auto-scaled (1.2 MB) and always-KB display, and the current mode flag.
@@ -851,9 +855,10 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
           <span title={r.pretty_class} style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden", width: "100%" }}>
             <code style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0, background: "none", padding: 0 }}>{r.pretty_class}</code>
             <CopyBtn text={r.pretty_class} />
+            <PivotBtn cls={r.pretty_class} />
           </span>
         ),
-        sortable: false,
+        sortable: true,
       },
       ...(showLoader ? [{
         id: "loader_label",
@@ -918,6 +923,21 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         format: (r) => fmtPct(pctOf(r.retained, totalShallow)),
         sortable: true,
         sortFunction: (a, b) => a.retained - b.retained,
+      },
+      {
+        id: "bar",
+        name: "",
+        width: "80px",
+        grow: 0,
+        sortable: false,
+        cell: (r) => {
+          const pct = totalShallow > 0 ? Math.min(100, (r.retained / totalShallow) * 100) : 0;
+          return (
+            <div title={`${fmtPct(pct)} of heap`} style={{ width: "100%", height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent, #2563eb)", borderRadius: 4, minWidth: pct > 0 ? 2 : 0 }} />
+            </div>
+          );
+        },
       },
     ];
     return cols;
@@ -990,6 +1010,32 @@ function LoaderCell({ label }: { label?: string | null }) {
     <code className="loader" title={label ?? undefined}>
       {short}
     </code>
+  );
+}
+
+// ── Global class pivot helper ─────────────────────────────────────────────────
+// Fires a CustomEvent that DominatorAnalysisSection listens for, then scrolls
+// to the Dominator Analysis section so the WhoHolds navigator highlights the class.
+function pivotClass(cls: string) {
+  window.dispatchEvent(new CustomEvent("pivot-class", { detail: cls }));
+  // Navigate to the section — let hashchange scrolling handle it.
+  window.location.hash = "dominator-analysis";
+}
+
+// Small "⬡" button shown next to class names in any table that triggers the pivot.
+function PivotBtn({ cls }: { cls: string }) {
+  const hasDomData = React.useContext(HasDomDataCtx);
+  if (!hasDomData) return null;
+  return (
+    <button
+      className="copy-btn"
+      title="View in Dominator Navigator"
+      aria-label="View in Dominator Navigator"
+      onClick={(e) => { e.stopPropagation(); pivotClass(cls); }}
+      style={{ opacity: 0.6 }}
+    >
+      ⬡
+    </button>
   );
 }
 
@@ -1751,7 +1797,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
       <ol className="accum-path">
         {s.path.map((p, i) => (
           <li key={i}>
-            <code>{p.display_class}</code>{" "}
+            <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(p.display_class)}>{p.display_class}</code>{" "}
             <span className="path-ret">retains {fmtB(p.retained)}</span>
           </li>
         ))}
@@ -1764,7 +1810,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (rows.length === 0) return null;
   const cols: TableColumn<HistRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -2157,7 +2203,8 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
               return (
               <g key={`sn-${i}`} className="sankey-node">
                 <rect x={x0} y={y0} width={Math.max(2, x1 - x0)} height={nodeH} fill={nodeColor(depth)}
-                  style={{ cursor: "default" }}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => pivotClass(sn.name)}
                   onMouseEnter={(e) => setHoverPopover({ x: e.clientX, y: e.clientY, name: sn.name, count: sn.count, retained: sn.retained })}
                   onMouseLeave={() => setHoverPopover(null)}
                 />
@@ -2193,6 +2240,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
           <span style={{ color: "var(--muted)" }}>Objects:</span><span>{fmtCount(hoverPopover.count)}</span>
           <span style={{ color: "var(--muted)" }}>Retained:</span><span>{fmtB(hoverPopover.retained)}</span>
         </div>
+        <div style={{ marginTop: "0.3rem", fontSize: "0.72rem", color: "var(--muted)" }}>Click to view in navigator →</div>
       </div>
     )}
     </>
@@ -2205,7 +2253,8 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
   return (
     <div className="suspect" id={`suspect-${rank}`}>
       <h3 style={{ margin: "0 0 0.25rem" }}>
-        <span className="rank">Suspect #{rank}</span> <code>{s.pretty_class}</code>
+        <span className="rank">Suspect #{rank}</span>{" "}
+        <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(s.pretty_class)}>{s.pretty_class}</code>
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
@@ -2229,7 +2278,9 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <p style={{ margin: "0.25rem 0" }}>
           <span className="label">Keywords:</span>{" "}
           {s.keywords.map((k, i) => (
-            <span key={i} className="pill keyword" title="Class involved in this suspect">
+            <span key={i} className="pill keyword" title="Click to view in Dominator Navigator"
+              style={{ cursor: "pointer" }}
+              onClick={() => pivotClass(k)}>
               {k}
             </span>
           ))}
@@ -2391,7 +2442,7 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const objTableCols: TableColumn<ObjRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (o) => <code title={o.display_class}>{o.display_class}</code> },
+    { id: "class", name: "Class", grow: 1, cell: (o) => <span className="copy-cell"><code title={o.display_class}>{o.display_class}</code><PivotBtn cls={o.display_class} /></span> },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: (o) => <span title={fmtExactBytes(o.retained)}>{fmtB(o.retained)}</span>, selector: (o) => o.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (o) => fmtPct(pctOf(o.retained, total)), selector: (o) => o.pct_bp, sortable: true },
@@ -2399,7 +2450,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   ];
 
   const clsTableCols: TableColumn<ClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
     { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "130px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
@@ -2462,7 +2513,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               type LeafRow = { short: string; pretty_class: string; instances: number; retained: number };
               const leafRows: LeafRow[] = classes.map(r => ({ ...r, short: r.pretty_class.slice(dotPkg.length) }));
               const leafCols: TableColumn<LeafRow>[] = [
-                { id: "class", name: "Class", grow: 1, cell: r => <code>{r.short}</code>, selector: r => r.short, sortable: true },
+                { id: "class", name: "Class", grow: 1, cell: r => <span className="copy-cell"><code>{r.short}</code><PivotBtn cls={r.pretty_class} /></span>, selector: r => r.short, sortable: true },
                 { id: "instances", name: "Instances", right: true, width: "110px", format: r => fmtCount(r.instances), selector: r => r.instances, sortable: true },
                 { id: "retained", name: "Retained", right: true, width: "110px", format: r => formatBytes(r.retained), selector: r => r.retained, sortable: true },
               ];
@@ -4114,6 +4165,16 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
     setTimeout(() => navigatorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   }, []);
 
+  // Listen for cross-section pivot events dispatched by PivotBtn.
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const cls = (e as CustomEvent<string>).detail;
+      if (cls) pivotToClass(cls);
+    };
+    window.addEventListener("pivot-class", handler);
+    return () => window.removeEventListener("pivot-class", handler);
+  }, [pivotToClass]);
+
   // Context menu state.
   const [ctxMenu, setCtxMenu] = React.useState<{ x: number; y: number; cls: string } | null>(null);
   React.useEffect(() => {
@@ -5538,6 +5599,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 
 export default function App({ report }: { report: Report }) {
   const [expandAllTables, setExpandAllTables] = React.useState(false);
+  const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
 
   // Scroll to the URL hash once the DOM has been painted after initial render.
   // The browser fires the native hash-scroll before React mounts, so we must
@@ -5551,6 +5613,7 @@ export default function App({ report }: { report: Report }) {
   }, []); // empty deps → runs once after first render
 
   return (
+    <HasDomDataCtx.Provider value={hasDomData}>
     <TableExpansionCtx.Provider value={expandAllTables}>
     <div className="app">
       <a href="#memory-triage" className="skip-link">Skip to content</a>
@@ -5631,6 +5694,7 @@ export default function App({ report }: { report: Report }) {
       </footer>
     </div>
     </TableExpansionCtx.Provider>
+    </HasDomDataCtx.Provider>
   );
 }
 
