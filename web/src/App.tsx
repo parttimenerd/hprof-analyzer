@@ -5129,7 +5129,38 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   );
 
   const PAGE_SIZE = 50;
-  const pagedEdges = currentEdges.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  // Group edges by (field_name, child_class) to collapse arrays of identical refs.
+  interface EdgeGroup {
+    field_name: string;
+    child_class: string;
+    child_idx: number;   // representative (highest retained)
+    count: number;
+    total_retained: number;
+    any_shared: boolean;
+  }
+  const groupedEdges: EdgeGroup[] = React.useMemo(() => {
+    const map = new Map<string, EdgeGroup>();
+    for (const edge of currentEdges) {
+      const key = `${edge.field_name}\0${edge.child_class}`;
+      const existing = map.get(key);
+      const childNode = data.nodes[String(edge.child_idx)];
+      const isShared = !!(childNode && childNode.idom !== nodeId);
+      if (!existing) {
+        map.set(key, { field_name: edge.field_name, child_class: edge.child_class, child_idx: edge.child_idx, count: 1, total_retained: edge.child_retained, any_shared: isShared });
+      } else {
+        existing.count++;
+        existing.total_retained += edge.child_retained;
+        if (edge.child_retained > (data.nodes[String(existing.child_idx)]?.retained ?? 0)) {
+          existing.child_idx = edge.child_idx;
+        }
+        if (isShared) existing.any_shared = true;
+      }
+    }
+    return Array.from(map.values());
+  }, [currentEdges, nodeId, data.nodes]);
+
+  const pagedEdges = groupedEdges.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   // Find pre-built SVG tree for current node
   const prebuiltTree = nodeId !== null
@@ -5284,48 +5315,59 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
                 <p className="subtitle">No outbound references captured.</p>
               )}
+              {groupedEdges.length > 0 && currentEdges.length > groupedEdges.length && (
+                <p className="subtitle" style={{ fontSize: "0.8rem" }}>
+                  {currentEdges.length} edges grouped into {groupedEdges.length} unique field×class combinations.
+                </p>
+              )}
               {pagedEdges.length > 0 && (
                 <table className="std-table">
                   <thead>
                     <tr>
                       <th>Field</th>
-                      <th>Child class (click to explore)</th>
-                      <th>Retained</th>
+                      <th>Child class (click → refs, ⌞ → dom tree)</th>
+                      <th style={{ textAlign: "right" }}>Retained</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {pagedEdges.map((edge, i) => {
-                      const childNode = data.nodes[String(edge.child_idx)];
-                      const isShared = childNode && childNode.idom !== nodeId;
-                      return (
-                        <tr key={i}>
-                          <td>
-                            <code>{edge.field_name || <em style={{ color: "var(--muted)" }}>(unnamed)</em>}</code>
-                          </td>
-                          <td>
-                            <span className="copy-cell">
-                              <button className="btn-link"
-                                onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
-                                <code>{edge.child_class}</code>
-                              </button>
-                              <PivotBtn cls={edge.child_class} />
-                              <OqlBtn cls={edge.child_class} />
+                    {pagedEdges.map((edge, i) => (
+                      <tr key={i}>
+                        <td>
+                          <code>{edge.field_name || <em style={{ color: "var(--muted)" }}>(unnamed)</em>}</code>
+                          {edge.count > 1 && (
+                            <span style={{ marginLeft: "0.35rem", fontSize: "0.75rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 4, padding: "0 4px" }}>
+                              ×{edge.count}
                             </span>
-                          </td>
-                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.child_retained)}</td>
-                          <td>
-                            {isShared && (
-                              <span className="shared-badge">&#8635; shared</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                          )}
+                        </td>
+                        <td>
+                          <span className="copy-cell">
+                            <button className="btn-link"
+                              onClick={() => navigate("explore", edge.child_idx, edge.child_class)}>
+                              <code>{edge.child_class}</code>
+                            </button>
+                            <button className="btn-link" title="Open dominator tree"
+                              style={{ opacity: 0.6, flexShrink: 0 }}
+                              onClick={() => navigate("domtree", edge.child_idx, edge.child_class)}>
+                              ⌞
+                            </button>
+                            <PivotBtn cls={edge.child_class} />
+                            <OqlBtn cls={edge.child_class} />
+                          </span>
+                        </td>
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtB(edge.total_retained)}</td>
+                        <td>
+                          {edge.any_shared && (
+                            <span className="shared-badge">&#8635; shared</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               )}
-              {currentEdges.length > PAGE_SIZE && (
+              {groupedEdges.length > PAGE_SIZE && (
                 <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem" }}>
                   <button
                     className="btn-link"
@@ -5335,11 +5377,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     &laquo; Prev
                   </button>
                   <span>
-                    {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, currentEdges.length)} of {currentEdges.length}
+                    {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, groupedEdges.length)} of {groupedEdges.length}
                   </span>
                   <button
                     className="btn-link"
-                    disabled={(page + 1) * PAGE_SIZE >= currentEdges.length}
+                    disabled={(page + 1) * PAGE_SIZE >= groupedEdges.length}
                     onClick={() => setPage(p => p + 1)}
                   >
                     Next &raquo;
@@ -5442,12 +5484,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <th>Immediate dominator</th>
                 <td>
                   {currentNode.idom != null ? (
-                    <button
-                      className="btn-link"
-                      onClick={() => navigate("domtree", currentNode.idom!, idomNode?.display_class ?? `#${currentNode.idom}`)}
-                    >
-                      {idomNode?.display_class ?? `obj#${currentNode.idom}`}
-                    </button>
+                    <span className="copy-cell">
+                      <button
+                        className="btn-link"
+                        onClick={() => navigate("domtree", currentNode.idom!, idomNode?.display_class ?? `#${currentNode.idom}`)}
+                      >
+                        {idomNode?.display_class ?? `obj#${currentNode.idom}`}
+                      </button>
+                      {idomNode && <PivotBtn cls={idomNode.display_class} />}
+                      {idomNode && <OqlBtn cls={idomNode.display_class} />}
+                    </span>
                   ) : (
                     <em>GC root</em>
                   )}
