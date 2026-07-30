@@ -483,8 +483,8 @@ function NavBreadcrumb() {
     const m = hash.match(/^(explore|domtree)\/(\d+)$/);
     if (m) {
       const node = objNodes?.[m[2]];
-      const shortCls = node ? (node.display_class.split(".").pop() ?? node.display_class) : `#${m[2]}`;
-      return `${m[1] === "domtree" ? "⌞ " : "→ "}${shortCls}`;
+      const shortCls = node ? (node.display_class.split(".").pop() ?? node.display_class) : `obj`;
+      return `${m[1] === "domtree" ? "⌞ " : "→ "}${shortCls}#${m[2]}`;
     }
     return SECTION_LABELS[hash] ?? hash;
   }
@@ -5089,6 +5089,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string }[]>([]);
   const [page, setPage] = React.useState(0);
   const [showSvg, setShowSvg] = React.useState(false);
+  const [jumpInput, setJumpInput] = React.useState("");
   const [fmtB] = useFmtBytes();
 
   React.useEffect(() => {
@@ -5182,11 +5183,32 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       .slice(0, 50);
     return (
       <div>
-        <p className="subtitle">
-          Significant objects (retained &ge; {fmtB(data.sig_floor_bytes)}).{" "}
-          <strong>&rarr;</strong> explores outbound references (what this object points to);{" "}
-          <strong>⌞</strong> opens the dominator tree (what this object exclusively retains).
-        </p>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
+          <p className="subtitle" style={{ margin: 0 }}>
+            Significant objects (retained &ge; {fmtB(data.sig_floor_bytes)}).{" "}
+            <strong>&rarr;</strong> explores outbound references (what this object points to);{" "}
+            <strong>⌞</strong> opens the dominator tree (what this object exclusively retains).
+          </p>
+          <form style={{ display: "flex", gap: "0.25rem", alignItems: "center", flexShrink: 0 }}
+            onSubmit={e => {
+              e.preventDefault();
+              const n = parseInt(jumpInput.trim(), 10);
+              if (!isNaN(n) && n >= 0) {
+                setJumpInput("");
+                navigate("explore", n, `#${n}`);
+              }
+            }}>
+            <input
+              type="text"
+              value={jumpInput}
+              onChange={e => setJumpInput(e.target.value)}
+              placeholder="Go to obj #…"
+              style={{ width: "9em", fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
+              title="Jump to an object by its dense index"
+            />
+            <button type="submit" className="btn-link" style={{ fontSize: "0.82rem" }}>Go</button>
+          </form>
+        </div>
         <table className="std-table">
           <thead>
             <tr>
@@ -5278,7 +5300,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       )}
 
       {/* Tab bar */}
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
         <button
           className={tab === "explore" ? "btn-active" : "btn-link"}
           onClick={() => { setTab("explore"); window.location.hash = `explore/${nodeId}`; }}
@@ -5302,6 +5324,25 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         }}>
           {breadcrumb.length > 0 ? `← ${breadcrumb[breadcrumb.length - 1].label}` : "⌂ Roots"}
         </button>
+        <form style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}
+          onSubmit={e => {
+            e.preventDefault();
+            const n = parseInt(jumpInput.trim(), 10);
+            if (!isNaN(n) && n >= 0) {
+              setJumpInput("");
+              navigate(tab, n, `#${n}`);
+            }
+          }}>
+          <input
+            type="text"
+            value={jumpInput}
+            onChange={e => setJumpInput(e.target.value)}
+            placeholder="Go to obj #…"
+            style={{ width: "9em", fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
+            title="Jump to an object by its dense index"
+          />
+          <button type="submit" className="btn-link" style={{ fontSize: "0.82rem" }}>Go</button>
+        </form>
       </div>
 
       <div className="obj-explorer">
