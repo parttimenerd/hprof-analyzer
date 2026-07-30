@@ -151,7 +151,7 @@ function TreeSvg({ root, maxRetained, ariaLabel }: { root: GenNode; maxRetained:
     >
       <defs>
         <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6 Z" fill="var(--border, #94a3b8)" />
+          <path d="M0,0 L6,3 L0,6 Z" fill="var(--muted, #94a3b8)" />
         </marker>
       </defs>
       <g transform={`translate(${PAD},${PAD})`}>
@@ -167,7 +167,7 @@ function TreeSvg({ root, maxRetained, ariaLabel }: { root: GenNode; maxRetained:
               key={i}
               d={`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`}
               fill="none"
-              stroke="var(--border, #cbd5e1)"
+              stroke="var(--muted, #cbd5e1)"
               strokeWidth={1.5}
               markerEnd="url(#arrow)"
             />

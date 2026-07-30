@@ -330,7 +330,7 @@ function Nav({ report }: { report: Report }) {
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
   if ((report.leak_indicators?.direct_byte_buffer_capacity_sum ?? 0) > 0) addData("off-heap-nio", "Off-Heap NIO");
-  if (report.alloc_sites) addData("allocation-sites", "Allocation Sites");
+  if (report.alloc_sites?.traces_present && report.alloc_sites.sites.some(s => s.frames.length > 0)) addData("allocation-sites", "Allocation Sites");
   if (report.queries?.length) addData("custom-queries", "Custom Queries", String(report.queries.length));
   if (report.obj_graph_flat) addData("object-graph", "Object Graph");
   if (report.type_ref_graph?.length) addData("type-ref-graph", "Type Graph");
@@ -547,10 +547,28 @@ function ExecSummaryCard({ report }: { report: Report }) {
           {" "}holds{" "}
           <strong>{formatBytes(top.retained)}</strong>
           {" "}({fmtPct(topRetainsPct)})
+          {top.root_type_label && top.root_type_label !== "System Class" &&
+           !top.pretty_class.toLowerCase().includes(top.root_type_label.toLowerCase()) && (
+            <span style={{ color: "var(--muted)", marginLeft: "0.5rem", fontSize: "0.85em" }}>
+              via {top.root_type_label}
+            </span>
+          )}
         </div>
       )}
 
-      {/* Line 5: Longest dominator chain (V25) */}
+      {/* Line 5: Notable indicators */}
+      {(showStaleThreadLocals || showOffHeap) && (
+        <div style={{ margin: "0.3rem 0", fontSize: "0.88rem", color: "var(--muted)", display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
+          {showStaleThreadLocals && (
+            <span>⚠ {fmtCount(li?.thread_local_null_key_count ?? 0)} stale ThreadLocal entr{(li?.thread_local_null_key_count ?? 0) === 1 ? "y" : "ies"}</span>
+          )}
+          {showOffHeap && (
+            <span>⚠ DirectByteBuffer off-heap: {formatBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}</span>
+          )}
+        </div>
+      )}
+
+      {/* Line 6: Longest dominator chain (V25) */}
       {chainDepth != null && chainDepth >= 2 && (
         <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
           <span style={labelStyle}>Longest dominator chain</span>
@@ -956,7 +974,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
 const histogramTableStyles = {
   headRow: { style: { borderBottomWidth: "1px", borderBottomColor: "var(--border)", fontWeight: 600, fontSize: "0.82rem", color: "var(--muted)", background: "var(--card)" } },
   headCells: { style: { paddingLeft: "5px", paddingRight: "5px", whiteSpace: "nowrap" as const } },
-  rows: { style: { fontSize: "0.86rem", borderBottomColor: "var(--border)", background: "transparent", minHeight: "unset" }, highlightOnHoverStyle: { background: "var(--card)" } },
+  rows: { style: { fontSize: "0.86rem", borderBottomColor: "var(--border)", background: "transparent", minHeight: "unset" }, highlightOnHoverStyle: { background: "var(--hover-bg, var(--card))" } },
   cells: { style: { paddingTop: "3px", paddingBottom: "3px", paddingLeft: "5px", paddingRight: "5px", whiteSpace: "nowrap" as const, overflow: "hidden", fontVariantNumeric: "tabular-nums" } },
   table: { style: { background: "transparent" } },
   tableWrapper: { style: { overflow: "auto" } },
@@ -1065,7 +1083,7 @@ function ExpandableText({ text, label }: { text: string; label?: string }) {
     <span
       className="expandable-text"
       onDoubleClick={e => { e.stopPropagation(); setOpen(true); }}
-      title={isLong ? "Double-click to expand" : undefined}
+      title={isLong ? "Double-click to expand" : text}
     >
       <code className={isLong ? "expandable-truncated" : ""}>{text}</code>
       {isLong && (
@@ -1126,7 +1144,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>HPROF Record Census</h2>
       <p className="subtitle">
-        Raw HPROF record-type composition of the dump (pass-1 counts); additive, not parity-compared.
+        Raw HPROF record-type breakdown — useful for verifying that the dump is complete and that allocation sites were recorded.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} />
     </section>
@@ -1142,7 +1160,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
   const sizeCols: TableColumn<SizeBucket>[] = [
     { id: "upper", name: useKB ? "Size ≤ (KB)" : "Size ≤", right: true, width: useKB ? "140px" : "120px", cell: byteCell(b => b.upper_bytes, fmtB, useKB), selector: (b) => b.upper_bytes },
     { id: "count", name: "Count", right: true, width: "100px", format: (b) => fmtCount(b.count), selector: (b) => b.count },
-    { id: "pct", name: "% of Dom.", right: true, width: "100px", format: (b) => d.count > 0 ? fmtPct(b.count / d.count * 100) : "—", selector: (b) => b.count },
+    { id: "pct", name: "% of Dominators", right: true, width: "150px", format: (b) => d.count > 0 ? fmtPct(b.count / d.count * 100) : "—", selector: (b) => b.count },
   ];
   return (
     <section id="size-distribution">
@@ -1174,7 +1192,7 @@ function TopDuplicatedTable({ rows }: { rows: DupStringSample[] }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "100px", cell: byteCell(s => s.wasted_bytes, fmtB, useKB), selector: (s) => s.wasted_bytes },
-    { id: "value", name: "Value", grow: 1, cell: (s) => <ExpandableText text={s.text} label="Duplicated string value" /> },
+    { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Duplicated string value" /> },
   ];
   return (
     <>
@@ -1189,7 +1207,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "len", name: "Length", right: true, width: "100px", format: (s) => fmtCount(s.len), selector: (s) => s.len },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
-    { id: "value", name: "Value", grow: 1, cell: (s) => <ExpandableText text={s.text} label="Longest string value" /> },
+    { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Longest string value" /> },
   ];
   return (
     <>
@@ -1424,9 +1442,9 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /></span> },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances },
-    { id: "hdr", name: "Hdr/obj", right: true, width: "90px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes },
+    { id: "hdr", name: "Header/obj", right: true, width: "105px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes },
     { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "150px" : "130px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes },
-    { id: "pct", name: "Hdr %", right: true, width: "90px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp },
+    { id: "pct", name: "% of Shallow", right: true, width: "115px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp },
     { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow },
   ];
   return (
@@ -1764,7 +1782,7 @@ function SysPropsTable({ rows }: { rows: { key: string; value: string }[] }) {
   const sysCols: TableColumn<{ key: string; value: string }>[] = [
     { id: "key", name: "Key", width: "280px", grow: 0,
       cell: r => <code>{r.key}</code>, selector: r => r.key, sortable: true },
-    { id: "val", name: "Value", grow: 1,
+    { id: "val", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px",
       cell: r => <ExpandableText text={r.value} label={`${r.key}`} />,
       selector: r => r.value },
   ];
@@ -2014,11 +2032,20 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
   // Consolidate all data-derived computations into one memo keyed on `node`.
   // This ensures visibleNodes/visibleLinks/height/nodePad are stable across
   // renders and the graph memo only recomputes when underlying data changes.
-  const { rawNodes, rawLinks, visibleNodes, visibleLinks, nodePad, height } = React.useMemo(() => {
+  const { rawNodes, rawLinks, visibleNodes, visibleLinks, nodePad, height, degenerate } = React.useMemo(() => {
     const { nodes: rawNodes, links: rawLinks } = mergedPathToSankey(node);
-    const visibleNodes = rawNodes.length > MAX_NODES
-      ? rawNodes.slice().sort((a, b) => b.retained - a.retained).slice(0, MAX_NODES)
-      : rawNodes;
+    // Filter out nodes that represent < 0.5% of total retained — they render as
+    // invisible hairlines in the sankey and add visual noise without information.
+    const MIN_SHARE = 0.005;
+    const totalRetained = node.retained > 0 ? node.retained : 1;
+    const significantNodes = rawNodes.filter((n) => n.retained / totalRetained >= MIN_SHARE);
+    // If fewer than 3 significant nodes survive the filter, the sankey would be
+    // uninformative (one dominant path + nothing else). Flag for fallback.
+    const degenerate = significantNodes.length < 3;
+    const candidateNodes = degenerate ? rawNodes : significantNodes;
+    const visibleNodes = candidateNodes.length > MAX_NODES
+      ? candidateNodes.slice().sort((a, b) => b.retained - a.retained).slice(0, MAX_NODES)
+      : candidateNodes;
     const visibleSet = new Set(visibleNodes.map((n) => n.name));
     const visibleLinks = rawLinks.filter(
       (l) => visibleSet.has(rawNodes[l.source]?.name) && visibleSet.has(rawNodes[l.target]?.name)
@@ -2026,7 +2053,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
     // Adaptive padding: reduce when many nodes so rects stay visible.
     const nodePad = rawNodes.length > 30 ? 6 : rawNodes.length > 15 ? 10 : 12;
     const height = Math.min(600, Math.max(200, visibleNodes.length * (14 + nodePad)));
-    return { rawNodes, rawLinks, visibleNodes, visibleLinks, nodePad, height };
+    return { rawNodes, rawLinks, visibleNodes, visibleLinks, nodePad, height, degenerate };
   }, [node]);
 
   // Right-side label column — 220px cleared for class name text.
@@ -2063,7 +2090,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
   }, [w, visibleNodes, visibleLinks, height, nodePad, rawNodes]);
 
   // All hooks above — safe to early-return now.
-  if (rawNodes.length <= 1) return <MergedPathsFallback node={node} />;
+  if (rawNodes.length <= 1 || degenerate) return <MergedPathsFallback node={node} />;
   if (graph === null) return <MergedPathsFallback node={node} />;
 
   // Count root chains (leaves of the tree) and total retained.
@@ -2299,7 +2326,7 @@ function TopConsumersSection({ report }: { report: Report }) {
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: (o) => <span title={fmtExactBytes(o.retained)}>{fmtB(o.retained)}</span>, selector: (o) => o.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (o) => fmtPct(pctOf(o.retained, total)), selector: (o) => o.pct_bp, sortable: true },
-    ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, minWidth: "160px", cell: (o: ObjRow) => o.owner ? <ExpandableText text={o.owner} label="Held via" /> : o.held_via ? <><ExpandableText text={o.held_via} label="Held via" /> <span className="muted">(stack)</span></> : <span>—</span> } as TableColumn<ObjRow>] : []),
+    ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, minWidth: "160px", maxWidth: "600px", cell: (o: ObjRow) => o.owner ? <ExpandableText text={o.owner} label="Held via" /> : o.held_via ? <><ExpandableText text={o.held_via} label="Held via" /> <span className="muted">(stack)</span></> : <span>—</span> } as TableColumn<ObjRow>] : []),
   ];
 
   const clsTableCols: TableColumn<ClassRow>[] = [
@@ -2522,7 +2549,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       name: "State",
       width: "145px",
       selector: (t) => t.thread_state ?? "",
-      format: (t) => t.thread_state || "—",
+      cell: (t) => <span title={t.thread_state || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state || "—"}</span>,
     },
     {
       id: "retained",
@@ -2537,7 +2564,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       id: "max_local_retained",
       name: useKB ? "Max Local Retained (KB)" : "Max Local Retained",
       right: true,
-      width: useKB ? "190px" : "165px",
+      width: useKB ? "200px" : "175px",
       sortable: true,
       cell: byteCell((t) => t.max_local_retained, fmtB, useKB),
       selector: (t) => t.max_local_retained,
@@ -2546,7 +2573,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       id: "stack_depth",
       name: "Stack depth",
       right: true,
-      width: "105px",
+      width: "120px",
       selector: (t) => t.frames?.length ?? 0,
       format: (t) => String(t.frames?.length ?? 0),
     },
@@ -2571,7 +2598,7 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
     { id: "loader", name: "Context Class Loader", grow: 1, minWidth: "145px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span> },
     { id: "daemon", name: "Daemon", width: "85px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no" },
     { id: "priority", name: "Priority", right: true, width: "80px", format: (t) => String(t.priority), selector: (t) => t.priority },
-    { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", format: (t) => t.thread_state || "—" },
+    { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state || "—"}</span> },
   ];
   return (
     <details className="thread-overview-detail">
@@ -2847,7 +2874,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length },
       ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "120px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—" } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow },
-      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: (r: import("./types").TopArrayRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
+      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: (r: import("./types").TopArrayRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
     ];
     const byClassCols: TableColumn<import("./types").TopArrayClassRow>[] = [
       { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code> },
@@ -3045,7 +3072,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
           { id: "value", name: "Value", right: true, width: "90px", format: (r) => String(r.value), selector: (r) => r.value },
           { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects },
           { id: "shallow", name: useKBcpa ? "Shallow (KB)" : "Shallow", right: true, width: useKBcpa ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtBcpa, useKBcpa), selector: (r) => r.shallow },
-          ...(cpaHasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: (r: import("./types").ConstantArrayRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").ConstantArrayRow>] : []),
+          ...(cpaHasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: (r: import("./types").ConstantArrayRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").ConstantArrayRow>] : []),
         ];
         return <StdTable columns={cpaCols} data={cpaRows} searchKeys={["array_class"]} fmtBtn={kbBtnCpa} />;
       })()}
@@ -3317,7 +3344,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
         ? <span>—</span>
         : <>{r.value_type_breakdown.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}</span>)}</>,
     } as TableColumn<CoalescedRow>] : []),
-    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: ({ row: r }: CoalescedRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: ({ row: r }: CoalescedRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? (useKB ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : fmtB(r.retained)) : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0 } as TableColumn<CoalescedRow>] : []),
   ];
   return (
@@ -3414,16 +3441,17 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   return (
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size (Class#field)</h2>
-      {data.truncated && (
-        <p className="subtitle">
-          Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
-        </p>
-      )}
       <p className="subtitle">
         Which holder <code>Class#field</code> retains the most memory, summed over every object the
         field points at. Runtime pointee type is the dominant concrete class reached through the
         field (<code>varies</code> when no single type dominates).
       </p>
+      {data.truncated && (
+        <p className="subtitle">
+          &#9888; Results are a bounded sample — some field groups were cut off to stay within analysis limits.
+          Values represent the groups that were captured, not the full heap.
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (
@@ -4117,8 +4145,8 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
           { id: "dominator_class", name: "Dominator Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /></span> },
           { id: "dominator_count", name: "#Dominators", right: true, width: "132px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count },
           { id: "dominated_count", name: "#Dominated", right: true, width: "120px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count },
-          { id: "dominator_shallow", name: useKB ? "Dom. Shallow (KB)" : "Dom. Shallow", right: true, width: useKB ? "150px" : "120px", cell: byteCell(r => r.dominator_shallow, fmtB, useKB), selector: (r) => r.dominator_shallow },
-          { id: "dominated_shallow", name: useKB ? "Dominated Shallow (KB)" : "Dominated Shallow", right: true, width: useKB ? "175px" : "155px", cell: byteCell(r => r.dominated_shallow, fmtB, useKB), selector: (r) => r.dominated_shallow },
+          { id: "dominator_shallow", name: useKB ? "Dominator Shallow (KB)" : "Dominator Shallow", right: true, width: useKB ? "178px" : "162px", cell: byteCell(r => r.dominator_shallow, fmtB, useKB), selector: (r) => r.dominator_shallow },
+          { id: "dominated_shallow", name: useKB ? "Dominated Shallow (KB)" : "Dominated Shallow", right: true, width: useKB ? "178px" : "162px", cell: byteCell(r => r.dominated_shallow, fmtB, useKB), selector: (r) => r.dominated_shallow },
         ];
         const totalDomCount = idoms.reduce((s, r) => s + r.dominator_count, 0);
         const totalDominatedCount = idoms.reduce((s, r) => s + r.dominated_count, 0);
@@ -4289,6 +4317,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
   return (
     <section id="off-heap-nio" tabIndex={-1}>
       <h2>Off-Heap NIO Memory</h2>
+      <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — not counted in JVM heap totals.</p>
       <div className="card">
         <p>
           <strong>{formatBytes(capacity)}</strong>
@@ -4621,6 +4650,8 @@ function CustomQueriesSection({ report }: { report: Report }) {
                   id: `col_${ci}`,
                   name: c.name,
                   grow: 1,
+                  minWidth: "80px",
+                  maxWidth: "500px",
                   cell: (row) => {
                     const val = row[ci];
                     const text = fmtCell(val);
@@ -4737,13 +4768,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     return (
       <div>
         <p className="subtitle">
-          Significant objects (retained &ge; {fmtB(data.sig_floor_bytes)}).
-          Click <strong>&rarr;</strong> to explore outbound references or dominator children.
+          Significant objects (retained &ge; {fmtB(data.sig_floor_bytes)}).{" "}
+          <strong>&rarr;</strong> explores outbound references (what this object points to);{" "}
+          <strong>⌞</strong> opens the dominator tree (what this object exclusively retains).
         </p>
         <table className="std-table">
           <thead>
             <tr>
-              <th>Navigate</th>
+              <th title="→ Outbound Refs  ⌞ Dominator Tree">Navigate</th>
               <th>Class</th>
               <th>Shallow</th>
               <th>Retained</th>
@@ -4756,6 +4788,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <td>
                   <button
                     className="btn-link"
+                    title="Explore outbound references"
                     onClick={() => navigate("explore", id, node.display_class)}
                   >
                     &rarr;
@@ -4763,6 +4796,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   {" "}
                   <button
                     className="btn-link"
+                    title="Open dominator tree"
                     onClick={() => navigate("domtree", id, node.display_class)}
                   >
                     ⌞
@@ -4782,10 +4816,26 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
   // ── Node detail view ───────────────────────────────────────────────────────
   if (!currentNode) {
+    const prevCrumb = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : null;
     return (
       <div>
-        <button className="btn-link" style={{ marginBottom: "0.5rem" }} onClick={goToRoot}>← Roots</button>
-        <p className="subtitle">Object {nodeId} not found in significant nodes (outside the top-N capture threshold).</p>
+        <div style={{ display: "flex", gap: "0.75rem", marginBottom: "0.75rem", alignItems: "center" }}>
+          {prevCrumb && (
+            <button className="btn-link" onClick={() => {
+              setBreadcrumb(prev => prev.slice(0, -1));
+              window.location.hash = `${tab}/${prevCrumb.nodeId}`;
+            }}>← {prevCrumb.label}</button>
+          )}
+          <button className="btn-link" onClick={goToRoot}>⌂ Roots</button>
+        </div>
+        <div style={{ padding: "0.75rem 1rem", background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 6 }}>
+          <p style={{ margin: "0 0 0.4rem", fontWeight: 600 }}>Object #{nodeId} — not in captured graph</p>
+          <p className="subtitle" style={{ margin: 0 }}>
+            This object was referenced from the edge above but is below the significance threshold
+            (top 10,000 by shallow heap, ≥{fmtB(data.sig_floor_bytes)} retained).
+            Re-run with a larger <code>--top-n</code> to include it.
+          </p>
+        </div>
       </div>
     );
   }
@@ -4831,8 +4881,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         >
           Dominator Tree
         </button>
-        <button className="btn-link" style={{ marginLeft: "auto" }} onClick={goToRoot}>
-          &larr; Roots
+        <button className="btn-link" style={{ marginLeft: "auto" }} onClick={() => {
+          if (breadcrumb.length > 0) {
+            const prev = breadcrumb[breadcrumb.length - 1];
+            setBreadcrumb(b => b.slice(0, -1));
+            window.location.hash = `${tab}/${prev.nodeId}`;
+          } else {
+            goToRoot();
+          }
+        }}>
+          {breadcrumb.length > 0 ? `← ${breadcrumb[breadcrumb.length - 1].label}` : "⌂ Roots"}
         </button>
       </div>
 
@@ -4920,7 +4978,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <>
               <h4 style={{ margin: "0 0 0.4rem" }}>Immediate Dominator Children</h4>
               <p className="subtitle" style={{ fontSize: "0.82rem" }}>
-                &#8505; Showing immediate dominator children only.
+                &#8505; One level at a time: shows objects <em>directly</em> dominated by this node.
+                Click <strong>into &rarr;</strong> to descend into a child's subtree.
               </p>
               {currentDomChildren.length === 0 ? (
                 <p className="subtitle">No significant dominated children.</p>
@@ -4985,8 +5044,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <td><code>{currentNode.display_class}</code></td>
               </tr>
               <tr>
-                <th>Dense index</th>
-                <td>{nodeId}</td>
+                <th>Object #</th>
+                <td title="1-based dense index in captured node set">{nodeId}</td>
               </tr>
               <tr>
                 <th>Shallow</th>
@@ -5484,11 +5543,7 @@ export default function App({ report }: { report: Report }) {
       <ReferencesSection data={report.references} />
       <DirectByteBufferCard indicators={report.leak_indicators} />
       <UnreachableObjectsSection data={report.overview} />
-      {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
-      <RetentionConcentrationSection report={report} />
-      <DominatorDepthSection report={report} />
-      <LeakIndicatorsSection data={report.leak_indicators} />
-      <CustomQueriesSection report={report} />
+      {report.alloc_sites?.traces_present && report.alloc_sites.sites.some(s => s.frames.length > 0) && <AllocSitesSection data={report.alloc_sites} />}
       {report.obj_graph_flat && (
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
@@ -5502,10 +5557,14 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow.</p>
+          <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow. <em>Note: Retained Flow sums the retained size of referenced objects across all instances — values may exceed total heap size when objects are shared (referenced by multiple sources).</em></p>
           <TypeRefGraph edges={report.type_ref_graph} />
         </section>
       )}
+      <RetentionConcentrationSection report={report} />
+      <DominatorDepthSection report={report} />
+      <LeakIndicatorsSection data={report.leak_indicators} />
+      <CustomQueriesSection report={report} />
       <GlossarySection />
       <BackToTop />
       <footer className="report-footer">
