@@ -360,7 +360,7 @@ impl Rule for DominantGcRootType {
                 "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root class.",
                 pct, top.root_type,
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -465,7 +465,7 @@ impl Rule for ClassloaderLeak {
                     dup.loader_count,
                     format_bytes(dup.total_retained),
                 ),
-                Some(("duplicate-classes", "Duplicate Classes")),
+                Some(("system-overview", "Duplicate Classes")),
             ));
         }
         Some(signal(
@@ -478,7 +478,7 @@ impl Rule for ClassloaderLeak {
                 dup.loader_count,
                 format_bytes(dup.total_retained),
             ),
-            Some(("duplicate-classes", "Duplicate Classes")),
+            Some(("system-overview", "Duplicate Classes")),
         ))
     }
 }
@@ -754,7 +754,7 @@ impl Rule for ObjectSwarm {
                 format_bytes(row.shallow),
                 pct_of(row.shallow, total),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -825,7 +825,7 @@ impl Rule for ClassloaderExplosion {
                 "{} live ClassLoader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
                 fmt_count(n),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -988,7 +988,7 @@ impl Rule for FinalizerQueueBacklog {
                 "{} live `java.lang.ref.Finalizer` instances — the finalizer thread is falling behind; finalizeable objects (e.g. `Deflater`, JDBC connections) accumulate until drained.",
                 fmt_count(row.instances),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1011,7 +1011,7 @@ impl Rule for MetaspacePressure {
                 "{} classes loaded — far above normal; class metadata is likely exhausting Metaspace. Typical cause: CGLIB/Byte Buddy/Groovy proxy generation without caching.",
                 fmt_count(n),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1045,7 +1045,7 @@ impl Rule for CachedReflectionMetadata {
                 "{} live `java.lang.reflect.{{Method,Field,Constructor}}` objects — framework reflection caches are unbounded (typically Spring/Hibernate accumulating per scanned class).",
                 fmt_count(total),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1087,7 +1087,7 @@ impl Rule for JniGlobalRefLeak {
                 format_bytes(retained),
                 pct_of(retained, total),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1120,7 +1120,7 @@ impl Rule for HeapCompositionSkew {
                 "`{}` account for {:.1}% of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
                 dominant.kind, pct,
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1181,7 +1181,7 @@ impl Rule for SessionScopeLeak {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1215,7 +1215,7 @@ impl Rule for ConnectionLeak {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1248,7 +1248,7 @@ impl Rule for EventListenerAccumulation {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1290,7 +1290,7 @@ impl Rule for ParserOutputAccumulation {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1331,7 +1331,7 @@ impl Rule for InternedStringBloat {
                 fmt_count(string_count),
                 fmt_count(jni_global_count),
             ),
-            Some(("overview", "System Overview")),
+            Some(("system-overview", "System Overview")),
         ))
     }
 }
@@ -1445,7 +1445,7 @@ impl Rule for FixedPerObjectOverhead {
                 format_bytes(overhead),
                 pct,
             ),
-            Some(("header-overhead", "Header Overhead")),
+            Some(("object-header-overhead", "Header Overhead")),
         ))
     }
 }

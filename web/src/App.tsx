@@ -1591,7 +1591,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           },
           { id: "type", name: "Root Type", grow: 1, selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
-          { id: "pct", name: "%", right: true, width: "80px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count },
+          { id: "pct", name: "%", right: true, width: "80px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "120px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
             id: "top_classes", name: "Top retained classes", grow: 2,
@@ -1707,13 +1707,13 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
   const loaderDetailCols: TableColumn<typeof rows[0]["per_loader"][0]>[] = [
     { id: "loader", name: "Loader", grow: 1,
       cell: pl => <code title={pl.loader_label ?? undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>,
-      selector: pl => pl.loader_label ?? "" },
+      selector: pl => pl.loader_label ?? "", sortable: true },
     { id: "instances", name: "Instances", right: true, width: "100px",
-      format: pl => fmtCount(pl.instances), selector: pl => pl.instances },
+      format: pl => fmtCount(pl.instances), selector: pl => pl.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "120px" : "100px",
-      cell: byteCell(pl => pl.shallow, fmtB, useKB), selector: pl => pl.shallow },
+      cell: byteCell(pl => pl.shallow, fmtB, useKB), selector: pl => pl.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "120px" : "100px",
-      cell: byteCell(pl => pl.retained, fmtB, useKB), selector: pl => pl.retained },
+      cell: byteCell(pl => pl.retained, fmtB, useKB), selector: pl => pl.retained, sortable: true },
   ];
   const cols: TableColumn<DuplicateClass>[] = [
     {
@@ -1768,7 +1768,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
-    { id: "pct", name: "% of suspect", right: true, width: "120px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained },
+    { id: "pct", name: "% of suspect", right: true, width: "120px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained, sortable: true },
   ];
   return (
     <details open>
@@ -2015,6 +2015,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
   const [fmtB] = useFmtBytes();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [w, setW] = React.useState(600);
+  const [hoverPopover, setHoverPopover] = React.useState<{ x: number; y: number; name: string; count: number; retained: number } | null>(null);
 
   React.useLayoutEffect(() => {
     if (!containerRef.current) return;
@@ -2112,6 +2113,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
   const svgW = Math.max(1, w - LABEL_COL);
 
   return (
+    <>
     <details open className="merged-path-sankey">
       <summary>
         Merged retention paths ({chainCount} chain{chainCount === 1 ? "" : "s"} · {fmtB(totalRetained)})
@@ -2152,10 +2154,13 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
             const midY = y0 + nodeH / 2;
             const depth = sn.depth ?? 0;
             const shortName = sn.name.length > 32 ? sn.name.slice(0, 31) + "…" : sn.name;
-            return (
+              return (
               <g key={`sn-${i}`} className="sankey-node">
-                <title>{sn.name + "\n" + fmtCount(sn.count) + " objects · " + fmtB(sn.retained)}</title>
-                <rect x={x0} y={y0} width={Math.max(2, x1 - x0)} height={nodeH} fill={nodeColor(depth)} />
+                <rect x={x0} y={y0} width={Math.max(2, x1 - x0)} height={nodeH} fill={nodeColor(depth)}
+                  style={{ cursor: "default" }}
+                  onMouseEnter={(e) => setHoverPopover({ x: e.clientX, y: e.clientY, name: sn.name, count: sn.count, retained: sn.retained })}
+                  onMouseLeave={() => setHoverPopover(null)}
+                />
                 {nodeH >= 8 && (
                   <text x={svgW + 4} y={midY} dy="0.35em" fontSize={10} fill="var(--fg)" textAnchor="start">
                     {shortName}
@@ -2167,6 +2172,30 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
         </svg>
       </div>
     </details>
+    {hoverPopover && (
+      <div style={{
+        position: "fixed",
+        left: Math.min(hoverPopover.x + 10, window.innerWidth - 260),
+        top: Math.min(hoverPopover.y + 10, window.innerHeight - 120),
+        zIndex: 99999,
+        background: "var(--card-bg, var(--bg))",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+        padding: "0.5rem 0.75rem",
+        minWidth: 200,
+        maxWidth: 300,
+        fontSize: "0.8rem",
+        pointerEvents: "none",
+      }}>
+        <div style={{ fontFamily: "var(--mono, monospace)", fontSize: "0.75rem", fontWeight: 600, wordBreak: "break-all", marginBottom: "0.3rem" }}>{hoverPopover.name}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.1rem 0.5rem", color: "var(--fg)" }}>
+          <span style={{ color: "var(--muted)" }}>Objects:</span><span>{fmtCount(hoverPopover.count)}</span>
+          <span style={{ color: "var(--muted)" }}>Retained:</span><span>{fmtB(hoverPopover.retained)}</span>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -2370,10 +2399,10 @@ function TopConsumersSection({ report }: { report: Report }) {
   ];
 
   const clsTableCols: TableColumn<ClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /></span> },
+    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
     { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "130px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
-    { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained },
+    { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
   ];
 
   return (
@@ -2565,6 +2594,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       minWidth: "120px",
       cell: (t) => <code>{t.name?.trim() || "(unnamed)"}</code>,
       selector: (t) => t.name ?? "",
+      sortable: true,
     },
     {
       id: "state",
@@ -2572,6 +2602,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       width: "145px",
       selector: (t) => t.thread_state ?? "",
       cell: (t) => <span title={t.thread_state || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state || "—"}</span>,
+      sortable: true,
     },
     {
       id: "retained",
@@ -2598,6 +2629,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       width: "120px",
       selector: (t) => t.frames?.length ?? 0,
       format: (t) => String(t.frames?.length ?? 0),
+      sortable: true,
     },
   ];
   return (
@@ -3774,14 +3806,6 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
     return () => window.removeEventListener("keydown", handler);
   }, [fullscreen]);
 
-  // Click outside closes popover
-  React.useEffect(() => {
-    if (!popover) return;
-    const handler = () => setPopover(null);
-    window.addEventListener("click", handler);
-    return () => window.removeEventListener("click", handler);
-  }, [!!popover]);
-
   const classOptions = React.useMemo(() => {
     const seen = new Set<string>();
     for (const p of pairs) { seen.add(p.dominator_class); seen.add(p.dominated_class); }
@@ -3932,7 +3956,6 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
           <svg
             width={w} height={svgHeight}
             role="img" aria-label={`Who holds ${target}`}
-            onClick={() => setPopover(null)}
           >
             {/* Links */}
             {graph.links.map((link, i) => (
@@ -3978,9 +4001,12 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
                     style={{ cursor: clickable ? "pointer" : "default" }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (isPopoverOpen) { setPopover(null); return; }
+                      if (clickable) pivot(n.cls);
+                    }}
+                    onMouseEnter={(e) => {
                       setPopover({ nodeId: n.id, x: e.clientX, y: e.clientY });
                     }}
+                    onMouseLeave={() => setPopover(null)}
                   />
                   {labelEl}
                 </g>
@@ -4007,7 +4033,6 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
   // Popover rendering (fixed position so it works in both normal and fullscreen)
   const popoverEl = popoverNode ? (
     <div
-      onClick={(e) => e.stopPropagation()}
       style={{
         position: "fixed",
         left: Math.min(popover!.x + 8, window.innerWidth - 280),
@@ -4021,6 +4046,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         minWidth: 240,
         maxWidth: 320,
         fontSize: "0.82rem",
+        pointerEvents: "none",
       }}
     >
       <div style={{ fontFamily: "var(--mono, monospace)", fontSize: "0.78rem", color: "var(--fg)", wordBreak: "break-all", marginBottom: "0.4rem", fontWeight: 600 }}>
@@ -4037,12 +4063,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         </span>
       </div>
       {popoverNode.side !== "C" && (
-        <button
-          onClick={() => { pivot(popoverNode.cls); setPopover(null); }}
-          style={{ marginTop: "0.5rem", width: "100%", padding: "0.3rem", border: "1px solid var(--accent)", borderRadius: 4, background: "transparent", color: "var(--accent)", cursor: "pointer", fontSize: "0.82rem" }}
-        >
-          Focus on this class →
-        </button>
+        <div style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--muted)" }}>Click to focus →</div>
       )}
     </div>
   ) : null;
@@ -5267,6 +5288,7 @@ function SeriesTable({
       width: "60px",
       cell: (r: SRow) => ("is_new" in r && r.is_new ? "yes" : ""),
       selector: (r: SRow) => ("is_new" in r && r.is_new ? 1 : 0),
+      sortable: true,
     } as TableColumn<SRow>] : []),
   ];
   return <StdTable columns={seriesCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="delta" />;
