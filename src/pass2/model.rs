@@ -477,9 +477,14 @@ pub struct ObjGraphCapture {
     /// src dense-idx → [(dst dense-idx, field_name_pool_idx)].
     /// field_name_pool_idx 0 means unnamed (array element, class edge, synthetic).
     pub edges: std::collections::HashMap<u32, Vec<(u32, u16)>>,
+    /// dst dense-idx → [(src dense-idx, field_name_pool_idx)].
+    /// Populated for nodes in `captured`; bounded by edge_cap per dst.
+    pub inbound: std::collections::HashMap<u32, Vec<(u32, u16)>>,
+    /// Nodes whose inbound edge list was cut at edge_cap.
+    pub inbound_truncated: std::collections::HashSet<u32>,
     /// Deduped field-name strings; index 0 is always "" (unnamed).
     pub field_name_pool: Vec<String>,
-    /// Dense indices that were captured as sources (top-K by shallow heap).
+    /// Dense indices that were captured as sources.
     pub captured: std::collections::HashSet<u32>,
 }
 
@@ -487,6 +492,8 @@ impl ObjGraphCapture {
     pub fn empty() -> Self {
         Self {
             edges: Default::default(),
+            inbound: Default::default(),
+            inbound_truncated: Default::default(),
             field_name_pool: vec![String::new()],
             captured: Default::default(),
         }
@@ -553,6 +560,44 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         }
         if !row.is_empty() {
             cap.edges.insert(src, row);
+        }
+    }
+
+    // Second pass: record inbound edges for captured destinations.
+    // Iterate all objects' outbound edges; for each src→dst where dst is captured,
+    // push (src, name_idx) to cap.inbound[dst], bounded by edge_cap.
+    for src in 0..n as u32 {
+        let s = src as usize;
+        let start = g.fwd_offsets[s] as usize;
+        let end = g.fwd_offsets[s + 1] as usize;
+        for pos in start..end {
+            let dst = g.fwd_targets.get(pos);
+            if !cap.captured.contains(&dst) {
+                continue;
+            }
+            let entry = cap.inbound.entry(dst).or_default();
+            if entry.len() >= edge_cap {
+                cap.inbound_truncated.insert(dst);
+                continue;
+            }
+            let name_idx: u16 = match (fwd_names, name_pool) {
+                (Some(idx_vec), Some(pool)) => {
+                    let ni = idx_vec[pos] as usize;
+                    let name: &str = if ni < pool.len() { &pool[ni] } else { "" };
+                    if name.is_empty() {
+                        0u16
+                    } else {
+                        let next = name_map.len() as u16;
+                        let idx = *name_map.entry(name.to_owned()).or_insert(next);
+                        if idx as usize >= cap.field_name_pool.len() {
+                            cap.field_name_pool.push(name.to_owned());
+                        }
+                        idx
+                    }
+                }
+                _ => 0u16,
+            };
+            entry.push((src, name_idx));
         }
     }
     cap
@@ -1532,5 +1577,105 @@ fn scatter_edge(fwd_off: &mut Vec<u32>, fwd_tgt: &mut Vec<u32>, src_idx: usize, 
     if pos < fwd_tgt.len() {
         fwd_tgt[pos] = dst as u32;
         fwd_off[src_idx] += 1;
+    }
+}
+
+#[cfg(test)]
+mod obj_graph_tests {
+    use super::*;
+
+    fn make_graph(fwd_offsets: Vec<u32>, fwd_targets_data: Vec<u32>) -> Graph {
+        let n = fwd_offsets.len() - 1;
+        Graph {
+            n,
+            format: String::new(),
+            file_size: 0,
+            source_name: String::new(),
+            file_path: String::new(),
+            id_size: 4,
+            ref_size: 4,
+            header_timestamp_ms: 0,
+            gc_root_indices: vec![],
+            gc_root_types: vec![],
+            shallow: vec![100u32; n],
+            class_idx: vec![],
+            class_names: vec![],
+            class_loader_id: vec![],
+            loader_labels: Default::default(),
+            thread_stacks: vec![],
+            thread_props: Default::default(),
+            thread_local_counts: Default::default(),
+            thread_local_samples: Default::default(),
+            thread_local_frame_samples: Default::default(),
+            system_properties: vec![],
+            jvm_version: None,
+            class_obj_class_idx: Default::default(),
+            fwd_offsets,
+            fwd_targets: crate::chunkvec::ChunkU32::from_vec(fwd_targets_data),
+            synthetic_root_count: 0,
+            system_classloader_shallow: None,
+            idom: vec![],
+            retained: vec![],
+            has_same_class_ancestor: crate::bitset::Bitset::default(),
+            alloc_stack_serial: vec![],
+            alloc_frames_by_serial: None,
+            record_census: Default::default(),
+            dup_strings: None,
+            dup_prim_arrays: None,
+            boxed_number_holders: vec![],
+            arrays_by_size: Default::default(),
+            collections: Default::default(),
+            references: Default::default(),
+            reference_referent_idx: Default::default(),
+            reference_null_referent_count: Default::default(),
+            collection_attribution_raw: None,
+            collection_attribution_truncated: false,
+            fields_by_size_raw: None,
+            coll_values_raw: None,
+            node_kv: None,
+            fwd_field_name_idx: None,
+            field_name_pool: None,
+            direct_byte_buffer_capacity_sum: 0,
+            thread_local_null_key_count: 0,
+            tl_entry_records: vec![],
+            unreachable_retained: None,
+            obj_graph_edges: None,
+        }
+    }
+
+    #[test]
+    fn inbound_edges_captured_for_captured_dst() {
+        // Objects: 0→1, 0→2, 1→2. All captured (top_n=usize::MAX).
+        let g = make_graph(vec![0, 2, 3, 3], vec![1, 2, 2]);
+        let cap = capture_obj_graph_edges(&g, usize::MAX, 100);
+        // Object 2 has two inbound: from 0 and from 1.
+        let inb2 = cap.inbound.get(&2).expect("inbound for 2");
+        let srcs: Vec<u32> = inb2.iter().map(|&(s, _)| s).collect();
+        assert!(srcs.contains(&0), "0→2 should be captured as inbound");
+        assert!(srcs.contains(&1), "1→2 should be captured as inbound");
+        // Object 1 has one inbound: from 0.
+        let inb1 = cap.inbound.get(&1).expect("inbound for 1");
+        assert_eq!(inb1.len(), 1);
+        assert_eq!(inb1[0].0, 0);
+    }
+
+    #[test]
+    fn inbound_truncated_at_edge_cap() {
+        // Object 0 has 3 outbound edges to object 1. edge_cap=2.
+        let g = make_graph(vec![0, 3, 3], vec![1, 1, 1]);
+        let cap = capture_obj_graph_edges(&g, usize::MAX, 2);
+        assert!(cap.inbound_truncated.contains(&1), "inbound for 1 should be truncated");
+        assert_eq!(cap.inbound.get(&1).map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn inbound_not_captured_for_uncaptured_dst() {
+        // top_n=1: only object with highest shallow (all same, so object 0 by sort order).
+        // Edges 0→1. Object 1 NOT in captured set, so no inbound for 1.
+        let g = make_graph(vec![0, 1, 1], vec![1]);
+        let cap = capture_obj_graph_edges(&g, 1, 100);
+        // Object 0 is captured (only one), object 1 is not.
+        // Since 1 is not captured, no inbound entry for 1.
+        assert!(cap.inbound.get(&1).is_none());
     }
 }
