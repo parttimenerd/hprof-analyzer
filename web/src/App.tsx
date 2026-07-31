@@ -5093,9 +5093,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [pendingLabel, setPendingLabel] = React.useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
   const [fmtB] = useFmtBytes();
+  const containerRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    const onHash = () => {
+    const onHash = (fromEvent: boolean) => {
       const h = window.location.hash;
       const m = h.match(/^#(explore|domtree)\/(\d+)$/);
       if (m) {
@@ -5103,14 +5104,18 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         setNodeId(parseInt(m[2], 10));
         setPage(0);
         setShowSvg(false);
+        if (fromEvent) {
+          setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        }
       } else if (h === "#object-graph") {
         setNodeId(null);
         setBreadcrumb([]);
       }
     };
-    onHash();
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    onHash(false);
+    const listener = () => onHash(true);
+    window.addEventListener("hashchange", listener);
+    return () => window.removeEventListener("hashchange", listener);
   }, []);
 
   const navigate = (newTab: "explore" | "domtree", id: number, fieldLabel: string) => {
@@ -5122,6 +5127,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     setPage(0);
     setExpandedGroups(new Set());
     window.location.hash = `${newTab}/${id}`;
+    setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
 
   const goToRoot = () => {
@@ -5189,7 +5195,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       .filter(r => r.node != null)
       .slice(0, 50);
     return (
-      <div>
+      <div ref={containerRef}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
           <p className="subtitle" style={{ margin: 0 }}>
             Significant objects (retained &ge; {fmtB(data.sig_floor_bytes)}).{" "}
@@ -5257,13 +5263,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   if (!currentNode) {
     const prevCrumb = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : null;
     return (
-      <div>
+      <div ref={containerRef}>
         <div style={{ display: "flex", gap: "0.75rem", marginBottom: "0.75rem", alignItems: "center" }}>
           {prevCrumb && (
             <button className="btn-link" onClick={() => {
               setBreadcrumb(prev => prev.slice(0, -1));
               window.location.hash = `${tab}/${prevCrumb.nodeId}`;
-            }}>← {prevCrumb.label}</button>
+            }}>← {(prevCrumb.label.split(".").pop() ?? prevCrumb.label)}#{prevCrumb.nodeId}</button>
           )}
           <button className="btn-link" onClick={goToRoot}>⌂ Roots</button>
         </div>
@@ -5290,7 +5296,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const idomNode = currentNode.idom != null ? data.nodes[String(currentNode.idom)] : null;
 
   return (
-    <div>
+    <div ref={containerRef}>
       {/* Breadcrumb */}
       {breadcrumb.length > 0 && (
         <div className="breadcrumb">
@@ -5305,12 +5311,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   window.location.hash = `${tab}/${b.nodeId}`;
                 }}
               >
-                {b.label}
+                {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
               </span>
             </React.Fragment>
           ))}
           <span className="breadcrumb-sep">/</span>
-          <span>{currentNode.display_class}</span>
+          <span>{(currentNode.display_class.split(".").pop() ?? currentNode.display_class)}#{nodeId}</span>
         </div>
       )}
 
@@ -5337,7 +5343,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             goToRoot();
           }
         }}>
-          {breadcrumb.length > 0 ? `← ${breadcrumb[breadcrumb.length - 1].label}` : "⌂ Roots"}
+          {breadcrumb.length > 0 ? `← ${(breadcrumb[breadcrumb.length - 1].label.split(".").pop() ?? breadcrumb[breadcrumb.length - 1].label)}#${breadcrumb[breadcrumb.length - 1].nodeId}` : "⌂ Roots"}
         </button>
         <form style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}
           onSubmit={e => {
@@ -5615,6 +5621,41 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               </tr>
             </tbody>
           </table>
+          {/* Retaining path: walk idom links up to GC root */}
+          {(() => {
+            const path: { id: number; node: ObjGraphFlatNode }[] = [];
+            let cur = currentNode.idom;
+            const seen = new Set<number>();
+            while (cur != null && !seen.has(cur) && path.length < 8) {
+              seen.add(cur);
+              const n = data.nodes[String(cur)];
+              if (!n) break;
+              path.push({ id: cur, node: n });
+              cur = n.idom;
+            }
+            if (path.length === 0) return null;
+            return (
+              <div style={{ marginTop: "0.5rem" }}>
+                <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>Retaining path ↑</div>
+                {path.map(({ id, node: n }, i) => (
+                  <div key={id} style={{ display: "flex", alignItems: "center", gap: "0.2rem", fontSize: "0.78rem", paddingLeft: `${i * 8}px` }}>
+                    <span style={{ color: "var(--muted)", flexShrink: 0 }}>↑</span>
+                    <button className="btn-link" style={{ fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={`${n.display_class} · retained ${n.retained} B`}
+                      onClick={() => navigate("domtree", id, n.display_class)}>
+                      <code style={{ fontSize: "0.76rem" }}>{n.display_class.split(".").pop()}#{id}</code>
+                    </button>
+                    <span style={{ color: "var(--muted)", flexShrink: 0, fontSize: "0.74rem" }}>{fmtB(n.retained)}</span>
+                  </div>
+                ))}
+                {cur == null ? (
+                  <div style={{ fontSize: "0.74rem", color: "var(--muted)", paddingLeft: `${Math.min(path.length, 8) * 8}px` }}>↑ GC root</div>
+                ) : (
+                  <div style={{ fontSize: "0.74rem", color: "var(--muted)", paddingLeft: `${path.length * 8}px` }}>↑ … (truncated)</div>
+                )}
+              </div>
+            );
+          })()}
           {currentDomChildren.length > 0 && tab === "explore" && (
             <div style={{ marginTop: "0.75rem" }}>
               <h4 style={{ margin: "0 0 0.4rem" }}>Dominator children ({currentDomChildren.length})</h4>
