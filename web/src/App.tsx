@@ -489,9 +489,11 @@ function NavBreadcrumb() {
     return SECTION_LABELS[hash] ?? hash;
   }
 
-  // Show the last 4 entries (excluding current) as breadcrumb trail
+  // Show the last 4 entries (excluding current) as breadcrumb trail.
+  // Don't render inside object-graph explorer — it has its own richer breadcrumb.
+  const currentHash = history[history.length - 1] ?? "";
   const trail = history.slice(-5, -1);
-  if (trail.length === 0) return null;
+  if (trail.length === 0 || /^(explore|domtree)\/\d+$/.test(currentHash)) return null;
 
   return (
     <div className="nav-breadcrumb">
@@ -5087,7 +5089,7 @@ function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
 function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [tab, setTab] = React.useState<"explore" | "domtree">("explore");
   const [nodeId, setNodeId] = React.useState<number | null>(null);
-  const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string; edge?: string }[]>([]);
+  const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string; edge?: string; sourceTab?: "explore" | "domtree" }[]>([]);
   const [page, setPage] = React.useState(0);
   const [showSvg, setShowSvg] = React.useState(false);
   const [jumpInput, setJumpInput] = React.useState("");
@@ -5153,7 +5155,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       setBreadcrumb(prev => {
         if (prev.length > 0) {
           const last = prev[prev.length - 1];
-          window.location.hash = `${tab}/${last.nodeId}`;
+          window.location.hash = `${last.sourceTab ?? tab}/${last.nodeId}`;
           return prev.slice(0, -1);
         }
         window.location.hash = "object-graph";
@@ -5171,7 +5173,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     if (expandGroup && nodeId !== null) pendingExpandByNode.current.set(nodeId, expandGroup);
     setBreadcrumb(prev => {
       if (nodeId === null) return [];
-      return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass }];
+      return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass, sourceTab: tab }];
     });
     setPendingLabel(childClass);
     setPage(0);
@@ -5440,11 +5442,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   className="breadcrumb-item"
                   onClick={() => {
                     setBreadcrumb(prev => prev.slice(0, i));
-                    window.location.hash = `${tab}/${b.nodeId}`;
+                    window.location.hash = `${b.sourceTab ?? tab}/${b.nodeId}`;
                   }}
+                  title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
                 >
+                  {b.sourceTab === "domtree" && <span style={{ color: "var(--muted)", fontSize: "0.8em", marginRight: "2px" }}>⌞</span>}
                   {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
-                  {b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
+                  {b.sourceTab !== "domtree" && b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
                     <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.8em" }}>
                       {" "}.{b.edge}
                     </span>
@@ -5466,7 +5470,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (breadcrumb.length > 0) {
                   const prev = breadcrumb[breadcrumb.length - 1];
                   setBreadcrumb(b => b.slice(0, -1));
-                  window.location.hash = `${tab}/${prev.nodeId}`;
+                  window.location.hash = `${prev.sourceTab ?? tab}/${prev.nodeId}`;
                 } else {
                   goToRoot();
                 }
@@ -5528,11 +5532,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 className="breadcrumb-item"
                 onClick={() => {
                   setBreadcrumb(prev => prev.slice(0, i));
-                  window.location.hash = `${tab}/${b.nodeId}`;
+                  window.location.hash = `${b.sourceTab ?? tab}/${b.nodeId}`;
                 }}
+                title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
               >
+                {b.sourceTab === "domtree" && <span style={{ color: "var(--muted)", fontSize: "0.8em", marginRight: "2px" }}>⌞</span>}
                 {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
-                {b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
+                {b.sourceTab !== "domtree" && b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
                   <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.8em" }}>
                     {" "}.{b.edge}
                   </span>
@@ -5565,12 +5571,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           if (breadcrumb.length > 0) {
             const prev = breadcrumb[breadcrumb.length - 1];
             setBreadcrumb(b => b.slice(0, -1));
-            window.location.hash = `${tab}/${prev.nodeId}`;
+            window.location.hash = `${prev.sourceTab ?? tab}/${prev.nodeId}`;
           } else {
             goToRoot();
           }
         }}>
-          {breadcrumb.length > 0 ? `← ${(breadcrumb[breadcrumb.length - 1].label.split(".").pop() ?? breadcrumb[breadcrumb.length - 1].label)}#${breadcrumb[breadcrumb.length - 1].nodeId}` : "⌂ Roots"}
+          {breadcrumb.length > 0 ? `← ${breadcrumb[breadcrumb.length - 1].sourceTab === "domtree" ? "⌞ " : ""}${(breadcrumb[breadcrumb.length - 1].label.split(".").pop() ?? breadcrumb[breadcrumb.length - 1].label)}#${breadcrumb[breadcrumb.length - 1].nodeId}` : "⌂ Roots"}
         </button>
         {classSiblings.length > 1 && (
           <span style={{ display: "flex", gap: "0.1rem", alignItems: "center", fontSize: "0.78rem", color: "var(--muted)" }} title="Navigate same-class instances by retained size (lateral — no breadcrumb push). Keyboard: [ / ]">
@@ -5839,15 +5845,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
                               <button className="btn-link" title="Explore outbound refs"
                                 onClick={() => navigate("explore", childId, cn.display_class)}
-                                style={{ opacity: 0.7 }}>
-                                →
-                              </button>
-                              <button
-                                className="btn-link"
-                                title="Open in dominator tree"
-                                onClick={() => navigate("domtree", childId, cn.display_class)}
                               >
                                 <code>{cn.display_class}</code>
+                              </button>
+                              <button className="btn-link" title="Open in dominator tree"
+                                style={{ opacity: 0.6, flexShrink: 0 }}
+                                onClick={() => navigate("domtree", childId, cn.display_class)}>
+                                ⌞
                               </button>
                               <PivotBtn cls={cn.display_class} />
                               <OqlBtn cls={cn.display_class} />
@@ -5945,17 +5949,17 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <span className="copy-cell">
                       <button
                         className="btn-link"
-                        title="Explore outbound refs"
                         onClick={() => navigate("explore", currentNode.idom!, idomNode?.display_class ?? `#${currentNode.idom}`, "idom")}
-                        style={{ opacity: 0.7 }}
                       >
-                        →
+                        {idomNode ? `${idomNode.display_class.split(".").pop()}#${currentNode.idom}` : `obj#${currentNode.idom}`}
                       </button>
                       <button
                         className="btn-link"
+                        title="Open in dominator tree"
+                        style={{ opacity: 0.6, flexShrink: 0 }}
                         onClick={() => navigate("domtree", currentNode.idom!, idomNode?.display_class ?? `#${currentNode.idom}`, "idom")}
                       >
-                        {idomNode ? `${idomNode.display_class.split(".").pop()}#${currentNode.idom}` : `obj#${currentNode.idom}`}
+                        ⌞
                       </button>
                       {idomNode && <PivotBtn cls={idomNode.display_class} />}
                       {idomNode && <OqlBtn cls={idomNode.display_class} />}
@@ -5995,15 +5999,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     {fieldToChild && (
                       <code style={{ fontSize: "0.72rem", color: "var(--muted)", flexShrink: 0 }}>.{fieldToChild}</code>
                     )}
-                    <button className="btn-link" style={{ fontSize: "0.76rem", opacity: 0.7, flexShrink: 0 }}
-                      title="Explore outbound refs"
-                      onClick={() => navigate("explore", id, n.display_class)}>
-                      →
-                    </button>
                     <button className="btn-link" style={{ fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title={`${n.display_class} · retained ${n.retained} B`}
-                      onClick={() => navigate("domtree", id, n.display_class)}>
+                      onClick={() => navigate("explore", id, n.display_class)}>
                       <code style={{ fontSize: "0.76rem" }}>{n.display_class.split(".").pop()}#{id}</code>
+                    </button>
+                    <button className="btn-link" style={{ fontSize: "0.72rem", opacity: 0.6, flexShrink: 0 }}
+                      title="Open in dominator tree"
+                      onClick={() => navigate("domtree", id, n.display_class)}>
+                      ⌞
                     </button>
                     <span style={{ color: "var(--muted)", flexShrink: 0, fontSize: "0.74rem" }}>{fmtB(n.retained)}</span>
                   </div>
@@ -6031,15 +6035,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 return (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.2rem", fontSize: "0.78rem" }}>
                     {field_name && <code style={{ fontSize: "0.72rem", color: "var(--muted)" }}>.{field_name}</code>}
-                    <button className="btn-link" style={{ fontSize: "0.76rem", opacity: 0.7, flexShrink: 0 }}
-                      title="Explore outbound refs"
-                      onClick={() => navigate("explore", srcIdx, sn?.display_class ?? `#${srcIdx}`, field_name || undefined)}>
-                      →
-                    </button>
                     <button className="btn-link" style={{ fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title={sn?.display_class ?? `obj#${srcIdx}`}
-                      onClick={() => navigate("domtree", srcIdx, sn?.display_class ?? `#${srcIdx}`, field_name || undefined)}>
+                      onClick={() => navigate("explore", srcIdx, sn?.display_class ?? `#${srcIdx}`, field_name || undefined)}>
                       <code style={{ fontSize: "0.76rem" }}>{(sn?.display_class.split(".").pop() ?? sn?.display_class ?? `obj`)}#{srcIdx}</code>
+                    </button>
+                    <button className="btn-link" style={{ fontSize: "0.76rem", opacity: 0.6, flexShrink: 0 }}
+                      title="Open in dominator tree"
+                      onClick={() => navigate("domtree", srcIdx, sn?.display_class ?? `#${srcIdx}`, field_name || undefined)}>
+                      ⌞
                     </button>
                     {sn && <span style={{ color: "var(--muted)", flexShrink: 0, fontSize: "0.74rem" }}>{fmtB(sn.retained)}</span>}
                   </div>
@@ -6068,14 +6072,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       <div style={{ overflow: "hidden", padding: "1px 2px" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", minWidth: 0 }}>
                           <button className="btn-link" title="Explore outbound refs"
-                            style={{ flexShrink: 0 }}
-                            onClick={() => navigate("explore", childId, cn.display_class)}>
-                            →
-                          </button>
-                          <button className="btn-link" title={cn.display_class}
                             style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
-                            onClick={() => navigate("domtree", childId, cn.display_class)}>
+                            onClick={() => navigate("explore", childId, cn.display_class)}>
                             <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
+                          </button>
+                          <button className="btn-link" title="Open in dominator tree"
+                            style={{ flexShrink: 0, opacity: 0.6 }}
+                            onClick={() => navigate("domtree", childId, cn.display_class)}>
+                            ⌞
                           </button>
                           <PivotBtn cls={cn.display_class} />
                           <OqlBtn cls={cn.display_class} />
