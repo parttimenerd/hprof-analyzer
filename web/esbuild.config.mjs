@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 828 KB minified bundle budget (raised to accommodate inbound sub-tab, capture tier indicator, and WASM upgrade banner).
-const BUDGET_BYTES = 828 * 1024;
+// ≤ 836 KB minified bundle budget (raised to accommodate Path to GC Root panel with WASM BFS path + dominator chain).
+const BUDGET_BYTES = 836 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

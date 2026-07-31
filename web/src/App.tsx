@@ -5091,6 +5091,50 @@ function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
 
 // ── Object Graph Explorer (V3 + V4) ──────────────────────────────────────────
 
+function WasmGcPathPanel({ nodeId, session, data, fmtB, navigate }: {
+  nodeId: number;
+  session: any;
+  data: ObjGraphFlat;
+  fmtB: (b: number) => string;
+  navigate: (id: number) => void;
+}) {
+  const [pathData, setPathData] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    setLoading(true);
+    try {
+      const result = JSON.parse(session.gc_root_path(nodeId));
+      setPathData(result.ok ? result : null);
+    } catch { setPathData(null); }
+    setLoading(false);
+  }, [nodeId, session]);
+
+  if (loading) return <p className="subtitle">Computing shortest path…</p>;
+  if (!pathData) return <p className="subtitle">No path to GC root found.</p>;
+
+  return (
+    <div>
+      <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0" }}>
+        Root type: <strong>{pathData.root_type}</strong>
+      </p>
+      {(pathData.path as any[]).map((step: any, i: number) => {
+        const node = data.nodes[String(step.dense_idx)];
+        return (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.82rem", padding: "1px 0" }}>
+            {i > 0 && <span style={{ color: "var(--muted)", marginLeft: "0.5rem" }}>↓{step.field_name ? ` .${step.field_name}` : ""}</span>}
+            <button className="btn-link" style={{ fontFamily: "monospace", flex: 1, textAlign: "left" }}
+              onClick={() => navigate(step.dense_idx)}>
+              {step.display_class || node?.display_class || `obj#${step.dense_idx}`}
+            </button>
+            <span style={{ color: "var(--muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }}>{fmtB(step.retained)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function WasmInboundPanel({ nodeId, session, fmtB, onNavigate }: {
   nodeId: number; session: any; fmtB: (b: number) => string; onNavigate: (id: number) => void;
 }) {
@@ -5146,6 +5190,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [bannerDismissed, setBannerDismissed] = React.useState(
     sessionStorage.getItem("wasm-banner-dismissed") === "1"
   );
+  const [showGcPath, setShowGcPath] = React.useState(false);
+  const [, forceUpdate] = React.useReducer((x: number) => x + 1, 0);
   const [fmtB] = useFmtBytes();
   const containerRef = React.useRef<HTMLDivElement>(null);
   // Remember the last active rootFilter so "⌂ Roots" returns to the filtered list
@@ -5292,6 +5338,19 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     }
     return result;
   }, [nodeId, data.edges]);
+
+  const dominatorChain: number[] = React.useMemo(() => {
+    if (!currentNode || nodeId === null) return [];
+    const chain: number[] = [nodeId];
+    let cursor = currentNode.idom;
+    const seen = new Set<number>([nodeId]);
+    while (cursor != null && !seen.has(cursor)) {
+      chain.push(cursor);
+      seen.add(cursor);
+      cursor = data.nodes[String(cursor)]?.idom ?? null;
+    }
+    return chain; // target → root order; reversed for display
+  }, [currentNode, nodeId, data.nodes]);
 
   // Sorted same-class siblings for prev/next navigation (computed before early returns to satisfy hook rules)
   const currentDisplayClass = nodeId !== null ? (data.nodes[String(nodeId)]?.display_class ?? null) : null;
@@ -5723,6 +5782,24 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         </div>
       )}
 
+      {!bannerDismissed && !!(window as any).__wasmSession && !(window as any).__wasmExploration && (
+        <div style={{ background: "var(--accent-bg, #eff6ff)", border: "1px solid var(--accent-border, #bfdbfe)", borderRadius: 6, padding: "0.4rem 0.6rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
+          <span style={{ flex: 1 }}>
+            WASM session loaded. Enable full exploration to use inbound refs and GC root paths.
+          </span>
+          <button className="copy-btn" style={{ flexShrink: 0 }}
+            onClick={async () => {
+              const session = (window as any).__wasmSession;
+              if (session?.enable_exploration) {
+                await session.enable_exploration();
+                (window as any).__wasmExploration = session;
+                forceUpdate();
+              }
+            }}>Enable →</button>
+          <button className="copy-btn" onClick={() => { sessionStorage.setItem("wasm-banner-dismissed", "1"); setBannerDismissed(true); }} style={{ flexShrink: 0, opacity: 0.6 }} title="Dismiss">✕</button>
+        </div>
+      )}
+
       <div className="obj-explorer">
         {/* Left panel */}
         <div className="obj-explorer-left">
@@ -5956,6 +6033,65 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
                 return <p className="subtitle">No inbound references captured for this object.</p>;
               })()}
+              {/* Path to GC Root */}
+              {currentNode && dominatorChain.length > 0 && (
+                <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-faint, #f0f0f0)", paddingTop: "0.5rem" }}>
+                  <button
+                    className="btn-link"
+                    style={{ fontSize: "0.85rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.3rem" }}
+                    onClick={() => setShowGcPath(v => !v)}
+                  >
+                    {showGcPath ? "▼" : "▶"} Path to GC Root
+                  </button>
+                  {showGcPath && (() => {
+                    const wasmExploration = (window as any).__wasmExploration;
+                    const chainReversed = [...dominatorChain].reverse(); // root → target
+
+                    const domSection = (
+                      <div style={{ marginTop: "0.4rem" }}>
+                        <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0" }}>
+                          Dominator path{" "}
+                          <span title="Objects that dominate this object's memory. Not necessarily the actual reference path." style={{ cursor: "help", borderBottom: "1px dotted var(--muted)" }}>(?)</span>
+                        </p>
+                        {chainReversed.map((idx, i) => {
+                          const node = data.nodes[String(idx)];
+                          return (
+                            <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.82rem", padding: "1px 0" }}>
+                              {i > 0 && <span style={{ color: "var(--muted)", marginLeft: "0.5rem" }}>↓</span>}
+                              <button className="btn-link" style={{ fontFamily: "monospace", flex: 1, textAlign: "left" }}
+                                onClick={() => navigate("explore", idx, node?.display_class ?? `obj#${idx}`)}>
+                                {node?.display_class ?? `obj#${idx}`}
+                              </button>
+                              <span style={{ color: "var(--muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }}>{fmtB(node?.retained ?? 0)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+
+                    if (wasmExploration) {
+                      return (
+                        <>
+                          <div style={{ marginTop: "0.4rem" }}>
+                            <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0", fontWeight: 600 }}>
+                              Shortest reference path (WASM)
+                            </p>
+                            <WasmGcPathPanel
+                              nodeId={nodeId!}
+                              session={wasmExploration}
+                              data={data}
+                              fmtB={fmtB}
+                              navigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)}
+                            />
+                          </div>
+                          {domSection}
+                        </>
+                      );
+                    }
+                    return domSection;
+                  })()}
+                </div>
+              )}
             </>
           ) : (
             <>
