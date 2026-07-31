@@ -506,6 +506,30 @@ pub struct ObjGraphEdge {
     pub child_retained: u64,
 }
 
+/// One inbound reference captured in the static report snapshot.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct InboundEdge {
+    /// Dense index of the object holding the reference to this node.
+    pub src_idx: u32,
+    /// Field name on `src` that points to this node, or "" if unnamed.
+    pub field_name: String,
+    /// Display class of `src`.
+    pub src_class: String,
+    /// Shallow heap of `src`.
+    pub src_shallow: u64,
+    /// Retained heap of `src`.
+    pub src_retained: u64,
+}
+
+/// Parameters used when capturing the object graph snapshot.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CaptureParams {
+    /// Max edges per object (outbound and inbound).
+    pub edge_cap: usize,
+    /// Human-readable tier name: "small", "medium", or "large".
+    pub size_tier: String,
+}
+
 /// One node in the flat object graph lookup table.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ObjGraphFlatNode {
@@ -546,6 +570,16 @@ pub struct ObjGraphFlat {
     pub roots: Vec<u32>,
     /// Minimum retained bytes to be included as a significant node.
     pub sig_floor_bytes: u64,
+    /// Inbound reference snapshot (who points to each captured node).
+    /// Key = dense index (as string in JSON). Only present for nodes in the capture set.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub inbound_edges: std::collections::HashMap<u32, Vec<InboundEdge>>,
+    /// Dense indices of nodes where inbound edges were truncated at edge_cap.
+    #[serde(default, skip_serializing_if = "std::collections::HashSet::is_empty")]
+    pub inbound_truncated: std::collections::HashSet<u32>,
+    /// Capture parameters (tier name, edge_cap) for the UI indicator.
+    #[serde(default)]
+    pub capture_params: CaptureParams,
 }
 
 /// One node of a "merged shortest paths to GC roots" prefix tree (Eclipse MAT
@@ -1445,7 +1479,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// One detected framework's aggregate statistics.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -1614,4 +1648,16 @@ pub struct RetainerRow {
     pub name: String,
     pub kind: String,
     pub retained: u64,
+}
+
+#[cfg(test)]
+mod model_completeness {
+    use super::*;
+    #[test]
+    fn obj_graph_flat_has_inbound_fields() {
+        let flat = ObjGraphFlat::default();
+        let _ = flat.inbound_edges;
+        let _ = flat.inbound_truncated;
+        let _ = &flat.capture_params;
+    }
 }

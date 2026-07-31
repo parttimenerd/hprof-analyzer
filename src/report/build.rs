@@ -47,6 +47,8 @@ fn build_obj_graph_flat(
     g: &Graph,
     dc_offsets: &[u32],
     dc_targets: &[u32],
+    edge_cap: usize,
+    size_tier: &str,
 ) -> ObjGraphFlat {
     use std::collections::{HashMap, HashSet, VecDeque};
     let n = g.n;
@@ -193,6 +195,45 @@ fn build_obj_graph_flat(
         }
     }
 
+    // Populate inbound_edges from ObjGraphCapture.inbound
+    let mut inbound_map: std::collections::HashMap<u32, Vec<InboundEdge>> = std::collections::HashMap::new();
+    let mut inbound_truncated_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    if let Some(cap) = g.obj_graph_edges.as_ref() {
+        for (&dst, raw_inbound) in &cap.inbound {
+            if !nodes.contains_key(&dst) {
+                continue;
+            }
+            let inbound_edges: Vec<InboundEdge> = raw_inbound
+                .iter()
+                .map(|&(src_idx, name_idx)| {
+                    let field_name = if name_idx == 0 {
+                        String::new()
+                    } else {
+                        cap.field_name_pool.get(name_idx as usize).cloned().unwrap_or_default()
+                    };
+                    let src_usize = src_idx as usize;
+                    let src_ci = g.class_idx.get(src_usize).copied().unwrap_or(0) as usize;
+                    let src_class = if src_ci < g.class_names.len() {
+                        pretty_class_name(&g.class_names[src_ci])
+                    } else {
+                        format!("obj#{}", src_idx)
+                    };
+                    let src_shallow = g.shallow.get(src_usize).copied().unwrap_or(0) as u64;
+                    let src_retained = g.retained.get(src_usize).copied().unwrap_or(0);
+                    InboundEdge { src_idx, field_name, src_class, src_shallow, src_retained }
+                })
+                .collect();
+            if !inbound_edges.is_empty() {
+                inbound_map.insert(dst, inbound_edges);
+            }
+        }
+        for &dst in &cap.inbound_truncated {
+            if nodes.contains_key(&dst) {
+                inbound_truncated_set.insert(dst);
+            }
+        }
+    }
+
     // Pre-build depth-3 DomTreeNode trees for top-20 roots
     let display_of = |i: usize| -> String {
         let ci = g.class_idx[i] as usize;
@@ -226,6 +267,12 @@ fn build_obj_graph_flat(
         root_dom_trees,
         roots,
         sig_floor_bytes: sig_floor,
+        inbound_edges: inbound_map,
+        inbound_truncated: inbound_truncated_set,
+        capture_params: CaptureParams {
+            edge_cap,
+            size_tier: size_tier.to_string(),
+        },
     }
 }
 
@@ -336,7 +383,7 @@ pub fn build_model(
     let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let obj_graph_flat = if opts.obj_graph {
-        Some(build_obj_graph_flat(g, dc_offsets, dc_targets))
+        Some(build_obj_graph_flat(g, dc_offsets, dc_targets, opts.report_size.edge_cap(), opts.report_size.tier_name()))
     } else {
         None
     };

@@ -593,6 +593,26 @@
         "avg_shallow"
       ]
     },
+    "CaptureParams": {
+      "description": "Parameters used when capturing the object graph snapshot.",
+      "type": "object",
+      "properties": {
+        "edge_cap": {
+          "description": "Max edges per object (outbound and inbound).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "size_tier": {
+          "description": "Human-readable tier name: \"small\", \"medium\", or \"large\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "edge_cap",
+        "size_tier"
+      ]
+    },
     "CharArrayWaste": {
       "description": "Waste in char[]/byte[] arrays backing Strings. `top` sorted by\nwasted_bytes desc, capped. Additive.",
       "type": "object",
@@ -1999,6 +2019,45 @@
         "rows"
       ]
     },
+    "InboundEdge": {
+      "description": "One inbound reference captured in the static report snapshot.",
+      "type": "object",
+      "properties": {
+        "field_name": {
+          "description": "Field name on `src` that points to this node, or \"\" if unnamed.",
+          "type": "string"
+        },
+        "src_class": {
+          "description": "Display class of `src`.",
+          "type": "string"
+        },
+        "src_idx": {
+          "description": "Dense index of the object holding the reference to this node.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "src_retained": {
+          "description": "Retained heap of `src`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "src_shallow": {
+          "description": "Shallow heap of `src`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "src_idx",
+        "field_name",
+        "src_class",
+        "src_shallow",
+        "src_retained"
+      ]
+    },
     "KindStat": {
       "description": "One kind-bucket of the heap-composition breakdown (B5).",
       "type": "object",
@@ -2227,6 +2286,14 @@
       "description": "Flat lookup table powering V3 + V4 navigation (object graph + dominator explorer).\nOnly present when --obj-graph is used.",
       "type": "object",
       "properties": {
+        "capture_params": {
+          "description": "Capture parameters (tier name, edge_cap) for the UI indicator.",
+          "$ref": "#/$defs/CaptureParams",
+          "default": {
+            "edge_cap": 0,
+            "size_tier": ""
+          }
+        },
         "dom_children": {
           "description": "Immediate dominator children for all significant nodes. Key = parent dense index.",
           "type": "object",
@@ -2254,6 +2321,29 @@
               }
             }
           }
+        },
+        "inbound_edges": {
+          "description": "Inbound reference snapshot (who points to each captured node).\nKey = dense index (as string in JSON). Only present for nodes in the capture set.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InboundEdge"
+              }
+            }
+          }
+        },
+        "inbound_truncated": {
+          "description": "Dense indices of nodes where inbound edges were truncated at edge_cap.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "uniqueItems": true
         },
         "nodes": {
           "description": "All significant nodes (retained >= sig_floor_bytes). Key = dense index (u32).",
