@@ -5801,12 +5801,39 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 const shallowSelf = currentNode.retained - childRetainedTotal;
                 const shallowPct = currentNode.retained > 0 ? (shallowSelf / currentNode.retained * 100).toFixed(0) : "0";
                 const childPct = currentNode.retained > 0 ? (childRetainedTotal / currentNode.retained * 100).toFixed(0) : "0";
+                // Compute how many steps we can skip (single-child chain where child ≥ 95% of parent)
+                let chainEnd: number | null = null;
+                let chainLen = 0;
+                if (currentDomChildren.length === 1) {
+                  let cur = currentDomChildren[0];
+                  while (true) {
+                    const curNode = data.nodes[String(cur)];
+                    if (!curNode) break;
+                    const curChildren = data.dom_children[String(cur)] ?? [];
+                    const frac = currentNode.retained > 0 ? curNode.retained / currentNode.retained : 0;
+                    if (curChildren.length !== 1 || frac < 0.95) { chainEnd = cur; chainLen++; break; }
+                    chainLen++;
+                    cur = curChildren[0];
+                  }
+                }
                 return (
-                  <p className="subtitle" style={{ fontSize: "0.82rem", margin: "0 0 0.4rem" }}>
-                    {currentDomChildren.length} children retaining {fmtB(childRetainedTotal)} ({childPct}%){" "}
-                    + {fmtB(shallowSelf)} ({shallowPct}%) in this object itself.
-                    Click a child to descend.
-                  </p>
+                  <>
+                    <p className="subtitle" style={{ fontSize: "0.82rem", margin: "0 0 0.4rem" }}>
+                      {currentDomChildren.length} children retaining {fmtB(childRetainedTotal)} ({childPct}%){" "}
+                      + {fmtB(shallowSelf)} ({shallowPct}%) in this object itself.
+                      Click a child to descend.
+                    </p>
+                    {chainEnd !== null && chainLen >= 2 && (
+                      <p className="subtitle" style={{ fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
+                        <button className="btn-link" style={{ fontSize: "0.8rem" }}
+                          title={`Skip ${chainLen} single-child steps to reach the first node with multiple dominatees`}
+                          onClick={() => navigate("domtree", chainEnd!, data.nodes[String(chainEnd!)]?.display_class ?? `#${chainEnd}`)}>
+                          Skip {chainLen}-step chain →
+                        </button>
+                        {" "}(single-child dominator chain — all retain ≥95% of this node)
+                      </p>
+                    )}
+                  </>
                 );
               })()}
               {currentDomChildren.length > 5 && (

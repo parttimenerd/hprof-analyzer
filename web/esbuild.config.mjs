@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 822 KB minified bundle budget (raised to accommodate retained bars and UX improvements).
-const BUDGET_BYTES = 822 * 1024;
+// ≤ 827 KB minified bundle budget (raised to accommodate follow-chain feature and UX improvements).
+const BUDGET_BYTES = 827 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
