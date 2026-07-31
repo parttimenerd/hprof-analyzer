@@ -858,6 +858,21 @@ export interface ObjGraphEdge {
   child_retained: number;
 }
 
+// One inbound edge to an object (reverse reference).
+export interface InboundEdge {
+  src_idx: number;
+  field_name: string;
+  src_class: string;
+  src_shallow: number;
+  src_retained: number;
+}
+
+// Capture parameters for object graph extraction.
+export interface CaptureParams {
+  edge_cap: number;
+  size_tier: string;  // "small" | "medium" | "large"
+}
+
 // One node entry in the flat object graph lookup table.
 export interface ObjGraphFlatNode {
   display_class: string;
@@ -878,6 +893,9 @@ export interface ObjGraphFlat {
   root_dom_trees?: [number, DomTreeNode][];
   roots: number[];
   sig_floor_bytes: number;
+  inbound_edges?: Record<string, InboundEdge[]>;   // key = dense idx as string
+  inbound_truncated?: number[];                     // dense indices where inbound was cut
+  capture_params?: CaptureParams;
 }
 
 // ── Type-Level Reference Graph (TPFG, V13) ────────────────────────────────────
