@@ -5686,6 +5686,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {currentNode.edges_truncated && (
                 <p className="subtitle">Showing first 100 of more edges.</p>
               )}
+              {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && (
+                <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                  All fields unnamed — re-run with <code>--ref-paths</code> to see field names.
+                </p>
+              )}
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
                 <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references (leaf object or all refs are to primitives)."}</p>
               )}
@@ -5761,7 +5766,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 <span style={{ display: "inline-block", width: `${Math.max(2, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${pct < 0.01 ? (pct * 100).toFixed(1) : (pct * 100).toFixed(0)}% of parent retained`} />
                               )}
                               {fmtB(edge.total_retained)}
-                              {pct > 0 && (
+                              {pct >= 0.0005 && (
                                 <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
                                   {pct < 0.01 ? `${(pct * 100).toFixed(1)}%` : `${(pct * 100).toFixed(0)}%`}
                                 </span>
@@ -5931,7 +5936,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(1)}% of parent`} />
                               )}
                               {fmtB(cn.retained)}
-                              {pct > 0 && (
+                              {pct >= 0.005 && (
                                 <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
                                   {(pct * 100).toFixed(0)}%
                                 </span>
@@ -6154,7 +6159,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       </div>
                       <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px" }} title={`${cn.retained} B`}>{fmtB(cn.retained)}</div>
                       <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px", color: "var(--muted)", fontSize: "0.8rem" }}>
-                        {currentNode.retained > 0 ? `${(cn.retained / currentNode.retained * 100).toFixed(0)}%` : "—"}
+                        {currentNode.retained > 0 ? (() => {
+                          const p = cn.retained / currentNode.retained;
+                          return p >= 0.005 ? `${(p * 100).toFixed(0)}%` : p > 0 ? `${(p * 100).toFixed(1)}%` : "—";
+                        })() : "—"}
                       </div>
                     </React.Fragment>
                   );
