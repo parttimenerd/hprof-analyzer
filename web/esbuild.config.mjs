@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 820 KB minified bundle budget (raised to accommodate OqlBtn coverage across all class cells).
-const BUDGET_BYTES = 820 * 1024;
+// ≤ 822 KB minified bundle budget (raised to accommodate retained bars and UX improvements).
+const BUDGET_BYTES = 822 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

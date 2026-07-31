@@ -5093,6 +5093,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [jumpInput, setJumpInput] = React.useState("");
   const [pendingLabel, setPendingLabel] = React.useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
+  // Per-node pending expand groups: nodeId → groupKey. Survives state-reset races during navigation.
+  const pendingExpandByNode = React.useRef<Map<number, string>>(new Map());
   const [domFilter, setDomFilter] = React.useState("");
   const [refFilter, setRefFilter] = React.useState("");
   const [rootFilter, setRootFilter] = React.useState("");
@@ -5128,6 +5130,17 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     return () => window.removeEventListener("hashchange", listener);
   }, []);
 
+  // Apply any pending group expansion after nodeId settles (survives state-reset races)
+  React.useEffect(() => {
+    if (nodeId !== null && pendingExpandByNode.current.has(nodeId)) {
+      const key = pendingExpandByNode.current.get(nodeId)!;
+      pendingExpandByNode.current.delete(nodeId);
+      setExpandedGroups(new Set([key]));
+    } else {
+      setExpandedGroups(new Set());
+    }
+  }, [nodeId]);
+
   // Keyboard: Escape / Alt+Left = go back in explorer
   React.useEffect(() => {
     if (nodeId === null) return;
@@ -5151,16 +5164,17 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [nodeId, tab]);
 
-  const navigate = (newTab: "explore" | "domtree", id: number, childClass: string, edgeLabel?: string) => {
+  const navigate = (newTab: "explore" | "domtree", id: number, childClass: string, edgeLabel?: string, expandGroup?: string) => {
     // Save rootFilter so going back to root list restores the filter context
     if (nodeId === null) savedRootFilter.current = rootFilter;
+    // Store which group should be auto-expanded when returning to the current node
+    if (expandGroup && nodeId !== null) pendingExpandByNode.current.set(nodeId, expandGroup);
     setBreadcrumb(prev => {
       if (nodeId === null) return [];
       return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass }];
     });
     setPendingLabel(childClass);
     setPage(0);
-    setExpandedGroups(new Set());
     setDomFilter("");
     setRefFilter("");
     setRootFilter("");
@@ -5356,11 +5370,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         <table className="std-table">
           <thead>
             <tr>
-              <th>{rootFilter ? "Class" : "Class (click → refs, ⌞ → dom tree)"}</th>
+              <th>Class</th>
               <th style={{ whiteSpace: "nowrap" }} title="Dense index — use in 'Go to obj #' to navigate directly">#</th>
               <th>Shallow</th>
-              <th>Retained</th>
-              <th>% Heap</th>
+              <th style={{ textAlign: "right" }}>Retained</th>
+              <th style={{ textAlign: "right" }}>% Heap</th>
             </tr>
           </thead>
           <tbody>
@@ -5383,8 +5397,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </td>
                 <td style={{ color: "var(--muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>{id}</td>
                 <td>{fmtB(node.shallow)}</td>
-                <td>{fmtB(node.retained)}</td>
-                <td>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
+                    {totalHeap > 0 && node.retained / totalHeap > 0.01 && (
+                      <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(node.retained / totalHeap * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} />
+                    )}
+                    {fmtB(node.retained)}
+                  </span>
+                </td>
+                <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
               </tr>
             );})}
           </tbody>
@@ -5454,9 +5475,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </button>
           </div>
           <p className="subtitle" style={{ margin: "0 0 0.4rem" }}>
-            This object was referenced from{breadcrumb.length > 0
-              ? <> <strong>{breadcrumb[breadcrumb.length - 1].label.split(".").pop()}#{breadcrumb[breadcrumb.length - 1].nodeId}</strong> but is</>
-              : " above but is"
+            This object was referenced{breadcrumb.length > 0 ? (() => {
+              const parent = breadcrumb[breadcrumb.length - 1];
+              const parentShort = parent.label.split(".").pop();
+              const field = parent.edge && parent.edge !== parent.label && !parent.edge.includes(".") && /^[a-zA-Z_$]/.test(parent.edge)
+                ? <> via field <code>.{parent.edge}</code></> : null;
+              return <> from <strong>{parentShort}#{parent.nodeId}</strong>{field} but is</>;
+            })() : " above but is"
             } below the significance threshold
             (top 10,000 by shallow heap, ≥{fmtB(data.sig_floor_bytes)} retained).
             Re-run with a larger <code>--top-n</code> to include it.
@@ -5637,7 +5662,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <thead>
                     <tr>
                       <th>Field</th>
-                      <th>Child class (click → refs, ⌞ → dom tree)</th>
+                      <th>Child class</th>
                       <th style={{ textAlign: "right" }}>Retained</th>
                       <th></th>
                     </tr>
@@ -5645,6 +5670,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <tbody>
                     {pagedEdges.flatMap((edge, i) => {
                       const isExpanded = expandedGroups.has(edge.groupKey);
+                      const pct = currentNode.retained > 0 && !edge.any_shared ? edge.total_retained / currentNode.retained : 0;
                       const rows: React.ReactNode[] = [];
                       rows.push(
                         <tr key={i}>
@@ -5654,7 +5680,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               <button
                                 className="btn-link"
                                 style={{ marginLeft: "0.35rem", fontSize: "0.75rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 4, padding: "0 4px" }}
-                                title={isExpanded ? "Collapse individual entries" : "Expand to see all individual entries"}
+                                title={isExpanded ? "Collapse" : `Expand — show all ${edge.count} instances`}
                                 onClick={() => setExpandedGroups(prev => {
                                   const next = new Set(prev);
                                   if (next.has(edge.groupKey)) next.delete(edge.groupKey); else next.add(edge.groupKey);
@@ -5668,10 +5694,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           <td>
                             <span className="copy-cell">
                               <button className="btn-link"
-                                onClick={() => navigate("explore", edge.child_idx, edge.child_class, edge.field_name || undefined)}>
+                                title={edge.count > 1 ? `Navigate to biggest instance (×${edge.count} total)` : "Navigate to outbound refs"}
+                                onClick={() => {
+                                  navigate("explore", edge.child_idx, edge.child_class, edge.field_name || undefined, edge.count > 1 ? edge.groupKey : undefined);
+                                }}>
                                 <code>{edge.child_class}</code>
                               </button>
-                              <button className="btn-link" title="Open dominator tree"
+                              <button className="btn-link" title="Open in dominator tree"
                                 style={{ opacity: 0.6, flexShrink: 0 }}
                                 onClick={() => navigate("domtree", edge.child_idx, edge.child_class, edge.field_name || undefined)}>
                                 ⌞
@@ -5681,16 +5710,21 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             </span>
                           </td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                            {fmtB(edge.total_retained)}
-                            {currentNode.retained > 0 && !edge.any_shared && (
-                              <span style={{ color: "var(--muted)", fontSize: "0.78rem", marginLeft: "0.2rem" }}>
-                                {(edge.total_retained / currentNode.retained * 100).toFixed(0)}%
-                              </span>
-                            )}
+                            <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
+                              {pct > 0.01 && (
+                                <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(0)}% of parent`} />
+                              )}
+                              {fmtB(edge.total_retained)}
+                              {pct > 0 && (
+                                <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                                  {(pct * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </span>
                           </td>
                           <td>
                             {edge.any_shared && (
-                              <span className="shared-badge" title="Shared: this child's retained heap is counted in another object's subtree, not this one — the retained value here is a gross sum across all copies">&#8635; shared</span>
+                              <span className="shared-badge" title="Shared: this child's retained heap belongs to another subtree — value is a gross sum">&#8635; shared</span>
                             )}
                           </td>
                         </tr>
@@ -5784,11 +5818,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <table className="std-table">
                   <thead>
                     <tr>
-                      <th>Class (click ⌞ domtree, → refs)</th>
+                      <th>Class</th>
                       <th>Shallow</th>
-                      <th>Retained</th>
-                      <th>% of parent</th>
-                      <th>% Heap</th>
+                      <th style={{ textAlign: "right" }}>Retained</th>
+                      <th style={{ textAlign: "right" }}>% Heap</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -5799,6 +5832,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     }).map(childId => {
                       const cn = data.nodes[String(childId)];
                       if (!cn) return null;
+                      const pct = currentNode.retained > 0 ? cn.retained / currentNode.retained : 0;
                       return (
                         <tr key={childId}>
                           <td>
@@ -5810,6 +5844,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </button>
                               <button
                                 className="btn-link"
+                                title="Open in dominator tree"
                                 onClick={() => navigate("domtree", childId, cn.display_class)}
                               >
                                 <code>{cn.display_class}</code>
@@ -5819,13 +5854,20 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             </span>
                           </td>
                           <td>{fmtB(cn.shallow)}</td>
-                          <td>{fmtB(cn.retained)}</td>
-                          <td>
-                            {currentNode.retained > 0
-                              ? (cn.retained / currentNode.retained * 100).toFixed(1)
-                              : "—"}%
+                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                            <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
+                              {pct > 0.01 && (
+                                <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(1)}% of parent`} />
+                              )}
+                              {fmtB(cn.retained)}
+                              {pct > 0 && (
+                                <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                                  {(pct * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </span>
                           </td>
-                          <td>
+                          <td style={{ textAlign: "right" }}>
                             {totalHeap > 0
                               ? (cn.retained / totalHeap * 100).toFixed(1)
                               : "—"}%
@@ -5864,7 +5906,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   </span>
                   {classSiblings.length > 1 && (
                     <button className="btn-link" style={{ fontSize: "0.76rem", color: "var(--muted)", marginLeft: "0.3rem" }}
-                      title={`Show all ${classSiblings.length} ${currentNode.display_class.split(".").pop()} instances in captured graph`}
+                      title={`Show all ${classSiblings.length} ${currentNode.display_class.split(".").pop()} instances in captured graph (${fmtB(classSiblings.reduce((s, x) => s + x.retained, 0))} total retained)`}
                       onClick={() => goToRoot(currentNode.display_class)}>
                       {classSiblings.length} instances ↗
                     </button>
@@ -6015,7 +6057,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <div style={{ marginTop: "0.75rem" }}>
               <h4 style={{ margin: "0 0 0.4rem" }}>Dominator children ({currentDomChildren.length})</h4>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 44px", fontSize: "0.84rem", gap: "0 0" }}>
-                <div style={{ fontWeight: 600, padding: "2px 4px", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Class (→ refs, name → ⌞ domtree)</div>
+                <div style={{ fontWeight: 600, padding: "2px 4px", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Class</div>
                 <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Retained</div>
                 <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)", color: "var(--muted)" }}>%</div>
                 {currentDomChildren.slice(0, 10).map(childId => {
