@@ -21,6 +21,14 @@ fn call_progress(cb: &js_sys::Function, phase: &str, fraction: f32) {
     );
 }
 // ──────────────────────────────────────────────────────────────────────────────
+// ExplorationData
+// ──────────────────────────────────────────────────────────────────────────────
+
+struct ExplorationData {
+    result: hprof_analyzer::ExplorationResult,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // HprofSession
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -37,6 +45,7 @@ pub struct HprofSession {
     retained: Vec<u64>,
     cache: Option<hprof_analyzer::query::run::ReplCache>,
     cached_report_html: Option<String>,
+    exploration: Option<ExplorationData>,
 }
 
 #[wasm_bindgen]
@@ -121,6 +130,7 @@ impl HprofSession {
             retained: Vec::new(),
             cache: Some(cache),
             cached_report_html: None,
+            exploration: None,
         })
     }
 
@@ -409,6 +419,7 @@ impl HprofSession {
             retained: Vec::new(),
             cache: Some(cache),
             cached_report_html: None,
+            exploration: None,
         })
     }
 
@@ -480,11 +491,261 @@ impl HprofSession {
             .collect();
         serde_json::Value::Array(arr).to_string()
     }
+
+    /// Build and cache the inbound CSR for interactive exploration (BFS queries).
+    /// Must be called before `inbound_refs()` or `gc_root_path()`.
+    /// If `run_full_analysis()` has been called, retained sizes are included.
+    pub fn enable_exploration(&mut self) -> Result<(), wasm_bindgen::JsValue> {
+        let retained = &self.retained;
+        let result = hprof_analyzer::build_exploration(&self.source, retained)
+            .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
+        self.exploration = Some(ExplorationData { result });
+        Ok(())
+    }
+
+    /// Returns a JSON object listing inbound referrers of the given dense object index.
+    ///
+    /// Returns `{"ok":true,"refs":[...],"total":N,"truncated":bool}` on success,
+    /// or `{"error":"exploration_not_enabled"}` if `enable_exploration()` was not called.
+    ///
+    /// Each ref entry: `{"src_idx":N,"field_name":"","display_class":"...","shallow":N,"retained":N}`
+    pub fn inbound_refs(&self, dense_idx: u32, limit: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let dense = dense_idx as usize;
+        let pre = exp.dense_to_pre.get(dense).copied().unwrap_or(u32::MAX);
+        if pre == u32::MAX {
+            return serde_json::json!({"ok":true,"refs":[],"total":0,"truncated":false})
+                .to_string();
+        }
+
+        let limit = limit as usize;
+        let (parent_pres, total) = decode_inbound_parents(
+            pre as usize,
+            &exp.inb_block_off,
+            &exp.inb_data,
+            exp.inb_block,
+            limit,
+        );
+
+        let refs: Vec<serde_json::Value> = parent_pres
+            .iter()
+            .map(|&parent_pre| {
+                let src_dense =
+                    exp.rpo_vertex.get(parent_pre as usize).copied().unwrap_or(u32::MAX);
+                let src = src_dense as usize;
+                let display_class =
+                    exp.class_names_by_idx.get(src).cloned().unwrap_or_default();
+                let shallow = exp.shallow.get(src).copied().unwrap_or(0) as u64;
+                let retained = exp.retained.get(src).copied().unwrap_or(0);
+                serde_json::json!({
+                    "src_idx": src_dense,
+                    "field_name": "",
+                    "display_class": display_class,
+                    "shallow": shallow,
+                    "retained": retained,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "ok": true,
+            "refs": refs,
+            "total": total,
+            "truncated": total > limit,
+        })
+        .to_string()
+    }
+
+    /// BFS from `dense_idx` to the nearest GC root through inbound edges.
+    ///
+    /// Returns `{"ok":true,"path":[...],"root_type":"..."}` on success,
+    /// `{"ok":false,"error":"no_path"}` if no path was found,
+    /// or `{"error":"exploration_not_enabled"}` if `enable_exploration()` was not called.
+    ///
+    /// Path is ordered root → target. Each node: `{"dense_idx":N,"display_class":"...","shallow":N,"retained":N,"field_name":""}`
+    pub fn gc_root_path(&self, dense_idx: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<(u32, Vec<u32>)> =
+            std::collections::VecDeque::new();
+        queue.push_back((dense_idx, vec![dense_idx]));
+        visited.insert(dense_idx);
+
+        while let Some((current, path)) = queue.pop_front() {
+            if exp.gc_root_set.contains(&current) {
+                let root_type_idx = exp.gc_root_indices.iter().position(|&r| r == current);
+                let root_type = root_type_idx
+                    .and_then(|i| exp.gc_root_types.get(i).copied())
+                    .map(gc_root_type_label)
+                    .unwrap_or("GC_ROOT");
+
+                // path is target→root order; reverse to root→target for display
+                let path_json: Vec<serde_json::Value> = path
+                    .iter()
+                    .rev()
+                    .map(|&idx| {
+                        let i = idx as usize;
+                        serde_json::json!({
+                            "dense_idx": idx,
+                            "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
+                            "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+                            "retained": exp.retained.get(i).copied().unwrap_or(0),
+                            "field_name": "",
+                        })
+                    })
+                    .collect();
+
+                return serde_json::json!({
+                    "ok": true,
+                    "path": path_json,
+                    "root_type": root_type,
+                })
+                .to_string();
+            }
+
+            if path.len() > 100 {
+                break;
+            }
+
+            let pre =
+                exp.dense_to_pre.get(current as usize).copied().unwrap_or(u32::MAX);
+            if pre != u32::MAX {
+                let (parents, _) = decode_inbound_parents(
+                    pre as usize,
+                    &exp.inb_block_off,
+                    &exp.inb_data,
+                    exp.inb_block,
+                    64,
+                );
+                for parent_pre in parents {
+                    let parent_dense = exp
+                        .rpo_vertex
+                        .get(parent_pre as usize)
+                        .copied()
+                        .unwrap_or(u32::MAX);
+                    if parent_dense != u32::MAX && visited.insert(parent_dense) {
+                        let mut new_path = path.clone();
+                        new_path.push(parent_dense);
+                        queue.push_back((parent_dense, new_path));
+                    }
+                }
+            }
+        }
+
+        serde_json::json!({"ok": false, "error": "no_path"}).to_string()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Free functions
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Decode a single vbyte (little-endian base-128) value from `data[pos..]`.
+/// Returns `(value, bytes_consumed)` or `None` if out of bounds.
+/// MSB=1 means continuation byte; MSB=0 means final byte.
+fn vbyte_decode(data: &[u8], pos: usize) -> Option<(u32, usize)> {
+    let mut val = 0u32;
+    let mut shift = 0u32;
+    let mut i = pos;
+    loop {
+        if i >= data.len() {
+            return None;
+        }
+        let b = data[i];
+        i += 1;
+        val |= ((b & 0x7f) as u32) << shift;
+        if b & 0x80 == 0 {
+            return Some((val, i - pos));
+        }
+        shift += 7;
+        if shift >= 35 {
+            return None; // overflow guard
+        }
+    }
+}
+
+/// Decode the inbound parent pre-order list for node `pre` from the blocked CSR.
+/// Returns `(parent_pres, total_count)`. At most `limit` parents are returned.
+fn decode_inbound_parents(
+    pre: usize,
+    inb_block_off: &[u64],
+    inb_data: &[u8],
+    inb_block: usize,
+    limit: usize,
+) -> (Vec<u32>, usize) {
+    let block = pre / inb_block;
+    if block >= inb_block_off.len() {
+        return (vec![], 0);
+    }
+
+    let mut pos = inb_block_off[block] as usize;
+
+    // Skip past entries for nodes in this block before `pre`
+    let block_start = block * inb_block;
+    for _ in block_start..pre {
+        // Read count
+        let (cnt, c0) = match vbyte_decode(inb_data, pos) {
+            Some(x) => x,
+            None => return (vec![], 0),
+        };
+        pos += c0;
+        // Skip `cnt` delta values
+        for _ in 0..cnt {
+            let (_, c1) = match vbyte_decode(inb_data, pos) {
+                Some(x) => x,
+                None => return (vec![], 0),
+            };
+            pos += c1;
+        }
+    }
+
+    // Now at node `pre`
+    let (cnt, c0) = match vbyte_decode(inb_data, pos) {
+        Some(x) => x,
+        None => return (vec![], 0),
+    };
+    pos += c0;
+
+    let total = cnt as usize;
+    let mut parents: Vec<u32> = Vec::with_capacity(total.min(limit));
+    let mut prev: u32 = 0;
+    for _ in 0..total {
+        let (delta, c) = match vbyte_decode(inb_data, pos) {
+            Some(x) => x,
+            None => break,
+        };
+        pos += c;
+        prev = prev.wrapping_add(delta);
+        parents.push(prev);
+        if parents.len() >= limit {
+            break;
+        }
+    }
+    (parents, total)
+}
+
+/// Map a GC root HPROF sub-tag byte to a human-readable label.
+fn gc_root_type_label(tag: u8) -> &'static str {
+    match tag {
+        0x01 => "JNI_GLOBAL",
+        0x02 => "JNI_LOCAL",
+        0x03 => "JAVA_FRAME",
+        0x04 => "NATIVE_STACK",
+        0x05 => "STICKY_CLASS",
+        0x06 => "THREAD_BLOCK",
+        0x07 => "MONITOR_USED",
+        0x08 => "THREAD_OBJECT",
+        _ => "GC_ROOT",
+    }
+}
 
 /// Gzip-compress an owned byte buffer.
 ///

@@ -106,6 +106,129 @@ pub fn analyze_to_report_with_progress(
     analyze_to_report_inner(source, opts, progress)
 }
 
+/// Data retained after `build_exploration`, used for per-object BFS queries.
+pub struct ExplorationResult {
+    /// Block-sampled byte offsets into `inb_data`; one entry per INB_BLOCK nodes.
+    pub inb_block_off: Vec<u64>,
+    /// Vbyte-encoded inbound parent lists.
+    pub inb_data: Vec<u8>,
+    /// Dense indices that are GC roots (BFS stop condition).
+    pub gc_root_set: std::collections::HashSet<u32>,
+    /// GC root dense indices (1:1 with gc_root_types).
+    pub gc_root_indices: Vec<u32>,
+    /// GC root type tag per gc_root_index.
+    pub gc_root_types: Vec<u8>,
+    /// Object count.
+    pub n: usize,
+    /// Dense index → retained heap (bytes). May be zeros if retained not computed.
+    pub retained: Vec<u64>,
+    /// Dense index → class name string.
+    pub class_names_by_idx: Vec<String>,
+    /// Dense index → shallow heap (u32).
+    pub shallow: Vec<u32>,
+    /// pre-order → dense index mapping (rpo.vertex).
+    pub rpo_vertex: Vec<u32>,
+    /// Dense index → pre-order (inverse of rpo_vertex; u32::MAX = not in RPO).
+    pub dense_to_pre: Vec<u32>,
+    /// INB_BLOCK constant (needed by decoder).
+    pub inb_block: usize,
+}
+
+/// Build inbound CSR for interactive exploration (no report, no dominators).
+/// Called by the WASM session's `enable_exploration()`.
+pub fn build_exploration(
+    source: &crate::source::HprofSource,
+    retained: &[u64],
+) -> std::io::Result<ExplorationResult> {
+    let p1 = pass1::Pass1::run(source, false)?;
+    let n = p1.class_ids.len();
+
+    let compress = cvec::Codec::Deflate9;
+    let opts = AnalyzeOptions::default();
+    let mut no_in_sets = std::collections::HashMap::new();
+    let mut no_exists_bools = std::collections::HashMap::new();
+    let (
+        mut g,
+        mut inbound,
+        shallow_c,
+        class_idx_c,
+        _alloc_serial_c,
+        _query_state,
+        _refwalk_csr,
+        _string_values,
+        _string_values_truncated,
+    ) = pass2::Pass2::build(
+        source,
+        p1,
+        compress,
+        &opts,
+        &[],
+        &mut no_in_sets,
+        &mut no_exists_bools,
+    )?;
+
+    inbound.compress_id_map(compress)?;
+
+    let rpo = rpo_dfs::rpo_dfs(n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+
+    let (inb_block_off, inb_data) = inbound.build_from_fwd(
+        std::mem::take(&mut g.fwd_offsets),
+        std::mem::take(&mut g.fwd_targets),
+        &rpo.dfn,
+    )?;
+
+    // Rebuild vertex from dfn before we lose dfn
+    let rpo_vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
+
+    // Build dense_to_pre inverse mapping
+    let mut dense_to_pre = vec![u32::MAX; n];
+    for (pre, &dense) in rpo_vertex.iter().enumerate() {
+        if (dense as usize) < n {
+            dense_to_pre[dense as usize] = pre as u32;
+        }
+    }
+
+    let gc_root_set: std::collections::HashSet<u32> =
+        g.gc_root_indices.iter().copied().collect();
+
+    // Decompress shallow + class_idx for class name lookup
+    let shallow: Vec<u32> = shallow_c.restore()?;
+    let class_idx: Vec<u32> = class_idx_c.restore()?;
+
+    let class_names_by_idx: Vec<String> = class_idx
+        .iter()
+        .map(|&ci| {
+            let ci = ci as usize;
+            if ci < g.class_names.len() {
+                g.class_names[ci].replace('/', ".").replace("[[", "[").to_string()
+            } else {
+                format!("obj#{}", ci)
+            }
+        })
+        .collect();
+
+    let retained_vec: Vec<u64> = if retained.len() == n {
+        retained.to_vec()
+    } else {
+        vec![0u64; n]
+    };
+
+    Ok(ExplorationResult {
+        inb_block_off,
+        inb_data,
+        gc_root_set,
+        gc_root_indices: g.gc_root_indices.clone(),
+        gc_root_types: g.gc_root_types.clone(),
+        n,
+        retained: retained_vec,
+        class_names_by_idx,
+        shallow,
+        rpo_vertex,
+        dense_to_pre,
+        inb_block: pass2::INB_BLOCK,
+    })
+}
+
 fn analyze_to_report_inner(
     source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
