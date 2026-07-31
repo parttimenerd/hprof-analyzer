@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 836 KB minified bundle budget (raised to accommodate Path to GC Root panel with WASM BFS path + dominator chain).
-const BUDGET_BYTES = 836 * 1024;
+// ≤ 840 KB minified bundle budget (raised from 827 KB to accommodate inbound refs + GC root path explorer feature).
+const BUDGET_BYTES = 840 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
