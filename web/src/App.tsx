@@ -1184,8 +1184,12 @@ function ExploreBtn({ denseIdx, label }: { denseIdx: number; label?: string }) {
   if (!nodes || nodes[String(denseIdx)] == null) return null;
   const click = (e: React.MouseEvent) => {
     e.stopPropagation();
-    window.location.hash = `explore/${denseIdx}`;
-    document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+    if ((window as any).__explorerNavigate) {
+      (window as any).__explorerNavigate("explore", denseIdx);
+    } else {
+      window.location.hash = `explore/${denseIdx}`;
+      document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+    }
   };
   return (
     <button className="copy-btn" onClick={click}
@@ -2046,7 +2050,7 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
           return (
             <g key={i}
               style={inGraph ? { cursor: "pointer" } : undefined}
-              onClick={inGraph ? () => { window.location.hash = `explore/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); } : undefined}
+              onClick={inGraph ? () => { (window as any).__explorerNavigate?.("explore", denseIdx) ?? (window.location.hash = `explore/${denseIdx}`); } : undefined}
               role={inGraph ? "button" : undefined}
               aria-label={inGraph ? `Explore ${step.display_class} in Object Graph` : undefined}
             >
@@ -2643,13 +2647,13 @@ function TopConsumersSection({ report }: { report: Report }) {
           <OqlBtn cls={o.display_class} />
           {inGraph && (
             <button className="copy-btn" title="Explore outbound references in Object Graph"
-              onClick={() => { window.location.hash = `explore/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); }}>
+              onClick={() => { (window as any).__explorerNavigate?.("explore", denseIdx) ?? (window.location.hash = `explore/${denseIdx}`); }}>
               →
             </button>
           )}
           {inGraph && (
             <button className="copy-btn" title="Open dominator tree in Object Graph"
-              onClick={() => { window.location.hash = `domtree/${denseIdx}`; document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" }); }}>
+              onClick={() => { (window as any).__explorerNavigate?.("domtree", denseIdx) ?? (window.location.hash = `domtree/${denseIdx}`); }}>
               ⌞
             </button>
           )}
@@ -4989,7 +4993,8 @@ function QueryCell({ val, colName, hasObjGraph }: { val: QueryValue; colName: st
         <PivotBtn cls={cls} />
         <OqlBtn cls={cls} />
         {hasObjGraph && (
-          <a href={`#explore/${idx}`} className="copy-btn" title="Open in Object Graph Explorer" style={{ textDecoration: "none", visibility: "visible" }}>⬡↗</a>
+          <button className="copy-btn" title="Open in Object Graph Explorer" style={{ visibility: "visible" }}
+            onClick={() => (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`)}>⬡↗</button>
         )}
       </span>
     );
@@ -5106,18 +5111,25 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   // Remember the last active rootFilter so "⌂ Roots" returns to the filtered list
   const savedRootFilter = React.useRef("");
+  // Track which node was last navigated to via navigate() so external hash changes can clear the breadcrumb
+  const lastInternalNavRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     const onHash = (fromEvent: boolean) => {
       const h = window.location.hash;
       const m = h.match(/^#(explore|domtree)\/(\d+)$/);
       if (m) {
+        const newId = parseInt(m[2], 10);
         setTab(m[1] as "explore" | "domtree");
-        setNodeId(parseInt(m[2], 10));
+        setNodeId(newId);
         setPage(0);
         setShowSvg(false);
         setShowAllInbound(false);
         setPathDepth(8);
+        // External navigation (from elsewhere in the report or direct URL): clear breadcrumb
+        if (lastInternalNavRef.current !== newId) {
+          setBreadcrumb([]);
+        }
         if (fromEvent) {
           setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
         }
@@ -5155,6 +5167,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       setBreadcrumb(prev => {
         if (prev.length > 0) {
           const last = prev[prev.length - 1];
+          lastInternalNavRef.current = last.nodeId;
           window.location.hash = `${last.sourceTab ?? tab}/${last.nodeId}`;
           return prev.slice(0, -1);
         }
@@ -5175,6 +5188,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       if (nodeId === null) return [];
       return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass, sourceTab: tab }];
     });
+    lastInternalNavRef.current = id;
     setPendingLabel(childClass);
     setPage(0);
     setDomFilter("");
@@ -5193,6 +5207,30 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     setRootFilter(newFilter);
     window.location.hash = "object-graph";
   };
+
+  // Expose an external entry-point so buttons outside the explorer can navigate here
+  // without leaving stale breadcrumb state. Sets hash and clears breadcrumb atomically.
+  React.useEffect(() => {
+    (window as any).__explorerNavigate = (tab: string, id: number) => {
+      lastInternalNavRef.current = null; // mark as external
+      setBreadcrumb([]);
+      const hash = `${tab}/${id}`;
+      if (window.location.hash === `#${hash}`) {
+        // Hash won't change → manually trigger the same logic as onHash
+        setTab(tab as "explore" | "domtree");
+        setNodeId(id);
+        setPage(0);
+        setShowSvg(false);
+        setShowAllInbound(false);
+        setPathDepth(8);
+        setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      } else {
+        window.location.hash = hash;
+        setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      }
+    };
+    return () => { delete (window as any).__explorerNavigate; };
+  }, []);
 
   const currentNode: ObjGraphFlatNode | null =
     nodeId !== null ? (data.nodes[String(nodeId)] ?? null) : null;
@@ -5532,6 +5570,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 className="breadcrumb-item"
                 onClick={() => {
                   setBreadcrumb(prev => prev.slice(0, i));
+                  lastInternalNavRef.current = b.nodeId;
                   window.location.hash = `${b.sourceTab ?? tab}/${b.nodeId}`;
                 }}
                 title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
@@ -5571,6 +5610,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           if (breadcrumb.length > 0) {
             const prev = breadcrumb[breadcrumb.length - 1];
             setBreadcrumb(b => b.slice(0, -1));
+            lastInternalNavRef.current = prev.nodeId;
             window.location.hash = `${prev.sourceTab ?? tab}/${prev.nodeId}`;
           } else {
             goToRoot();
@@ -5717,13 +5757,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           </td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                             <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
-                              {pct > 0.01 && (
-                                <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(0)}% of parent`} />
+                              {pct > 0.001 && (
+                                <span style={{ display: "inline-block", width: `${Math.max(2, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${pct < 0.01 ? (pct * 100).toFixed(1) : (pct * 100).toFixed(0)}% of parent retained`} />
                               )}
                               {fmtB(edge.total_retained)}
                               {pct > 0 && (
                                 <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
-                                  {(pct * 100).toFixed(0)}%
+                                  {pct < 0.01 ? `${(pct * 100).toFixed(1)}%` : `${(pct * 100).toFixed(0)}%`}
                                 </span>
                               )}
                             </span>
