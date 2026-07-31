@@ -5091,6 +5091,41 @@ function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
 
 // ── Object Graph Explorer (V3 + V4) ──────────────────────────────────────────
 
+function WasmInboundPanel({ nodeId, session, fmtB, onNavigate }: {
+  nodeId: number; session: any; fmtB: (b: number) => string; onNavigate: (id: number) => void;
+}) {
+  const [refs, setRefs] = React.useState<any[]>([]);
+  const [total, setTotal] = React.useState(0);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    setLoading(true);
+    try {
+      const r = JSON.parse(session.inbound_refs(nodeId, 200));
+      if (r.ok) { setRefs(r.refs); setTotal(r.total); }
+    } catch {}
+    setLoading(false);
+  }, [nodeId, session]);
+  if (loading) return <p className="subtitle">Loading…</p>;
+  if (!refs.length) return <p className="subtitle">No inbound refs found.</p>;
+  return (
+    <>
+      <table className="std-table">
+        <thead><tr><th>Class</th><th style={{ textAlign: "right" }}>Shallow</th><th style={{ textAlign: "right" }}>Retained</th></tr></thead>
+        <tbody>
+          {refs.map((r: any, i: number) => (
+            <tr key={i}>
+              <td><button className="btn-link" onClick={() => onNavigate(r.src_idx)}><code>{r.display_class}</code></button></td>
+              <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
+              <td style={{ textAlign: "right" }}>{fmtB(r.retained)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {total > refs.length && <p className="subtitle" style={{ fontSize: "0.78rem" }}>Showing {refs.length} of {total} inbound refs.</p>}
+    </>
+  );
+}
+
 function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [tab, setTab] = React.useState<"explore" | "domtree">("explore");
   const [nodeId, setNodeId] = React.useState<number | null>(null);
@@ -5107,6 +5142,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [rootFilter, setRootFilter] = React.useState("");
   const [showAllInbound, setShowAllInbound] = React.useState(false);
   const [pathDepth, setPathDepth] = React.useState(8);
+  const [activeRefTab, setActiveRefTab] = React.useState<"outbound" | "inbound">("outbound");
+  const [bannerDismissed, setBannerDismissed] = React.useState(
+    sessionStorage.getItem("wasm-banner-dismissed") === "1"
+  );
   const [fmtB] = useFmtBytes();
   const containerRef = React.useRef<HTMLDivElement>(null);
   // Remember the last active rootFilter so "⌂ Roots" returns to the filtered list
@@ -5668,12 +5707,40 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         </form>
       </div>
 
+      {data.capture_params && (() => {
+        const cp = data.capture_params;
+        return (
+          <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.4rem 0" }}>
+            Capture: {cp.edge_cap} edges/obj ({cp.size_tier}).{cp.size_tier !== "large" && <> Re-run with <code>--report-size {cp.size_tier === "small" ? "medium" : "large"}</code> for more.</>}
+          </p>
+        );
+      })()}
+
+      {!bannerDismissed && !(window as any).__wasmSession && (
+        <div style={{ background: "var(--accent-bg, #eff6ff)", border: "1px solid var(--accent-border, #bfdbfe)", borderRadius: 6, padding: "0.4rem 0.6rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
+          <span style={{ flex: 1 }}>Load .hprof in the browser for the full inbound graph and shortest GC root paths.</span>
+          <button className="copy-btn" onClick={() => { sessionStorage.setItem("wasm-banner-dismissed", "1"); setBannerDismissed(true); }} style={{ flexShrink: 0, opacity: 0.6 }} title="Dismiss">✕</button>
+        </div>
+      )}
+
       <div className="obj-explorer">
         {/* Left panel */}
         <div className="obj-explorer-left">
           {tab === "explore" ? (
             <>
-              <h4 style={{ margin: "0 0 0.4rem" }}>Outbound References</h4>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.4rem" }}>
+                {(["outbound","inbound"] as const).map(t => (
+                  <React.Fragment key={t}>
+                    {t === "inbound" && <span style={{ color: "var(--muted)" }}>|</span>}
+                    <button className="btn-link" style={{ fontWeight: activeRefTab === t ? 700 : 400, fontSize: "0.9rem", padding: "0 2px" }} onClick={() => setActiveRefTab(t)}>
+                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                    </button>
+                  </React.Fragment>
+                ))}
+                <span style={{ color: "var(--muted)", fontSize: "0.8rem", marginLeft: "auto" }}>References</span>
+              </div>
+              {activeRefTab === "outbound" && (
+                <>
               {currentNode.edges_unknown && (
                 <p className="subtitle" style={{ color: "var(--warn-border)" }}>
                   &#9888; Outbound refs not captured for this object (not in top-10,000 by shallow heap).{" "}
@@ -5834,6 +5901,61 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   </button>
                 </div>
               )}
+                </>
+              )}
+              {activeRefTab === "inbound" && nodeId !== null && (() => {
+                const iEdges = data.inbound_edges?.[String(nodeId)] ?? [];
+                const iTrunc = (data.inbound_truncated ?? []).includes(nodeId);
+                const wasm = (window as any).__wasmExploration;
+
+                if (wasm) {
+                  return <WasmInboundPanel nodeId={nodeId} session={wasm} fmtB={fmtB} onNavigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)} />;
+                }
+
+                if (iEdges.length > 0 || iTrunc) {
+                  return (
+                    <>
+                      <table className="std-table">
+                        <thead><tr>
+                          <th>Field</th><th>Class</th>
+                          <th style={{ textAlign: "right" }}>Shallow</th>
+                          <th style={{ textAlign: "right" }}>Retained</th>
+                        </tr></thead>
+                        <tbody>
+                          {iEdges.map((e, i) => (
+                            <tr key={i}>
+                              <td style={{ color: "var(--muted)" }}><code>{e.field_name || "—"}</code></td>
+                              <td>
+                                <button className="btn-link" onClick={() => navigate("explore", e.src_idx, e.src_class)}>
+                                  <code>{e.src_class}</code>
+                                </button>
+                              </td>
+                              <td style={{ textAlign: "right" }}>{fmtB(e.src_shallow)}</td>
+                              <td style={{ textAlign: "right" }}>{fmtB(e.src_retained)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {iTrunc && (
+                        <p className="subtitle" style={{ fontSize: "0.78rem" }}>
+                          Showing first {data.capture_params?.edge_cap ?? 100} inbound refs.{" "}
+                          Re-run with <code>--report-size medium</code> for more.
+                        </p>
+                      )}
+                    </>
+                  );
+                }
+
+                if (currentNode?.edges_unknown) {
+                  return (
+                    <p className="subtitle">
+                      Inbound refs unavailable in the static report. Load the .hprof in the browser for the full inbound graph.
+                    </p>
+                  );
+                }
+
+                return <p className="subtitle">No inbound references captured for this object.</p>;
+              })()}
             </>
           ) : (
             <>
