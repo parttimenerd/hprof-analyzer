@@ -5211,6 +5211,26 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   }, [currentDisplayClass, data.nodes]);
   const siblingIdx = nodeId !== null ? classSiblings.findIndex(s => s.id === nodeId) : -1;
 
+  // Keyboard: [ / ] = prev/next same-class sibling (lateral, no breadcrumb push)
+  React.useEffect(() => {
+    if (nodeId === null || classSiblings.length <= 1) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
+      if (e.key !== "[" && e.key !== "]") return;
+      e.preventDefault();
+      const idx = classSiblings.findIndex(s => s.id === nodeId);
+      if (e.key === "[" && idx > 0) {
+        setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
+        window.location.hash = `${tab}/${classSiblings[idx - 1].id}`;
+      } else if (e.key === "]" && idx < classSiblings.length - 1) {
+        setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
+        window.location.hash = `${tab}/${classSiblings[idx + 1].id}`;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [nodeId, classSiblings, tab]);
+
   const totalHeap = Object.values(data.nodes).reduce(
     (s, n) => (n.idom == null ? s + n.retained : s), 0
   );
@@ -5528,9 +5548,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {breadcrumb.length > 0 ? `← ${(breadcrumb[breadcrumb.length - 1].label.split(".").pop() ?? breadcrumb[breadcrumb.length - 1].label)}#${breadcrumb[breadcrumb.length - 1].nodeId}` : "⌂ Roots"}
         </button>
         {classSiblings.length > 1 && (
-          <span style={{ display: "flex", gap: "0.1rem", alignItems: "center", fontSize: "0.78rem", color: "var(--muted)" }} title="Navigate same-class instances by retained size (lateral — no breadcrumb push)">
+          <span style={{ display: "flex", gap: "0.1rem", alignItems: "center", fontSize: "0.78rem", color: "var(--muted)" }} title="Navigate same-class instances by retained size (lateral — no breadcrumb push). Keyboard: [ / ]">
             <button className="btn-link" style={{ fontSize: "0.78rem", padding: "0 3px", opacity: siblingIdx > 0 ? 1 : 0.3 }}
               disabled={siblingIdx <= 0}
+              title="Previous same-class instance [ key"
               onClick={() => {
                 if (siblingIdx > 0) {
                   const s = classSiblings[siblingIdx - 1];
@@ -5543,6 +5564,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <span style={{ fontSize: "0.72rem" }}>{siblingIdx + 1}/{classSiblings.length}</span>
             <button className="btn-link" style={{ fontSize: "0.78rem", padding: "0 3px", opacity: siblingIdx < classSiblings.length - 1 ? 1 : 0.3 }}
               disabled={siblingIdx >= classSiblings.length - 1}
+              title="Next same-class instance ] key"
               onClick={() => {
                 if (siblingIdx < classSiblings.length - 1) {
                   const s = classSiblings[siblingIdx + 1];
@@ -5836,6 +5858,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <td>
                   <span className="copy-cell">
                     <code>{currentNode.display_class}</code>
+                    <CopyBtn text={currentNode.display_class} />
                     <PivotBtn cls={currentNode.display_class} />
                     <OqlBtn cls={currentNode.display_class} />
                   </span>
