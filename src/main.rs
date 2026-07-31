@@ -213,6 +213,14 @@ struct Cli {
     #[arg(long)]
     obj_graph: bool,
 
+    /// Object-graph capture tier: controls how many edges per object are stored.
+    /// small = 100 edges (default, ~1–3 MB added to report),
+    /// medium = 150 edges (~2–5 MB), large = 300 edges (~5–15 MB).
+    /// See docs/report-size-benchmarks.md for measured file sizes per tier.
+    /// Only meaningful with --obj-graph or --full-analysis.
+    #[arg(long, value_name = "TIER", default_value = "small")]
+    report_size: String,
+
     /// Embed the React app bundle as plain readable JS in the HTML report
     /// (no deflate/base64). The report is ~750 KB larger but the JS is visible
     /// and editable in browser DevTools — useful for iterating on the UI.
@@ -788,7 +796,7 @@ fn run_default(cli: Cli) {
             resolve_format(cli.format, cli.output.as_deref())
         };
         let opts = cli.detail.options();
-        let opts = AnalyzeOptions {
+        let mut opts = AnalyzeOptions {
             find_duplicates: cli.find_duplicates || cli.full_analysis,
             collections: cli.collections || cli.full_analysis,
             collection_config: cli.collection_config.clone(),
@@ -805,6 +813,11 @@ fn run_default(cli: Cli) {
             obj_graph: cli.obj_graph || cli.full_analysis,
             dev_report: cli.dev,
             ..opts
+        };
+        opts.report_size = match cli.report_size.to_ascii_lowercase().as_str() {
+            "medium" => crate::opts::ReportSize::Medium,
+            "large"  => crate::opts::ReportSize::Large,
+            _        => crate::opts::ReportSize::Small,
         };
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
         // input basename with a trailing `.hprof[.gz]` stripped, matching how
@@ -972,11 +985,10 @@ fn analyze_to_report_inner(
     // Capture outbound edges for ALL objects before fwd CSR is consumed.
     // Must capture all (not just top-N by shallow) because dominator roots have tiny shallow.
     if opts.obj_graph {
-        const GRAPH_EDGE_CAP: usize = 100;
         g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
             &g,
             usize::MAX,
-            GRAPH_EDGE_CAP,
+            opts.report_size.edge_cap(),
         ));
     }
 
@@ -2299,11 +2311,10 @@ fn run(
     // heap (dominator roots) often have tiny shallow size and would be missed by a
     // shallow-sorted top-N filter. Memory is bounded by edge_cap per node.
     if opts.obj_graph {
-        const GRAPH_EDGE_CAP: usize = 100;
         g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
             &g,
             usize::MAX,
-            GRAPH_EDGE_CAP,
+            opts.report_size.edge_cap(),
         ));
     }
 

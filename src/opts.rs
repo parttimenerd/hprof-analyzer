@@ -1,6 +1,36 @@
 //! Analysis options and detail-level presets, shared between the CLI binary
 //! and the WASM library crate.
 
+/// Controls the capture tier for --obj-graph: how many edges per object are included.
+/// Larger tiers produce bigger HTML reports but cover more of the heap.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ReportSize {
+    Small,   // edge_cap=100  (default, current behaviour)
+    Medium,  // edge_cap=150
+    Large,   // edge_cap=300
+}
+
+impl ReportSize {
+    pub fn edge_cap(self) -> usize {
+        match self {
+            ReportSize::Small  => 100,
+            ReportSize::Medium => 150,
+            ReportSize::Large  => 300,
+        }
+    }
+    pub fn tier_name(self) -> &'static str {
+        match self {
+            ReportSize::Small  => "small",
+            ReportSize::Medium => "medium",
+            ReportSize::Large  => "large",
+        }
+    }
+}
+
+impl Default for ReportSize {
+    fn default() -> Self { ReportSize::Small }
+}
+
 /// Output format for the analysis report.
 #[derive(Clone, Copy, PartialEq)]
 pub enum OutputFormat {
@@ -54,6 +84,9 @@ pub struct AnalyzeOptions {
     /// objects. Enables click-through in the HTML report. Adds ~1-3 MB to the
     /// report JSON; captured in ~30 MB of peak RAM freed after build_model.
     pub obj_graph: bool,
+    /// Capture tier for --obj-graph: controls edge_cap per object.
+    /// small=100 edges (default), medium=150, large=300.
+    pub report_size: ReportSize,
     /// Embed the React bundle as an uncompressed inline <script> in the HTML
     /// report so it is human-readable and editable in DevTools. Output is much
     /// larger but easier to inspect/modify. Implies HTML output format.
@@ -105,6 +138,7 @@ impl DetailLevel {
             reachable_only: false,
             ref_paths: false,
             obj_graph: false,
+            report_size: ReportSize::Small,
             dev_report: false,
             skip_report: false,
         }
