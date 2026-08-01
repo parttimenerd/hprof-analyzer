@@ -60,7 +60,7 @@ _Where the reachable heap is concentrated, at a glance._
 - **One leak or many:** the single biggest object, `java.util.concurrent.ForkJoinWorkerThread`, retains 46.3% and the top 10 retain 89.9% of the heap; 7 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
 - **Thread pinning:** thread `ForkJoinPool.commonPool-worker-16` retains 8.9 MB (46.3% of heap) and pins 316 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
 - **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
-- **Fixed per-object header overhead:** 517,791 objects × 12 B header = 5.9 MB (30.9% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#header-overhead).
+- **Fixed per-object header overhead:** 517,791 objects × 12 B header = 5.9 MB (30.9% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#object-header-overhead).
 - **Empty-collection cemetery:** 2,950 of 3,982 tracked collections (74.1%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
 - **Collection waste not analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 

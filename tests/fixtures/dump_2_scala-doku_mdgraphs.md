@@ -54,14 +54,14 @@ _Where the reachable heap is concentrated, at a glance._
 
 - **Headline retainer:** `java.lang.Thread` (a single object) retains 22.9 MB (76.7% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** highly concentrated — `java.lang.Thread` (a single object) holds 76.7% of the heap, so freeing it would reclaim most memory. See [Leak Suspects](#leak-suspects).
-- **Dominant GC-root type:** 76.7% of the heap is held by "Thread" roots — retention concentrates at one root class. See [System Overview](#overview).
+- **Dominant GC-root type:** 76.7% of the heap is held by "Thread" roots — retention concentrates at one root class. See [System Overview](#system-overview).
 - **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 11273, max depth 41355. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One leak or many:** the single biggest object, `java.lang.Thread`, retains 76.7% and the top 10 retain 92.6% of the heap; 4 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
-- **Classloader reload (low count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (8.6 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#duplicate-classes).
+- **Classloader reload (low count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (8.6 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#system-overview).
 - **Thread pinning:** thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
 - **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
 - **Sparse object arrays:** 38,119 object arrays are <=20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. See [Collections](#collections).
-- **Fixed per-object header overhead:** 952,666 objects × 12 B header = 10.9 MB (36.6% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#header-overhead).
+- **Fixed per-object header overhead:** 952,666 objects × 12 B header = 10.9 MB (36.6% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#object-header-overhead).
 - **Empty-collection cemetery:** 5,806 of 6,307 tracked collections (92.1%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
 - **Collection waste not analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
