@@ -271,7 +271,7 @@ where
             let base = match name.as_str() {
                 "objectId" => Attr::ObjectId,
                 "objectAddress" => Attr::ObjectAddress,
-                "usedHeapSize" => Attr::UsedHeapSize,
+                "usedHeapSize" | "shallowHeapSize" | "shallowSize" => Attr::UsedHeapSize,
                 "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
                 "displayName" => Attr::DisplayName,
                 "name" => Attr::DisplayName,
@@ -926,6 +926,49 @@ where
                 .clone()
                 .map(|e| (SelectItem::Expr(Box::new(e)), None::<String>));
 
+            // A bare `@alias` select item that preserves the written alias name as the
+            // column header when a non-canonical alias is used (e.g. `@shallowHeapSize`
+            // displays as `@shallowHeapSize`, not `@usedHeapSize`).
+            let select_attr_item = select! { Token::Ident(p) if p.ends_with('.') => p }
+                .or_not()
+                .then(select! { Token::At(name) => name })
+                // Peek at the next token: if it's an arithmetic op, bail and let
+                // expr_item parse the full `@attr + ...` expression instead.
+                .then(
+                    one_of([Token::Plus, Token::Minus, Token::Star, Token::Divide])
+                        .rewind()
+                        .or_not(),
+                )
+                .map(|((prefix, name), next_arith): ((Option<String>, String), _)| {
+                    if next_arith.is_some() {
+                        return None; // arithmetic follows; hand off to expr_item
+                    }
+                    let (attr, canonical) = match name.as_str() {
+                        "usedHeapSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
+                        "shallowHeapSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
+                        "shallowSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
+                        "retainedHeapSize" => (Attr::RetainedHeapSize, "@retainedHeapSize"),
+                        "retainedHeap" => (Attr::RetainedHeapSize, "@retainedHeapSize"),
+                        _ => return None,
+                    };
+                    // Single-segment prefix is just the FROM alias; strip it.
+                    let has_hops = prefix
+                        .as_deref()
+                        .map(|p| p.trim_end_matches('.').contains('.'))
+                        .unwrap_or(false);
+                    if has_hops {
+                        return None; // leave to expr_item for full RefPath handling
+                    }
+                    let written = format!("@{name}");
+                    let auto_alias = if written != canonical {
+                        Some(written)
+                    } else {
+                        None
+                    };
+                    Some((SelectItem::Attr(attr), auto_alias))
+                })
+                .filter_map(|x| x);
+
             // `expr_item` covers all arithmetic expressions AND bare attrs (folded back).
             let expr_item = expr.clone().map(|e| {
                 let item = match e {
@@ -936,12 +979,14 @@ where
             });
             // IMPORTANT: `star` must come before `expr_item`.
             // `case_item` before `expr_item` so CASE is not swallowed as a bare field.
+            // `select_attr_item` before `expr_item` so alias attr names get column headers.
             let base_item = percentile_item
                 .or(agg)
                 .or(path_item)
                 .or(tostring_item)
                 .or(star)
                 .or(case_item)
+                .or(select_attr_item)
                 .or(expr_item);
 
             let alias_name = ident_ci("AS").ignore_then(
@@ -950,7 +995,11 @@ where
 
             base_item
                 .then(alias_name.or_not())
-                .map(|((item, _), alias)| (item, alias))
+                // Explicit AS alias wins; fall back to the pre-computed alias from
+                // select_attr_item (e.g. "@shallowHeapSize" when that alias was written).
+                .map(|((item, pre_alias), explicit_alias)| {
+                    (item, explicit_alias.map(Some).unwrap_or(pre_alias))
+                })
                 .labelled("expression")
         });
 
