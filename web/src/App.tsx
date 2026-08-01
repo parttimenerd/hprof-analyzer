@@ -1599,7 +1599,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   const holders = report.overview.boxed_number_holders ?? [];
   const boxedCols: TableColumn<import("./types").BoxedNumberRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Total Shallow (KB)" : "Total Shallow", right: true, width: useKB ? "150px" : "120px", cell: byteCell(r => r.total_shallow, fmtB, useKB), selector: (r) => r.total_shallow, sortable: true },
     { id: "pct", name: "% of Heap", right: true, width: "100px", format: (r) => total > 0 ? fmtPct(r.pct_of_heap_bp / 100) : "—", selector: (r) => r.pct_of_heap_bp, sortable: true },
@@ -4793,9 +4793,12 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
               <details className="stack-detail">
                 <summary>{frameLabel}</summary>
                 <ol className="stack-frames">
-                  {s.frames.map((f, fi) => (
-                    <li key={fi}><code>{f}</code></li>
-                  ))}
+                  {s.frames.map((f, fi) => {
+                    const fc = frameToClass(f);
+                    return (
+                      <li key={fi}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{f}</code>{fc && <><PivotBtn cls={fc} /><OqlBtn cls={fc} /></>}</span></li>
+                    );
+                  })}
                 </ol>
               </details>
             );
@@ -6192,9 +6195,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             <tr key={i}>
                               <td style={{ color: "var(--muted)" }}><code>{e.field_name || "—"}</code></td>
                               <td>
-                                <button className="btn-link" onClick={() => navigate("explore", e.src_idx, e.src_class)}>
-                                  <code>{e.src_class}</code>
-                                </button>
+                                <span className="copy-cell">
+                                  <button className="btn-link" onClick={() => navigate("explore", e.src_idx, e.src_class)}>
+                                    <code>{e.src_class}</code>
+                                  </button>
+                                  <PivotBtn cls={e.src_class} />
+                                  <OqlBtn cls={e.src_class} />
+                                </span>
                               </td>
                               <td style={{ textAlign: "right" }}>{fmtB(e.src_shallow)}</td>
                               <td style={{ textAlign: "right" }}>{fmtB(e.src_retained)}</td>
@@ -6323,10 +6330,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           return (
                             <tr key={rootId}>
                               <td>
-                                <button className="btn-link"
-                                  onClick={() => navigate("domtree", rootId, rn.display_class)}>
-                                  <code>{rn.display_class}</code>
-                                </button>
+                                <span className="copy-cell">
+                                  <button className="btn-link"
+                                    onClick={() => navigate("domtree", rootId, rn.display_class)}>
+                                    <code>{rn.display_class}</code>
+                                  </button>
+                                  <PivotBtn cls={rn.display_class} />
+                                  <OqlBtn cls={rn.display_class} />
+                                </span>
                               </td>
                               <td style={{ textAlign: "right" }}>{fmtB(rn.shallow)}</td>
                               <td style={{ textAlign: "right" }}>{fmtB(rn.retained)}</td>
@@ -6448,7 +6459,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         <tbody>
                           {rows.map(r => (
                             <tr key={r.cls}>
-                              <td><code>{r.cls}</code></td>
+                              <td><span className="copy-cell"><code>{r.cls}</code><PivotBtn cls={r.cls} /><OqlBtn cls={r.cls} /></span></td>
                               <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
                               <td style={{ textAlign: "right" }}>{fmtB(r.total_retained)}</td>
                               <td style={{ textAlign: "right" }}>{fmtB(r.max_retained)}</td>
@@ -6487,10 +6498,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             {filtered.slice(0, 500).map(r => (
                               <tr key={r.id}>
                                 <td>
-                                  <button className="btn-link" style={{ fontSize: "0.85rem" }}
-                                    onClick={() => navigate("domtree", r.id, r.display_class)}>
-                                    <code>{r.display_class}</code>
-                                  </button>
+                                  <span className="copy-cell">
+                                    <button className="btn-link" style={{ fontSize: "0.85rem" }}
+                                      onClick={() => navigate("domtree", r.id, r.display_class)}>
+                                      <code>{r.display_class}</code>
+                                    </button>
+                                    <PivotBtn cls={r.display_class} />
+                                    <OqlBtn cls={r.display_class} />
+                                  </span>
                                 </td>
                                 <td style={{ textAlign: "right", color: "var(--muted)", fontSize: "0.8rem" }}>{r.depth}</td>
                                 <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
