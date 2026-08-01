@@ -42,6 +42,7 @@ interface GenNode {
   retained: number;
   sublabel: string;   // second line (e.g. "N objects" or "shallow X")
   children: GenNode[];
+  objIndex?: number;   // dense 0-based index; undefined for garbage roots
 }
 
 // ── Tagged wrapper carrying a stable id for d3-dag ───────────────────────────
@@ -132,7 +133,7 @@ function layoutTree(root: GenNode): { nodes: LayoutNode[]; edges: LayoutEdge[]; 
 
 // ── Core SVG renderer (works on GenNode) ─────────────────────────────────────
 
-function TreeSvg({ root, maxRetained, ariaLabel }: { root: GenNode; maxRetained: number; ariaLabel: string }) {
+function TreeSvg({ root, maxRetained, ariaLabel, onNavigate }: { root: GenNode; maxRetained: number; ariaLabel: string; onNavigate?: (idx: number) => void }) {
   if (root.children.length === 0) return null;
   const { nodes, edges, width, height } = layoutTree(root);
   const PAD = 12;
@@ -178,8 +179,9 @@ function TreeSvg({ root, maxRetained, ariaLabel }: { root: GenNode; maxRetained:
           const y = node.y - NODE_H / 2;
           const col = classColor(node.node.label);
           const barW = maxRetained > 0 ? Math.round((node.node.retained / maxRetained) * (NODE_W - 8)) : 0;
+          const navigable = onNavigate != null && node.node.objIndex != null;
           return (
-            <g key={node.id} transform={`translate(${x},${y})`}>
+            <g key={node.id} transform={`translate(${x},${y})`} style={{ cursor: navigable ? "pointer" : "default" }} onClick={navigable ? () => onNavigate!(node.node.objIndex!) : undefined}>
               <rect width={NODE_W} height={NODE_H} rx={5} fill="var(--card, #f7f7f8)" stroke={col} strokeWidth={2} />
               <rect x={4} y={NODE_H - 8} width={barW} height={4} rx={2} fill={col} opacity={0.6} />
               <text x={NODE_W / 2} y={16} textAnchor="middle" fontSize={FONT_SIZE} fontWeight="bold" fill={col} fontFamily="monospace">
@@ -224,7 +226,7 @@ function domTreeNodeToGen(n: DomTreeNode): GenNode {
       if (count > 1) {
         const totalRetained = rawChildren.slice(i, j).reduce((s, x) => s + x.retained, 0);
         const totalShallow = n.children.slice(i, j).reduce((s, x) => s + x.shallow, 0);
-        merged.push({ label: c.label, retained: totalRetained, sublabel: `×${count} · shallow ${formatBytes(totalShallow)}`, children: [] });
+        merged.push({ label: c.label, retained: totalRetained, sublabel: `×${count} · shallow ${formatBytes(totalShallow)}`, children: [], objIndex: rawChildren[i].objIndex });
         i = j;
         continue;
       }
@@ -237,6 +239,7 @@ function domTreeNodeToGen(n: DomTreeNode): GenNode {
     retained: n.retained,
     sublabel: `shallow ${formatBytes(n.shallow)}`,
     children: merged,
+    objIndex: n.obj_index_1based - 1,
   };
 }
 
@@ -273,7 +276,13 @@ export function UnreachableDomTreeSection({ roots }: { roots: UnreachableGarbage
 
 // ── Public: Leak-suspect dominator subtree ────────────────────────────────────
 
-export function DomSubtreeSvg({ node }: { node: DomTreeNode }) {
+export function DomSubtreeSvg({
+  node,
+  onNavigate,
+}: {
+  node: DomTreeNode;
+  onNavigate?: (denseIdx: number) => void;
+}) {
   const gen = domTreeNodeToGen(node);
   return (
     <div style={{ overflowX: "auto", margin: "8px 0" }}>
@@ -281,6 +290,7 @@ export function DomSubtreeSvg({ node }: { node: DomTreeNode }) {
         root={gen}
         maxRetained={node.retained}
         ariaLabel={`Dominator subtree: ${node.display_class}`}
+        onNavigate={onNavigate}
       />
     </div>
   );

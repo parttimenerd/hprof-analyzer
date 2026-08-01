@@ -2505,7 +2505,9 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         );
       })()}
       {s.root_path && s.root_path.length > 0 && <RootPathChain steps={s.root_path} />}
-      {s.dominator_tree && <DomSubtreeSvg node={s.dominator_tree} />}
+      {s.dominator_tree && <DomSubtreeSvg node={s.dominator_tree} onNavigate={(idx) => {
+        (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`);
+      }} />}
       {!s.is_single && s.merged_paths && <MergedPathSankey node={s.merged_paths} />}
     </div>
   );
@@ -4738,6 +4740,16 @@ function buildFrameTrie(sites: import("./types").AllocSite[]): FrameTrieNode {
   return root;
 }
 
+function frameToClass(frame: string): string | null {
+  const paren = frame.indexOf("(");
+  if (paren < 0) return null;
+  const sig = frame.slice(0, paren);
+  const dot = sig.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const cls = sig.slice(0, dot);
+  return cls.includes(".") ? cls : null;
+}
+
 function AllocSitesSection({ data }: { data: AllocSites }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
 
@@ -4755,20 +4767,32 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
-          { id: "stack", name: "Stack", grow: 1, cell: (s) => s.frames.length === 0 ? (
-            <span className="hint">serial {s.stack_serial} <span className="hint">(no frames recorded)</span></span>
-          ) : s.frames.length === 1 ? (
-            <code>{s.frames[0]}</code>
-          ) : (
-            <details className="stack-detail">
-              <summary><code>{s.frames[0]}</code></summary>
-              <ol className="stack-frames">
-                {s.frames.map((f, fi) => (
-                  <li key={fi}><code>{f}</code></li>
-                ))}
-              </ol>
-            </details>
-          )},
+          { id: "stack", name: "Stack", grow: 1, cell: (s) => {
+            if (s.frames.length === 0) {
+              return <span className="hint">serial {s.stack_serial} <span className="hint">(no frames recorded)</span></span>;
+            }
+            const cls = frameToClass(s.frames[0]);
+            const frameLabel = (
+              <span className="copy-cell">
+                <code>{s.frames[0]}</code>
+                {cls && <PivotBtn cls={cls} />}
+                {cls && <OqlBtn cls={cls} />}
+              </span>
+            );
+            if (s.frames.length === 1) {
+              return frameLabel;
+            }
+            return (
+              <details className="stack-detail">
+                <summary>{frameLabel}</summary>
+                <ol className="stack-frames">
+                  {s.frames.map((f, fi) => (
+                    <li key={fi}><code>{f}</code></li>
+                  ))}
+                </ol>
+              </details>
+            );
+          }},
           { id: "objects", name: "Objects", right: true, width: "110px", format: (s) => fmtCount(s.object_count), selector: (s) => s.object_count, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(s => s.shallow_total, fmtB, useKB), selector: (s) => s.shallow_total, sortable: true },
         ];
@@ -6405,7 +6429,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <button className="btn-link" onClick={() => setShowSvg(v => !v)}>
                     {showSvg ? "Hide SVG tree" : "Show SVG tree"}
                   </button>
-                  {showSvg && <DomSubtreeSvg node={prebuiltTree} />}
+                  {showSvg && <DomSubtreeSvg node={prebuiltTree} onNavigate={(idx) => {
+                    (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`);
+                  }} />}
                 </div>
               )}
             </>
