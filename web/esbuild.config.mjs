@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 850 KB minified bundle budget (raised from 846 KB to accommodate live instance search + inbound field names).
-const BUDGET_BYTES = 850 * 1024;
+// ≤ 852 KB minified bundle budget (raised from 850 KB to accommodate WASM below-threshold node panel).
+const BUDGET_BYTES = 852 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

@@ -5377,6 +5377,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [wasmOutboundEdges, setWasmOutboundEdges] = React.useState<ObjGraphEdge[] | null>(null);
   const [wasmOutboundTotal, setWasmOutboundTotal] = React.useState(0);
   const [wasmOutboundTruncated, setWasmOutboundTruncated] = React.useState(false);
+  // WASM data for below-threshold nodes (not in static graph)
+  const [wasmBelowInfo, setWasmBelowInfo] = React.useState<{display_class: string; shallow: number; retained: number} | null>(null);
+  const [wasmBelowOutbound, setWasmBelowOutbound] = React.useState<{dst_idx: number; field_name: string; display_class: string; shallow: number; retained: number}[] | null>(null);
+  const [wasmBelowInbound, setWasmBelowInbound] = React.useState<{src_idx: number; field_name: string; display_class: string; shallow: number; retained: number}[] | null>(null);
 
   React.useEffect(() => {
     setWasmOutboundEdges(null);
@@ -5404,6 +5408,29 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     } catch {}
     void inCapture; // suppress lint
   }, [nodeId, data.edges, data.nodes]);
+
+  // Below-threshold node: fetch WASM info when the node isn't in the static graph but WASM exploration is live
+  React.useEffect(() => {
+    setWasmBelowInfo(null);
+    setWasmBelowOutbound(null);
+    setWasmBelowInbound(null);
+    const wasm = (window as any).__wasmExploration;
+    if (!wasm?.get_node_info || nodeId === null) return;
+    const inCapture = data.nodes[String(nodeId)] != null;
+    if (inCapture) return; // static graph has it — no need
+    try {
+      const info = JSON.parse(wasm.get_node_info(nodeId));
+      if (info.ok) setWasmBelowInfo({ display_class: info.display_class, shallow: info.shallow, retained: info.retained });
+    } catch {}
+    try {
+      const out = JSON.parse(wasm.outbound_refs(nodeId, 100));
+      if (out.ok) setWasmBelowOutbound(out.refs);
+    } catch {}
+    try {
+      const inp = JSON.parse(wasm.inbound_refs(nodeId, 100));
+      if (inp.ok) setWasmBelowInbound(inp.refs);
+    } catch {}
+  }, [nodeId, data.nodes]);
 
   React.useEffect(() => {
     const onHash = (fromEvent: boolean) => {
@@ -5865,10 +5892,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
   // ── Node detail view ───────────────────────────────────────────────────────
   if (!currentNode) {
-    const shortCls = pendingLabel ? (pendingLabel.split(".").pop() ?? pendingLabel) : null;
-    const sameClassNodes = pendingLabel
+    const effectiveCls = wasmBelowInfo?.display_class ?? pendingLabel;
+    const shortCls = effectiveCls ? (effectiveCls.split(".").pop() ?? effectiveCls) : null;
+    const sameClassNodes = effectiveCls
       ? Object.entries(data.nodes)
-          .filter(([, n]) => n.display_class === pendingLabel)
+          .filter(([, n]) => n.display_class === effectiveCls)
           .sort((a, b) => b[1].retained - a[1].retained)
           .slice(0, 10)
       : [];
@@ -5905,7 +5933,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         <div style={{ padding: "0.75rem 1rem", background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem", marginBottom: "0.4rem" }}>
             <p style={{ margin: 0, fontWeight: 600 }}>
-              {pendingLabel ? <><code>{pendingLabel}</code> #{nodeId}</> : <>Object #{nodeId}</>}{" "}— not in captured graph
+              {effectiveCls ? <><code>{effectiveCls}</code> #{nodeId}</> : <>Object #{nodeId}</>}{" "}— not in captured graph
             </p>
             <button className="btn-link" style={{ flexShrink: 0, fontSize: "0.82rem" }}
               onClick={() => {
@@ -5920,22 +5948,27 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {breadcrumb.length > 0 ? `← back` : "⌂ Roots"}
             </button>
           </div>
-          <p className="subtitle" style={{ margin: "0 0 0.4rem" }}>
-            This object was referenced{breadcrumb.length > 0 ? (() => {
-              const parent = breadcrumb[breadcrumb.length - 1];
-              const parentShort = parent.label.split(".").pop();
-              const field = parent.edge && parent.edge !== parent.label && !parent.edge.includes(".") && /^[a-zA-Z_$]/.test(parent.edge)
-                ? <> via field <code>.{parent.edge}</code></> : null;
-              return <> from <strong>{parentShort}#{parent.nodeId}</strong>{field} but is</>;
-            })() : " above but is"
-            } below the significance threshold
-            (top 10,000 by shallow heap, ≥{fmtB(data.sig_floor_bytes)} retained).
-            Re-run with a larger <code>--top-n</code> to include it.
-          </p>
-          {pendingLabel && (
+          {!wasmBelowInfo ? (
+            <p className="subtitle" style={{ margin: "0 0 0.4rem" }}>
+              This object was referenced{breadcrumb.length > 0 ? (() => {
+                const parent = breadcrumb[breadcrumb.length - 1];
+                const parentShort = parent.label.split(".").pop();
+                const field = parent.edge && parent.edge !== parent.label && !parent.edge.includes(".") && /^[a-zA-Z_$]/.test(parent.edge)
+                  ? <> via field <code>.{parent.edge}</code></> : null;
+                return <> from <strong>{parentShort}#{parent.nodeId}</strong>{field} but is</>;
+              })() : " above but is"
+              } below the significance threshold (≥{fmtB(data.sig_floor_bytes)} retained).
+              Re-run with <code>--top-n</code> to include it.
+            </p>
+          ) : (
+            <p className="subtitle" style={{ margin: "0 0 0.4rem", fontSize: "0.8rem" }}>
+              <code>{wasmBelowInfo.display_class}</code> · shallow {fmtB(wasmBelowInfo.shallow)} · retained {fmtB(wasmBelowInfo.retained)} · below significance threshold — live WASM data.
+            </p>
+          )}
+          {effectiveCls && (
             <span className="copy-cell">
-              <OqlBtn cls={pendingLabel} />
-              <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Copy OQL to query all {shortCls} instances</span>
+              <OqlBtn cls={effectiveCls} />
+              <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Copy OQL for all {shortCls} instances</span>
             </span>
           )}
           {sameClassNodes.length > 0 && (
@@ -5955,6 +5988,35 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </div>
           )}
         </div>
+        {/* WASM live refs for below-threshold node */}
+        {wasmBelowInfo && (wasmBelowOutbound !== null || wasmBelowInbound !== null) && (() => {
+          const mkRow = (idx: number, field: string, cls: string, ret: number, i: number) => (
+            <tr key={i}>
+              <td style={{ color:"var(--muted)" }}><code>{field||"—"}</code></td>
+              <td><span className="copy-cell">
+                <button className="btn-link" onClick={() => navigate("explore",idx,cls,field||undefined)}><code>{cls}</code></button>
+                <button className="btn-link" title="Open in dominator tree" style={{ opacity:0.6,flexShrink:0 }} onClick={() => navigate("domtree",idx,cls,field||undefined)}>⌞</button>
+                <PivotBtn cls={cls}/><OqlBtn cls={cls}/>
+              </span></td>
+              <td style={{ textAlign:"right" }}>{fmtB(ret)}</td>
+            </tr>
+          );
+          return (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0.75rem", marginTop:"0.75rem" }}>
+              {([["Outbound refs", (wasmBelowOutbound??[]).map((r,i)=>mkRow(r.dst_idx,r.field_name,r.display_class,r.retained,i)), "No outbound refs."],
+                 ["Inbound refs", (wasmBelowInbound??[]).map((r,i)=>mkRow(r.src_idx,r.field_name,r.display_class,r.retained,i)), "No inbound refs."]] as const).map(([title,rows,empty]) => (
+                <div key={String(title)} style={{ background:"var(--card-bg,var(--bg))", border:"1px solid var(--border)", borderRadius:6, padding:"0.6rem 0.75rem" }}>
+                  <div style={{ fontWeight:600, fontSize:"0.85rem", marginBottom:"0.35rem" }}>{title}</div>
+                  {rows.length===0 ? <p className="subtitle">{empty}</p> : (
+                    <table className="std-table"><thead><tr><th>Field</th><th>Class</th><th style={{ textAlign:"right" }}>Retained</th></tr></thead>
+                      <tbody>{rows.slice(0,50)}</tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
     );
   }

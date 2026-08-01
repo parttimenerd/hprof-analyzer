@@ -771,6 +771,29 @@ impl HprofSession {
         })
         .to_string()
     }
+
+    /// Returns class name, shallow, and retained for a single object by dense index.
+    ///
+    /// Returns `{"ok":true,"display_class":"...","shallow":N,"retained":N}` on success,
+    /// or `{"error":"exploration_not_enabled"}` / `{"error":"out_of_range"}`.
+    /// Requires `enable_exploration()` to have been called first.
+    pub fn get_node_info(&self, dense_idx: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+        let i = dense_idx as usize;
+        if i >= exp.class_names_by_idx.len() {
+            return serde_json::json!({"error":"out_of_range"}).to_string();
+        }
+        serde_json::json!({
+            "ok": true,
+            "display_class": exp.class_names_by_idx[i],
+            "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+            "retained": exp.retained.get(i).copied().unwrap_or(0),
+        })
+        .to_string()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
