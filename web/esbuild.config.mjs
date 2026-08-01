@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 846 KB minified bundle budget (raised from 842 KB to accommodate subtree class histogram feature).
-const BUDGET_BYTES = 846 * 1024;
+// ≤ 850 KB minified bundle budget (raised from 846 KB to accommodate live instance search + inbound field names).
+const BUDGET_BYTES = 850 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

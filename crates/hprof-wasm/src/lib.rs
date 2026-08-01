@@ -541,9 +541,29 @@ impl HprofSession {
                     exp.class_names_by_idx.get(src).cloned().unwrap_or_default();
                 let shallow = exp.shallow.get(src).copied().unwrap_or(0) as u64;
                 let retained = exp.retained.get(src).copied().unwrap_or(0);
+
+                // Reverse-lookup field name: scan src's out-edges for an edge to dense_idx.
+                let field_name: &str = if src + 1 < exp.fwd_offsets.len() {
+                    let start = exp.fwd_offsets[src] as usize;
+                    let end = exp.fwd_offsets[src + 1] as usize;
+                    exp.fwd_targets[start..end]
+                        .iter()
+                        .position(|&t| t == dense_idx)
+                        .and_then(|rel| {
+                            exp.fwd_field_name_idx
+                                .as_ref()
+                                .and_then(|idx| idx.get(start + rel).copied())
+                                .and_then(|ni| exp.field_name_pool.get(ni as usize))
+                                .map(|s| s.as_str())
+                        })
+                        .unwrap_or("")
+                } else {
+                    ""
+                };
+
                 serde_json::json!({
                     "src_idx": src_dense,
-                    "field_name": "",
+                    "field_name": field_name,
                     "display_class": display_class,
                     "shallow": shallow,
                     "retained": retained,
@@ -700,6 +720,56 @@ impl HprofSession {
         }
 
         serde_json::json!({"ok": false, "error": "no_path"}).to_string()
+    }
+
+    /// Find all captured objects whose class name contains `class_prefix` (case-insensitive).
+    ///
+    /// Returns `{"ok":true,"matches":[...],"total":N,"truncated":bool}`.
+    /// Each match: `{"dense_idx":N,"display_class":"...","shallow":N,"retained":N}`.
+    /// Results are sorted by retained heap descending.
+    /// Requires `enable_exploration()` to have been called first.
+    pub fn find_instances(&self, class_prefix: &str, limit: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let needle = class_prefix.to_ascii_lowercase();
+        let limit = limit as usize;
+
+        let mut matches: Vec<(u32, u64)> = exp
+            .class_names_by_idx
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| name.to_ascii_lowercase().contains(&needle))
+            .map(|(i, _)| (i as u32, exp.retained.get(i).copied().unwrap_or(0)))
+            .collect();
+
+        let total = matches.len();
+        matches.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        let truncated = total > limit;
+
+        let result: Vec<serde_json::Value> = matches
+            .into_iter()
+            .take(limit)
+            .map(|(idx, retained)| {
+                let i = idx as usize;
+                serde_json::json!({
+                    "dense_idx": idx,
+                    "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
+                    "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+                    "retained": retained,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "ok": true,
+            "matches": result,
+            "total": total,
+            "truncated": truncated,
+        })
+        .to_string()
     }
 }
 

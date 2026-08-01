@@ -5292,8 +5292,9 @@ function WasmGcPathPanel({ nodeId, session, data, fmtB, navigate }: {
   );
 }
 
-function WasmInboundPanel({ nodeId, session, fmtB, onNavigate }: {
-  nodeId: number; session: any; fmtB: (b: number) => string; onNavigate: (id: number) => void;
+function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree }: {
+  nodeId: number; session: any; fmtB: (b: number) => string;
+  onNavigate: (id: number) => void; onNavigateDomtree: (id: number) => void;
 }) {
   const [refs, setRefs] = React.useState<any[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -5311,11 +5312,19 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate }: {
   return (
     <>
       <table className="std-table">
-        <thead><tr><th>Class</th><th style={{ textAlign: "right" }}>Shallow</th><th style={{ textAlign: "right" }}>Retained</th></tr></thead>
+        <thead><tr><th>Field</th><th>Class</th><th style={{ textAlign: "right" }}>Shallow</th><th style={{ textAlign: "right" }}>Retained</th></tr></thead>
         <tbody>
           {refs.map((r: any, i: number) => (
             <tr key={i}>
-              <td><span className="copy-cell"><button className="btn-link" onClick={() => onNavigate(r.src_idx)}><code>{r.display_class}</code></button><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /></span></td>
+              <td style={{ color: "var(--muted)" }}><code>{r.field_name || "—"}</code></td>
+              <td>
+                <span className="copy-cell">
+                  <button className="btn-link" onClick={() => onNavigate(r.src_idx)}><code>{r.display_class}</code></button>
+                  <button className="btn-link" title="Open in dominator tree" style={{ opacity: 0.6, flexShrink: 0 }} onClick={() => onNavigateDomtree(r.src_idx)}>⌞</button>
+                  <PivotBtn cls={r.display_class} />
+                  <OqlBtn cls={r.display_class} />
+                </span>
+              </td>
               <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
               <td style={{ textAlign: "right" }}>{fmtB(r.retained)}</td>
             </tr>
@@ -5354,6 +5363,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   );
   const [showGcPath, setShowGcPath] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x: number) => x + 1, 0);
+  const [liveSearchQuery, setLiveSearchQuery] = React.useState("");
+  const [liveSearchResults, setLiveSearchResults] = React.useState<any[] | null>(null);
+  const [liveSearchTotal, setLiveSearchTotal] = React.useState(0);
+  const [liveSearchTruncated, setLiveSearchTruncated] = React.useState(false);
   const [fmtB] = useFmtBytes();
   const containerRef = React.useRef<HTMLDivElement>(null);
   // Remember the last active rootFilter so "⌂ Roots" returns to the filtered list
@@ -5778,6 +5791,73 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <p className="subtitle" style={{ marginTop: "0.4rem", fontSize: "0.8rem" }}>
             Showing top 50 of {data.roots.length} roots. Use the class filter above to search all {Object.keys(data.nodes).length.toLocaleString()} captured objects.
           </p>
+        )}
+        {!!(window as any).__wasmExploration && (
+          <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border-faint, #f0f0f0)", paddingTop: "0.6rem" }}>
+            <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.3rem" }}>Live Instance Search</div>
+            <p className="subtitle" style={{ fontSize: "0.78rem", margin: "0 0 0.4rem 0" }}>
+              Search all {(((window as any).__wasmExploration as any)?.n ?? Object.keys(data.nodes).length).toLocaleString()} captured objects by class name (not limited to captured graph).
+            </p>
+            <form style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}
+              onSubmit={e => {
+                e.preventDefault();
+                const wasm = (window as any).__wasmExploration;
+                if (!wasm?.find_instances || !liveSearchQuery.trim()) return;
+                try {
+                  const r = JSON.parse(wasm.find_instances(liveSearchQuery.trim(), 50));
+                  if (r.ok) { setLiveSearchResults(r.matches); setLiveSearchTotal(r.total); setLiveSearchTruncated(r.truncated); }
+                } catch {}
+              }}>
+              <input
+                type="text"
+                value={liveSearchQuery}
+                onChange={e => setLiveSearchQuery(e.target.value)}
+                placeholder="Class name substring…"
+                style={{ flex: 1, fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
+              />
+              <button type="submit" className="btn-link" style={{ fontSize: "0.82rem" }}>Search</button>
+              {liveSearchResults !== null && (
+                <button type="button" className="btn-link" style={{ fontSize: "0.82rem", opacity: 0.6 }}
+                  onClick={() => { setLiveSearchResults(null); setLiveSearchQuery(""); }}>Clear</button>
+              )}
+            </form>
+            {liveSearchResults !== null && (
+              <>
+                <p className="subtitle" style={{ fontSize: "0.78rem", margin: "0.3rem 0" }}>
+                  {liveSearchTotal} match{liveSearchTotal === 1 ? "" : "es"}{liveSearchTruncated ? ` (showing top 50 by retained)` : ""}.
+                </p>
+                {liveSearchResults.length > 0 && (
+                  <table className="std-table">
+                    <thead>
+                      <tr>
+                        <th>Class</th>
+                        <th style={{ whiteSpace: "nowrap" }}>#</th>
+                        <th style={{ textAlign: "right" }}>Shallow</th>
+                        <th style={{ textAlign: "right" }}>Retained</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {liveSearchResults.map((m: any) => (
+                        <tr key={m.dense_idx}>
+                          <td>
+                            <span className="copy-cell">
+                              <button className="btn-link" onClick={() => navigate("explore", m.dense_idx, m.display_class)}><code>{m.display_class}</code></button>
+                              <button className="btn-link" title="Open dominator tree" style={{ opacity: 0.6, flexShrink: 0 }} onClick={() => navigate("domtree", m.dense_idx, m.display_class)}>⌞</button>
+                              <PivotBtn cls={m.display_class} />
+                              <OqlBtn cls={m.display_class} />
+                            </span>
+                          </td>
+                          <td style={{ color: "var(--muted)", fontSize: "0.8rem" }}>{m.dense_idx}</td>
+                          <td style={{ textAlign: "right" }}>{fmtB(m.shallow)}</td>
+                          <td style={{ textAlign: "right" }}>{fmtB(m.retained)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
     );
@@ -6213,6 +6293,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   </button>
                 </div>
               )}
+              {groupedEdges.length > 0 && currentNode && (() => {
+                const childTotal = groupedEdges.reduce((s, e) => s + (e.any_shared ? 0 : e.total_retained), 0);
+                const selfOnly = Math.max(0, currentNode.retained - childTotal);
+                const pct = currentNode.retained > 0 ? Math.round(childTotal / currentNode.retained * 100) : 0;
+                return (
+                  <p className="subtitle" style={{ fontSize: "0.78rem", marginTop: "0.4rem" }}>
+                    {currentEdges.length} ref{currentEdges.length === 1 ? "" : "s"} · children retain {fmtB(childTotal)} ({pct}%) · self shallow {fmtB(selfOnly)}
+                  </p>
+                );
+              })()}
                 </>
               )}
               {activeRefTab === "inbound" && nodeId !== null && (() => {
@@ -6221,7 +6311,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 const wasm = (window as any).__wasmExploration;
 
                 if (wasm) {
-                  return <WasmInboundPanel nodeId={nodeId} session={wasm} fmtB={fmtB} onNavigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)} />;
+                  return <WasmInboundPanel nodeId={nodeId} session={wasm} fmtB={fmtB} onNavigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)} onNavigateDomtree={(id) => navigate("domtree", id, data.nodes[String(id)]?.display_class ?? `#${id}`)} />;
                 }
 
                 if (iEdges.length > 0 || iTrunc) {
