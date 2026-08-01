@@ -6,7 +6,7 @@
 use flate2::read::GzDecoder;
 use std::{
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufReader, Cursor, Read},
 };
 
 const BUF_CAP: usize = 8 << 20; // 8 MiB refill chunk
@@ -31,17 +31,24 @@ pub struct HprofReader {
 }
 
 impl HprofReader {
-    /// Open a dump (gzip auto-detected via magic) and consume its HPROF header.
+    /// Open a dump (gzip/zip auto-detected via magic) and consume its HPROF header.
     pub fn open(path: &str) -> io::Result<Self> {
         let file = File::open(path)?;
         let mut peek = BufReader::new(file);
-        let mut magic = [0u8; 2];
+        let mut magic = [0u8; 4];
         peek.read_exact(&mut magic)?;
+
+        // ZIP archive (PK\x03\x04): re-open with Seek and extract the .hprof entry.
+        #[cfg(feature = "native")]
+        if magic[..2] == [0x50, 0x4b] {
+            return Self::open_zip(path);
+        }
+
         // Stitch the sniffed magic bytes back onto the front of the stream so we
         // never re-open the path (avoids a double-open + a TOCTOU window, and
         // works on inputs that can only be opened once).
-        let stream = io::Cursor::new(magic.to_vec()).chain(peek);
-        let inner: Box<dyn Read> = if magic == [0x1f, 0x8b] {
+        let stream = Cursor::new(magic.to_vec()).chain(peek);
+        let inner: Box<dyn Read> = if magic[..2] == [0x1f, 0x8b] {
             Box::new(GzDecoder::new(stream))
         } else {
             Box::new(stream)
@@ -58,6 +65,36 @@ impl HprofReader {
         };
         r.read_header()?;
         Ok(r)
+    }
+
+    /// Open a `.hprof.zip`, find the first `.hprof` entry, and stream it through
+    /// the parser. Re-opens the file to get a `Seek`-capable handle; the entry is
+    /// decompressed on-the-fly with no full-file buffering.
+    #[cfg(feature = "native")]
+    fn open_zip(path: &str) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let idx = (0..archive.len())
+            .find(|&i| {
+                archive
+                    .by_index(i)
+                    .map(|f| f.name().to_ascii_lowercase().ends_with(".hprof"))
+                    .unwrap_or(false)
+            })
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "no .hprof entry found in zip")
+            })?;
+        let entry = archive
+            .by_index(idx)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        // `ZipFile` is `Read` but borrows `archive`, so we must read into a Vec.
+        // For typical .hprof.zip sizes (tens to hundreds of MB decompressed) this
+        // is acceptable; the parser's own pass1 scan then proceeds from a Cursor.
+        let mut hprof_bytes = Vec::with_capacity(entry.size() as usize);
+        let mut entry = entry;
+        entry.read_to_end(&mut hprof_bytes)?;
+        Self::from_reader(Cursor::new(hprof_bytes))
     }
 
     /// Construct a reader from any `Read` implementation.
