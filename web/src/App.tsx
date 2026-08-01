@@ -6852,6 +6852,25 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     : "—"}%
                 </td>
               </tr>
+              {nodeId !== null && (() => {
+                const wasm = (window as any).__wasmExploration;
+                if (!wasm?.get_object_address) return null;
+                try {
+                  const r = JSON.parse(wasm.get_object_address(nodeId));
+                  if (!r.ok) return null;
+                  return (
+                    <tr>
+                      <th>Address</th>
+                      <td>
+                        <span className="copy-cell">
+                          <code style={{ fontSize: "0.8rem" }}>{r.address}</code>
+                          <CopyBtn text={r.address} />
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                } catch { return null; }
+              })()}
               <tr>
                 <th>Immediate dominator</th>
                 <td>

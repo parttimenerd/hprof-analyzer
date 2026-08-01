@@ -794,6 +794,30 @@ impl HprofSession {
         })
         .to_string()
     }
+
+    /// Returns the HPROF memory address (as a hex string) for a single object by dense index.
+    ///
+    /// Returns `{"ok":true,"address":"0x..."}` on success,
+    /// or `{"error":"exploration_not_enabled"}` / `{"error":"out_of_range"}` / `{"error":"no_addresses"}`.
+    /// Requires `enable_exploration()` to have been called first.
+    pub fn get_object_address(&self, dense_idx: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+        if exp.addrs.is_empty() {
+            return serde_json::json!({"error":"no_addresses"}).to_string();
+        }
+        let i = dense_idx as usize;
+        if i >= exp.addrs.len() {
+            return serde_json::json!({"error":"out_of_range"}).to_string();
+        }
+        serde_json::json!({
+            "ok": true,
+            "address": format!("0x{:x}", exp.addrs[i]),
+        })
+        .to_string()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

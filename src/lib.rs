@@ -142,6 +142,9 @@ pub struct ExplorationResult {
     pub fwd_field_name_idx: Option<Vec<u16>>,
     /// Deduped field-name strings; index 0 is always "" (unnamed).
     pub field_name_pool: Vec<String>,
+    /// Dense index → HPROF object address (memory address). May be empty if
+    /// id_map was already freed before `build_exploration` was called.
+    pub addrs: Vec<u64>,
 }
 
 /// Build inbound CSR for interactive exploration (no report, no dominators).
@@ -176,6 +179,13 @@ pub fn build_exploration(
         &mut no_in_sets,
         &mut no_exists_bools,
     )?;
+
+    // Extract object addresses before id_map is compressed away.
+    let addrs: Vec<u64> = if let Some(ref m) = inbound.id_map {
+        (0..n).map(|i| m.addr_at(i)).collect()
+    } else {
+        vec![]
+    };
 
     inbound.compress_id_map(compress)?;
 
@@ -248,6 +258,7 @@ pub fn build_exploration(
         fwd_targets: saved_fwd_targets,
         fwd_field_name_idx: saved_fwd_field_name_idx,
         field_name_pool: saved_field_name_pool,
+        addrs,
     })
 }
 

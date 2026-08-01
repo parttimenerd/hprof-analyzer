@@ -4029,6 +4029,7 @@ mod dom_subtree_tests {
             edges_truncated: false,
             idom: None,
             dom_subtree_count: 1,
+            subtree_classes: Vec::new(),
         };
         assert_eq!(n.dom_subtree_count, 1);
     }
