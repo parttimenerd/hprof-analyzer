@@ -2405,6 +2405,13 @@
         "display_class": {
           "type": "string"
         },
+        "dom_subtree_count": {
+          "description": "Total number of objects in the dominated subtree rooted here (including self).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
         "edges_truncated": {
           "type": "boolean",
           "default": false

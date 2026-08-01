@@ -541,6 +541,9 @@ pub struct ObjGraphFlatNode {
     #[serde(default)]
     pub edges_truncated: bool,
     pub idom: Option<u32>,
+    /// Total number of objects in the dominated subtree rooted here (including self).
+    #[serde(default)]
+    pub dom_subtree_count: u32,
 }
 
 /// One aggregated type-level reference edge for the TPFG (V13).

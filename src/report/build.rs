@@ -126,6 +126,7 @@ fn build_obj_graph_flat(
                 edges_unknown: false, // set below
                 edges_truncated: false,
                 idom,
+                dom_subtree_count: 0, // computed below
             },
         );
 
@@ -140,6 +141,35 @@ fn build_obj_graph_flat(
             for k in sig_kids {
                 queue.push_back(k);
             }
+        }
+    }
+
+    // Bottom-up subtree count via iterative postorder DFS (avoids stack overflow).
+    {
+        let mut subtree_counts: HashMap<u32, u32> = HashMap::new();
+        for &root in &roots {
+            let mut stack: Vec<(u32, usize)> = vec![(root, 0)];
+            while let Some((node, child_idx)) = stack.last_mut() {
+                let node = *node;
+                let children = dom_children_map.get(&node).map(|v| v.as_slice()).unwrap_or(&[]);
+                if *child_idx < children.len() {
+                    let child = children[*child_idx];
+                    *child_idx += 1;
+                    if !subtree_counts.contains_key(&child) {
+                        stack.push((child, 0));
+                    }
+                } else {
+                    stack.pop();
+                    let child_sum: u32 = dom_children_map
+                        .get(&node)
+                        .map(|kids| kids.iter().map(|k| *subtree_counts.get(k).unwrap_or(&1)).sum())
+                        .unwrap_or(0);
+                    subtree_counts.insert(node, 1 + child_sum);
+                }
+            }
+        }
+        for (&node_id, node) in nodes.iter_mut() {
+            node.dom_subtree_count = *subtree_counts.get(&node_id).unwrap_or(&1);
         }
     }
 
@@ -3886,6 +3916,25 @@ mod attribution_tests {
         let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall[0].total_retained, 0);
         assert_eq!(ca.biggest_single[0].retained, 0);
+    }
+}
+
+#[cfg(test)]
+mod dom_subtree_tests {
+    use super::*;
+
+    #[test]
+    fn obj_graph_flat_node_has_dom_subtree_count() {
+        let n = ObjGraphFlatNode {
+            display_class: "Foo".to_string(),
+            shallow: 0,
+            retained: 0,
+            edges_unknown: false,
+            edges_truncated: false,
+            idom: None,
+            dom_subtree_count: 1,
+        };
+        assert_eq!(n.dom_subtree_count, 1);
     }
 }
 
