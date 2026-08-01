@@ -731,6 +731,9 @@ export interface TriageSignal {
   // Reclaimable/attributable bytes used to rank problem signals (§26.2). Present
   // only on quantified problem rules; not rendered — ordering happens in Rust.
   bytes?: number | null;
+  // Primary class name to navigate to (PivotBtn/OqlBtn). Present only when the
+  // signal has exactly one navigable class.
+  nav_class?: string | null;
 }
 
 export interface QueryColumn {

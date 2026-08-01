@@ -226,7 +226,21 @@ fn signal(
         anchor,
         anchor_label,
         bytes: None,
+        nav_class: None,
     }
+}
+
+fn signal_cls(
+    id: &str,
+    severity: TriageSeverity,
+    title: &str,
+    detail: String,
+    anchor: Option<(&str, &str)>,
+    nav_class: impl Into<String>,
+) -> TriageSignal {
+    let mut s = signal(id, severity, title, detail, anchor);
+    s.nav_class = Some(nav_class.into());
+    s
 }
 
 // ── Rules (ported from the former render_md.rs hand-written logic) ─────────────
@@ -243,7 +257,7 @@ impl Rule for HeadlineRetainer {
             } else {
                 "a class group"
             };
-            Some(signal(
+            Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Critical,
                 "Headline retainer",
@@ -255,9 +269,10 @@ impl Rule for HeadlineRetainer {
                     pct_of(s.retained, total),
                 ),
                 Some(("leak-suspects", "Leak Suspects")),
+                &s.pretty_class,
             ))
         } else if let Some(o) = r.top.biggest_objects.first() {
-            Some(signal(
+            Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Warning,
                 "Headline retainer",
@@ -268,6 +283,7 @@ impl Rule for HeadlineRetainer {
                     pct_of(o.retained, total),
                 ),
                 Some(("top-consumers", "Top Consumers")),
+                &o.display_class,
             ))
         } else {
             Some(signal(
@@ -309,7 +325,7 @@ impl Rule for Concentration {
                     Some(o) => format!(" held by `{o}`"),
                     None => String::new(),
                 };
-                signal(
+                signal_cls(
                     "concentration",
                     TriageSeverity::Critical,
                     "Concentration",
@@ -321,6 +337,7 @@ impl Rule for Concentration {
                         pct_of(s.retained, total),
                     ),
                     Some(("leak-suspects", "Leak Suspects")),
+                    &s.pretty_class,
                 )
             }
             Some(_) => signal(
@@ -413,10 +430,8 @@ impl Rule for OneLeakOrMany {
         }
         let top1_pct = rc.top1_bp as f64 / 100.0;
         let top10_pct = rc.top10_bp as f64 / 100.0;
-        let detail = match r
-            .top
-            .biggest_objects
-            .first()
+        let top_obj = r.top.biggest_objects.first();
+        let detail = match top_obj
             .map(|o| match o.owner.as_deref() {
                 Some(owner) => format!("`{}` (held by `{}`)", o.display_class, owner),
                 None => format!("`{}`", o.display_class),
@@ -430,13 +445,18 @@ impl Rule for OneLeakOrMany {
                 top1_pct, top10_pct, rc.num_objects_ge_1pct,
             ),
         };
-        Some(signal(
+        let nav_class = top_obj
+            .filter(|o| o.owner.is_none())
+            .map(|o| o.display_class.clone());
+        let mut sig = signal(
             "one-leak-or-many",
             TriageSeverity::Info,
             "One leak or many",
             detail,
             Some(("top-consumers", "Top Consumers")),
-        ))
+        );
+        sig.nav_class = nav_class;
+        Some(sig)
     }
 }
 
@@ -455,7 +475,7 @@ impl Rule for ClassloaderLeak {
             return None;
         }
         if dup.loader_count < 5 {
-            return Some(signal(
+            return Some(signal_cls(
                 "classloader-leak",
                 TriageSeverity::Info,
                 "Classloader reload (low count)",
@@ -466,9 +486,10 @@ impl Rule for ClassloaderLeak {
                     format_bytes(dup.total_retained),
                 ),
                 Some(("system-overview", "Duplicate Classes")),
+                &dup.pretty_class,
             ));
         }
-        Some(signal(
+        Some(signal_cls(
             "classloader-leak",
             TriageSeverity::Warning,
             "Classloader leak",
@@ -479,6 +500,7 @@ impl Rule for ClassloaderLeak {
                 format_bytes(dup.total_retained),
             ),
             Some(("system-overview", "Duplicate Classes")),
+            &dup.pretty_class,
         ))
     }
 }
@@ -705,7 +727,7 @@ impl Rule for ConstantValueArrays {
             return None;
         }
         let big = cpa.rows.iter().max_by_key(|row| row.shallow)?;
-        Some(signal(
+        Some(signal_cls(
             "constant-value-arrays",
             TriageSeverity::Info,
             "Constant-value arrays",
@@ -716,6 +738,7 @@ impl Rule for ConstantValueArrays {
                 fmt_count(big.objects),
             ),
             Some(("collections", "Collections")),
+            &big.array_class,
         ))
     }
 }
@@ -743,7 +766,7 @@ impl Rule for ObjectSwarm {
         if pct_of(row.shallow, total) < SWARM_PCT {
             return None;
         }
-        Some(signal(
+        Some(signal_cls(
             "object-swarm",
             TriageSeverity::Warning,
             "Object swarm",
@@ -755,6 +778,7 @@ impl Rule for ObjectSwarm {
                 pct_of(row.shallow, total),
             ),
             Some(("system-overview", "System Overview")),
+            &row.pretty_class,
         ))
     }
 }
@@ -948,7 +972,7 @@ impl Rule for LargeUnboundedCollection {
             .as_deref()
             .map(|o| format!(" (held by `{}`)", o))
             .unwrap_or_default();
-        Some(signal(
+        Some(signal_cls(
             "large-unbounded-collection",
             TriageSeverity::Warning,
             "Large unbounded collection",
@@ -960,6 +984,7 @@ impl Rule for LargeUnboundedCollection {
                 owner_str,
             ),
             Some(("biggest-collections", "Biggest Collections")),
+            &row.container_class,
         ))
     }
 }
@@ -1140,7 +1165,7 @@ impl Rule for StaticFieldAnchor {
         if pct < STATIC_ANCHOR_PCT {
             return None;
         }
-        Some(signal(
+        Some(signal_cls(
             "static-field-anchor",
             TriageSeverity::Warning,
             "Static-field anchor",
@@ -1151,6 +1176,7 @@ impl Rule for StaticFieldAnchor {
                 pct,
             ),
             Some(("leak-suspects", "Leak Suspects")),
+            &s.pretty_class,
         ))
     }
 }
@@ -1172,7 +1198,7 @@ impl Rule for SessionScopeLeak {
                     && h.instances >= SESSION_FLOOR
             })
             .max_by_key(|h| h.instances)?;
-        Some(signal(
+        Some(signal_cls(
             "session-scope-leak",
             TriageSeverity::Warning,
             "Session-scope leak",
@@ -1182,6 +1208,7 @@ impl Rule for SessionScopeLeak {
                 row.pretty_class,
             ),
             Some(("system-overview", "System Overview")),
+            &row.pretty_class,
         ))
     }
 }
@@ -1206,7 +1233,7 @@ impl Rule for ConnectionLeak {
                     && h.instances >= CONNECTION_FLOOR
             })
             .max_by_key(|h| h.instances)?;
-        Some(signal(
+        Some(signal_cls(
             "connection-leak",
             TriageSeverity::Warning,
             "Connection / socket leak",
@@ -1216,6 +1243,7 @@ impl Rule for ConnectionLeak {
                 row.pretty_class,
             ),
             Some(("system-overview", "System Overview")),
+            &row.pretty_class,
         ))
     }
 }
@@ -1239,7 +1267,7 @@ impl Rule for EventListenerAccumulation {
                     && h.instances >= LISTENER_FLOOR
             })
             .max_by_key(|h| h.instances)?;
-        Some(signal(
+        Some(signal_cls(
             "event-listener-accumulation",
             TriageSeverity::Warning,
             "Event-listener accumulation",
@@ -1249,6 +1277,7 @@ impl Rule for EventListenerAccumulation {
                 row.pretty_class,
             ),
             Some(("system-overview", "System Overview")),
+            &row.pretty_class,
         ))
     }
 }
@@ -1281,7 +1310,7 @@ impl Rule for ParserOutputAccumulation {
                     && h.instances >= PARSER_FLOOR
             })
             .max_by_key(|h| h.instances)?;
-        Some(signal(
+        Some(signal_cls(
             "parser-output-accumulation",
             TriageSeverity::Info,
             "Parser-output accumulation",
@@ -1291,6 +1320,7 @@ impl Rule for ParserOutputAccumulation {
                 row.pretty_class,
             ),
             Some(("system-overview", "System Overview")),
+            &row.pretty_class,
         ))
     }
 }
@@ -1391,7 +1421,7 @@ impl Rule for BigDropConcentration {
         if pct < BIG_DROP_PCT {
             return None;
         }
-        Some(signal(
+        Some(signal_cls(
             "big-drop-concentration",
             TriageSeverity::Critical,
             "Dominator-tree big drop",
@@ -1404,6 +1434,7 @@ impl Rule for BigDropConcentration {
                 format_bytes(row.drop_bytes),
             ),
             Some(("dominator-tree", "Dominator Tree")),
+            &row.display_class,
         ))
     }
 }
@@ -1540,7 +1571,7 @@ impl Rule for OversizedPrimArray {
             Some(o) => format!(" held by `{o}`"),
             None => String::new(),
         };
-        Some(signal(
+        Some(signal_cls(
             "oversized-prim-array",
             TriageSeverity::Warning,
             "Oversized primitive array",
@@ -1554,6 +1585,7 @@ impl Rule for OversizedPrimArray {
                 pct,
             ),
             Some(("arrays", "Arrays")),
+            &row.array_class,
         ))
     }
 }

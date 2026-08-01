@@ -695,6 +695,7 @@ function OomTriage({ report }: { report: Report }) {
           return (
             <li key={i}>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
+              {s.nav_class && <>{" "}<PivotBtn cls={s.nav_class} /><OqlBtn cls={s.nav_class} /></>}
               {s.anchor && s.anchor_label ? (
                 <>
                   {" "}
@@ -2840,9 +2841,11 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
           <>
             <p className="subtitle"><em>Frame percentages are of this thread's {fmtB(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
-            {sig.map((sf, i) => (
+            {sig.map((sf, i) => {
+              const frameCls = frameToClass(sf.frame);
+              return (
               <li key={i}>
-                <code>{sf.frame}</code>
+                <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{sf.frame}</code>{frameCls && <><PivotBtn cls={frameCls} /><OqlBtn cls={frameCls} /></>}</span>
                 {sf.locals.length > 0 && (
                   <ul>
                     {sf.locals.map((loc, j) => (
@@ -2854,7 +2857,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                   </ul>
                 )}
               </li>
-            ))}
+            ); })}
           </ul>
           </>
         ) : (

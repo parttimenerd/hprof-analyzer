@@ -102187,13 +102187,14 @@
       "title": "Headline retainer",
       "detail": "`scala.concurrent.stm.ccstm.InTxnImpl` (a class group) retains 2.7 MB (22.9% of reachable heap).",
       "anchor": "leak-suspects",
-      "anchor_label": "Leak Suspects"
+      "anchor_label": "Leak Suspects",
+      "nav_class": "scala.concurrent.stm.ccstm.InTxnImpl"
     },
     {
       "id": "concentration",
       "severity": "info",
       "title": "Concentration",
-      "detail": "diffuse — retention is spread across multiple roots, so there is no single object to free.",
+      "detail": "diffuse \u2014 retention is spread across multiple roots, so there is no single object to free.",
       "anchor": "leak-suspects",
       "anchor_label": "Leak Suspects"
     },
@@ -102201,7 +102202,7 @@
       "id": "shape",
       "severity": "info",
       "title": "Shape",
-      "detail": "deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28.",
+      "detail": "deep (retention flows through long dominator chains \u2014 often nested collections or linked structures) \u2014 90% of objects within depth 7, max depth 28.",
       "anchor": "dominator-depth-distribution",
       "anchor_label": "Dominator-Depth Distribution"
     },
@@ -102211,13 +102212,14 @@
       "title": "One leak or many",
       "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%.",
       "anchor": "top-consumers",
-      "anchor_label": "Top Consumers"
+      "anchor_label": "Top Consumers",
+      "nav_class": "scala.runtime.LazyVals$"
     },
     {
       "id": "off-heap",
       "severity": "warning",
       "title": "Off-heap (DirectByteBuffer)",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers \u2014 not counted in heap size but can dominate RSS.",
       "anchor": "leak-indicators",
       "anchor_label": "Leak Indicators"
     },
@@ -102225,7 +102227,7 @@
       "id": "fixed-per-object-overhead",
       "severity": "warning",
       "title": "Fixed per-object header overhead",
-      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
+      "detail": "236,457 objects \u00d7 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone \u2014 consider value types, primitive arrays, or fewer wrapper objects.",
       "anchor": "object-header-overhead",
       "anchor_label": "Header Overhead"
     },
@@ -102233,7 +102235,7 @@
       "id": "empty-collection-cemetery",
       "severity": "info",
       "title": "Empty-collection cemetery",
-      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null.",
+      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) \u2014 pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null.",
       "anchor": "collections",
       "anchor_label": "Collections"
     },
@@ -102241,7 +102243,7 @@
       "id": "collections-not-analyzed",
       "severity": "info",
       "title": "Collection waste not analyzed",
-      "detail": "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
+      "detail": "_Collection waste not analyzed \u2014 re-run with `--collections` to check for wasted capacity._"
     }
   ],
   "top_retainers": [

@@ -4172,6 +4172,13 @@
           "description": "Stable slug identifying the rule, e.g. `\"off-heap\"`.",
           "type": "string"
         },
+        "nav_class": {
+          "description": "Primary class name mentioned in `detail`, when there is exactly one (e.g.\nthe headline retainer class). Enables PivotBtn / OqlBtn in the HTML triage\npanel. `None` when the signal has no single navigable class.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "severity": {
           "$ref": "#/$defs/TriageSeverity"
         },

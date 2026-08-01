@@ -1481,6 +1481,11 @@ pub struct TriageSignal {
     /// without a byte figure. Not rendered — ordering only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
+    /// Primary class name mentioned in `detail`, when there is exactly one (e.g.
+    /// the headline retainer class). Enables PivotBtn / OqlBtn in the HTML triage
+    /// panel. `None` when the signal has no single navigable class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav_class: Option<String>,
 }
 
 /// Schema version for the machine-readable JSON output. Bump on any
