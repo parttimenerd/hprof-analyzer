@@ -5182,6 +5182,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   // Per-node pending expand groups: nodeId → groupKey. Survives state-reset races during navigation.
   const pendingExpandByNode = React.useRef<Map<number, string>>(new Map());
   const [domFilter, setDomFilter] = React.useState("");
+  const [domViewMode, setDomViewMode] = React.useState<"flat" | "grouped" | "expanded">("flat");
+  const [expandedDomList, setExpandedDomList] = React.useState<
+    { id: number; depth: number; display_class: string; shallow: number; retained: number }[] | null
+  >(null);
+  const [expandFilter, setExpandFilter] = React.useState("");
   const [refFilter, setRefFilter] = React.useState("");
   const [rootFilter, setRootFilter] = React.useState("");
   const [showAllInbound, setShowAllInbound] = React.useState(false);
@@ -5238,6 +5243,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     } else {
       setExpandedGroups(new Set());
     }
+    // Reset dom-tree view state on every node change (covers hashchange-driven navigation)
+    setDomFilter("");
+    setDomViewMode("flat");
+    setExpandedDomList(null);
+    setExpandFilter("");
   }, [nodeId]);
 
   // Keyboard: Escape / Alt+Left = go back in explorer
@@ -5277,6 +5287,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     setPendingLabel(childClass);
     setPage(0);
     setDomFilter("");
+    setDomViewMode("flat");
+    setExpandedDomList(null);
+    setExpandFilter("");
     setRefFilter("");
     setRootFilter("");
     setShowAllInbound(false);
@@ -5372,10 +5385,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       e.preventDefault();
       const idx = classSiblings.findIndex(s => s.id === nodeId);
       if (e.key === "[" && idx > 0) {
-        setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
+        setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
         window.location.hash = `${tab}/${classSiblings[idx - 1].id}`;
       } else if (e.key === "]" && idx < classSiblings.length - 1) {
-        setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
+        setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
         window.location.hash = `${tab}/${classSiblings[idx + 1].id}`;
       }
     };
@@ -5386,6 +5399,28 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const totalHeap = Object.values(data.nodes).reduce(
     (s, n) => (n.idom == null ? s + n.retained : s), 0
   );
+
+  const expandDomSubtree = React.useCallback(() => {
+    if (nodeId === null) return;
+    const MAX = 1000;
+    const result: { id: number; depth: number; display_class: string; shallow: number; retained: number }[] = [];
+    const queue: { id: number; depth: number }[] = [{ id: nodeId, depth: 0 }];
+    const seen = new Set<number>();
+    while (queue.length > 0 && result.length < MAX) {
+      const { id, depth } = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const n = data.nodes[String(id)];
+      if (!n) continue;
+      result.push({ id, depth, display_class: n.display_class, shallow: n.shallow, retained: n.retained });
+      const children = data.dom_children[String(id)] ?? [];
+      for (const child of children) {
+        if (!seen.has(child)) queue.push({ id: child, depth: depth + 1 });
+      }
+    }
+    setExpandedDomList(result);
+    setDomViewMode("expanded");
+  }, [nodeId, data.nodes, data.dom_children]);
 
   const PAGE_SIZE = 50;
 
@@ -5724,7 +5759,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               onClick={() => {
                 if (siblingIdx > 0) {
                   const s = classSiblings[siblingIdx - 1];
-                  setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
+                  setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
                   window.location.hash = `${tab}/${s.id}`;
                 }
               }}>
@@ -5737,7 +5772,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               onClick={() => {
                 if (siblingIdx < classSiblings.length - 1) {
                   const s = classSiblings[siblingIdx + 1];
-                  setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
+                  setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
                   window.location.hash = `${tab}/${s.id}`;
                 }
               }}>
@@ -6189,7 +6224,25 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   </>
                 );
               })()}
-              {currentDomChildren.length > 5 && (
+              {currentDomChildren.length > 0 && (
+                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.4rem", fontSize: "0.82rem", alignItems: "center" }}>
+                  <span style={{ color: "var(--muted)" }}>View:</span>
+                  {(["flat", "grouped", "expanded"] as const).map(mode => (
+                    <button key={mode} className={domViewMode === mode ? "btn-active" : "btn-link"}
+                      style={{ fontSize: "0.82rem", padding: "1px 6px" }}
+                      onClick={() => {
+                        if (mode === "expanded") {
+                          expandDomSubtree();
+                        } else {
+                          setDomViewMode(mode);
+                        }
+                      }}>
+                      {mode === "flat" ? "Immediate" : mode === "grouped" ? "By class" : "All objects (up to 1000)"}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {currentDomChildren.length > 5 && domViewMode === "flat" && (
                 <input
                   type="text"
                   value={domFilter}
@@ -6201,66 +6254,151 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {currentDomChildren.length === 0 ? (
                 <p className="subtitle">No significant dominated children.</p>
               ) : (
-                <table className="std-table">
-                  <thead>
-                    <tr>
-                      <th>Class</th>
-                      <th>Shallow</th>
-                      <th style={{ textAlign: "right" }}>Retained</th>
-                      <th style={{ textAlign: "right" }}>% Heap</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {currentDomChildren.filter(childId => {
-                      if (!domFilter) return true;
+                <>
+                  {domViewMode === "grouped" && (() => {
+                    const byClass = new Map<string, { count: number; total_retained: number; max_retained: number }>();
+                    for (const childId of currentDomChildren) {
                       const cn = data.nodes[String(childId)];
-                      return cn?.display_class.toLowerCase().includes(domFilter.toLowerCase());
-                    }).map(childId => {
-                      const cn = data.nodes[String(childId)];
-                      if (!cn) return null;
-                      const pct = currentNode.retained > 0 ? cn.retained / currentNode.retained : 0;
-                      return (
-                        <tr key={childId}>
-                          <td>
-                            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                              <button className="btn-link" title="Explore outbound refs"
-                                onClick={() => navigate("explore", childId, cn.display_class)}
-                              >
-                                <code>{cn.display_class}</code>
-                              </button>
-                              <button className="btn-link" title="Open in dominator tree"
-                                style={{ opacity: 0.6, flexShrink: 0 }}
-                                onClick={() => navigate("domtree", childId, cn.display_class)}>
-                                ⌞
-                              </button>
-                              <PivotBtn cls={cn.display_class} />
-                              <OqlBtn cls={cn.display_class} />
-                            </span>
-                          </td>
-                          <td>{fmtB(cn.shallow)}</td>
-                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                            <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
-                              {pct > 0.01 && (
-                                <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(1)}% of parent`} />
-                              )}
-                              {fmtB(cn.retained)}
-                              {pct >= 0.005 && (
-                                <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
-                                  {(pct * 100).toFixed(0)}%
-                                </span>
-                              )}
-                            </span>
-                          </td>
-                          <td style={{ textAlign: "right" }}>
-                            {totalHeap > 0
-                              ? (cn.retained / totalHeap * 100).toFixed(1)
-                              : "—"}%
-                          </td>
+                      if (!cn) continue;
+                      const entry = byClass.get(cn.display_class) ?? { count: 0, total_retained: 0, max_retained: 0 };
+                      entry.count++;
+                      entry.total_retained += cn.retained;
+                      entry.max_retained = Math.max(entry.max_retained, cn.retained);
+                      byClass.set(cn.display_class, entry);
+                    }
+                    const rows = [...byClass.entries()]
+                      .map(([cls, v]) => ({ cls, ...v }))
+                      .sort((a, b) => b.total_retained - a.total_retained);
+                    return (
+                      <table className="std-table">
+                        <thead>
+                          <tr>
+                            <th>Class</th>
+                            <th style={{ textAlign: "right" }}>Instances</th>
+                            <th style={{ textAlign: "right" }}>Total Retained</th>
+                            <th style={{ textAlign: "right" }}>Max Single Retained</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map(r => (
+                            <tr key={r.cls}>
+                              <td><code>{r.cls}</code></td>
+                              <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
+                              <td style={{ textAlign: "right" }}>{fmtB(r.total_retained)}</td>
+                              <td style={{ textAlign: "right" }}>{fmtB(r.max_retained)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
+                  {domViewMode === "expanded" && expandedDomList !== null && (() => {
+                    const filtered = expandFilter
+                      ? expandedDomList.filter(r => r.display_class.toLowerCase().includes(expandFilter.toLowerCase()))
+                      : expandedDomList;
+                    return (
+                      <>
+                        <input type="text" value={expandFilter} onChange={e => setExpandFilter(e.target.value)}
+                          placeholder="Filter by class…"
+                          style={{ width: "100%", marginBottom: "0.4rem", fontSize: "0.82rem", padding: "2px 6px",
+                            border: "1px solid var(--border, #e2e8f0)", borderRadius: 4,
+                            background: "var(--input-bg, var(--bg))", color: "inherit", boxSizing: "border-box" as const }} />
+                        <p className="subtitle" style={{ fontSize: "0.8rem", margin: "0 0 0.3rem" }}>
+                          {expandedDomList.length >= 1000
+                            ? "Showing first 1,000 objects (subtree may be larger)."
+                            : `${expandedDomList.length} objects in captured subtree.`}
+                        </p>
+                        <table className="std-table">
+                          <thead>
+                            <tr>
+                              <th>Class</th>
+                              <th style={{ textAlign: "right" }}>Depth</th>
+                              <th style={{ textAlign: "right" }}>Shallow</th>
+                              <th style={{ textAlign: "right" }}>Retained</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.slice(0, 500).map(r => (
+                              <tr key={r.id}>
+                                <td>
+                                  <button className="btn-link" style={{ fontSize: "0.85rem" }}
+                                    onClick={() => navigate("domtree", r.id, r.display_class)}>
+                                    <code>{r.display_class}</code>
+                                  </button>
+                                </td>
+                                <td style={{ textAlign: "right", color: "var(--muted)", fontSize: "0.8rem" }}>{r.depth}</td>
+                                <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
+                                <td style={{ textAlign: "right" }}>{fmtB(r.retained)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </>
+                    );
+                  })()}
+                  {domViewMode === "flat" && (
+                    <table className="std-table">
+                      <thead>
+                        <tr>
+                          <th>Class</th>
+                          <th>Shallow</th>
+                          <th style={{ textAlign: "right" }}>Retained</th>
+                          <th style={{ textAlign: "right" }}>% Heap</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {currentDomChildren.filter(childId => {
+                          if (!domFilter) return true;
+                          const cn = data.nodes[String(childId)];
+                          return cn?.display_class.toLowerCase().includes(domFilter.toLowerCase());
+                        }).map(childId => {
+                          const cn = data.nodes[String(childId)];
+                          if (!cn) return null;
+                          const pct = currentNode.retained > 0 ? cn.retained / currentNode.retained : 0;
+                          return (
+                            <tr key={childId}>
+                              <td>
+                                <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                                  <button className="btn-link" title="Explore outbound refs"
+                                    onClick={() => navigate("explore", childId, cn.display_class)}
+                                  >
+                                    <code>{cn.display_class}</code>
+                                  </button>
+                                  <button className="btn-link" title="Open in dominator tree"
+                                    style={{ opacity: 0.6, flexShrink: 0 }}
+                                    onClick={() => navigate("domtree", childId, cn.display_class)}>
+                                    ⌞
+                                  </button>
+                                  <PivotBtn cls={cn.display_class} />
+                                  <OqlBtn cls={cn.display_class} />
+                                </span>
+                              </td>
+                              <td>{fmtB(cn.shallow)}</td>
+                              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                                <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
+                                  {pct > 0.01 && (
+                                    <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(1)}% of parent`} />
+                                  )}
+                                  {fmtB(cn.retained)}
+                                  {pct >= 0.005 && (
+                                    <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                                      {(pct * 100).toFixed(0)}%
+                                    </span>
+                                  )}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                {totalHeap > 0
+                                  ? (cn.retained / totalHeap * 100).toFixed(1)
+                                  : "—"}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </>
               )}
               {prebuiltTree && (
                 <div style={{ marginTop: "0.75rem" }}>
