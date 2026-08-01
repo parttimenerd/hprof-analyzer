@@ -6332,6 +6332,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                   <button className="btn-link" onClick={() => navigate("explore", e.src_idx, e.src_class)}>
                                     <code>{e.src_class}</code>
                                   </button>
+                                  <button className="btn-link" title="Open in dominator tree" style={{ opacity: 0.6, flexShrink: 0 }} onClick={() => navigate("domtree", e.src_idx, e.src_class)}>⌞</button>
                                   <PivotBtn cls={e.src_class} />
                                   <OqlBtn cls={e.src_class} />
                                 </span>
