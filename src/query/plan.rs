@@ -2062,63 +2062,158 @@ fn pred_cost_rank(c: PredCost) -> u8 {
 impl QueryPlan {
     /// Human-readable plan summary for `!explain` / `!plan`.
     pub fn explain(&self) -> String {
+        self.explain_inner(0)
+    }
+
+    fn explain_inner(&self, indent: usize) -> String {
+        let pad = "  ".repeat(indent);
         let mut s = String::new();
-        s.push_str(&format!("stage: {:?}\n", self.kind));
-        let mut armed = Vec::new();
-        if self.needs.histogram {
-            armed.push("histogram");
-        }
-        if self.needs.instance_scalar {
-            armed.push("instance_scalar");
-        }
-        if self.needs.instance_string {
-            armed.push("instance_string");
-        }
-        if self.needs.runtime_type {
-            armed.push("runtime_type");
-        }
-        if self.needs.retained {
-            armed.push("retained");
-        }
-        if self.needs.dominator_children {
-            armed.push("dominator_children");
-        }
-        if self.needs.ref_walk {
-            armed.push("ref_walk");
-        }
-        s.push_str(&format!(
-            "needs (armed): {}\n",
-            if armed.is_empty() {
-                "none".into()
-            } else {
-                armed.join(", ")
-            }
-        ));
-        s.push_str(&format!("finalize: {:?}\n", self.finalize_at));
-        if let Some(n) = self.limit {
-            s.push_str(&format!("limit: {n}\n"));
-        }
+
+        // ── Summary line ────────────────────────────────────────────────────────
+        let stage_label = match self.kind {
+            StageKind::HistogramOnly => "class histogram scan (fast)",
+            StageKind::SingleScan    => "full heap scan",
+            StageKind::GroupBy       => "full heap scan + GROUP BY",
+        };
+        let phase_label = match self.finalize_at {
+            Phase::P1 => "Phase-1",
+            Phase::P2 => "Phase-2 (ref-graph)",
+            Phase::P3 => "Phase-3 (retained/dominators)",
+        };
+        let mut summary_parts: Vec<String> = vec![
+            format!("{stage_label} → {phase_label}"),
+        ];
         if let Some(n) = self.scan_limit {
-            s.push_str(&format!("scan_limit: {n}\n"));
+            summary_parts.push(format!("early-stop at {n} rows"));
+        } else if self.order_sensitive && self.limit.is_some() {
+            summary_parts.push("ORDER BY blocks early-stop".to_string());
         }
+        if let Some(n) = self.limit {
+            summary_parts.push(format!("LIMIT {n}"));
+        }
+        if !self.union_branches.is_empty() {
+            summary_parts.push(format!("UNION ×{}", self.union_branches.len() + 1));
+        }
+        if !self.intersect_branch_plans.is_empty() {
+            summary_parts.push(format!("INTERSECT ×{}", self.intersect_branch_plans.len() + 1));
+        }
+        if !self.except_branch_plans.is_empty() {
+            summary_parts.push(format!("EXCEPT ×{}", self.except_branch_plans.len() + 1));
+        }
+        if self.from_subplan.is_some() {
+            summary_parts.push("FROM subquery".to_string());
+        }
+        if !self.in_subplans.is_empty() {
+            summary_parts.push(format!("IN subquery ×{}", self.in_subplans.len()));
+        }
+        if !self.exists_subplans.is_empty() {
+            summary_parts.push(format!("EXISTS subquery ×{}", self.exists_subplans.len()));
+        }
+        s.push_str(&format!("{pad}summary: {}\n", summary_parts.join(" · ")));
+
+        // ── Stage ────────────────────────────────────────────────────────────────
+        s.push_str(&format!("{pad}stage: {:?}\n", self.kind));
+
+        // ── Needs (human-readable) ────────────────────────────────────────────
+        let need_labels: &[(&str, bool)] = &[
+            ("class histogram (pre-aggregated, fast)", self.needs.histogram),
+            ("field values (blob decode)",             self.needs.instance_scalar),
+            ("string field decode",                    self.needs.instance_string),
+            ("runtime class name",                     self.needs.runtime_type),
+            ("retained heap (dominators)",             self.needs.retained),
+            ("dominator-tree children",                self.needs.dominator_children),
+            ("reference graph walk",                   self.needs.ref_walk),
+            ("toString() string values",               self.needs.string_values),
+            ("GC root descriptors",                    self.needs.gc_roots),
+            ("array element access",                   self.needs.array_index),
+        ];
+        let armed: Vec<&str> = need_labels.iter()
+            .filter(|(_, on)| *on)
+            .map(|(label, _)| *label)
+            .collect();
+        s.push_str(&format!(
+            "{pad}needs: {}\n",
+            if armed.is_empty() { "none".to_string() } else { armed.join(", ") }
+        ));
+
+        // ── Carry + finalize ──────────────────────────────────────────────────
+        let carry_label = match &self.carry {
+            CarryLayout::IndexOnly => "IndexOnly".to_string(),
+            CarryLayout::IndexPlusScalars { widths } =>
+                format!("IndexPlusScalars({} col{})", widths.len(), if widths.len() == 1 { "" } else { "s" }),
+            CarryLayout::AddrFrontier => "AddrFrontier".to_string(),
+        };
+        s.push_str(&format!("{pad}carry: {carry_label}\n"));
+        s.push_str(&format!("{pad}finalize: {:?}\n", self.finalize_at));
+
+        // ── Limits ───────────────────────────────────────────────────────────
+        if let Some(n) = self.limit      { s.push_str(&format!("{pad}limit: {n}\n")); }
+        if let Some(n) = self.scan_limit { s.push_str(&format!("{pad}scan_limit: {n}\n")); }
+        if self.order_sensitive          { s.push_str(&format!("{pad}order_sensitive: true  (ORDER BY prevents scan early-stop)\n")); }
+        if let Some(n) = self.union_limit { s.push_str(&format!("{pad}union_limit: {n}\n")); }
+
+        // ── WHERE predicates ──────────────────────────────────────────────────
         if !self.where_terms.is_empty() {
-            s.push_str("where:\n");
+            s.push_str(&format!("{pad}where:\n"));
             for c in &self.where_terms {
-                s.push_str(&format!("  [{:?}] {:?}\n", c.cost, c.pred));
+                s.push_str(&format!("{pad}  [{:?}] {:?}\n", c.cost, c.pred));
             }
         }
+
+        // ── GROUP BY / HAVING ─────────────────────────────────────────────────
+        if !self.group_by_exprs.is_empty() {
+            let exprs: Vec<String> = self.group_by_exprs.iter().map(|e| format!("{e:?}")).collect();
+            s.push_str(&format!("{pad}group_by: {}\n", exprs.join(", ")));
+        }
+        if !self.having_terms.is_empty() {
+            s.push_str(&format!("{pad}having:\n"));
+            for c in &self.having_terms {
+                s.push_str(&format!("{pad}  [{:?}] {:?}\n", c.cost, c.pred));
+            }
+        }
+
+        // ── Late ops ──────────────────────────────────────────────────────────
         if !self.late_ops.is_empty() {
             let names: Vec<String> = self.late_ops.iter().map(|op| format!("{op:?}")).collect();
-            s.push_str(&format!("late_ops: {}\n", names.join(", ")));
+            s.push_str(&format!("{pad}late_ops: {}\n", names.join(", ")));
         }
+
+        // ── Deferred projections ─────────────────────────────────────────────
         if !self.deferred_projections.is_empty() {
-            let indices: Vec<String> = self
-                .deferred_projections
-                .iter()
-                .map(|d| d.select_index.to_string())
-                .collect();
-            s.push_str(&format!("deferred_projections: [{}]\n", indices.join(", ")));
+            let indices: Vec<String> = self.deferred_projections.iter()
+                .map(|d| d.select_index.to_string()).collect();
+            s.push_str(&format!("{pad}deferred_projections: [{}]  (expensive SELECTs deferred past WHERE filter)\n",
+                indices.join(", ")));
         }
+
+        // ── Subquery trees ────────────────────────────────────────────────────
+        if let Some(sub) = &self.from_subplan {
+            s.push_str(&format!("{pad}subquery (FROM):\n"));
+            s.push_str(&sub.explain_inner(indent + 1));
+        }
+        for (i, sub) in self.in_subplans.iter().enumerate() {
+            s.push_str(&format!("{pad}subquery (IN [{i}]):\n"));
+            s.push_str(&sub.plan.explain_inner(indent + 1));
+        }
+        for (i, sub) in self.exists_subplans.iter().enumerate() {
+            s.push_str(&format!("{pad}subquery (EXISTS [{i}]):\n"));
+            s.push_str(&sub.plan.explain_inner(indent + 1));
+        }
+
+        // ── UNION / INTERSECT / EXCEPT branches ──────────────────────────────
+        for (i, branch) in self.union_branches.iter().enumerate() {
+            s.push_str(&format!("{pad}union_branch[{}]:\n", i + 1));
+            s.push_str(&branch.explain_inner(indent + 1));
+        }
+        for (i, branch) in self.intersect_branch_plans.iter().enumerate() {
+            s.push_str(&format!("{pad}intersect_branch[{}]:\n", i + 1));
+            s.push_str(&branch.explain_inner(indent + 1));
+        }
+        for (i, branch) in self.except_branch_plans.iter().enumerate() {
+            s.push_str(&format!("{pad}except_branch[{}]:\n", i + 1));
+            s.push_str(&branch.explain_inner(indent + 1));
+        }
+
         s
     }
 
@@ -2775,7 +2870,7 @@ mod tests {
         let plan = pq(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
         let text = plan.explain();
         assert!(text.contains("SingleScan"));
-        assert!(text.contains("instance_scalar"));
+        assert!(text.contains("needs:"));
         assert!(text.contains("where:"));
     }
 
@@ -2801,7 +2896,44 @@ mod tests {
         // @objectId does not arm any field-decode need; no WHERE either.
         let plan = pq(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
         let text = plan.explain();
-        assert!(text.contains("needs (armed): none"), "got: {text}");
+        assert!(text.contains("needs: none"), "got: {text}");
+    }
+
+    #[test]
+    fn explain_summary_line_is_first() {
+        let plan = pq(&parse("SELECT * FROM C WHERE count > 3").unwrap()).unwrap();
+        let text = plan.explain();
+        let first_line = text.lines().next().unwrap_or("");
+        assert!(first_line.starts_with("summary:"), "first line should be summary:, got: {first_line}");
+    }
+
+    #[test]
+    fn explain_human_readable_needs_instance_scalar() {
+        let plan = pq(&parse("SELECT count FROM C").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("field values (blob decode)"), "got: {text}");
+        assert!(!text.contains("instance_scalar"), "raw name should not appear, got: {text}");
+    }
+
+    #[test]
+    fn explain_human_readable_needs_retained() {
+        let plan = pq(&parse("SELECT @retainedHeapSize FROM C").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("retained heap (dominators)"), "got: {text}");
+    }
+
+    #[test]
+    fn explain_order_sensitive_shown_when_true() {
+        let plan = pq(&parse("SELECT * FROM C ORDER BY count DESC").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("order_sensitive: true"), "got: {text}");
+    }
+
+    #[test]
+    fn explain_carry_shown() {
+        let plan = pq(&parse("SELECT @retainedHeapSize FROM C").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("carry:"), "got: {text}");
     }
 
     #[test]

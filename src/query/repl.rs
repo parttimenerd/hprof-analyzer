@@ -4869,7 +4869,7 @@ fn print_oql_ref(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "    {cd}SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s){cr}"
+        "    {cd}SELECT classof(s) AS cls, COUNT(*) AS n FROM java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 20{cr}"
     )?;
     writeln!(
         out,
@@ -6047,9 +6047,9 @@ mod tests {
         let (quit, out) = meta_out("plan SELECT * FROM java.lang.String");
         assert!(!quit);
         // `QueryPlan::explain()` always emits a "stage: <StageKind>" line and a
-        // "needs (armed): ..." line.
+        // "needs: ..." line.
         assert!(out.contains("stage:"), "got: {out}");
-        assert!(out.contains("needs (armed):"), "got: {out}");
+        assert!(out.contains("needs:"), "got: {out}");
     }
 
     #[test]
