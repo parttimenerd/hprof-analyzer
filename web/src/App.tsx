@@ -5315,7 +5315,7 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate }: {
         <tbody>
           {refs.map((r: any, i: number) => (
             <tr key={i}>
-              <td><button className="btn-link" onClick={() => onNavigate(r.src_idx)}><code>{r.display_class}</code></button></td>
+              <td><span className="copy-cell"><button className="btn-link" onClick={() => onNavigate(r.src_idx)}><code>{r.display_class}</code></button><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /></span></td>
               <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
               <td style={{ textAlign: "right" }}>{fmtB(r.retained)}</td>
             </tr>
@@ -5723,6 +5723,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     style={{ opacity: 0.6, flexShrink: 0 }}>
                     ⌞
                   </button>
+                  <PivotBtn cls={node.display_class} />
                   <OqlBtn cls={node.display_class} />
                 </td>
                 <td style={{ color: "var(--muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>{id}</td>
@@ -6136,6 +6137,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                     onClick={() => navigate("domtree", m.child_idx, m.child_class, edge.field_name || undefined)}>
                                     ⌞
                                   </button>
+                                  <PivotBtn cls={m.child_class} />
+                                  <OqlBtn cls={m.child_class} />
                                 </span>
                               </td>
                               <td style={{ textAlign: "right", whiteSpace: "nowrap", fontSize: "0.8rem" }}>{fmtB(m.child_retained)}</td>
