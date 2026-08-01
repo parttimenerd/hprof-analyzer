@@ -5119,6 +5119,129 @@ function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
 
 // ── Object Graph Explorer (V3 + V4) ──────────────────────────────────────────
 
+function WasmQueryPanel({
+  nodeId,
+  session,
+  data,
+}: {
+  nodeId: number;
+  session: any;
+  data: ObjGraphFlat;
+}) {
+  const node = data.nodes[String(nodeId)];
+  const defaultQuery = node
+    ? `SELECT * FROM ${node.display_class} s WHERE s.@objectId = ${nodeId}`
+    : `SELECT * FROM java.lang.Object s WHERE s.@objectId = ${nodeId}`;
+
+  const [queryText, setQueryText] = React.useState(defaultQuery);
+  const [result, setResult] = React.useState<QueryResult | null>(null);
+  const [queryError, setQueryError] = React.useState<string | null>(null);
+  const [running, setRunning] = React.useState(false);
+
+  React.useEffect(() => {
+    const n = data.nodes[String(nodeId)];
+    const q = n
+      ? `SELECT * FROM ${n.display_class} s WHERE s.@objectId = ${nodeId}`
+      : `SELECT * FROM java.lang.Object s WHERE s.@objectId = ${nodeId}`;
+    setQueryText(q);
+    setResult(null);
+    setQueryError(null);
+  }, [nodeId, data]);
+
+  const runQuery = () => {
+    setRunning(true);
+    setResult(null);
+    setQueryError(null);
+    try {
+      const raw = JSON.parse(session.query(queryText));
+      if (raw.ok) {
+        setResult(raw.result as QueryResult);
+      } else {
+        const err = raw.error;
+        const loc = err.location ? ` (line ${err.location.line}, col ${err.location.col})` : "";
+        setQueryError(err.message + loc);
+      }
+    } catch (e: any) {
+      setQueryError(String(e));
+    }
+    setRunning(false);
+  };
+
+  const hasObjGraph = true; // always true: rendered only when __wasmExploration is live
+
+  return (
+    <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-faint, #f0f0f0)", paddingTop: "0.5rem" }}>
+      <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0", fontWeight: 600 }}>
+        OQL Query
+      </p>
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "flex-start" }}>
+        <textarea
+          value={queryText}
+          onChange={(e) => setQueryText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runQuery(); } }}
+          rows={3}
+          style={{
+            flex: 1, fontFamily: "monospace", fontSize: "0.78rem", padding: "4px 6px",
+            border: "1px solid var(--border)", borderRadius: 4, resize: "vertical",
+            background: "var(--input-bg, var(--bg))", color: "inherit", boxSizing: "border-box",
+          }}
+        />
+        <button
+          onClick={runQuery}
+          disabled={running || !queryText.trim()}
+          style={{
+            padding: "4px 10px", fontSize: "0.82rem", border: "1px solid var(--border)",
+            borderRadius: 4, cursor: "pointer", background: "var(--accent, #3b82f6)", color: "#fff",
+            flexShrink: 0, whiteSpace: "nowrap",
+          }}
+        >
+          {running ? "…" : "Run ▶"}
+        </button>
+      </div>
+      <p style={{ fontSize: "0.7rem", color: "var(--muted)", margin: "2px 0 0.3rem" }}>
+        Ctrl+Enter to run
+      </p>
+      {queryError && (
+        <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.3rem 0 0" }}>
+          {queryError}
+        </p>
+      )}
+      {result && (() => {
+        const rows = result.rows.slice(0, 200);
+        const cols = result.columns;
+        return (
+          <>
+            <table className="std-table" style={{ marginTop: "0.4rem", fontSize: "0.78rem" }}>
+              <thead>
+                <tr>
+                  {cols.map((c: { name: string }, i: number) => (
+                    <th key={i}>{c.name}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row: QueryValue[], ri: number) => (
+                  <tr key={ri}>
+                    {row.map((val, ci) => (
+                      <td key={ci}>
+                        <QueryCell val={val} colName={cols[ci]?.name ?? ""} hasObjGraph={hasObjGraph} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0.2rem 0 0" }}>
+              {result.row_count} row(s){result.row_count > 200 ? " (showing first 200)" : ""}
+              {result.truncated ? ", truncated" : ""}
+            </p>
+          </>
+        );
+      })()}
+    </div>
+  );
+}
+
 function WasmGcPathPanel({ nodeId, session, data, fmtB, navigate }: {
   nodeId: number;
   session: any;
@@ -6155,6 +6278,18 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   })()}
                 </div>
               )}
+              {/* OQL Query Panel — only when WASM session is available */}
+              {nodeId !== null && (() => {
+                const wasm = (window as any).__wasmExploration;
+                if (!wasm) return null;
+                return (
+                  <WasmQueryPanel
+                    nodeId={nodeId}
+                    session={wasm}
+                    data={data}
+                  />
+                );
+              })()}
             </>
           ) : (
             <>

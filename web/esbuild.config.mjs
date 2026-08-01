@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 840 KB minified bundle budget (raised from 827 KB to accommodate inbound refs + GC root path explorer feature).
-const BUDGET_BYTES = 840 * 1024;
+// ≤ 842 KB minified bundle budget (raised from 840 KB to accommodate live WasmQueryPanel OQL feature).
+const BUDGET_BYTES = 842 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
