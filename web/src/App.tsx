@@ -5381,6 +5381,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [wasmBelowInfo, setWasmBelowInfo] = React.useState<{display_class: string; shallow: number; retained: number} | null>(null);
   const [wasmBelowOutbound, setWasmBelowOutbound] = React.useState<{dst_idx: number; field_name: string; display_class: string; shallow: number; retained: number}[] | null>(null);
   const [wasmBelowInbound, setWasmBelowInbound] = React.useState<{src_idx: number; field_name: string; display_class: string; shallow: number; retained: number}[] | null>(null);
+  const [showBelowGcPath, setShowBelowGcPath] = React.useState(false);
 
   React.useEffect(() => {
     setWasmOutboundEdges(null);
@@ -5414,6 +5415,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     setWasmBelowInfo(null);
     setWasmBelowOutbound(null);
     setWasmBelowInbound(null);
+    setShowBelowGcPath(false);
     const wasm = (window as any).__wasmExploration;
     if (!wasm?.get_node_info || nodeId === null) return;
     const inCapture = data.nodes[String(nodeId)] != null;
@@ -6014,6 +6016,22 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   )}
                 </div>
               ))}
+            </div>
+          );
+        })()}
+        {wasmBelowInfo && nodeId !== null && (() => {
+          const wasm = (window as any).__wasmExploration;
+          if (!wasm?.gc_root_path) return null;
+          return (
+            <div style={{ background:"var(--card-bg,var(--bg))", border:"1px solid var(--border)", borderRadius:6, padding:"0.6rem 0.75rem", marginTop:"0.75rem" }}>
+              <button className="btn-link" style={{ fontSize:"0.85rem", fontWeight:600, display:"flex", alignItems:"center", gap:"0.3rem" }}
+                onClick={() => setShowBelowGcPath(v => !v)}>
+                {showBelowGcPath ? "▼" : "▶"} Path to GC Root
+              </button>
+              {showBelowGcPath && (
+                <WasmGcPathPanel nodeId={nodeId} session={wasm} data={data} fmtB={fmtB}
+                  navigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)} />
+              )}
             </div>
           );
         })()}
