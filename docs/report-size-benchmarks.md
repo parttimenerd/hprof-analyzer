@@ -1,6 +1,6 @@
-# --report-size Benchmarks
+# Object Graph Capture Tier Benchmarks
 
-Measured with `./target/release/hprof-analyzer <dump> <out.html> --obj-graph --report-size <tier>`.
+Measured with `./target/release/hprof-analyzer <dump> <out.html> --obj-graph=<tier>`.
 
 ## Small test fixture (`tests/fixtures/dump_1_mnemonics.hprof`)
 
@@ -34,5 +34,5 @@ The HTML report compresses the embedded JSON with deflate, so the on-disk file s
 
 Re-run with the chosen tier to regenerate the report:
 ```
-hprof-analyzer my-dump.hprof report.html --obj-graph --report-size medium
+hprof-analyzer my-dump.hprof report.html --obj-graph=medium
 ```

@@ -3489,7 +3489,7 @@ function startTerminal() {
     term.writeln('  \x1b[33mSyntax examples\x1b[0m');
     term.writeln('    \x1b[2mSELECT * FROM java.lang.String\x1b[0m');
     term.writeln('    \x1b[2mSELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100\x1b[0m');
-    term.writeln('    \x1b[2mSELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)\x1b[0m');
+    term.writeln('    \x1b[2mSELECT classof(s) AS cls, COUNT(*) AS n FROM java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 20\x1b[0m');
     term.writeln('    \x1b[2mSELECT * FROM INSTANCEOF java.util.Collection\x1b[0m');
     term.writeln('    \x1b[2mSELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC\x1b[0m');
     term.writeln('');
