@@ -560,6 +560,65 @@ impl HprofSession {
         .to_string()
     }
 
+    /// Returns a JSON object listing outbound references from the given dense object index.
+    ///
+    /// Returns `{"ok":true,"refs":[...],"total":N,"truncated":bool}` on success,
+    /// or `{"error":"exploration_not_enabled"}` if `enable_exploration()` was not called.
+    ///
+    /// Each ref entry: `{"dst_idx":N,"field_name":"...","display_class":"...","shallow":N,"retained":N}`
+    /// Field names are included when the dump was analyzed with `--ref-paths`; otherwise empty strings.
+    pub fn outbound_refs(&self, dense_idx: u32, limit: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let src = dense_idx as usize;
+        if src + 1 >= exp.fwd_offsets.len() {
+            return serde_json::json!({"ok":true,"refs":[],"total":0,"truncated":false}).to_string();
+        }
+        let start = exp.fwd_offsets[src] as usize;
+        let end = exp.fwd_offsets[src + 1] as usize;
+        let total = end - start;
+        let limit = limit as usize;
+        let truncated = total > limit;
+
+        let refs: Vec<serde_json::Value> = exp.fwd_targets[start..end]
+            .iter()
+            .take(limit)
+            .enumerate()
+            .map(|(i, &dst)| {
+                let pos = start + i;
+                let field_name = exp
+                    .fwd_field_name_idx
+                    .as_ref()
+                    .and_then(|idx_vec| idx_vec.get(pos).copied())
+                    .and_then(|ni| exp.field_name_pool.get(ni as usize))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let d = dst as usize;
+                let display_class = exp.class_names_by_idx.get(d).cloned().unwrap_or_default();
+                let shallow = exp.shallow.get(d).copied().unwrap_or(0) as u64;
+                let retained = exp.retained.get(d).copied().unwrap_or(0);
+                serde_json::json!({
+                    "dst_idx": dst,
+                    "field_name": field_name,
+                    "display_class": display_class,
+                    "shallow": shallow,
+                    "retained": retained,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "ok": true,
+            "refs": refs,
+            "total": total,
+            "truncated": truncated,
+        })
+        .to_string()
+    }
+
     /// BFS from `dense_idx` to the nearest GC root through inbound edges.
     ///
     /// Returns `{"ok":true,"path":[...],"root_type":"..."}` on success,

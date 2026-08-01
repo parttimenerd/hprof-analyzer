@@ -5360,6 +5360,37 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const savedRootFilter = React.useRef("");
   // Track which node was last navigated to via navigate() so external hash changes can clear the breadcrumb
   const lastInternalNavRef = React.useRef<number | null>(null);
+  // Live outbound refs from WASM (populated when static snapshot has no edges for this node)
+  const [wasmOutboundEdges, setWasmOutboundEdges] = React.useState<ObjGraphEdge[] | null>(null);
+  const [wasmOutboundTotal, setWasmOutboundTotal] = React.useState(0);
+  const [wasmOutboundTruncated, setWasmOutboundTruncated] = React.useState(false);
+
+  React.useEffect(() => {
+    setWasmOutboundEdges(null);
+    setWasmOutboundTotal(0);
+    setWasmOutboundTruncated(false);
+    const session = (window as any).__wasmSession;
+    if (!session?.outbound_refs || nodeId === null) return;
+    // Fetch live outbound refs via WASM when static snapshot has no edges or node is unknown
+    const hasStaticEdges = data.edges[String(nodeId)] != null;
+    const inCapture = data.nodes[String(nodeId)] != null;
+    if (hasStaticEdges && !data.nodes[String(nodeId)]?.edges_truncated) return;
+    try {
+      const r = JSON.parse(session.outbound_refs(nodeId, 200));
+      if (r.ok && r.refs.length > 0) {
+        const edges: ObjGraphEdge[] = r.refs.map((ref: any) => ({
+          field_name: ref.field_name ?? "",
+          child_idx: ref.dst_idx,
+          child_class: ref.display_class,
+          child_retained: ref.retained,
+        }));
+        setWasmOutboundEdges(edges);
+        setWasmOutboundTotal(r.total);
+        setWasmOutboundTruncated(r.truncated);
+      }
+    } catch {}
+    void inCapture; // suppress lint
+  }, [nodeId, data.edges, data.nodes]);
 
   React.useEffect(() => {
     const onHash = (fromEvent: boolean) => {
@@ -5489,8 +5520,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
   const currentNode: ObjGraphFlatNode | null =
     nodeId !== null ? (data.nodes[String(nodeId)] ?? null) : null;
-  const currentEdges: ObjGraphEdge[] =
+  const staticEdges: ObjGraphEdge[] =
     nodeId !== null ? (data.edges[String(nodeId)] ?? []) : [];
+  // Use WASM outbound refs when they cover more edges (truncated static or no static capture).
+  const currentEdges: ObjGraphEdge[] = wasmOutboundEdges ?? staticEdges;
   const currentDomChildren: number[] =
     nodeId !== null ? (data.dom_children[String(nodeId)] ?? []) : [];
 
@@ -6011,7 +6044,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               </div>
               {activeRefTab === "outbound" && (
                 <>
-              {currentNode.edges_unknown && (
+              {currentNode.edges_unknown && !wasmOutboundEdges && (
                 <p className="subtitle" style={{ color: "var(--warn-border)" }}>
                   &#9888; Outbound refs not captured for this object (not in top-10,000 by shallow heap).{" "}
                   <button className="btn-link" style={{ fontSize: "inherit" }}
@@ -6020,8 +6053,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   </button>
                 </p>
               )}
-              {currentNode.edges_truncated && (
-                <p className="subtitle">Showing first 100 of more edges.</p>
+              {wasmOutboundEdges && (
+                <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                  Live refs from WASM ({wasmOutboundTotal} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
+                </p>
+              )}
+              {currentNode.edges_truncated && !wasmOutboundEdges && (
+                <p className="subtitle">Showing first 100 of more edges.{" "}
+                  {(window as any).__wasmSession?.outbound_refs && "Enable exploration for full refs."}
+                </p>
               )}
               {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
@@ -6820,6 +6860,41 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     </button>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+          {currentNode.subtree_classes && currentNode.subtree_classes.length > 0 && (
+            <div style={{ marginTop: "0.75rem" }}>
+              <h4 style={{ margin: "0 0 0.25rem", fontSize: "0.85rem" }}>
+                Retained heap by class
+                <span style={{ fontWeight: 400, color: "var(--muted)", marginLeft: "0.35rem", fontSize: "0.78rem" }}>
+                  (top {currentNode.subtree_classes.length} by shallow, full subtree)
+                </span>
+              </h4>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 40px", fontSize: "0.82rem", gap: "0 0" }}>
+                <div style={{ fontWeight: 600, padding: "2px 4px", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Class</div>
+                <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Instances</div>
+                <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Shallow</div>
+                <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)", color: "var(--muted)" }}>%</div>
+                {currentNode.subtree_classes.map((row, i) => {
+                  const pct = currentNode.retained > 0 ? row.total_shallow / currentNode.retained : 0;
+                  return (
+                    <React.Fragment key={i}>
+                      <div style={{ padding: "1px 2px", overflow: "hidden" }}>
+                        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", maxWidth: "100%" }}>
+                          <code style={{ fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.class}>{row.class}</code>
+                          <PivotBtn cls={row.class} />
+                          <OqlBtn cls={row.class} />
+                        </span>
+                      </div>
+                      <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }}>{fmtCount(row.instance_count)}</div>
+                      <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }} title={`${row.total_shallow} B`}>{fmtB(row.total_shallow)}</div>
+                      <div style={{ textAlign: "right", padding: "1px 4px", color: "var(--muted)", fontSize: "0.78rem" }}>
+                        {pct >= 0.001 ? `${(pct * 100).toFixed(pct >= 0.01 ? 0 : 1)}%` : "<0.1%"}
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
               </div>
             </div>
           )}

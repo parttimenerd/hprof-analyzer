@@ -132,6 +132,16 @@ pub struct ExplorationResult {
     pub dense_to_pre: Vec<u32>,
     /// INB_BLOCK constant (needed by decoder).
     pub inb_block: usize,
+    /// Forward CSR row pointers (len n+1). fwd_offsets[i]..fwd_offsets[i+1] slices
+    /// fwd_targets for object i's out-edges.
+    pub fwd_offsets: Vec<u32>,
+    /// Forward CSR edge targets (parallel to fwd_field_name_idx when Some).
+    pub fwd_targets: Vec<u32>,
+    /// Per-edge field-name pool index, parallel to fwd_targets.
+    /// None when --ref-paths was not used (all edges unnamed).
+    pub fwd_field_name_idx: Option<Vec<u16>>,
+    /// Deduped field-name strings; index 0 is always "" (unnamed).
+    pub field_name_pool: Vec<String>,
 }
 
 /// Build inbound CSR for interactive exploration (no report, no dominators).
@@ -170,6 +180,14 @@ pub fn build_exploration(
     inbound.compress_id_map(compress)?;
 
     let rpo = rpo_dfs::rpo_dfs(n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+
+    // Clone forward CSR before it's consumed by build_from_fwd.
+    let saved_fwd_offsets: Vec<u32> = g.fwd_offsets.clone();
+    let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
+    let saved_fwd_targets: Vec<u32> = (0..total_edges).map(|i| g.fwd_targets.get(i)).collect();
+    let saved_fwd_field_name_idx: Option<Vec<u16>> = g.fwd_field_name_idx.clone();
+    let saved_field_name_pool: Vec<String> =
+        g.field_name_pool.clone().unwrap_or_else(|| vec![String::new()]);
 
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
         std::mem::take(&mut g.fwd_offsets),
@@ -226,6 +244,10 @@ pub fn build_exploration(
         rpo_vertex,
         dense_to_pre,
         inb_block: pass2::INB_BLOCK,
+        fwd_offsets: saved_fwd_offsets,
+        fwd_targets: saved_fwd_targets,
+        fwd_field_name_idx: saved_fwd_field_name_idx,
+        field_name_pool: saved_field_name_pool,
     })
 }
 

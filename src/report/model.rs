@@ -530,6 +530,14 @@ pub struct CaptureParams {
     pub size_tier: String,
 }
 
+/// One class row in a dominator-subtree class breakdown.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct SubtreeClassRow {
+    pub class: String,
+    pub instance_count: u32,
+    pub total_shallow: u64,
+}
+
 /// One node in the flat object graph lookup table.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ObjGraphFlatNode {
@@ -544,6 +552,10 @@ pub struct ObjGraphFlatNode {
     /// Total number of objects in the dominated subtree rooted here (including self).
     #[serde(default)]
     pub dom_subtree_count: u32,
+    /// Top-10 classes by shallow heap across the entire dominated subtree (including self).
+    /// Omitted when empty (e.g. leaf nodes or small subtrees).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtree_classes: Vec<SubtreeClassRow>,
 }
 
 /// One aggregated type-level reference edge for the TPFG (V13).

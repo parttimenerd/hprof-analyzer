@@ -877,6 +877,13 @@ export interface CaptureParams {
   size_tier: string;  // "small" | "medium" | "large"
 }
 
+// One row in a subtree class breakdown (top-10 by shallow heap within dominated subtree).
+export interface SubtreeClassRow {
+  class: string;
+  instance_count: number;
+  total_shallow: number;
+}
+
 // One node entry in the flat object graph lookup table.
 export interface ObjGraphFlatNode {
   display_class: string;
@@ -886,6 +893,7 @@ export interface ObjGraphFlatNode {
   edges_truncated?: boolean;
   idom?: number;
   dom_subtree_count?: number;   // total objects in dominated subtree (incl. self)
+  subtree_classes?: SubtreeClassRow[];  // top-10 classes by shallow within subtree
 }
 
 // Flat lookup table powering V3/V4 navigation (reference graph + dominator explorer).

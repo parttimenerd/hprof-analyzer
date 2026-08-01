@@ -2446,6 +2446,13 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "subtree_classes": {
+          "description": "Top-10 classes by shallow heap across the entire dominated subtree (including self).\nOmitted when empty (e.g. leaf nodes or small subtrees).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubtreeClassRow"
+          }
         }
       },
       "required": [
@@ -3285,6 +3292,30 @@
       "required": [
         "class_name",
         "string_refs"
+      ]
+    },
+    "SubtreeClassRow": {
+      "description": "One class row in a dominator-subtree class breakdown.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "instance_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "class",
+        "instance_count",
+        "total_shallow"
       ]
     },
     "Suspect": {

@@ -127,6 +127,7 @@ fn build_obj_graph_flat(
                 edges_truncated: false,
                 idom,
                 dom_subtree_count: 0, // computed below
+                subtree_classes: Vec::new(), // computed below
             },
         );
 
@@ -170,6 +171,100 @@ fn build_obj_graph_flat(
         }
         for (&node_id, node) in nodes.iter_mut() {
             node.dom_subtree_count = *subtree_counts.get(&node_id).unwrap_or(&1);
+        }
+    }
+
+    // Subtree class histogram: single bottom-up pass over the FULL dominator tree.
+    // For each significant node, store the top-10 classes by shallow heap.
+    // Uses small-to-large HashMap merging: O(n log n) total.
+    {
+        const TOP_K: usize = 10;
+        // class_idx → (instance_count, total_shallow)
+        type ClassMap = std::collections::HashMap<u32, (u32, u64)>;
+
+        // node_agg[i] = Some(owned ClassMap) while the node's subtree is being merged.
+        let n = g.n;
+        let mut node_agg: Vec<Option<Box<ClassMap>>> = vec![None; n + 1]; // +1 for vroot
+
+        // Iterative postorder DFS from vroot using dc_offsets/dc_targets.
+        let mut stack: Vec<(u32, usize)> = vec![(vroot, 0)];
+        while let Some((node, child_idx)) = stack.last_mut() {
+            let node = *node;
+            let node_usize = node as usize;
+            let children: &[u32] = if node_usize + 1 < dc_offsets.len() {
+                &dc_targets[dc_offsets[node_usize] as usize..dc_offsets[node_usize + 1] as usize]
+            } else {
+                &[]
+            };
+            if *child_idx < children.len() {
+                let child = children[*child_idx];
+                *child_idx += 1;
+                stack.push((child, 0));
+            } else {
+                stack.pop();
+                // Initialize with own entry (skip vroot which has no shallow/class).
+                let mut agg: Box<ClassMap> = if node_usize < n {
+                    let ci = g.class_idx.get(node_usize).copied().unwrap_or(0);
+                    let sh = g.shallow.get(node_usize).copied().unwrap_or(0) as u64;
+                    let mut m = Box::new(ClassMap::with_capacity(1));
+                    m.insert(ci, (1, sh));
+                    m
+                } else {
+                    Box::new(ClassMap::new())
+                };
+                // Merge children: take each child's map, merge into agg (small-to-large).
+                for &child in children {
+                    if let Some(child_map) = node_agg[child as usize].take() {
+                        if child_map.len() > agg.len() {
+                            // Swap: merge the smaller agg into the larger child_map.
+                            let mut big = child_map;
+                            for (ci, (cnt, sh)) in agg.drain() {
+                                let e = big.entry(ci).or_insert((0, 0));
+                                e.0 += cnt;
+                                e.1 += sh;
+                            }
+                            agg = big;
+                        } else {
+                            for (ci, (cnt, sh)) in child_map.iter() {
+                                let e = agg.entry(*ci).or_insert((0, 0));
+                                e.0 += cnt;
+                                e.1 += sh;
+                            }
+                        }
+                    }
+                }
+                // If this is a significant node, extract top-K and store.
+                if nodes.contains_key(&node) {
+                    let mut rows: Vec<(u32, u32, u64)> = agg
+                        .iter()
+                        .map(|(&ci, &(cnt, sh))| (ci, cnt, sh))
+                        .collect();
+                    rows.sort_unstable_by(|a, b| b.2.cmp(&a.2));
+                    rows.truncate(TOP_K);
+                    let histogram: Vec<SubtreeClassRow> = rows
+                        .into_iter()
+                        .map(|(ci, cnt, sh)| {
+                            let name = if (ci as usize) < g.class_names.len() {
+                                pretty_class_name(&g.class_names[ci as usize])
+                            } else {
+                                format!("obj#{}", ci)
+                            };
+                            SubtreeClassRow {
+                                class: name,
+                                instance_count: cnt,
+                                total_shallow: sh,
+                            }
+                        })
+                        .collect();
+                    if let Some(node_entry) = nodes.get_mut(&node) {
+                        node_entry.subtree_classes = histogram;
+                    }
+                }
+                // Stash the map for the parent to consume (skip vroot — no parent).
+                if node_usize < n {
+                    node_agg[node_usize] = Some(agg);
+                }
+            }
         }
     }
 
