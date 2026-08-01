@@ -881,6 +881,7 @@ export interface ObjGraphFlatNode {
   edges_unknown?: boolean;
   edges_truncated?: boolean;
   idom?: number;
+  dom_subtree_count?: number;   // total objects in dominated subtree (incl. self)
 }
 
 // Flat lookup table powering V3/V4 navigation (reference graph + dominator explorer).

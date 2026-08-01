@@ -5770,7 +5770,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         const cp = data.capture_params;
         return (
           <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.4rem 0" }}>
-            Capture: {cp.edge_cap} edges/obj ({cp.size_tier}).{cp.size_tier !== "large" && <> Re-run with <code>--report-size {cp.size_tier === "small" ? "medium" : "large"}</code> for more.</>}
+            Capture: {cp.edge_cap} edges/obj ({cp.size_tier}).{cp.size_tier !== "large" && <> Re-run with <code>--obj-graph={cp.size_tier === "small" ? "medium" : "large"}</code> for more.</>}
           </p>
         );
       })()}
@@ -6016,7 +6016,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       {iTrunc && (
                         <p className="subtitle" style={{ fontSize: "0.78rem" }}>
                           Showing first {data.capture_params?.edge_cap ?? 100} inbound refs.{" "}
-                          Re-run with <code>--report-size medium</code> for more.
+                          Re-run with <code>--obj-graph=medium</code> for more.
                         </p>
                       )}
                     </>
@@ -6095,6 +6095,53 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </>
           ) : (
             <>
+              {currentNode.idom == null && data.roots.length > 0 && (
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <h4 style={{ margin: "0 0 0.4rem" }}>Top Retained Roots</h4>
+                  <p className="subtitle" style={{ fontSize: "0.82rem", margin: "0 0 0.4rem" }}>
+                    GC roots sorted by retained heap. Click to descend into dominated subtree.
+                  </p>
+                  <table className="std-table">
+                    <thead>
+                      <tr>
+                        <th>Class</th>
+                        <th style={{ textAlign: "right" }}>Shallow</th>
+                        <th style={{ textAlign: "right" }}>Retained</th>
+                        <th style={{ textAlign: "right" }}>% Heap</th>
+                        <th style={{ textAlign: "right" }}>Objects in subtree</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...data.roots]
+                        .sort((a, b) => (data.nodes[String(b)]?.retained ?? 0) - (data.nodes[String(a)]?.retained ?? 0))
+                        .slice(0, 50)
+                        .map(rootId => {
+                          const rn = data.nodes[String(rootId)];
+                          if (!rn) return null;
+                          const pct = totalHeap > 0 ? (rn.retained / totalHeap * 100).toFixed(1) : "—";
+                          return (
+                            <tr key={rootId}>
+                              <td>
+                                <button className="btn-link"
+                                  onClick={() => navigate("domtree", rootId, rn.display_class)}>
+                                  <code>{rn.display_class}</code>
+                                </button>
+                              </td>
+                              <td style={{ textAlign: "right" }}>{fmtB(rn.shallow)}</td>
+                              <td style={{ textAlign: "right" }}>{fmtB(rn.retained)}</td>
+                              <td style={{ textAlign: "right" }}>{pct}%</td>
+                              <td style={{ textAlign: "right" }}>
+                                {rn.dom_subtree_count != null && rn.dom_subtree_count > 0
+                                  ? fmtCount(rn.dom_subtree_count)
+                                  : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               <h4 style={{ margin: "0 0 0.4rem" }}>Immediate Dominator Children</h4>
               {currentDomChildren.length > 0 && (() => {
                 const childRetainedTotal = currentDomChildren.reduce((s, id) => {
@@ -6125,6 +6172,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       {currentDomChildren.length} children retaining {fmtB(childRetainedTotal)} ({childPct}%){" "}
                       + {fmtB(shallowSelf)} ({shallowPct}%) in this object itself.
                       Click a child to descend.
+                      {currentNode.dom_subtree_count != null && currentNode.dom_subtree_count > 1 && (
+                        <> · <strong>{fmtCount(currentNode.dom_subtree_count)}</strong> objects total in subtree.</>
+                      )}
                     </p>
                     {chainEnd !== null && chainLen >= 2 && (
                       <p className="subtitle" style={{ fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
@@ -6254,6 +6304,19 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <span title="0-based dense index; use in 'Go to obj #' to navigate here">{nodeId}</span>
                     <CopyBtn text={String(nodeId)} />
                   </span>
+                </td>
+              </tr>
+              <tr>
+                <th>Query</th>
+                <td>
+                  <button className="btn-link" style={{ fontSize: "0.82rem" }}
+                    title={`Copy OQL: SELECT * FROM ${currentNode.display_class} s WHERE s.@objectId = ${nodeId}`}
+                    onClick={() => {
+                      const q = `SELECT * FROM ${currentNode.display_class} s WHERE s.@objectId = ${nodeId}`;
+                      navigator.clipboard?.writeText(q);
+                    }}>
+                    Query this object ↗
+                  </button>
                 </td>
               </tr>
               <tr>
