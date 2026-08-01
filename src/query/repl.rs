@@ -4953,10 +4953,10 @@ fn handle_meta(
             c!("!last", "re-run the previous query");
             c!("!count [<oql>]", "row count of last result, or count <oql>");
             c!(
-                "!plan [--raw] <oql>",
+                "!plan [--raw] [--verbose] [--json] <oql>",
                 "show execution plan without scanning"
             );
-            c!("!explain [--raw] <oql>", "alias for !plan");
+            c!("!explain [--raw|--verbose|--json] <oql>", "alias for !plan");
             c!("!run [<name>]", "run a named query (no arg = list all)");
             h!("Inspecting results");
             c!("!wc [col]", "shape (rows × cols); col arg = non-null count");
@@ -5114,13 +5114,26 @@ fn handle_meta(
             writeln!(out, "mode: {cg}{mode_val}{cr}  {cd}{hint}{cr}")?;
         }
         "plan" | "explain" => {
-            // Detect optional --raw flag.
-            let (raw, query_text) = if let Some(stripped) = rest.strip_prefix("--raw") {
-                let remainder = stripped.trim_start();
-                (true, remainder)
-            } else {
-                (false, rest)
-            };
+            // Parse flags: --raw --verbose --json (order-insensitive, any combination)
+            let mut raw     = false;
+            let mut verbose = false;
+            let mut as_json = false;
+            let mut query_text = rest;
+            loop {
+                let t = query_text.trim_start();
+                if let Some(r) = t.strip_prefix("--raw") {
+                    raw = true;
+                    query_text = r.trim_start();
+                } else if let Some(r) = t.strip_prefix("--verbose") {
+                    verbose = true;
+                    query_text = r.trim_start();
+                } else if let Some(r) = t.strip_prefix("--json") {
+                    as_json = true;
+                    query_text = r.trim_start();
+                } else {
+                    break;
+                }
+            }
             match crate::query::parse::parse_or_report(query_text) {
                 Ok(q) => match crate::query::plan::plan_query(&q, path_depth) {
                     Ok(plan) => {
@@ -5133,7 +5146,18 @@ fn handle_meta(
                                 &crate::query::optimize::SchemaStats::default(),
                             )
                         };
-                        write!(out, "{}", plan.explain())?;
+                        if as_json {
+                            match serde_json::to_string_pretty(&plan) {
+                                Ok(json) => writeln!(out, "{json}")?,
+                                Err(e)   => writeln!(out, "{ce}json error: {e}{cr}")?,
+                            }
+                        } else {
+                            write!(out, "{}", plan.explain())?;
+                            if verbose {
+                                writeln!(out, "\nquery: {query_text}")?;
+                                writeln!(out, "from:  {:?}", q.from)?;
+                            }
+                        }
                     }
                     Err(e) => {
                         writeln!(out, "{ce}plan error: {}{cr}", e.0)?;
@@ -6071,6 +6095,33 @@ mod tests {
         // rejections (path(x,y) alone now plans OK; the mixed form is still an error).
         let (_, out) = meta_out("plan SELECT path(x, y), @usedHeapSize FROM C x");
         assert!(out.contains("plan error:"), "got: {out}");
+    }
+
+    #[test]
+    fn plan_json_flag_emits_json() {
+        let (_, out) = meta_out("plan --json SELECT * FROM java.lang.String");
+        // Must parse as valid JSON and contain "kind" key
+        let v: serde_json::Value = serde_json::from_str(&out)
+            .expect(&format!("--json output must be valid JSON; got: {}", out));
+        assert!(v.get("kind").is_some(), "JSON must have 'kind' key; got: {}", out);
+    }
+
+    #[test]
+    fn plan_verbose_flag_includes_from_class() {
+        let (_, out) = meta_out("plan --verbose SELECT * FROM java.lang.String");
+        // --verbose must include the FROM source somewhere
+        assert!(
+            out.contains("java.lang.String"),
+            "--verbose output must mention FROM class; got: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn plan_flags_are_cumulative() {
+        // --raw and --verbose can coexist (unoptimized + verbose)
+        let (_, out) = meta_out("plan --raw --verbose SELECT * FROM C");
+        assert!(out.contains("stage:"), "got: {}", out);
     }
 
     #[test]

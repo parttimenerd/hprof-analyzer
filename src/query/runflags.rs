@@ -17,7 +17,7 @@ use crate::query::ast::{Attr, Expr, Predicate, Query, SelectItem};
 
 /// Direction of an edge feature. Kept as a small typed enum so callers that
 /// walk edges do not thread bare bools around.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum EdgeDir {
     Inbound,
     Outbound,

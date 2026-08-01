@@ -3,7 +3,7 @@
 
 /// A parsed query. `union_branches` holds the tail of a homogeneous `UNION`
 /// chain (empty for a single query); branches are flat, never nested.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Query {
     pub distinct: bool,
     pub select: Vec<SelectItem>,
@@ -37,21 +37,21 @@ pub struct Query {
     pub except_branches: Vec<Query>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SortDir {
     Asc,
     Desc,
 }
 
 /// Our extension over MAT OQL: `ORDER BY <attr> [ASC|DESC]`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OrderBy {
     pub key: Attr,
     pub dir: SortDir,
 }
 
 /// One projected column.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum SelectItem {
     /// `*` — the object itself (rendered as its display name / ref).
     Star,
@@ -72,7 +72,7 @@ pub enum SelectItem {
 }
 
 /// One operand of a `path(a, b)` select item: a bound alias or a class name.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum PathOperand {
     /// A bound FROM alias, e.g. the `s` in `FROM java.lang.String s`.
     Alias(String),
@@ -80,7 +80,7 @@ pub enum PathOperand {
     Class(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AggFunc {
     Count,
     Sum,
@@ -95,7 +95,7 @@ pub enum AggFunc {
 }
 
 /// An attribute reference. `@`-prefixed built-ins plus bare named fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum Attr {
     ObjectId,
     ObjectAddress,
@@ -169,7 +169,7 @@ pub enum Attr {
 /// SELECT columns and WHERE comparison operands. A single-leaf expression is
 /// folded back to `SelectItem::Attr` / a plain compare by the parser, so
 /// no-arithmetic queries never carry an `Expr`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum Expr {
     Attr(Attr),
     Lit(Value),
@@ -214,7 +214,7 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ArithOp {
     Add,
     Sub,
@@ -222,7 +222,7 @@ pub enum ArithOp {
     Div,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum UnaryOp {
     Neg,
     Pos,
@@ -248,14 +248,14 @@ impl Expr {
 /// When a `RefPath` must be resolved. Predicate-critical paths (used in WHERE)
 /// resolve before row filtering; projection-only paths (used only in SELECT)
 /// resolve after filtering (cheaper — fewer rows). Assigned during planning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum RefRole {
     PredicateCritical,
     ProjectionOnly,
 }
 
 /// The FROM clause target.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ClassSpec {
     /// true for `FROM INSTANCEOF C` (subclasses included), false for `FROM C`.
     pub instanceof: bool,
@@ -272,7 +272,7 @@ pub struct ClassSpec {
 /// A FROM source: either a class pattern or a nested (non-correlated) subquery
 /// whose result set the outer query scans. `Subquery` boxes the inner `Query`
 /// to keep `Query` a fixed size.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum FromSource {
     Class(ClassSpec),
     Subquery(Box<Query>),
@@ -316,7 +316,7 @@ impl FromSource {
 }
 
 /// A WHERE predicate tree.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum Predicate {
     And(Box<Predicate>, Box<Predicate>),
     Or(Box<Predicate>, Box<Predicate>),
@@ -343,7 +343,7 @@ pub enum Predicate {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum CompareOp {
     Eq,
     Ne,
@@ -359,7 +359,7 @@ pub enum CompareOp {
     NotLike,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum Value {
     Int(i64),
     Float(f64),

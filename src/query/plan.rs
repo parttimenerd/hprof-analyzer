@@ -16,7 +16,7 @@ pub const DEFAULT_RETAINED_CAP: usize = 1_000_000;
 /// Per-need cost flags. Each flag independently arms exactly one piece of
 /// machinery; an unset flag arms nothing. (Foundation subset — ref/retained/
 /// dominator/edge needs are added in later slices.)
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct QueryNeeds {
     pub histogram: bool,
     pub instance_scalar: bool,
@@ -43,7 +43,7 @@ pub struct QueryNeeds {
     pub array_index: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum StageKind {
     HistogramOnly,
     #[default]
@@ -54,7 +54,7 @@ pub enum StageKind {
 }
 
 /// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Phase {
     #[default]
     P1,
@@ -66,7 +66,7 @@ pub enum Phase {
 
 /// A late-phase operation applied when resuming a cross-phase query.
 /// (Extended with more variants in later phases.)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum StageOp {
     /// Join each carried dense index against `retained`, then apply retained
     /// WHERE terms, ORDER BY, and LIMIT.
@@ -112,7 +112,7 @@ pub enum StageOp {
     ResolveArrayIndex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum PredCost {
     Type,
     Scalar,
@@ -122,20 +122,20 @@ pub enum PredCost {
     Ref,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Conjunct {
     pub pred: Predicate,
     pub cost: PredCost,
 }
 
 /// A projection deferred past the scan-time filter (see `deferred_projections`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeferredProj {
     /// Index into the query's SELECT list of the deferred projected item.
     pub select_index: usize,
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 pub struct QueryPlan {
     pub kind: StageKind,
     pub needs: QueryNeeds,
@@ -205,7 +205,7 @@ pub struct QueryPlan {
 /// attribute compared for membership (must be `@objectAddress`); `plan`/`inner`
 /// are the inner subquery's plan and AST, run as their own scan slot before the
 /// outer scan so the address set is ready when the outer predicate evaluates.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InSubplan {
     pub lhs: Attr,
     pub plan: QueryPlan,
@@ -213,7 +213,7 @@ pub struct InSubplan {
 }
 
 /// A planned EXISTS/NOT EXISTS subquery predicate.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ExistsSubplan {
     pub negated: bool,
     pub plan: QueryPlan,
