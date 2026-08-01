@@ -480,6 +480,15 @@
         "kind": {
           "type": "string"
         },
+        "obj_index_1based": {
+          "description": "1-based dense object index for Object Graph Explorer navigation.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "owner": {
           "type": [
             "string",

@@ -1055,6 +1055,7 @@ fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
                 owner: c.owner.clone(),
                 dominant_value_type: Some(dominant_value_type(&counts)),
                 value_type_breakdown: top_value_shares(&counts, TOP_K_TYPES),
+                obj_index_1based: c.container_idx.checked_add(1),
             }
         })
         .collect();

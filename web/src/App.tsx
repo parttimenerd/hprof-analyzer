@@ -3656,6 +3656,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
   const coalesced: Coalesced[] = [];
   for (const r of rows) {
     const last = coalesced[coalesced.length - 1];
+    // obj_index_1based intentionally excluded: coalesced rows suppress ExploreBtn via count > 1
     if (
       last &&
       last.row.kind === r.kind &&
@@ -3680,6 +3681,9 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
           {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
           <PivotBtn cls={r.container_class} />
           <OqlBtn cls={r.container_class} />
+          {count === 1 && r.obj_index_1based != null && (
+            <ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.container_class} />
+          )}
         </span>
       ),
       selector: ({ row: r }) => r.container_class,

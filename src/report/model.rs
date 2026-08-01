@@ -1333,6 +1333,9 @@ pub struct BiggestCollectionRow {
     /// `--collections` was off or no element types were tallied.
     #[serde(default)]
     pub value_type_breakdown: Vec<ValueTypeShare>,
+    /// 1-based dense object index for Object Graph Explorer navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obj_index_1based: Option<u32>,
 }
 
 /// Biggest collections of one kind (e.g. all Maps), ranked. Additive.

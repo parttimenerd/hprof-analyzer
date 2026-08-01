@@ -669,6 +669,7 @@ export interface BiggestCollectionRow {
   owner?: string;
   dominant_value_type?: string;
   value_type_breakdown?: ValueTypeShare[];
+  obj_index_1based?: number;
 }
 export interface CollectionKindTable { kind: string; rows: BiggestCollectionRow[]; }
 export interface BiggestCollections {

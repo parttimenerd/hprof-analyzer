@@ -1905,6 +1905,7 @@ mod tests {
                 owner: None,
                 dominant_value_type: None,
                 value_type_breakdown: Vec::new(),
+                obj_index_1based: None,
             }],
             by_kind: Vec::new(),
             truncated: false,
