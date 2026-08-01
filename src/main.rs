@@ -134,12 +134,8 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Emit RSS probe/trim traces at pipeline checkpoints.
-    #[arg(long)]
-    trace_rss: bool,
-
     /// Show a live progress line on stderr. `auto` (default) enables it only
-    /// when stderr is a terminal and neither --verbose nor --trace-rss is set.
+    /// when stderr is a terminal and --verbose is not set.
     #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
     progress: ProgressWhen,
 
@@ -181,13 +177,8 @@ struct Cli {
     /// Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by
     /// default for analyze so the report stays byte-identical; opt in to prune
     /// unreachable objects from `--query` results.
-    #[arg(long, conflicts_with = "all")]
-    reachable_only: bool,
-
-    /// Include unreachable objects in OQL results (raw heap scan). The analyze
-    /// default; accepted for symmetry with the `query` subcommand.
     #[arg(long)]
-    all: bool,
+    reachable_only: bool,
 
     /// Store field-name labels on forward edges so that leak-suspect
     /// "path to GC roots" steps show `ParentClass.fieldName → ChildClass`.
@@ -206,20 +197,17 @@ struct Cli {
     full_analysis: bool,
 
     /// Capture the outbound-reference graph and dominator subtree for the top
-    /// retained objects. Enables the Reference Graph and Dominator Tree Explorer
-    /// views (V3+V4) and the Type-Level Reference Graph (V13) in the HTML report.
-    /// Adds ~1–3 MB to the report JSON; ~30 MB peak RSS freed after analysis.
+    /// retained objects. Enables the interactive Object Graph Explorer (outbound
+    /// refs, inbound refs, GC-root path, dominator drill-down) in the HTML report.
+    /// Adds ~1–3 MB to the report; ~30 MB peak RSS freed after analysis.
     /// Implied by --full-analysis. Analyze-only.
-    #[arg(long)]
-    obj_graph: bool,
-
-    /// Object-graph capture tier: controls how many edges per object are stored.
-    /// small = 100 edges (default, ~1–3 MB added to report),
-    /// medium = 150 edges (~2–5 MB), large = 300 edges (~5–15 MB).
-    /// See docs/report-size-benchmarks.md for measured file sizes per tier.
-    /// Only meaningful with --obj-graph or --full-analysis.
-    #[arg(long, value_name = "TIER", default_value = "small")]
-    report_size: String,
+    ///
+    /// Optional value controls the edge capture tier:
+    ///   --obj-graph          → small  (100 edges/obj, ~1–3 MB delta)
+    ///   --obj-graph=medium   → medium (150 edges/obj, ~2–5 MB delta)
+    ///   --obj-graph=large    → large  (300 edges/obj, ~5–15 MB delta)
+    #[arg(long, num_args = 0..=1, default_missing_value = "small", value_name = "TIER")]
+    obj_graph: Option<String>,
 
     /// Embed the React app bundle as plain readable JS in the HTML report
     /// (no deflate/base64). The report is ~750 KB larger but the JS is visible
@@ -346,9 +334,6 @@ enum MatCmd {
         /// `.index` header. When omitted, common installation paths are tried.
         #[arg(long, value_hint = ValueHint::FilePath)]
         mat_binary: Option<String>,
-        /// Emit RSS trace lines to stderr (useful for memory profiling).
-        #[arg(long)]
-        trace_rss: bool,
     },
 }
 
@@ -486,11 +471,11 @@ fn write_output(path: Option<&str>, text: &str) -> io::Result<()> {
             enc.finish()?;
             Ok(())
         }
-        Some(p) => std::fs::write(p, text).map_err(|e| io::Error::new(e.kind(), e)),
-        None => {
+        Some("-") | None => {
             print!("{text}");
             Ok(())
         }
+        Some(p) => std::fs::write(p, text).map_err(|e| io::Error::new(e.kind(), e)),
     }
 }
 
@@ -717,15 +702,11 @@ fn main() {
                 input,
                 dir,
                 mat_binary,
-                trace_rss,
             } => {
                 if !input_is_hprof(&input) {
                     fail(format!("'{input}' does not look like a .hprof[.gz] file"));
                 }
-                if trace_rss {
-                    trace::set_enabled(true);
-                }
-                progress::set_enabled(std::io::stderr().is_terminal() && !trace_rss);
+                progress::set_enabled(std::io::stderr().is_terminal());
                 let mat_dir = dir.as_deref().unwrap_or_else(|| {
                     std::path::Path::new(&input)
                         .parent()
@@ -779,13 +760,10 @@ fn run_default(cli: Cli) {
     };
 
     if input_is_hprof(&input) {
-        if cli.trace_rss {
-            trace::set_enabled(true);
-        }
         let show_progress = match cli.progress {
             ProgressWhen::Always => true,
             ProgressWhen::Never => false,
-            ProgressWhen::Auto => !cli.verbose && !cli.trace_rss && std::io::stderr().is_terminal(),
+            ProgressWhen::Auto => !cli.verbose && std::io::stderr().is_terminal(),
         };
         progress::set_enabled(show_progress);
         let fmt = if cli.dev {
@@ -807,17 +785,20 @@ fn run_default(cli: Cli) {
             query_file: cli.query_file.clone(),
             query_path_depth: cli.query_path_depth,
             // Analyze defaults to raw (all); --reachable-only opts into pruning.
-            // --all is the no-op default and stays off here.
             reachable_only: cli.reachable_only,
             ref_paths: cli.ref_paths,
-            obj_graph: cli.obj_graph || cli.full_analysis,
+            obj_graph: cli.obj_graph.is_some() || cli.full_analysis,
             dev_report: cli.dev,
             ..opts
         };
-        opts.report_size = match cli.report_size.to_ascii_lowercase().as_str() {
-            "medium" => crate::opts::ReportSize::Medium,
-            "large"  => crate::opts::ReportSize::Large,
-            _        => crate::opts::ReportSize::Small,
+        opts.report_size = match cli.obj_graph.as_deref().map(|s| s.to_ascii_lowercase()).as_deref() {
+            Some("medium") => crate::opts::ReportSize::Medium,
+            Some("large")  => crate::opts::ReportSize::Large,
+            None | Some("small") => crate::opts::ReportSize::Small,
+            Some(other) => {
+                eprintln!("error: unknown --obj-graph tier '{other}' (expected: small, medium, large)");
+                std::process::exit(2);
+            }
         };
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
         // input basename with a trailing `.hprof[.gz]` stripped, matching how
@@ -1077,7 +1058,7 @@ fn input_is_hprof(input: &str) -> bool {
         return false;
     }
     let lower = input.to_ascii_lowercase();
-    if lower.ends_with(".hprof") || lower.ends_with(".hprof.gz") {
+    if lower.ends_with(".hprof") || lower.ends_with(".hprof.gz") || lower.ends_with(".hprof.zip") {
         return true;
     }
     looks_like_hprof(input)
