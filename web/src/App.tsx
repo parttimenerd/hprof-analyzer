@@ -6688,7 +6688,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </button>
                               <PivotBtn cls={edge.child_class} />
                               <OqlBtn cls={edge.child_class} />
-                              {edge.count >= 2 && !edge.any_shared && isCollectionClass(edge.child_class) && (
+                              {edge.count >= 2 && !edge.any_shared && isCollectionClass(currentDisplayClass ?? "") && (
                                 <span
                                   style={{
                                     fontSize: "0.72rem",
