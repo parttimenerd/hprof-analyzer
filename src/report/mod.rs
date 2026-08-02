@@ -267,21 +267,23 @@ mod tests {
     /// `build_model`. Production tallies `depth_counts` for free inside
     /// `compute_retained`'s dominator-tree DFS; test graphs are tiny so
     /// recomputing here is irrelevant.
-    fn build_model_t(g: &Graph, dc_off: &[u32], dc_tgt: &[u32], cap: usize) -> Report {
+    fn build_model_t(g: &mut Graph, dc_off: &[u32], dc_tgt: &[u32], cap: usize) -> Report {
         let n = g.n;
         let vroot = n as u32;
         let undef = u32::MAX;
+        // Snapshot idom for depth_counts; build_model will clear g.idom.
+        let idom_snap = g.idom.clone();
         let mut depth_counts: Vec<u64> = Vec::new();
         for u in 0..n {
             // A node is reachable iff it has a defined idom (roots have idom
             // = vroot). Walk up to vroot counting hops; depth 1 = under vroot.
             let mut cur = u as u32;
-            if g.idom[u] == undef {
+            if idom_snap[u] == undef {
                 continue;
             }
             let mut depth = 0usize;
             while cur != vroot {
-                let p = g.idom[cur as usize];
+                let p = idom_snap[cur as usize];
                 if p == undef {
                     depth = 0;
                     break;
@@ -297,7 +299,7 @@ mod tests {
             }
             depth_counts[depth - 1] += 1;
         }
-        build_model(
+        let r = build_model(
             g,
             dc_off.to_vec(),
             dc_tgt.to_vec(),
@@ -305,13 +307,17 @@ mod tests {
             &depth_counts,
             &crate::AnalyzeOptions::default(),
             None,
-        )
+        );
+        // Restore idom so tests that call build_model_t multiple times on the
+        // same graph can still inspect g.idom between calls.
+        g.idom = idom_snap;
+        r
     }
 
     #[test]
     fn test_build_model_system_overview() {
-        let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.total_objects, 4);
         assert_eq!(o.total_shallow, 100 + 100 + 50 + 20);
@@ -363,7 +369,7 @@ mod tests {
         ];
         g.synthetic_root_count = 1;
 
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         // Scalar: 3 roots - 1 synthetic = 2.
         assert_eq!(o.gc_roots, 2);
@@ -394,7 +400,7 @@ mod tests {
         ];
         g.synthetic_root_count = 1;
 
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.gc_roots, 2);
         assert_eq!(o.gc_roots_by_type.len(), 1);
@@ -406,8 +412,8 @@ mod tests {
     /// into SystemOverview unchanged, and render into the markdown output.
     #[test]
     fn test_record_census_carried_through() {
-        let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let c = &r.overview.record_census;
         // Matches the census set in make_graph().
         assert_eq!(c.utf8_records, 111);
@@ -542,7 +548,7 @@ mod tests {
         // A graph with one of each kind: an instance, an object array, a
         // primitive array, and a class object (present in class_obj_class_idx).
         // idom: all top-level under vroot=4.
-        let (g, _dc_off, _dc_tgt) = make_graph(
+        let (mut g, _dc_off, _dc_tgt) = make_graph(
             vec![4, 4, 4, 4], // idom (vroot = 4)
             vec![0, 1, 2, 3], // class_idx
             vec![16, 24, 32, 8],
@@ -564,7 +570,7 @@ mod tests {
         // Two instances + one primitive array; NO object arrays, NO class
         // objects. by_kind must list Instances then Primitive arrays only,
         // preserving the fixed kind order and skipping empty buckets.
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![3, 3, 3], // idom (vroot = 3)
             vec![0, 0, 1], // class_idx
             vec![16, 16, 40],
@@ -575,7 +581,7 @@ mod tests {
             vec![],
             0,
         );
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let bk = &r.overview.heap_composition.by_kind;
         assert_eq!(bk.len(), 2);
         assert_eq!(bk[0].kind, "Instances");
@@ -592,8 +598,8 @@ mod tests {
     fn test_dominator_depth_histogram() {
         // fixture(): obj0/obj1/obj3 are top-level (depth 1); obj2 is dominated
         // by obj0 (depth 2); obj4 is unreachable (excluded).
-        let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let h = &r.overview.dominator_depth_histogram;
         assert_eq!(h.len(), 2);
         // Sorted by depth ascending.
@@ -610,8 +616,8 @@ mod tests {
         // fixture(): top-level dominators retained = [1000, 1000, 200];
         // total_shallow = 270 (denominator). one_pct = 270/100 = 2, so all
         // three top-level objects (>=2) count toward num_objects_ge_1pct.
-        let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let rc = &r.overview.retention_concentration;
         assert_eq!(rc.total_retained, 2200);
         // top1 = 1000/270 = 37037 bp; top10 (all 3) = 2200/270 = 81481 bp.
@@ -629,7 +635,7 @@ mod tests {
         // top-level dominators so Shape + One-leak-or-many lines emit.
         // obj0 instance (top-level), obj1 primitive array (top-level),
         // obj2 instance dominated by obj0.
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![3, 3, 0], // idom (vroot = 3); obj2 under obj0
             vec![0, 1, 0], // class_idx
             vec![100, 40, 20],
@@ -640,7 +646,7 @@ mod tests {
             vec![0, 1],
             0,
         );
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let md = render_markdown(&r);
         assert!(
             md.contains("### Heap Composition"),
@@ -672,7 +678,7 @@ mod tests {
         //   obj0: class_idx 0, IS a class object (represents row 1), top-level.
         //   obj1: class_idx 1, normal instance of com/foo/A, top-level.
         //   obj2: class_idx 2, java/lang/Class-typed mirror, NOT a class object.
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![3, 3, 3],        // idom (vroot = 3)
             vec![0, 1, 2],        // class_idx
             vec![100, 50, 20],    // shallow
@@ -683,7 +689,7 @@ mod tests {
             vec![0, 1, 2],
             0,
         );
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
 
         // classes_loaded counts distinct CLASS_DUMP objects (class_obj_repr set)
@@ -754,7 +760,7 @@ mod tests {
         // Assign loaders per histogram row: rows 0,1 = 0x1000; row 2 = boot(0).
         g.class_loader_id = vec![0x1000, 0x1000, 0];
         let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
 
         // Reachable class objects: obj0 (row 0, loader 0x1000) and obj1 (row 2,
@@ -797,7 +803,7 @@ mod tests {
         );
         g.class_loader_id = vec![0, 0];
         let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         assert_eq!(r.overview.classloaders_loaded, 1);
     }
 
@@ -822,7 +828,7 @@ mod tests {
         g.loader_labels
             .insert(0x1234, "com/example/MyLoader".to_string());
         let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
 
         let boot = o
@@ -873,9 +879,9 @@ mod tests {
 
         // None path: nothing injected.
         {
-            let (g, dc_off, dc_tgt) = build();
+            let (mut g, dc_off, dc_tgt) = build();
             assert_eq!(g.system_classloader_shallow, None);
-            let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+            let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
             let o = &r.overview;
             assert_eq!(o.total_objects, 2);
             assert_eq!(o.total_shallow, 72 + 40);
@@ -892,7 +898,7 @@ mod tests {
         {
             let (mut g, dc_off, dc_tgt) = build();
             g.system_classloader_shallow = Some(72);
-            let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+            let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
             let o = &r.overview;
             assert_eq!(o.total_objects, 3, "synthetic object not counted");
             assert_eq!(o.total_shallow, 72 + 40 + 72, "synthetic shallow missing");
@@ -925,7 +931,7 @@ mod tests {
         let (mut g, dc_off, dc_tgt) = fixture();
         g.ref_size = g.id_size; // 8 == 8 -> not compressed
         g.header_timestamp_ms = 0; // no creation timestamp
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.compressed_oops, Some(false)); // ref_size == id_size
         assert_eq!(o.dump_creation, None); // header_timestamp_ms == 0
@@ -933,8 +939,8 @@ mod tests {
 
     #[test]
     fn test_build_model_top_consumers_package_determinism() {
-        let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let t = &r.top;
 
         // Biggest objects: top-level are obj0(1000), obj1(1000), obj3(200).
@@ -985,7 +991,7 @@ mod tests {
         // (<1% of total). The tiny package's whole subtree must be pruned.
         // big: retained 10000 in com/big/Foo; small: retained 1 in org/tiny/Bar.
         // total = 10001; 1% threshold => keep >= 100.06 (i.e. >= floor via bp math).
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![2, 2],     // idom: obj0,obj1 both under vroot (node 2)
             vec![0, 1],     // class_idx
             vec![50, 5],    // shallow
@@ -996,7 +1002,7 @@ mod tests {
             vec![0, 1],
             0,
         );
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let root = &r.top.biggest_packages;
         // Root keeps cumulative totals over ALL dominators (before pruning).
         assert_eq!(root.retained_heap, 10001);
@@ -1020,7 +1026,7 @@ mod tests {
         let names: Vec<String> = (0..count).map(|i| format!("pkg{i}/Foo")).collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         let gc_roots: Vec<u32> = (0..count as u32).collect();
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             idom,
             class_idx,
             shallow,
@@ -1031,7 +1037,7 @@ mod tests {
             gc_roots,
             0,
         );
-        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let mut r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let root = &r.top.biggest_packages;
         assert_eq!(root.top_dominator_count, count as u64);
         assert!(
@@ -1057,8 +1063,8 @@ mod tests {
 
     #[test]
     fn test_build_model_leak_suspects() {
-        let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // total_shallow = 270, threshold = 27. Singles directly under vroot with
         // retained >= 27: obj0(1000), obj1(1000), obj3(200) all qualify.
@@ -1085,7 +1091,7 @@ mod tests {
         // A->B: 950 >= 1000*0.7=700 -> descend. B's largest child C=500 <
         //   950*0.7=665 -> BIG DROP -> accumulation point is B (the parent).
         // E->F: 700 >= 800*0.7=560 -> descend. F is a leaf -> accumulation is F.
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![6, 0, 1, 1, 6, 4],
             vec![0, 1, 2, 3, 4, 5],
             vec![10, 10, 10, 10, 10, 10],
@@ -1129,7 +1135,7 @@ mod tests {
         // A(obj0) is the accumulation point (its largest child drops below 0.7),
         // with 3 immediately-dominated children B,C,D.
         // retained: A=1000 B=100 C=90 D=80. 100 < 1000*0.7 -> A is accumulation.
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![4, 0, 0, 0],
             vec![0, 1, 2, 3],
             vec![10, 10, 10, 10],
@@ -1167,7 +1173,7 @@ mod tests {
             heap::ROOT_JNI_GLOBAL,
         ];
 
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // obj0 is a Thread root -> "Thread".
         assert_eq!(l.suspects[0].pretty_class, "com.foo.A");
@@ -1197,7 +1203,7 @@ mod tests {
         g.gc_root_indices = vec![1];
         g.gc_root_types = vec![heap::ROOT_THREAD_OBJ];
 
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // obj0 (com.foo.A) is a single suspect but not itself a root -> empty.
         assert_eq!(l.suspects[0].pretty_class, "com.foo.A");
@@ -1220,7 +1226,7 @@ mod tests {
         //         class_obj_class_idx -> represents row1. Top-level, big retained.
         //   obj1: class_idx row1 (a normal instance), dominated by obj0.
         //   vroot = 2.
-        let (g, dc_off, dc_tgt) = make_graph(
+        let (mut g, dc_off, dc_tgt) = make_graph(
             vec![2, 0],        // idom: obj0 top-level, obj1 under obj0
             vec![0, 1],        // class_idx
             vec![24, 16],      // shallow
@@ -1231,7 +1237,7 @@ mod tests {
             vec![0], // obj0 is a GC root
             0,
         );
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let s = &r.leaks.suspects[0];
         assert!(s.is_single);
         // The represented class, NOT "java.lang.Class".
@@ -1249,10 +1255,10 @@ mod tests {
     fn test_render_markdown_deterministic() {
         // Build the model twice and assert render output is byte-identical.
         // This specifically guards the Biggest-Packages HashMap sort fix.
-        let (g1, off1, tgt1) = fixture();
-        let (g2, off2, tgt2) = fixture();
-        let mut r1 = build_model_t(&g1, &off1, &tgt1, DOMINATED_CAP);
-        let mut r2 = build_model_t(&g2, &off2, &tgt2, DOMINATED_CAP);
+        let (mut g1, off1, tgt1) = fixture();
+        let (mut g2, off2, tgt2) = fixture();
+        let mut r1 = build_model_t(&mut g1, &off1, &tgt1, DOMINATED_CAP);
+        let mut r2 = build_model_t(&mut g2, &off2, &tgt2, DOMINATED_CAP);
         // Neutralise the nondeterministic timestamp line.
         r1.generated = "FIXED".to_string();
         r2.generated = "FIXED".to_string();
@@ -1261,8 +1267,8 @@ mod tests {
 
     #[test]
     fn test_render_markdown_structure() {
-        let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let mut r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
         assert!(md.starts_with("# Heap Dump Analysis: `test.hprof`\n\n"));
@@ -1297,8 +1303,8 @@ mod tests {
 
     #[test]
     fn test_render_markdown_oom_triage() {
-        let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let mut r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
         let doc = Md::parse(&md);
@@ -1349,8 +1355,8 @@ mod tests {
 
     /// Build the fixture Report with the nondeterministic timestamp neutralised.
     fn fixture_report() -> Report {
-        let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let (mut g, dc_off, dc_tgt) = fixture();
+        let mut r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         r
     }
@@ -1555,7 +1561,7 @@ mod tests {
         // None path: fixture graph has collection_attribution_raw == None.
         let (mut g, dc_off, dc_tgt) = fixture();
         assert!(g.collection_attribution_raw.is_none());
-        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         assert!(
             r.collection_attribution.is_none(),
             "flag-off must leave collection_attribution absent"
@@ -1563,7 +1569,7 @@ mod tests {
 
         // Some(empty) path: build_model must emit Some with empty rankings.
         g.collection_attribution_raw = Some(Vec::new());
-        let r2 = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r2 = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let ca = r2
             .collection_attribution
             .expect("Some when raw vec present");

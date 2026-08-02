@@ -1039,7 +1039,7 @@ fn analyze_to_report_inner(
     };
 
     let report = report::build_model(
-        &g,
+        &mut g,
         dc_off,
         dc_tgt,
         opts.leak_children_cap,
@@ -3070,7 +3070,7 @@ fn run(
     // B2 dominator-depth histogram tallied during compute_retained's DFS (no
     // separate ~2GB per-object memo scan).
     let mut report = report::build_model(
-        &g,
+        &mut g,
         dc_off,
         dc_tgt,
         opts.leak_children_cap,

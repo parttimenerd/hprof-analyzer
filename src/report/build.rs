@@ -475,8 +475,10 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
 /// consumers. Takes `dc_offsets` and `dc_targets` by value so it can free them
 /// (~4 GB on large dumps) immediately after their last use (before the remaining
 /// collection/attribution/framework sections allocate intermediate data).
+/// Takes `g` as `&mut Graph` to allow freeing `g.idom` (~2 GB) after
+/// `build_references`, the last consumer of it.
 pub fn build_model(
-    g: &Graph,
+    g: &mut Graph,
     dc_offsets: Vec<u32>,
     dc_targets: Vec<u32>,
     leak_children_cap: usize,
@@ -525,6 +527,10 @@ pub fn build_model(
     };
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
+    // g.idom is not used after build_references. Free it now (~2 GB on large dumps)
+    // before collection/attribution/framework sections run.
+    g.idom = Vec::new();
+    crate::trace::probe("build_model: after drop(g.idom) — before collection_attribution");
     let collection_attribution = build_collection_attribution(g, &overview);
     let fields_by_size = build_fields_by_size(g, &overview);
     let biggest_collections = build_biggest_collections(g);
