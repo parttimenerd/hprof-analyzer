@@ -5188,8 +5188,8 @@ function WasmQueryPanel({
       {history.length > 0 && (
         <div style={{ marginBottom: "0.3rem", display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
           {history.map((q, i) => (
-            <button key={i} className="btn-link"
-              style={{ fontSize: "0.72rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 3, padding: "1px 5px", maxWidth: "24em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            <button key={q} className="btn-link"
+              style={{ fontSize: "0.72rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 4, padding: "1px 5px", maxWidth: "24em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
               title={q}
               onClick={() => setQueryText(q)}>
               {q.length > 40 ? q.slice(0, 38) + "…" : q}
