@@ -5548,6 +5548,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [expandFilter, setExpandFilter] = React.useState("");
   const [refFilter, setRefFilter] = React.useState("");
   const [rootFilter, setRootFilter] = React.useState("");
+  const [rootViewMode, setRootViewMode] = React.useState<"instances" | "classes">("instances");
   const [rootSort, setRootSort] = React.useState<{ col: "class" | "idx" | "shallow" | "retained"; asc: boolean }>({ col: "retained", asc: false });
   const [showAllInbound, setShowAllInbound] = React.useState(false);
   const [pathDepth, setPathDepth] = React.useState(8);
@@ -6050,17 +6051,29 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             }
           </p>
           <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+            {rootFilter && (
+              <span style={{ display: "inline-flex", borderRadius: 4, overflow: "hidden", border: "1px solid var(--border, #e2e8f0)", fontSize: "0.78rem" }}>
+                <button
+                  className={rootViewMode === "instances" ? "btn-active" : "btn-link"}
+                  style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0 }}
+                  onClick={() => setRootViewMode("instances")}>Instances</button>
+                <button
+                  className={rootViewMode === "classes" ? "btn-active" : "btn-link"}
+                  style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0, borderLeft: "1px solid var(--border, #e2e8f0)" }}
+                  onClick={() => setRootViewMode("classes")}>By class</button>
+              </span>
+            )}
             <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
               <input
                 type="text"
                 value={rootFilter}
-                onChange={e => setRootFilter(e.target.value)}
+                onChange={e => { setRootFilter(e.target.value); setRootViewMode("instances"); }}
                 placeholder="Filter by class…"
                 style={{ width: "14em", fontSize: "0.82rem", padding: "1px 5px", paddingRight: rootFilter ? "1.4em" : "5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
                 title="Filter captured objects by class name"
               />
               {rootFilter && (
-                <button onClick={() => setRootFilter("")}
+                <button onClick={() => { setRootFilter(""); setRootViewMode("instances"); }}
                   style={{ position: "absolute", right: "4px", background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: "0.85rem", padding: 0, lineHeight: 1 }}
                   title="Clear filter">×</button>
               )}
@@ -6125,7 +6138,53 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </div>
           );
         })()}
-        <table className="std-table">
+        {rootFilter && rootViewMode === "classes" && (() => {
+          const byClass = new Map<string, { count: number; totalShallow: number; totalRetained: number; topIdx: number }>();
+          for (const [idStr, n] of filtered) {
+            const entry = byClass.get(n.display_class) ?? { count: 0, totalShallow: 0, totalRetained: 0, topIdx: parseInt(idStr, 10) };
+            entry.count++;
+            entry.totalShallow += n.shallow;
+            entry.totalRetained += n.retained;
+            byClass.set(n.display_class, entry);
+          }
+          const rows = [...byClass.entries()]
+            .map(([cls, v]) => ({ cls, ...v }))
+            .sort((a, b) => b.totalRetained - a.totalRetained);
+          return (
+            <table className="std-table">
+              <thead>
+                <tr>
+                  <th>Class</th>
+                  <th style={{ textAlign: "right" }}>Instances</th>
+                  <th style={{ textAlign: "right" }}>Total Shallow</th>
+                  <th style={{ textAlign: "right" }}>Total Retained</th>
+                  <th style={{ textAlign: "right" }}>% Heap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 200).map(r => (
+                  <tr key={r.cls}>
+                    <td>
+                      <span className="copy-cell">
+                        <button className="btn-link" title="Navigate to top instance"
+                          onClick={() => navigate("explore", r.topIdx, r.cls)}>
+                          <code>{r.cls}</code>
+                        </button>
+                        <PivotBtn cls={r.cls} />
+                        <OqlBtn cls={r.cls} />
+                      </span>
+                    </td>
+                    <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
+                    <td style={{ textAlign: "right" }}>{fmtB(r.totalShallow)}</td>
+                    <td style={{ textAlign: "right" }}>{fmtB(r.totalRetained)}</td>
+                    <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (r.totalRetained / totalHeap * 100).toFixed(1) : "—"}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+        })()}
+        {(!rootFilter || rootViewMode === "instances") && <table className="std-table">
           <thead>
             <tr>
               <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "class" ? { col: "class", asc: !s.asc } : { col: "class", asc: true })}>Class {rootSort.col === "class" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
@@ -6168,7 +6227,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               </tr>
             );})}
           </tbody>
-        </table>
+        </table>}
         {!rootFilter && data.roots.length > 50 && (
           <p className="subtitle" style={{ marginTop: "0.4rem", fontSize: "0.8rem" }}>
             Showing top 50 of {data.roots.length} roots. Use the class filter above to search all {Object.keys(data.nodes).length.toLocaleString()} captured objects.
