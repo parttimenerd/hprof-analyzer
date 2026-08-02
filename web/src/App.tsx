@@ -5973,6 +5973,19 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     : groupedEdges;
   const pagedEdges = filteredEdges.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
+  // Index of the grouped edge representative that is the highest-retained dom child
+  const domBadgeChildIdx: number | null = React.useMemo(() => {
+    let best: { idx: number; retained: number } | null = null;
+    const domSet = new Set(currentDomChildren);
+    for (const edge of groupedEdges) {
+      if (domSet.has(edge.child_idx) && !edge.any_shared) {
+        const r = edge.total_retained;
+        if (!best || r > best.retained) best = { idx: edge.child_idx, retained: r };
+      }
+    }
+    return best?.idx ?? null;
+  }, [groupedEdges, currentDomChildren]);
+
   // Find pre-built SVG tree for current node
   const prebuiltTree = nodeId !== null
     ? data.root_dom_trees?.find(([idx]) => idx === nodeId)?.[1]
@@ -6677,6 +6690,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             </span>
                           </td>
                           <td>
+                            {domBadgeChildIdx === edge.child_idx && (
+                              <span
+                                className="shared-badge"
+                                title="This child is the dominant retention path (immediate dominator child with highest retained size)"
+                                style={{ background: "var(--ok-bg, #d1fae5)", color: "var(--ok, #065f46)", borderColor: "var(--ok-border, #a7f3d0)" }}
+                              >
+                                dom
+                              </span>
+                            )}
                             {edge.any_shared && (
                               <span className="shared-badge" title="Shared: this child's retained heap belongs to another subtree — value is a gross sum">&#8635; shared</span>
                             )}
