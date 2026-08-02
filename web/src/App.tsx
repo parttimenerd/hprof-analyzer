@@ -6225,7 +6225,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       <div ref={containerRef}>
         {breadcrumb.length > 0 && (
           <div className="breadcrumb">
-            <span className="breadcrumb-item" onClick={goToRoot}>Roots</span>
+            <span className="breadcrumb-item" onClick={() => goToRoot()}>Roots</span>
             {breadcrumb.map((b, i) => (
               <React.Fragment key={i}>
                 <span className="breadcrumb-sep">/</span>
@@ -6253,7 +6253,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               </React.Fragment>
             ))}
             <span className="breadcrumb-sep">/</span>
-            <span>{shortCls ? `${shortCls}#${nodeId}` : `obj#${nodeId}`}</span>
+            <span style={{ fontWeight: 600 }}>
+              {shortCls ? `${shortCls}#${nodeId}` : `obj#${nodeId}`}
+              {wasmBelowInfo && <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(wasmBelowInfo.retained)}</span>}
+            </span>
           </div>
         )}
         <div style={{ padding: "0.75rem 1rem", background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 6 }}>
@@ -6371,7 +6374,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       {/* Breadcrumb */}
       {breadcrumb.length > 0 && (
         <div className="breadcrumb">
-          <span className="breadcrumb-item" onClick={goToRoot}>Roots</span>
+          <span className="breadcrumb-item" onClick={() => goToRoot()}>Roots</span>
           {breadcrumb.map((b, i) => (
             <React.Fragment key={i}>
               <span className="breadcrumb-sep">/</span>
@@ -6400,7 +6403,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </React.Fragment>
           ))}
           <span className="breadcrumb-sep">/</span>
-          <span>{(currentNode.display_class.split(".").pop() ?? currentNode.display_class)}#{nodeId}</span>
+          <span style={{ fontWeight: 600 }}>
+            {(currentNode.display_class.split(".").pop() ?? currentNode.display_class)}#{nodeId}
+            <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(currentNode.retained)}</span>
+          </span>
         </div>
       )}
 
