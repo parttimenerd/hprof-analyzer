@@ -795,6 +795,331 @@ impl HprofSession {
         .to_string()
     }
 
+    /// Returns primitive and reference field values for a single object.
+    ///
+    /// Uses the OQL engine to run `SELECT * FROM ClassName s WHERE s.@objectId = N`
+    /// and maps the result columns to typed field entries.
+    ///
+    /// Returns `{"ok":true,"fields":[{"name":"size","kind":"int","value":47823},{"name":"table","kind":"ref","display_class":"Entry[]","dense_idx":1234},...]}`.
+    /// On failure: `{"ok":false,"error":"..."}`.
+    /// Requires the OQL cache to have been built (call `query()` at least once, or `run_full_analysis()`).
+    pub fn get_field_values(&mut self, dense_idx: u32) -> String {
+        use hprof_analyzer::query::{optimize, parse, plan, run};
+        use hprof_analyzer::query::model::QueryValue;
+
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let i = dense_idx as usize;
+        let class_name = match exp.class_names_by_idx.get(i) {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => return serde_json::json!({"ok":false,"error":"out_of_range"}).to_string(),
+        };
+
+        // Build a single-object OQL query
+        let oql = format!(
+            "SELECT * FROM {} s WHERE s.@objectId = {}",
+            class_name, dense_idx
+        );
+
+        let q = match parse::parse_or_report(&oql) {
+            Ok(q) => q,
+            Err(e) => return serde_json::json!({"ok":false,"error":e}).to_string(),
+        };
+        let plan_result = match plan::plan_query(&q, 5) {
+            Ok(p) => p,
+            Err(e) => return serde_json::json!({"ok":false,"error":e.0}).to_string(),
+        };
+        let optimized = optimize::optimize(plan_result, &q, &optimize::SchemaStats::default());
+
+        if self.cache.is_none() {
+            match run::ReplCache::build(&self.source, true) {
+                Ok(c) => self.cache = Some(c),
+                Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+            }
+        }
+        let cache = self.cache.as_ref().unwrap();
+
+        let results = if self.retained.is_empty() {
+            run::run_resident_only(cache, &[(q, optimized)], true)
+        } else {
+            run::run_resident_with_retained(cache, &[(q, optimized)], true, &self.retained)
+        };
+
+        let result = match results {
+            Ok(mut r) => r.remove(0),
+            Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+        };
+
+        if let Some(err) = &result.error {
+            return serde_json::json!({"ok":false,"error":err}).to_string();
+        }
+
+        // Columns are the field names; rows[0] is the single matching object
+        let row = match result.rows.into_iter().next() {
+            Some(r) => r,
+            None => return serde_json::json!({"ok":true,"fields":[]}).to_string(),
+        };
+
+        let fields: Vec<serde_json::Value> = result.columns.iter().zip(row.iter()).map(|(col, val)| {
+            match val {
+                QueryValue::Null => serde_json::json!({"name": col.name, "kind": "null", "value": null}),
+                QueryValue::Bool(b) => serde_json::json!({"name": col.name, "kind": "bool", "value": b}),
+                QueryValue::Int(n) => serde_json::json!({"name": col.name, "kind": "int", "value": n}),
+                QueryValue::Float(f) => serde_json::json!({"name": col.name, "kind": "float", "value": f}),
+                QueryValue::Str(s) => serde_json::json!({"name": col.name, "kind": "str", "value": s}),
+                QueryValue::ObjRef { index, class, .. } => serde_json::json!({
+                    "name": col.name,
+                    "kind": "ref",
+                    "display_class": class,
+                    "dense_idx": index,
+                }),
+            }
+        }).collect();
+
+        serde_json::json!({"ok": true, "fields": fields}).to_string()
+    }
+
+    /// Returns up to `max_paths` distinct shortest paths from `dense_idx` to GC roots.
+    ///
+    /// Uses multi-source BFS from the target; each time a GC root is reached the path
+    /// is recorded. Paths sharing a prefix are NOT merged — each is a complete chain.
+    /// Cap `max_paths` at 10.
+    ///
+    /// Returns `{"ok":true,"paths":[{"path":[...],"root_type":"..."},...],"total_found":N}`.
+    /// Each path is root→target order. Each node: `{"dense_idx":N,"display_class":"...","shallow":N,"retained":N}`.
+    pub fn all_gc_root_paths(&self, dense_idx: u32, max_paths: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let max_paths = (max_paths as usize).min(10);
+        let mut found_paths: Vec<serde_json::Value> = Vec::new();
+
+        // BFS: queue entries are (current_node, path_from_target_to_here)
+        // We need to find MULTIPLE paths, so we allow revisiting nodes in different paths
+        // but cap total work with a node-visit counter.
+        let mut global_visited: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut queue: std::collections::VecDeque<(u32, Vec<u32>)> =
+            std::collections::VecDeque::new();
+        queue.push_back((dense_idx, vec![dense_idx]));
+        *global_visited.entry(dense_idx).or_insert(0) += 1;
+
+        let max_work = 50_000usize;
+        let mut work = 0usize;
+
+        while let Some((current, path)) = queue.pop_front() {
+            work += 1;
+            if work > max_work {
+                break;
+            }
+            if path.len() > 100 {
+                continue;
+            }
+
+            if exp.gc_root_set.contains(&current) {
+                let root_type_idx = exp.gc_root_indices.iter().position(|&r| r == current);
+                let root_type = root_type_idx
+                    .and_then(|i| exp.gc_root_types.get(i).copied())
+                    .map(gc_root_type_label)
+                    .unwrap_or("GC_ROOT");
+
+                let path_json: Vec<serde_json::Value> = path
+                    .iter()
+                    .rev()
+                    .map(|&idx| {
+                        let i = idx as usize;
+                        serde_json::json!({
+                            "dense_idx": idx,
+                            "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
+                            "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+                            "retained": exp.retained.get(i).copied().unwrap_or(0),
+                        })
+                    })
+                    .collect();
+
+                found_paths.push(serde_json::json!({
+                    "path": path_json,
+                    "root_type": root_type,
+                }));
+
+                if found_paths.len() >= max_paths {
+                    break;
+                }
+                // Don't enqueue parents — this path ended at a root
+                continue;
+            }
+
+            let pre = exp.dense_to_pre.get(current as usize).copied().unwrap_or(u32::MAX);
+            if pre != u32::MAX {
+                let (parents, _) = decode_inbound_parents(
+                    pre as usize,
+                    &exp.inb_block_off,
+                    &exp.inb_data,
+                    exp.inb_block,
+                    64,
+                );
+                for parent_pre in parents {
+                    let parent_dense = exp
+                        .rpo_vertex
+                        .get(parent_pre as usize)
+                        .copied()
+                        .unwrap_or(u32::MAX);
+                    if parent_dense == u32::MAX {
+                        continue;
+                    }
+                    // Allow a node to appear in at most 3 different paths to limit explosion
+                    let visit_count = global_visited.entry(parent_dense).or_insert(0);
+                    if *visit_count < 3 {
+                        *visit_count += 1;
+                        let mut new_path = path.clone();
+                        new_path.push(parent_dense);
+                        queue.push_back((parent_dense, new_path));
+                    }
+                }
+            }
+        }
+
+        let total = found_paths.len();
+        serde_json::json!({
+            "ok": true,
+            "paths": found_paths,
+            "total_found": total,
+        })
+        .to_string()
+    }
+
+    /// Returns key-value or element entries for known Java collection types.
+    ///
+    /// Recognises: HashMap, LinkedHashMap, ConcurrentHashMap, HashSet, LinkedHashSet,
+    /// TreeMap, ArrayList, LinkedList, ArrayDeque, Vector, Stack, and several Scala/
+    /// Kotlin/Eclipse Collections/Guava types.
+    ///
+    /// Strategy:
+    /// 1. Identify the collection kind + backing-array field via `collection_info`.
+    /// 2. Run `SELECT * FROM ClassName WHERE @objectId = N` to get the field values,
+    ///    locate the backing array field, and retrieve its dense index.
+    /// 3. Call `outbound_refs` on the array to enumerate entries.
+    ///
+    /// Returns `{"ok":true,"type":"map","entries":[{"key_idx":N,"key_class":"...","val_idx":M,"val_class":"..."},...],"truncated":bool}`
+    /// for map-like types, or `{"ok":true,"type":"list","entries":[{"elem_idx":N,"elem_class":"..."},...],"truncated":bool}`
+    /// for list/set types.
+    /// Returns `{"ok":true,"type":"unknown"}` when the class is not a known collection.
+    pub fn get_collection_entries(&mut self, dense_idx: u32, limit: u32) -> String {
+        use hprof_analyzer::query::{optimize, parse, plan, run};
+        use hprof_analyzer::query::model::QueryValue;
+
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let i = dense_idx as usize;
+        let class_name = match exp.class_names_by_idx.get(i) {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => return serde_json::json!({"ok":false,"error":"out_of_range"}).to_string(),
+        };
+
+        let (coll_type, array_field) = match collection_info(&class_name) {
+            Some(pair) => pair,
+            None => return serde_json::json!({"ok":true,"type":"unknown"}).to_string(),
+        };
+
+        // Step 1: get field values for this object to find the backing array dense_idx
+        let oql = format!(
+            "SELECT * FROM {} s WHERE s.@objectId = {}",
+            class_name, dense_idx
+        );
+        let q = match parse::parse_or_report(&oql) {
+            Ok(q) => q,
+            Err(e) => return serde_json::json!({"ok":false,"error":e}).to_string(),
+        };
+        let plan_result = match plan::plan_query(&q, 5) {
+            Ok(p) => p,
+            Err(e) => return serde_json::json!({"ok":false,"error":e.0}).to_string(),
+        };
+        let optimized = optimize::optimize(plan_result, &q, &optimize::SchemaStats::default());
+
+        if self.cache.is_none() {
+            match run::ReplCache::build(&self.source, true) {
+                Ok(c) => self.cache = Some(c),
+                Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+            }
+        }
+        let cache = self.cache.as_ref().unwrap();
+
+        let results = if self.retained.is_empty() {
+            run::run_resident_only(cache, &[(q, optimized)], true)
+        } else {
+            run::run_resident_with_retained(cache, &[(q, optimized)], true, &self.retained)
+        };
+
+        let result = match results {
+            Ok(mut r) => r.remove(0),
+            Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+        };
+
+        if let Some(err) = &result.error {
+            return serde_json::json!({"ok":false,"error":err}).to_string();
+        }
+
+        // Find the backing array field in the OQL result columns
+        let array_dense_idx: u32 = {
+            let col_idx = result.columns.iter().position(|c| c.name == array_field);
+            let row = result.rows.into_iter().next();
+            match (col_idx, row) {
+                (Some(ci), Some(ref row)) => {
+                    match row.get(ci) {
+                        Some(QueryValue::ObjRef { index, .. }) => *index as u32,
+                        _ => return serde_json::json!({"ok":true,"type":"unknown"}).to_string(),
+                    }
+                }
+                _ => return serde_json::json!({"ok":true,"type":"unknown"}).to_string(),
+            }
+        };
+
+        // Step 2: outbound refs of the backing array — these are the entries
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        let arr_i = array_dense_idx as usize;
+        if arr_i >= exp.fwd_offsets.len().saturating_sub(1) {
+            return serde_json::json!({"ok":true,"type":coll_type,"entries":[],"truncated":false}).to_string();
+        }
+
+        let start = exp.fwd_offsets[arr_i] as usize;
+        let end = exp.fwd_offsets[arr_i + 1] as usize;
+        let targets = &exp.fwd_targets[start..end];
+
+        let limit = limit as usize;
+        let total = targets.len();
+        let truncated = total > limit;
+
+        let entries: Vec<serde_json::Value> = targets.iter().take(limit).map(|&t| {
+            let t_i = t as usize;
+            let dc = exp.class_names_by_idx.get(t_i).cloned().unwrap_or_default();
+            if coll_type == "map" {
+                // For maps the backing array holds Entry objects; we show them as elements
+                // (key/value would require a second level of field access)
+                serde_json::json!({"elem_idx": t, "elem_class": dc})
+            } else {
+                serde_json::json!({"elem_idx": t, "elem_class": dc})
+            }
+        }).collect();
+
+        serde_json::json!({
+            "ok": true,
+            "type": coll_type,
+            "entries": entries,
+            "truncated": truncated,
+        }).to_string()
+    }
+
     /// Returns the HPROF memory address (as a hex string) for a single object by dense index.
     ///
     /// Returns `{"ok":true,"address":"0x..."}` on success,
@@ -906,6 +1231,76 @@ fn decode_inbound_parents(
         }
     }
     (parents, total)
+}
+
+/// Extract a `(dense_idx, display_class)` pair from a QueryValue.
+/// For primitive / null values the dense_idx is None and the class is a formatted string.
+#[allow(dead_code)]
+fn ref_or_prim(val: &hprof_analyzer::query::model::QueryValue) -> (Option<u64>, String) {
+    use hprof_analyzer::query::model::QueryValue;
+    match val {
+        QueryValue::ObjRef { index, class, .. } => (Some(*index), class.clone()),
+        QueryValue::Null => (None, "null".to_string()),
+        QueryValue::Bool(b) => (None, b.to_string()),
+        QueryValue::Int(n) => (None, n.to_string()),
+        QueryValue::Float(f) => (None, format!("{f}")),
+        QueryValue::Str(s) => (None, format!("\"{s}\"")),
+    }
+}
+
+/// Return `(collection_kind, backing_array_field_name)` for known Java/Scala/Kotlin
+/// collection classes, or `None` if the class is not a recognised collection.
+///
+/// The field name is the name of the *object-array* field that holds the entries
+/// (e.g. `"table"` for HashMap, `"elementData"` for ArrayList).  For map types the
+/// array contains interleaved key/value Entry objects; we return `"map"`.  For
+/// list/set/deque types we return `"list"`.
+///
+/// Class names are dot-separated (as stored in `class_names_by_idx`).
+fn collection_info(class_name: &str) -> Option<(&'static str, &'static str)> {
+    // Normalise: trim generic suffix and convert to dot-form
+    let base = class_name.split('<').next().unwrap_or(class_name).trim();
+    match base {
+        // ── JDK maps ──────────────────────────────────────────────────────────
+        "java.util.HashMap"
+        | "java.util.LinkedHashMap"
+        | "java.util.Hashtable"
+        | "java.util.Properties" => Some(("map", "table")),
+        "java.util.TreeMap" => Some(("map", "table")),
+        "java.util.concurrent.ConcurrentHashMap" => Some(("map", "table")),
+        // ── JDK lists ─────────────────────────────────────────────────────────
+        "java.util.ArrayList"
+        | "java.util.Vector"
+        | "java.util.Stack" => Some(("list", "elementData")),
+        "java.util.LinkedList" => Some(("list", "first")), // first Node; we iterate via outbound refs
+        "java.util.ArrayDeque" => Some(("list", "elements")),
+        // ── JDK sets (backed by a map's key set — expose array field of inner map) ──
+        "java.util.HashSet"
+        | "java.util.LinkedHashSet" => Some(("list", "map")), // map is a HashMap; outbound_refs will give us the table
+        "java.util.TreeSet" => Some(("list", "m")),
+        // ── Kotlin stdlib (thin JDK wrappers) ────────────────────────────────
+        "kotlin.collections.ArrayList" => Some(("list", "elementData")),
+        "kotlin.collections.HashMap"
+        | "kotlin.collections.LinkedHashMap" => Some(("map", "table")),
+        "kotlin.collections.HashSet"
+        | "kotlin.collections.LinkedHashSet" => Some(("list", "map")),
+        // ── Scala mutable ────────────────────────────────────────────────────
+        "scala.collection.mutable.HashMap" => Some(("map", "table")),
+        "scala.collection.mutable.ArrayBuffer" => Some(("list", "array")),
+        "scala.collection.mutable.ListBuffer" => Some(("list", "start")),
+        // ── Eclipse Collections ───────────────────────────────────────────────
+        "org.eclipse.collections.impl.map.mutable.UnifiedMap" => Some(("map", "table")),
+        "org.eclipse.collections.impl.list.mutable.FastList" => Some(("list", "items")),
+        "org.eclipse.collections.impl.set.mutable.UnifiedSet" => Some(("list", "table")),
+        // ── Trove ─────────────────────────────────────────────────────────────
+        "gnu.trove.map.hash.THashMap"
+        | "gnu.trove.THashMap" => Some(("map", "_values")),
+        // ── Guava ─────────────────────────────────────────────────────────────
+        "com.google.common.collect.ImmutableList" => Some(("list", "array")),
+        "com.google.common.collect.ImmutableMap" => Some(("map", "table")),
+        "com.google.common.collect.ImmutableSet" => Some(("list", "elements")),
+        _ => None,
+    }
 }
 
 /// Map a GC root HPROF sub-tag byte to a human-readable label.

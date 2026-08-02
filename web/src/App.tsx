@@ -921,7 +921,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         pretty_class: `${prefix} [λ ×${grp.length}]`,
         instances: grp.reduce((s, r) => s + r.instances, 0),
         shallow: grp.reduce((s, r) => s + r.shallow, 0),
-        retained: grp.reduce((s, r) => s + r.shallow, 0), // shallow sum (retained not additive across groups)
+        retained: grp.reduce((s, r) => s + r.retained, 0),
         max_instance_shallow: grp.reduce((mx, r) => Math.max(mx, r.max_instance_shallow), 0),
         loader_id: grp[0].loader_id,
         loader_label: grp[0].loader_label,
@@ -5385,6 +5385,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [showBelowGcPath, setShowBelowGcPath] = React.useState(false);
   const [wasmPeerInstances, setWasmPeerInstances] = React.useState<{dense_idx: number; display_class: string; retained: number}[] | null>(null);
   const [wasmPeerTotal, setWasmPeerTotal] = React.useState(0);
+  const [wasmFieldValues, setWasmFieldValues] = React.useState<{name: string; kind: string; value?: any; display_class?: string; dense_idx?: number}[] | null>(null);
+  const [wasmCollEntries, setWasmCollEntries] = React.useState<{type: string; entries: any[]; truncated: boolean} | null>(null);
+  const [wasmAllPaths, setWasmAllPaths] = React.useState<{paths: {path: {dense_idx: number; display_class: string; shallow: number; retained: number}[]; root_type: string}[]; total_found: number} | null>(null);
+  const [showAllPaths, setShowAllPaths] = React.useState(false);
 
   React.useEffect(() => {
     setWasmOutboundEdges(null);
@@ -5427,6 +5431,40 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         setWasmPeerInstances(peers);
         setWasmPeerTotal(r.total);
       }
+    } catch {}
+  }, [nodeId, data.nodes]);
+
+  // Field values: fetch primitive + ref fields for the current node via WASM
+  React.useEffect(() => {
+    setWasmFieldValues(null);
+    const wasm = (window as any).__wasmExploration;
+    if (!wasm?.get_field_values || nodeId === null) return;
+    try {
+      const r = JSON.parse(wasm.get_field_values(nodeId));
+      if (r.ok && r.fields?.length > 0) setWasmFieldValues(r.fields);
+    } catch {}
+  }, [nodeId, data.nodes]);
+
+  // Collection entries: fetch for known Java/Scala/Kotlin collections
+  React.useEffect(() => {
+    setWasmCollEntries(null);
+    const wasm = (window as any).__wasmExploration;
+    if (!wasm?.get_collection_entries || nodeId === null) return;
+    try {
+      const r = JSON.parse(wasm.get_collection_entries(nodeId, 50));
+      if (r.ok && r.type !== "unknown" && r.entries?.length > 0) setWasmCollEntries(r);
+    } catch {}
+  }, [nodeId, data.nodes]);
+
+  // All GC root paths: multi-path BFS to GC roots
+  React.useEffect(() => {
+    setWasmAllPaths(null);
+    setShowAllPaths(false);
+    const wasm = (window as any).__wasmExploration;
+    if (!wasm?.all_gc_root_paths || nodeId === null) return;
+    try {
+      const r = JSON.parse(wasm.all_gc_root_paths(nodeId, 10));
+      if (r.ok && r.paths?.length > 1) setWasmAllPaths(r); // only show if >1 path (single path already shown)
     } catch {}
   }, [nodeId, data.nodes]);
 
@@ -6574,6 +6612,82 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   />
                 );
               })()}
+              {/* Collection Entries (J): entries for known Java/Scala/Kotlin collections */}
+              {wasmCollEntries && (
+                <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-faint, #f0f0f0)", paddingTop: "0.5rem" }}>
+                  <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.3rem" }}>
+                    Collection entries{wasmCollEntries.truncated ? " (first 50)" : ` (${wasmCollEntries.entries.length})`}
+                  </div>
+                  <table className="std-table" style={{ fontSize: "0.8rem" }}>
+                    <thead>
+                      <tr>
+                        {wasmCollEntries.type === "map" ? (
+                          <th>Entry object</th>
+                        ) : (
+                          <th>Element</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {wasmCollEntries.entries.map((e: any, i: number) => (
+                        <tr key={i}>
+                          <td>
+                            {e.elem_idx != null ? (
+                              <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.8rem" }}
+                                onClick={() => navigate("explore", e.elem_idx, e.elem_class ?? `#${e.elem_idx}`)}>
+                                {e.elem_class ?? `obj#${e.elem_idx}`}#{e.elem_idx}
+                              </button>
+                            ) : (
+                              <span style={{ color: "var(--muted)", fontStyle: "italic" }}>null</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {wasmCollEntries.truncated && (
+                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0.2rem 0 0" }}>Showing first 50 entries.</p>
+                  )}
+                </div>
+              )}
+              {/* Additional GC root paths (H): multi-path BFS, shown when >1 distinct path exists */}
+              {wasmAllPaths && wasmAllPaths.paths.length > 1 && (
+                <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-faint, #f0f0f0)", paddingTop: "0.5rem" }}>
+                  <button
+                    className="btn-link"
+                    style={{ fontSize: "0.85rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.3rem" }}
+                    onClick={() => setShowAllPaths(v => !v)}
+                  >
+                    {showAllPaths ? "▼" : "▶"} Additional retention paths ({wasmAllPaths.paths.length})
+                  </button>
+                  {showAllPaths && (
+                    <div style={{ marginTop: "0.4rem" }}>
+                      <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.4rem" }}>
+                        Multiple paths from GC roots to this object. Each row is a separate retention chain (root → object).
+                      </p>
+                      {wasmAllPaths.paths.map((p, pi) => (
+                        <details key={pi} style={{ marginBottom: "0.4rem" }}>
+                          <summary style={{ fontSize: "0.82rem", cursor: "pointer", userSelect: "none" }}>
+                            Path {pi + 1} via <strong>{p.root_type}</strong> ({p.path.length} hop{p.path.length !== 1 ? "s" : ""})
+                          </summary>
+                          <div style={{ paddingLeft: "0.75rem", marginTop: "0.2rem" }}>
+                            {p.path.map((step, si) => (
+                              <div key={si} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.8rem", padding: "1px 0" }}>
+                                {si > 0 && <span style={{ color: "var(--muted)", flexShrink: 0 }}>↓</span>}
+                                <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.8rem", flex: 1, textAlign: "left" }}
+                                  onClick={() => navigate("explore", step.dense_idx, step.display_class ?? `#${step.dense_idx}`)}>
+                                  {step.display_class ?? `obj#${step.dense_idx}`}
+                                </button>
+                                <span style={{ color: "var(--muted)", fontSize: "0.74rem", whiteSpace: "nowrap" }}>{fmtB(step.retained)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -6950,6 +7064,28 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   );
                 } catch { return null; }
               })()}
+              {/* Field Values (G): show primitive + ref fields from WASM */}
+              {wasmFieldValues && wasmFieldValues.map((f, fi) => (
+                <tr key={`fv-${fi}`}>
+                  <th style={{ fontWeight: "normal", color: "var(--muted)", fontStyle: "italic" }}>
+                    .{f.name}
+                  </th>
+                  <td>
+                    {f.kind === "ref" && f.dense_idx != null ? (
+                      <span className="copy-cell">
+                        <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.82rem" }}
+                          onClick={() => navigate("explore", f.dense_idx!, f.display_class ?? `#${f.dense_idx}`)}>
+                          {f.display_class ?? `obj#${f.dense_idx}`}
+                        </button>
+                      </span>
+                    ) : f.kind === "null" ? (
+                      <span style={{ color: "var(--muted)", fontStyle: "italic" }}>null</span>
+                    ) : (
+                      <code style={{ fontSize: "0.82rem" }}>{String(f.value)}</code>
+                    )}
+                  </td>
+                </tr>
+              ))}
               <tr>
                 <th>Immediate dominator</th>
                 <td>

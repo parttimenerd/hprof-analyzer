@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 856 KB minified bundle budget (raised from 852 KB to accommodate forward nav, peer instances panel, cycle badge).
-const BUDGET_BYTES = 856 * 1024;
+// ≤ 860 KB minified bundle budget (raised from 856 KB to accommodate field values, all-paths, collection entries panels).
+const BUDGET_BYTES = 860 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
