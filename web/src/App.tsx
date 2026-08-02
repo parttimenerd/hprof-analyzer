@@ -6054,6 +6054,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 >
                   {b.sourceTab === "domtree" && <span style={{ color: "var(--muted)", fontSize: "0.8em", marginRight: "2px" }}>⌞</span>}
                   {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
+                  {(() => {
+                    const n = data.nodes[String(b.nodeId)];
+                    if (!n) return null;
+                    return <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(n.retained)}</span>;
+                  })()}
                   {b.sourceTab !== "domtree" && b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
                     <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.8em" }}>
                       {" "}.{b.edge}
@@ -6196,6 +6201,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               >
                 {b.sourceTab === "domtree" && <span style={{ color: "var(--muted)", fontSize: "0.8em", marginRight: "2px" }}>⌞</span>}
                 {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
+                {(() => {
+                  const n = data.nodes[String(b.nodeId)];
+                  if (!n) return null;
+                  return <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(n.retained)}</span>;
+                })()}
                 {b.sourceTab !== "domtree" && b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
                   <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.8em" }}>
                     {" "}.{b.edge}
