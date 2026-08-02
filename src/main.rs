@@ -13,6 +13,12 @@
 
 mod bitset;
 mod chunkvec;
+
+// jemalloc returns freed pages to the OS more aggressively than glibc malloc,
+// lowering the kernel-reported max RSS after large drops (rpo window, etc.).
+#[cfg(feature = "native")]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod collection_config;
 mod cvec;
 mod diff;
