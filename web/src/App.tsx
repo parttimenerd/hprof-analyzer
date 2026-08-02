@@ -3926,10 +3926,10 @@ function shortClass(name: string): string {
 }
 
 const KNOWN_COLLECTION_FRAGMENTS = [
-  "HashMap", "HashSet", "LinkedHashMap", "LinkedHashSet",
+  "HashMap", "HashSet",
   "ArrayList", "LinkedList", "ArrayDeque", "PriorityQueue",
-  "ConcurrentHashMap", "TreeMap", "TreeSet",
-  "Vector", "Stack",
+  "TreeMap", "TreeSet",
+  "java.util.Vector", "java.util.Stack",
   "scala.collection", "kotlin.collections",
 ] as const;
 
