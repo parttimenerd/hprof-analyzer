@@ -5288,21 +5288,40 @@ function WasmGcPathPanel({ nodeId, session, data, fmtB, navigate }: {
   if (!pathData) return <p className="subtitle">No path to GC root found.</p>;
 
   return (
-    <div>
-      <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0" }}>
-        Root type: <strong>{pathData.root_type}</strong>
-      </p>
+    <div style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+      <div style={{
+        display: "inline-block", border: "2px solid var(--accent, #3b82f6)",
+        borderRadius: 4, padding: "2px 8px", background: "var(--accent-muted, #dbeafe)",
+        color: "var(--accent)", fontWeight: 600, fontSize: "0.76rem", marginBottom: "2px",
+      }}>
+        [{pathData.root_type}]
+      </div>
       {(pathData.path as any[]).map((step: any, i: number) => {
-        const node = data.nodes[String(step.dense_idx)];
+        const isLast = i === (pathData.path as any[]).length - 1;
+        const nextStep: any = (pathData.path as any[])[i + 1];
         return (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.82rem", padding: "1px 0" }}>
-            {i > 0 && <span style={{ color: "var(--muted)", marginLeft: "0.5rem" }}>↓{step.field_name ? ` .${step.field_name}` : ""}</span>}
-            <button className="btn-link" style={{ fontFamily: "monospace", flex: 1, textAlign: "left" }}
-              onClick={() => navigate(step.dense_idx)}>
-              {step.display_class || node?.display_class || `obj#${step.dense_idx}`}
-            </button>
-            <span style={{ color: "var(--muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }}>{fmtB(step.retained)}</span>
-          </div>
+          <React.Fragment key={i}>
+            <div style={{ color: "var(--muted)", fontSize: "0.74rem", paddingLeft: "0.5rem" }}>
+              │{nextStep?.field_name ? ` .${nextStep.field_name}` : ""}
+            </div>
+            <div style={{ color: "var(--muted)", paddingLeft: "0.5rem", fontSize: "0.78rem" }}>▼</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              {isLast ? (
+                <span style={{ fontFamily: "monospace", fontSize: "0.8rem", fontWeight: 600 }}>
+                  {step.display_class || `obj#${step.dense_idx}`}
+                </span>
+              ) : (
+                <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.8rem" }}
+                  onClick={() => navigate(step.dense_idx)}>
+                  {step.display_class || `obj#${step.dense_idx}`}
+                </button>
+              )}
+              <span style={{ color: "var(--muted)", fontSize: "0.74rem", whiteSpace: "nowrap" }}>
+                {fmtB(step.retained)}
+              </span>
+              {isLast && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← here</span>}
+            </div>
+          </React.Fragment>
         );
       })}
     </div>
