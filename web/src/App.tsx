@@ -6226,6 +6226,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     </td>
                     <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
                     <td style={{ textAlign: "right" }}>{fmtB(r.totalShallow)}</td>
+                    <td style={{ textAlign: "right" }}>{fmtB(r.totalRetained)}</td>
                     <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (r.totalRetained / totalHeap * 100).toFixed(1) : "—"}%</td>
                   </tr>
                 ))}
