@@ -1,9 +1,9 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-02T17:02:26.614243000Z",
+  "generated": "2026-08-02T18:21:11.256701000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
-    "file_path": "/Users/i560383_1/code/experiments/hprof-analyzer/tests/fixtures/dump_4_philosophers.hprof",
+    "file_path": "tests/fixtures/dump_4_philosophers.hprof",
     "format": "JAVA PROFILE 1.0.2",
     "file_size": 23731997,
     "identifier_size_bits": 64,

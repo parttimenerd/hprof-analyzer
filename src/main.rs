@@ -974,11 +974,19 @@ fn analyze_to_report_inner(
     }
 
     // build_from_fwd needs dfn alive; it is cleared afterward (matching run()).
-    let (inb_block_off, inb_data) = inbound.build_from_fwd(
-        std::mem::take(&mut g.fwd_offsets),
-        std::mem::take(&mut g.fwd_targets),
-        &rpo.dfn,
-    )?;
+    // Large dumps: drop fwd_targets first and rescan HPROF to avoid the
+    // inb_flat+fwd_targets peak (saves ~7-10 GB on 30G+ dumps).
+    let (inb_block_off, inb_data) = if inbound.total_inb > 1_000_000_000 {
+        drop(std::mem::take(&mut g.fwd_targets));
+        drop(std::mem::take(&mut g.fwd_offsets));
+        inbound.build_mat_scan(&rpo.dfn, |_src, _fwd| Ok(()))?
+    } else {
+        inbound.build_from_fwd(
+            std::mem::take(&mut g.fwd_offsets),
+            std::mem::take(&mut g.fwd_targets),
+            &rpo.dfn,
+        )?
+    };
 
     // Rebuild vertex while dfn is still live; then free dfn.
     let count = parent_pre_count;
@@ -2310,6 +2318,16 @@ fn run(
             &rpo.dfn,
             |_src, _fwd| Ok(()), // outbound collected later via HPROF rescan
         )?
+    } else if inbound.total_inb > 1_000_000_000 {
+        // Large dump: drop fwd_targets before inb_flat alloc so both ~N×4B
+        // arrays never coexist. Costs one extra HPROF rescan but cuts the
+        // inbound peak by ~7-10 GB on 30G+ production dumps.
+        progress::phase("building inbound references (rescan path)");
+        drop(std::mem::take(&mut g.fwd_targets));
+        drop(std::mem::take(&mut g.fwd_offsets));
+        crate::trace::trim();
+        crate::trace::probe("main: fwd dropped (rescan-inbound path, before inb_flat alloc)");
+        inbound.build_mat_scan(&rpo.dfn, |_src, _fwd| Ok(()))?
     } else {
         inbound.build_from_fwd(
             std::mem::take(&mut g.fwd_offsets),

@@ -1003,6 +1003,23 @@ impl Pass2 {
             in_degree[dst as usize] += 1;
         }
 
+        // Sum in_degree by class NOW — after synthetic edges, before fwd_targets.
+        // class_idx was compressed before the 2a scan; restoring it here costs
+        // ~2 GB but fwd_targets doesn't exist yet, so this coexistence is
+        // ~2 GB cheaper than the previous approach (restoring after fwd_targets).
+        let n_hist_classes = class_names.len();
+        let mut incoming_refs_per_class: Vec<u64> = vec![0u64; n_hist_classes];
+        {
+            let class_idx_restored = class_idx_c.restore()?;
+            for (i, &d) in in_degree.iter().enumerate() {
+                let ci = class_idx_restored[i] as usize;
+                if ci < n_hist_classes {
+                    incoming_refs_per_class[ci] += d as u64;
+                }
+            }
+        } // class_idx_restored dropped here
+        crate::trace::probe("pass2: incoming_refs_per_class computed (class_idx restore dropped)");
+
         let mut gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
         gc_root_indices.sort_unstable();
         // Per-root type aligned 1:1 with the sorted indices. Every index in the
@@ -1144,21 +1161,6 @@ impl Pass2 {
         if let Some(c) = in_degree_c {
             in_degree = c.restore()?;
         }
-
-        // Sum in_degree by class before the prefix-sum destroys the counts.
-        // class_idx was compressed before the 2a scan — restore temporarily here.
-        // The restored Vec is dropped immediately after the loop (~2 GB on large dumps).
-        let n_hist_classes = class_names.len();
-        let mut incoming_refs_per_class: Vec<u64> = vec![0u64; n_hist_classes];
-        {
-            let class_idx_restored = class_idx_c.restore()?;
-            for (i, &d) in in_degree.iter().enumerate() {
-                let ci = class_idx_restored[i] as usize;
-                if ci < n_hist_classes {
-                    incoming_refs_per_class[ci] += d as u64;
-                }
-            }
-        } // class_idx_restored dropped here
 
         // Prefix-sum in_degree counts → START cursors for the deferred inbound
         // build. in_degree[i] becomes node i's inbound slice START; total_inb
