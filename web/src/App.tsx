@@ -5883,18 +5883,33 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <form style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}
               onSubmit={e => {
                 e.preventDefault();
-                const n = parseInt(jumpInput.trim(), 10);
-                if (!isNaN(n) && n >= 0) {
-                  setJumpInput("");
-                  const label = data.nodes[String(n)]?.display_class ?? `#${n}`;
-                  navigate("explore", n, label);
+                const raw = jumpInput.trim();
+                const isHex = /^0x[0-9a-fA-F]+$/i.test(raw);
+                if (isHex) {
+                  const addr = parseInt(raw.slice(2), 16);
+                  const wasm = (window as any).__wasmExploration;
+                  if (wasm?.find_dense_by_address) {
+                    try {
+                      const r = JSON.parse(wasm.find_dense_by_address(addr));
+                      if (r.ok) {
+                        setJumpInput("");
+                        navigate("explore", r.dense_idx, data.nodes[String(r.dense_idx)]?.display_class ?? `#${r.dense_idx}`);
+                      }
+                    } catch {}
+                  }
+                } else {
+                  const n = parseInt(raw, 10);
+                  if (!isNaN(n) && n >= 0) {
+                    setJumpInput("");
+                    navigate("explore", n, data.nodes[String(n)]?.display_class ?? `#${n}`);
+                  }
                 }
               }}>
               <input
                 type="text"
                 value={jumpInput}
                 onChange={e => setJumpInput(e.target.value)}
-                placeholder="Go to obj #…"
+                placeholder="Go to obj # or 0x…"
                 style={{ width: "9em", fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
                 title="Jump to an object by its dense index"
               />
@@ -6312,17 +6327,33 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         <form style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}
           onSubmit={e => {
             e.preventDefault();
-            const n = parseInt(jumpInput.trim(), 10);
-            if (!isNaN(n) && n >= 0) {
-              setJumpInput("");
-              navigate(tab, n, data.nodes[String(n)]?.display_class ?? `#${n}`);
+            const raw = jumpInput.trim();
+            const isHex = /^0x[0-9a-fA-F]+$/i.test(raw);
+            if (isHex) {
+              const addr = parseInt(raw.slice(2), 16);
+              const wasm = (window as any).__wasmExploration;
+              if (wasm?.find_dense_by_address) {
+                try {
+                  const r = JSON.parse(wasm.find_dense_by_address(addr));
+                  if (r.ok) {
+                    setJumpInput("");
+                    navigate(tab, r.dense_idx, data.nodes[String(r.dense_idx)]?.display_class ?? `#${r.dense_idx}`);
+                  }
+                } catch {}
+              }
+            } else {
+              const n = parseInt(raw, 10);
+              if (!isNaN(n) && n >= 0) {
+                setJumpInput("");
+                navigate(tab, n, data.nodes[String(n)]?.display_class ?? `#${n}`);
+              }
             }
           }}>
           <input
             type="text"
             value={jumpInput}
             onChange={e => setJumpInput(e.target.value)}
-            placeholder="Go to obj #…"
+            placeholder="Go to obj # or 0x…"
             style={{ width: "9em", fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
             title="Jump to an object by its dense index"
           />

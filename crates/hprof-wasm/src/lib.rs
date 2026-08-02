@@ -1143,6 +1143,20 @@ impl HprofSession {
         })
         .to_string()
     }
+
+    pub fn find_dense_by_address(&self, addr: u64) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+        if exp.addrs.is_empty() {
+            return serde_json::json!({"error":"no_addresses"}).to_string();
+        }
+        match exp.addrs.iter().position(|&a| a == addr) {
+            Some(idx) => serde_json::json!({"ok":true,"dense_idx":idx as u32}).to_string(),
+            None => serde_json::json!({"ok":false,"error":"not_found"}).to_string(),
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
