@@ -497,3 +497,35 @@ dialog.text-modal::backdrop {
   :root:not([data-theme="light"]) .rdt_TableRow span { color: var(--fg) !important; }
   :root:not([data-theme="light"]) .rdt_headSeparator { --rdt-color-text-primary: var(--fg) !important; }
 }
+
+/* ── Sticky section title strip ── */
+.sticky-section-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0.2rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  z-index: 4; /* below toc (z-index 5) */
+  pointer-events: none;
+  opacity: 0.93;
+  transition: opacity 0.15s;
+}
+@media print { .sticky-section-header { display: none; } }
+
+/* ── Keyboard shortcut key styling ── */
+kbd {
+  display: inline-block;
+  padding: 0.1em 0.35em;
+  font-size: 0.82em;
+  font-family: var(--mono, monospace);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--fg);
+  white-space: nowrap;
+}

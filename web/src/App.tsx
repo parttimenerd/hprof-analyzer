@@ -1081,6 +1081,15 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
 
   const hiddenSmall = !showAll && !filter ? rows.filter(r => pctOf(r.retained, totalShallow) < HIST_MIN_PCT).length : 0;
 
+  const histTsvRows = React.useMemo(() => {
+    const header = ["Class", "Instances", "Shallow (bytes)", "Retained (bytes)", "% Heap"];
+    const data = displayRows.map(r => [
+      r.pretty_class, String(r.instances), String(r.shallow),
+      String(r.retained), fmtPct(pctOf(r.retained, totalShallow)),
+    ]);
+    return [header, ...data];
+  }, [displayRows, totalShallow]);
+
   return (
     <div>
       <div className="tools">
@@ -1112,6 +1121,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
           </button>
         )}
         {kbBtn}
+        <CopyTsvBtn rows={histTsvRows} label="Copy histogram as TSV" />
       </div>
       <DataTable
         columns={columns}
@@ -1194,6 +1204,26 @@ function CopyBtn({ text }: { text: string }) {
   return (
     <button className="copy-btn" onClick={copy} title="Copy class name" aria-label="Copy class name">
       {copied ? "✓" : "⎘"}
+    </button>
+  );
+}
+
+// Exports an array of string rows as tab-separated values to the clipboard.
+// Each row is a string[]; the first row should be the header.
+function CopyTsvBtn({ rows, label }: { rows: string[][]; label?: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const tsv = rows.map(r => r.join("\t")).join("\n");
+    navigator.clipboard?.writeText(tsv).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button className="show-more-btn" onClick={copy}
+      title={label ?? "Copy as TSV (paste into spreadsheet)"}>
+      {copied ? "✓ Copied" : "⎘ Copy TSV"}
     </button>
   );
 }
@@ -2773,7 +2803,9 @@ function TopConsumersSection({ report }: { report: Report }) {
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
-      <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained" />
+      <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
+        extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy biggest classes as TSV" />}
+      />
 
       {pkgRoot.children.length > 0 && (
         <>
@@ -4598,6 +4630,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               onRowClicked={hasPairs ? (r) => pivotToClass(r.dominator_class) : undefined}
               onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.dominator_class }); } : undefined}
               rowClickTitle={hasPairs ? "Click to view in Navigator" : undefined}
+              extraBtns={<CopyTsvBtn rows={[["Dominator Class","#Dominators","#Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...idoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
             />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
@@ -5181,25 +5214,436 @@ function CustomQueriesSection({ report }: { report: Report }) {
 }
 
 // ── Type Reference Graph (TPFG, V13) ─────────────────────────────────────────
+// Rich interactive force-directed class-to-class reference topology.
+// Graph tab: SVG force graph with stable spring layout.
+// Table tab: sortable/filterable edge table.
+// Clicking a node opens a popover with class stats and navigation to instances.
 
-function TypeRefGraph({ edges }: { edges: TypeEdge[] }) {
+// 8-color palette for package-prefix hashing (same scheme as domTree.tsx).
+const TPFG_PALETTE = ["#6366f1","#10b981","#f59e0b","#3b82f6","#ef4444","#8b5cf6","#06b6d4","#ec4899"];
+function tpfgColor(cls: string): string {
+  const pkg = cls.includes(".") ? cls.slice(0, cls.lastIndexOf(".")) : cls;
+  let h = 0;
+  for (let i = 0; i < pkg.length; i++) h = (Math.imul(31, h) + pkg.charCodeAt(i)) | 0;
+  return TPFG_PALETTE[Math.abs(h) % TPFG_PALETTE.length];
+}
+function tpfgShortName(cls: string): string {
+  const parts = cls.split(".");
+  return parts[parts.length - 1];
+}
+
+// Force-directed layout: 250 Verlet iterations (static — no animation).
+interface FDNode { id: string; x: number; y: number; vx: number; vy: number; r: number; }
+function runForceLayout(
+  nodes: FDNode[], edges: { src: number; dst: number }[],
+  w: number, h: number,
+): FDNode[] {
+  const ns = nodes.map(n => ({ ...n }));
+  const KR = 4000, KA = 0.06, REST = 90, DAMP = 0.85, ITER = 250;
+  for (let t = 0; t < ITER; t++) {
+    // Repulsion
+    for (let i = 0; i < ns.length; i++) {
+      for (let j = i + 1; j < ns.length; j++) {
+        const dx = ns[j].x - ns[i].x;
+        const dy = ns[j].y - ns[i].y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const f = KR / (dist * dist);
+        const fx = (dx / dist) * f;
+        const fy = (dy / dist) * f;
+        ns[i].vx -= fx; ns[i].vy -= fy;
+        ns[j].vx += fx; ns[j].vy += fy;
+      }
+    }
+    // Attraction
+    for (const e of edges) {
+      const a = ns[e.src], b = ns[e.dst];
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = KA * (dist - REST);
+      const fx = (dx / dist) * f;
+      const fy = (dy / dist) * f;
+      a.vx += fx; a.vy += fy;
+      b.vx -= fx; b.vy -= fy;
+    }
+    // Integrate + damp + clamp
+    const pad = 40;
+    for (const n of ns) {
+      n.vx *= DAMP; n.vy *= DAMP;
+      n.x = Math.max(pad + n.r, Math.min(w - pad - n.r, n.x + n.vx));
+      n.y = Math.max(pad + n.r, Math.min(h - pad - n.r, n.y + n.vy));
+    }
+  }
+  return ns;
+}
+
+function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: HistRow[] }) {
   const [fmtB] = useFmtBytes();
+  const [view, setView] = React.useState<"graph" | "table">("graph");
+  const [filter, setFilter] = React.useState("");
+  const [topN, setTopN] = React.useState(100);
+  const [sizeBy, setSizeBy] = React.useState<"retained" | "edges">("retained");
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const [popoverPos, setPopoverPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [fullscreen, setFullscreen] = React.useState(false);
+  const [layoutKey, setLayoutKey] = React.useState(0);
+  const svgRef = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(800);
+  const svgH = 520;
+
+  // Build histogram lookup map once
+  const histMap = React.useMemo(() => {
+    const m = new Map<string, HistRow>();
+    for (const r of histogram) m.set(r.pretty_class, r);
+    return m;
+  }, [histogram]);
+
+  // Responsive width
+  React.useLayoutEffect(() => {
+    if (!svgRef.current) return;
+    const ro = new ResizeObserver((ents) => {
+      const bw = ents[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(svgRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Esc closes fullscreen / popover
+  React.useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setFullscreen(false); setSelected(null); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  // Build node set, filtered to topN by combined retained/edge weight
+  const { nodeInfos, graphEdges } = React.useMemo(() => {
+    const retByNode = new Map<string, number>();
+    const edgeCntByNode = new Map<string, number>();
+    for (const e of edges) {
+      retByNode.set(e.src_class, (retByNode.get(e.src_class) ?? 0) + e.retained_weight);
+      retByNode.set(e.dst_class, (retByNode.get(e.dst_class) ?? 0) + e.retained_weight);
+      edgeCntByNode.set(e.src_class, (edgeCntByNode.get(e.src_class) ?? 0) + e.edge_count);
+      edgeCntByNode.set(e.dst_class, (edgeCntByNode.get(e.dst_class) ?? 0) + e.edge_count);
+    }
+    const all = Array.from(retByNode.keys());
+    all.sort((a, b) => (retByNode.get(b) ?? 0) - (retByNode.get(a) ?? 0));
+    const kept = new Set(all.slice(0, topN));
+    const graphEdges = edges.filter(e => kept.has(e.src_class) && kept.has(e.dst_class));
+    const nodeInfos = Array.from(kept).map(cls => ({
+      cls,
+      retFlow: retByNode.get(cls) ?? 0,
+      edgeCount: edgeCntByNode.get(cls) ?? 0,
+      hist: histMap.get(cls) ?? null,
+    }));
+    return { nodeInfos, graphEdges };
+  }, [edges, histMap, topN]);
+
+  // Compute radius per node
+  const maxWeight = React.useMemo(
+    () => nodeInfos.reduce((m, n) => Math.max(m, sizeBy === "retained" ? n.retFlow : n.edgeCount), 1),
+    [nodeInfos, sizeBy],
+  );
+
+  // Initial radial placement, then force layout — recomputed only when layoutKey / nodes change
+  const positions = React.useMemo(() => {
+    if (nodeInfos.length === 0) return [] as FDNode[];
+    const sorted = [...nodeInfos].sort((a, b) =>
+      (sizeBy === "retained" ? b.retFlow - a.retFlow : b.edgeCount - a.edgeCount));
+    const nodes: FDNode[] = sorted.map((n, i) => {
+      const w2 = sizeBy === "retained" ? n.retFlow : n.edgeCount;
+      const r = Math.max(6, Math.min(28, 6 + 22 * Math.sqrt(w2 / maxWeight)));
+      // Spiral initial placement
+      const angle = (i / sorted.length) * 2 * Math.PI * 3;
+      const radius = 60 + i * 2;
+      return {
+        id: n.cls,
+        x: w / 2 + radius * Math.cos(angle),
+        y: svgH / 2 + radius * Math.sin(angle),
+        vx: 0, vy: 0, r,
+      };
+    });
+    const idxMap = new Map(nodes.map((n, i) => [n.id, i]));
+    const fdEdges = graphEdges.map(e => ({
+      src: idxMap.get(e.src_class) ?? -1,
+      dst: idxMap.get(e.dst_class) ?? -1,
+    })).filter(e => e.src >= 0 && e.dst >= 0);
+    return runForceLayout(nodes, fdEdges, w, svgH);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeInfos, graphEdges, layoutKey, w, sizeBy, maxWeight]);
+
+  const posMap = React.useMemo(() => new Map(positions.map(p => [p.id, p])), [positions]);
+
+  // Filter highlight set
+  const filterLc = filter.toLowerCase().trim();
+  const matchedNodes = React.useMemo(() => {
+    if (!filterLc) return null;
+    return new Set(positions.map(p => p.id).filter(id => id.toLowerCase().includes(filterLc)));
+  }, [positions, filterLc]);
+
+  // Connected nodes for selected highlight
+  const connectedTo = React.useMemo(() => {
+    if (!selected) return null;
+    const s = new Set([selected]);
+    for (const e of graphEdges) {
+      if (e.src_class === selected) s.add(e.dst_class);
+      if (e.dst_class === selected) s.add(e.src_class);
+    }
+    return s;
+  }, [selected, graphEdges]);
+
+  // Max edge retained for stroke scaling
+  const maxEdgeRet = React.useMemo(
+    () => graphEdges.reduce((m, e) => Math.max(m, e.retained_weight), 1),
+    [graphEdges],
+  );
 
   const tableCols: TableColumn<TypeEdge>[] = [
-    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
-    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
+    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
+    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
     { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, format: r => fmtCount(r.edge_count) },
     { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, format: r => fmtB(r.retained_weight) },
   ];
 
+  // Popover data for selected node
+  const selInfo = selected ? nodeInfos.find(n => n.cls === selected) : null;
+  const selOutEdges = selected ? graphEdges.filter(e => e.src_class === selected).sort((a, b) => b.retained_weight - a.retained_weight).slice(0, 6) : [];
+  const selInEdges = selected ? graphEdges.filter(e => e.dst_class === selected).sort((a, b) => b.retained_weight - a.retained_weight).slice(0, 6) : [];
+
+  const wrapStyle: React.CSSProperties = fullscreen
+    ? { position: "fixed", inset: 0, background: "var(--bg)", zIndex: 9999, overflow: "auto", padding: "1rem" }
+    : {};
+
   return (
-    <StdTable
-      columns={tableCols}
-      data={edges}
-      searchKeys={["src_class", "dst_class"]}
-      defaultSortFieldId="retained_weight"
-      defaultSortAsc={false}
-    />
+    <div style={wrapStyle}>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+        {(["graph", "table"] as const).map(v => (
+          <button key={v} onClick={() => setView(v)} style={{
+            padding: "0.25rem 0.85rem", fontSize: "0.88rem",
+            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+            background: view === v ? "var(--accent)" : "transparent",
+            color: view === v ? "#fff" : "var(--fg)",
+          }}>{v === "graph" ? "⬡ Graph" : "⊞ Table"}</button>
+        ))}
+        <span style={{ flex: 1 }} />
+        {view === "graph" && (
+          <>
+            <input type="text" className="filter" value={filter} onChange={e => setFilter(e.target.value)}
+              placeholder="Highlight class…" style={{ maxWidth: 200, fontSize: "0.82rem" }} />
+            <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Top:</span>
+            {([50, 100, 150] as const).map(n => (
+              <button key={n} onClick={() => setTopN(n)} style={{
+                padding: "0.15rem 0.5rem", fontSize: "0.82rem",
+                border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+                background: topN === n ? "var(--accent)" : "transparent",
+                color: topN === n ? "#fff" : "var(--fg)",
+              }}>{n}</button>
+            ))}
+            <button onClick={() => setSizeBy(v => v === "retained" ? "edges" : "retained")}
+              style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
+              title="Toggle: size nodes by retained heap flow vs edge count">
+              Size: {sizeBy === "retained" ? "Retained" : "Edges"}
+            </button>
+            <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
+              style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
+              title="Re-run force layout from scratch">↺ Reset</button>
+            <button onClick={() => setFullscreen(f => !f)}
+              style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}>
+              {fullscreen ? "⛶ Exit" : "⛶ Fullscreen"}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Graph view */}
+      {view === "graph" && (
+        <div ref={svgRef} style={{ position: "relative" }}>
+          {positions.length === 0 && (
+            <p className="subtitle">No type reference data — run with <code>--obj-graph</code>.</p>
+          )}
+          {positions.length > 0 && (
+            <>
+              <svg
+                width={w} height={svgH}
+                style={{ display: "block", background: "var(--card, #f7f7f8)", borderRadius: 6, border: "1px solid var(--border)" }}
+                onClick={e => { if (e.target === e.currentTarget) setSelected(null); }}
+              >
+                <defs>
+                  <marker id="tpfg-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L0,6 L6,3 z" fill="var(--muted, #888)" />
+                  </marker>
+                </defs>
+                {/* Edges */}
+                {graphEdges.map((e, i) => {
+                  const sp = posMap.get(e.src_class);
+                  const dp = posMap.get(e.dst_class);
+                  if (!sp || !dp) return null;
+                  const highlighted = matchedNodes
+                    ? (matchedNodes.has(e.src_class) && matchedNodes.has(e.dst_class))
+                    : connectedTo
+                      ? (connectedTo.has(e.src_class) && connectedTo.has(e.dst_class))
+                      : true;
+                  const opacity = highlighted ? 0.55 : 0.1;
+                  const sw = Math.max(0.5, Math.min(5, 0.5 + 4.5 * Math.sqrt(e.retained_weight / maxEdgeRet)));
+                  // Offset line endpoints by radius so arrows touch node edge
+                  const dx = dp.x - sp.x, dy = dp.y - sp.y;
+                  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                  const x1 = sp.x + (dx / len) * sp.r;
+                  const y1 = sp.y + (dy / len) * sp.r;
+                  const x2 = dp.x - (dx / len) * (dp.r + 6);
+                  const y2 = dp.y - (dy / len) * (dp.r + 6);
+                  return (
+                    <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+                      stroke="var(--muted, #888)" strokeWidth={sw}
+                      opacity={opacity}
+                      markerEnd="url(#tpfg-arrow)"
+                    />
+                  );
+                })}
+                {/* Nodes */}
+                {positions.map(p => {
+                  const isSelected = p.id === selected;
+                  const inFilter = matchedNodes ? matchedNodes.has(p.id) : true;
+                  const inConnected = connectedTo ? connectedTo.has(p.id) : true;
+                  const dimmed = (matchedNodes && !inFilter) || (connectedTo && !inConnected);
+                  return (
+                    <g key={p.id}
+                      transform={`translate(${p.x},${p.y})`}
+                      style={{ cursor: "pointer" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isSelected) { setSelected(null); setPopoverPos(null); }
+                        else {
+                          setSelected(p.id);
+                          setPopoverPos({ x: e.clientX, y: e.clientY });
+                        }
+                      }}
+                    >
+                      <circle r={p.r + (isSelected ? 3 : 0)}
+                        fill={tpfgColor(p.id)}
+                        opacity={dimmed ? 0.12 : 0.85}
+                        stroke={isSelected ? "var(--fg)" : "transparent"}
+                        strokeWidth={isSelected ? 2 : 0}
+                      />
+                      <text
+                        fontSize={Math.min(10, Math.max(8, p.r * 0.7))}
+                        fill="var(--bg, #fff)"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        opacity={dimmed ? 0.2 : 1}
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >
+                        {tpfgShortName(p.id).slice(0, Math.floor(p.r / 3.5) + 3)}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+              <p style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "0.25rem 0 0" }}>
+                Showing top {positions.length} of {nodeInfos.length + (edges.length > 0 ? 0 : 0)} classes by retained flow.
+                Click a node to inspect · Scroll to zoom not supported (static layout).
+              </p>
+            </>
+          )}
+
+          {/* Node popover */}
+          {selected && selInfo && popoverPos && (
+            <div
+              style={{
+                position: "fixed",
+                left: Math.min(popoverPos.x + 12, window.innerWidth - 340),
+                top: Math.min(popoverPos.y + 12, window.innerHeight - 320),
+                zIndex: 99999,
+                background: "var(--card-bg, var(--bg))",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                boxShadow: "0 4px 20px rgba(0,0,0,0.18)",
+                padding: "0.75rem 0.9rem",
+                maxWidth: 320,
+                minWidth: 200,
+                fontSize: "0.82rem",
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "0.4rem", marginBottom: "0.4rem" }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: tpfgColor(selected), flexShrink: 0, marginTop: 2 }} />
+                <code style={{ fontWeight: 700, fontSize: "0.8rem", wordBreak: "break-all", flex: 1 }}>{selected}</code>
+                <button className="copy-btn" style={{ flexShrink: 0 }} onClick={() => setSelected(null)} title="Close">✕</button>
+              </div>
+              {selInfo.hist && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.15rem 0.75rem", color: "var(--muted)", marginBottom: "0.4rem" }}>
+                  <span>Instances</span><span style={{ color: "var(--fg)", textAlign: "right" }}>{fmtCount(selInfo.hist.instances)}</span>
+                  <span>Shallow</span><span style={{ color: "var(--fg)", textAlign: "right" }}>{fmtB(selInfo.hist.shallow)}</span>
+                  <span>Retained</span><span style={{ color: "var(--fg)", textAlign: "right", fontWeight: 600 }}>{fmtB(selInfo.hist.retained)}</span>
+                </div>
+              )}
+              <div style={{ marginBottom: "0.3rem" }}>
+                <span style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                  {selOutEdges.length} outbound edge type{selOutEdges.length !== 1 ? "s" : ""} ·{" "}
+                  {selInEdges.length} inbound edge type{selInEdges.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+              {selOutEdges.length > 0 && (
+                <>
+                  <p style={{ margin: "0 0 0.2rem", fontWeight: 600, fontSize: "0.76rem", color: "var(--muted)" }}>→ References:</p>
+                  <ul style={{ margin: 0, paddingLeft: "1rem", fontSize: "0.78rem" }}>
+                    {selOutEdges.map((e, i) => (
+                      <li key={i} style={{ marginBottom: "0.1rem" }}>
+                        <button className="btn-link" onClick={() => { setSelected(e.dst_class); setPopoverPos(popoverPos); }}>
+                          <code>{tpfgShortName(e.dst_class)}</code>
+                        </button>
+                        {" "}<span style={{ color: "var(--muted)" }}>×{fmtCount(e.edge_count)} ({fmtB(e.retained_weight)})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {selInEdges.length > 0 && (
+                <>
+                  <p style={{ margin: "0.35rem 0 0.2rem", fontWeight: 600, fontSize: "0.76rem", color: "var(--muted)" }}>← Referenced by:</p>
+                  <ul style={{ margin: 0, paddingLeft: "1rem", fontSize: "0.78rem" }}>
+                    {selInEdges.map((e, i) => (
+                      <li key={i} style={{ marginBottom: "0.1rem" }}>
+                        <button className="btn-link" onClick={() => { setSelected(e.src_class); setPopoverPos(popoverPos); }}>
+                          <code>{tpfgShortName(e.src_class)}</code>
+                        </button>
+                        {" "}<span style={{ color: "var(--muted)" }}>×{fmtCount(e.edge_count)} ({fmtB(e.retained_weight)})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {/* Navigation buttons */}
+              <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap", marginTop: "0.5rem", paddingTop: "0.4rem", borderTop: "1px solid var(--border)" }}>
+                <CopyBtn text={selected} />
+                <PivotBtn cls={selected} />
+                <OqlBtn cls={selected} />
+                <ListObjectsBtn cls={selected} />
+                <span style={{ fontSize: "0.72rem", color: "var(--muted)", display: "flex", alignItems: "center", marginLeft: "0.2rem" }}>
+                  {selInfo.hist ? `${fmtCount(selInfo.hist.instances)} instances` : ""}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Table view */}
+      {view === "table" && (
+        <StdTable
+          columns={tableCols}
+          data={edges}
+          searchKeys={["src_class", "dst_class"]}
+          defaultSortFieldId="retained_weight"
+          defaultSortAsc={false}
+          extraBtns={<CopyTsvBtn rows={[["Source Class","Dest Class","Edge Count","Retained Flow (bytes)"],...edges.map(e=>[e.src_class,e.dst_class,String(e.edge_count),String(e.retained_weight)])]} label="Copy as TSV" />}
+        />
+      )}
+    </div>
   );
 }
 
@@ -7916,6 +8360,31 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   );
 }
 
+// Shows the current section title as a thin fixed strip at the very top of the viewport.
+// Appears after the user scrolls an h2 out of view; z-index is below the ToC nav.
+function StickyHeader() {
+  const [title, setTitle] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const update = () => {
+      const h2s = Array.from(document.querySelectorAll<HTMLElement>("section h2, div.oom h2"));
+      let best = "";
+      let bestTop = -Infinity;
+      for (const el of h2s) {
+        const top = el.getBoundingClientRect().top;
+        if (top < 0 && top > bestTop) { bestTop = top; best = el.textContent ?? ""; }
+      }
+      setTitle(best || null);
+    };
+    window.addEventListener("scroll", update, { passive: true });
+    update();
+    return () => window.removeEventListener("scroll", update);
+  }, []);
+
+  if (!title) return null;
+  return <div className="sticky-section-header">§ {title}</div>;
+}
+
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
@@ -7943,6 +8412,24 @@ function GlossarySection() {
           </React.Fragment>
         ))}
       </dl>
+      <h3 style={{ marginTop: "1.5rem" }}>Keyboard Shortcuts</h3>
+      <p className="subtitle">Global shortcuts work when no text input is focused.</p>
+      <table className="std-table" style={{ maxWidth: 480 }}>
+        <thead><tr><th>Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>/</kbd></td><td>Focus the nearest filter input</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Blur focused input</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>h</kbd></td><td>Jump to System Overview</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>l</kbd></td><td>Jump to Leak Suspects</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>t</kbd></td><td>Jump to Top Consumers</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>d</kbd></td><td>Jump to Dominator Analysis</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>r</kbd></td><td>Jump to Type Reference Graph</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>o</kbd></td><td>Jump to Object Graph</td></tr>
+          <tr><td><kbd>Alt</kbd>+<kbd>←</kbd></td><td>Back in Object Explorer</td></tr>
+          <tr><td><kbd>Alt</kbd>+<kbd>→</kbd></td><td>Forward in Object Explorer</td></tr>
+          <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Prev/next peer instance in Object Explorer</td></tr>
+        </tbody>
+      </table>
     </section>
   );
 }
@@ -8295,6 +8782,53 @@ export default function App({ report }: { report: Report }) {
     });
   }, []); // empty deps → runs once after first render
 
+  // Global keyboard shortcuts (skip when focus is inside a text input/textarea).
+  const gKeyTime = React.useRef(0);
+  React.useEffect(() => {
+    const SECTION_NAV: Record<string, string> = {
+      h: "system-overview", l: "leak-suspects",
+      t: "top-consumers", d: "dominator-analysis",
+      r: "type-ref-graph", o: "object-graph",
+    };
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === "/") {
+        e.preventDefault();
+        const inputs = document.querySelectorAll<HTMLInputElement>(".filter");
+        for (const inp of inputs) {
+          const rect = inp.getBoundingClientRect();
+          if (rect.top >= 0 && rect.bottom <= window.innerHeight) { inp.focus(); break; }
+        }
+        gKeyTime.current = 0;
+        return;
+      }
+
+      if (e.key === "Escape") {
+        (document.activeElement as HTMLElement | null)?.blur();
+        gKeyTime.current = 0;
+        return;
+      }
+
+      const now = Date.now();
+      if (e.key === "g") {
+        gKeyTime.current = now;
+        return;
+      }
+      if (now - gKeyTime.current < 1500 && SECTION_NAV[e.key]) {
+        e.preventDefault();
+        const id = SECTION_NAV[e.key];
+        const el = document.getElementById(id);
+        if (el) { el.scrollIntoView({ behavior: "smooth" }); window.location.hash = id; }
+      }
+      gKeyTime.current = 0;
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   return (
     <HasDomDataCtx.Provider value={hasDomData}>
     <ObjGraphCtx.Provider value={objGraphNodes}>
@@ -8311,6 +8845,7 @@ export default function App({ report }: { report: Report }) {
       </div>
       <Nav report={report} />
       <NavBreadcrumb />
+      <StickyHeader />
       <OomTriage report={report} />
       <ExecSummaryCard report={report} />
       <WasteSummarySection report={report} />
@@ -8360,7 +8895,7 @@ export default function App({ report }: { report: Report }) {
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
           <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow. <em>Note: Retained Flow sums the retained size of referenced objects across all instances — values may exceed total heap size when objects are shared (referenced by multiple sources).</em></p>
-          <TypeRefGraph edges={report.type_ref_graph} />
+          <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} />
         </section>
       )}
       <RetentionConcentrationSection report={report} />

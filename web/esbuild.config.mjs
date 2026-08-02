@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 880 KB minified bundle budget (raised to accommodate ListObjectsBtn coverage).
-const BUDGET_BYTES = 880 * 1024;
+// ≤ 1000 KB minified bundle budget (raised for force-directed type graph + usability features).
+const BUDGET_BYTES = 1000 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
