@@ -7370,7 +7370,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       title={`Find reference path from ${pathSource.label}#${pathSource.nodeId} to here`}
                       onClick={() => {
                         const wasm = (window as any).__wasmExploration;
-                        if (!wasm?.find_path_between) return;
+                        if (!wasm?.find_path_between) { setPathBetweenResult(null); setPathBetweenError("requires .hprof loaded in browser"); return; }
                         try {
                           const r = JSON.parse(wasm.find_path_between(pathSource.nodeId, nodeId!));
                           if (r.ok) { setPathBetweenResult(r.path); setPathBetweenError(null); }
@@ -7522,7 +7522,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           </table>
           {pathBetweenError && (
             <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.4rem 0 0" }}>
-              No reference path found ({pathBetweenError}). Objects may not be connected through outbound references.
+              {pathBetweenError === "requires .hprof loaded in browser"
+                ? "Path search requires the .hprof loaded in browser (see banner above)."
+                : `No reference path found (${pathBetweenError}). Objects may not be connected through outbound references.`}
             </p>
           )}
           {pathBetweenResult && pathBetweenResult.length > 0 && (
