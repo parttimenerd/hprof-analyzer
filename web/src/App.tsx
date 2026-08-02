@@ -5434,10 +5434,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     });
   };
 
+  const [pathSource, setPathSource] = React.useState<{nodeId: number; label: string} | null>(null);
+  const [pathBetweenResult, setPathBetweenResult] = React.useState<any[] | null>(null);
+  const [pathBetweenError, setPathBetweenError] = React.useState<string | null>(null);
+
   React.useEffect(() => {
     setWasmOutboundEdges(null);
     setWasmOutboundTotal(0);
     setWasmOutboundTruncated(false);
+    setPathBetweenResult(null);
+    setPathBetweenError(null);
     const session = (window as any).__wasmSession;
     if (!session?.outbound_refs || nodeId === null) return;
     // Fetch live outbound refs via WASM when static snapshot has no edges or node is unknown
@@ -7141,6 +7147,38 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </td>
               </tr>
               <tr>
+                <th>Path</th>
+                <td>
+                  {pathSource?.nodeId === nodeId ? (
+                    <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>
+                      ← path source
+                      <button className="btn-link" style={{ marginLeft: "0.4rem", fontSize: "0.78rem" }}
+                        onClick={() => setPathSource(null)}>clear</button>
+                    </span>
+                  ) : pathSource ? (
+                    <button className="btn-link" style={{ fontSize: "0.82rem" }}
+                      title={`Find reference path from ${pathSource.label}#${pathSource.nodeId} to here`}
+                      onClick={() => {
+                        const wasm = (window as any).__wasmExploration;
+                        if (!wasm?.find_path_between) return;
+                        try {
+                          const r = JSON.parse(wasm.find_path_between(pathSource.nodeId, nodeId!));
+                          if (r.ok) { setPathBetweenResult(r.path); setPathBetweenError(null); }
+                          else { setPathBetweenResult(null); setPathBetweenError(r.error ?? "not_found"); }
+                        } catch (e: any) { setPathBetweenError(String(e)); }
+                      }}>
+                      Find path from {pathSource.label.split(".").pop()}#{pathSource.nodeId} →
+                    </button>
+                  ) : (
+                    <button className="btn-link" style={{ fontSize: "0.82rem" }}
+                      title="Set this object as the source for a path-between search"
+                      onClick={() => { setPathSource({ nodeId: nodeId!, label: currentNode.display_class }); setPathBetweenResult(null); setPathBetweenError(null); }}>
+                      Set as path source
+                    </button>
+                  )}
+                </td>
+              </tr>
+              <tr>
                 <th>Query</th>
                 <td>
                   <button className="btn-link" style={{ fontSize: "0.82rem" }}
@@ -7239,6 +7277,34 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               </tr>
             </tbody>
           </table>
+          {pathBetweenError && (
+            <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.4rem 0 0" }}>
+              No reference path found ({pathBetweenError}). Objects may not be connected through outbound references.
+            </p>
+          )}
+          {pathBetweenResult && pathBetweenResult.length > 0 && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
+                Reference path ({pathBetweenResult.length} steps)
+              </div>
+              <div style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                {pathBetweenResult.map((step: any, i: number) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && <div style={{ color: "var(--muted)", paddingLeft: "0.5rem", fontSize: "0.76rem" }}>▼</div>}
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.8rem", fontWeight: i === 0 || i === pathBetweenResult.length - 1 ? 600 : 400 }}
+                        onClick={() => navigate("explore", step.dense_idx, step.display_class)}>
+                        {step.display_class.split(".").pop()}#{step.dense_idx}
+                      </button>
+                      <span style={{ color: "var(--muted)", fontSize: "0.74rem" }}>{fmtB(step.retained)}</span>
+                      {i === 0 && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← source</span>}
+                      {i === pathBetweenResult.length - 1 && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← target</span>}
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          )}
           {/* Retaining path: walk idom links up to GC root */}
           {(() => {
             const path: { id: number; node: ObjGraphFlatNode; fieldToChild?: string }[] = [];

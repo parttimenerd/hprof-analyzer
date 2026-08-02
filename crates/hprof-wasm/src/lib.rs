@@ -1157,6 +1157,71 @@ impl HprofSession {
             None => serde_json::json!({"ok":false,"error":"not_found"}).to_string(),
         }
     }
+
+    pub fn find_path_between(&self, src_idx: u32, dst_idx: u32) -> String {
+        let exp = match self.exploration.as_ref() {
+            Some(e) => &e.result,
+            None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
+        };
+
+        if src_idx == dst_idx {
+            let i = src_idx as usize;
+            let node = serde_json::json!({
+                "dense_idx": src_idx,
+                "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
+                "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+                "retained": exp.retained.get(i).copied().unwrap_or(0),
+            });
+            return serde_json::json!({"ok":true,"path":[node]}).to_string();
+        }
+
+        let n = exp.fwd_offsets.len().saturating_sub(1);
+        let mut visited = vec![u32::MAX; n];
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(src_idx);
+        visited[src_idx as usize] = src_idx;
+
+        'bfs: while let Some(cur) = queue.pop_front() {
+            let ci = cur as usize;
+            if ci + 1 >= exp.fwd_offsets.len() { continue; }
+            let start = exp.fwd_offsets[ci] as usize;
+            let end = exp.fwd_offsets[ci + 1] as usize;
+            for &nxt in &exp.fwd_targets[start..end] {
+                let ni = nxt as usize;
+                if ni >= n || visited[ni] != u32::MAX { continue; }
+                visited[ni] = cur;
+                if nxt == dst_idx { break 'bfs; }
+                if queue.len() < 50_000 { queue.push_back(nxt); }
+            }
+        }
+
+        if visited[dst_idx as usize] == u32::MAX {
+            return serde_json::json!({"ok":false,"error":"no_path"}).to_string();
+        }
+
+        let mut path_indices = vec![dst_idx];
+        let mut cur = dst_idx;
+        for _ in 0..500 {
+            let parent = visited[cur as usize];
+            if parent == u32::MAX || parent == cur { break; }
+            path_indices.push(parent);
+            if parent == src_idx { break; }
+            cur = parent;
+        }
+        path_indices.reverse();
+
+        let path_json: Vec<serde_json::Value> = path_indices.iter().map(|&idx| {
+            let i = idx as usize;
+            serde_json::json!({
+                "dense_idx": idx,
+                "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
+                "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+                "retained": exp.retained.get(i).copied().unwrap_or(0),
+            })
+        }).collect();
+
+        serde_json::json!({"ok":true,"path":path_json}).to_string()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
