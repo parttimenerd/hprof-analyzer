@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 875 KB minified bundle budget (raised to accommodate class histogram view).
-const BUDGET_BYTES = 875 * 1024;
+// ≤ 880 KB minified bundle budget (raised to accommodate ListObjectsBtn coverage).
+const BUDGET_BYTES = 880 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
