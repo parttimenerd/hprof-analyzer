@@ -395,6 +395,11 @@ pub struct Graph {
     /// during pass2 from `p1.elem_count`/`p1.kind` before those arrays are freed.
     /// Always populated; additive, not parity-compared.
     pub arrays_by_size: crate::report::ArraysBySize,
+    /// Per-class incoming reference count: `incoming_refs_per_class[ci]` = total
+    /// number of inbound edges pointing at instances of class `ci`. Summed from
+    /// `in_degree` before the prefix-sum converts it to cursors. ~100 KB; always
+    /// populated. Used by `build_system_overview` to fill `HistRow::incoming_ref_count`.
+    pub incoming_refs_per_class: Vec<u64>,
     /// Field-decode collection & array analysis. Always populated; additive,
     /// not parity-compared. See [`crate::report::CollectionsAnalysis`].
     pub collections: crate::report::CollectionsAnalysis,
@@ -1624,6 +1629,7 @@ mod obj_graph_tests {
             dup_prim_arrays: None,
             boxed_number_holders: vec![],
             arrays_by_size: Default::default(),
+            incoming_refs_per_class: vec![],
             collections: Default::default(),
             references: Default::default(),
             reference_referent_idx: Default::default(),

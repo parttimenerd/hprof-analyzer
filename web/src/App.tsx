@@ -874,6 +874,11 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   const [showLoader, setShowLoader] = React.useState(false);
   const [groupLambdas, setGroupLambdas] = React.useState(true);
 
+  const hasIncomingRefCount = React.useMemo(
+    () => rows.some((r) => (r.incoming_ref_count ?? 0) > 0),
+    [rows],
+  );
+
   // Only offer the loader toggle if at least one non-boot loader exists
   const hasNonBootLoader = React.useMemo(
     () => rows.some((r) => r.loader_label != null && r.loader_label !== "<boot>"),
@@ -997,6 +1002,23 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         format: (r) => fmtCount(r.instances),
         sortable: true,
       },
+      ...(hasIncomingRefCount ? [{
+        id: "incoming_ref_count",
+        name: "Inbound Refs",
+        width: "116px",
+        grow: 0,
+        right: true,
+        selector: (r: HistRow) => r.incoming_ref_count ?? 0,
+        format: (r: HistRow) => fmtCount(r.incoming_ref_count ?? 0),
+        sortable: true,
+        // Show a tooltip explaining the column
+        cell: (r: HistRow) => (
+          <span title={`${(r.incoming_ref_count ?? 0).toLocaleString()} total references to instances of this class`}
+            style={{ width: "100%", textAlign: "right", display: "block" }}>
+            {fmtCount(r.incoming_ref_count ?? 0)}
+          </span>
+        ),
+      }] as TableColumn<HistRow>[] : []),
       {
         id: "shallow",
         name: useKB ? "Shallow (KB)" : "Shallow",

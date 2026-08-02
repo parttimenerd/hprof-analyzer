@@ -220,6 +220,7 @@ mod tests {
             dup_prim_arrays: None,
             boxed_number_holders: Vec::new(),
             arrays_by_size: Default::default(),
+            incoming_refs_per_class: vec![],
             collections: crate::report::CollectionsAnalysis::default(),
             references: crate::report::ReferencesAnalysis::default(),
             reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],

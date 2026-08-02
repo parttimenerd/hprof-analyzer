@@ -1145,6 +1145,21 @@ impl Pass2 {
             in_degree = c.restore()?;
         }
 
+        // Sum in_degree by class before the prefix-sum destroys the counts.
+        // class_idx was compressed before the 2a scan — restore temporarily here.
+        // The restored Vec is dropped immediately after the loop (~2 GB on large dumps).
+        let n_hist_classes = class_names.len();
+        let mut incoming_refs_per_class: Vec<u64> = vec![0u64; n_hist_classes];
+        {
+            let class_idx_restored = class_idx_c.restore()?;
+            for (i, &d) in in_degree.iter().enumerate() {
+                let ci = class_idx_restored[i] as usize;
+                if ci < n_hist_classes {
+                    incoming_refs_per_class[ci] += d as u64;
+                }
+            }
+        } // class_idx_restored dropped here
+
         // Prefix-sum in_degree counts → START cursors for the deferred inbound
         // build. in_degree[i] becomes node i's inbound slice START; total_inb
         // is the flat inbound length. inb_flat is NOT allocated here.
@@ -1225,6 +1240,7 @@ impl Pass2 {
             dup_prim_arrays,
             boxed_number_holders,
             arrays_by_size,
+            incoming_refs_per_class,
             collections: fd_collections,
             references: fd_references,
             reference_referent_idx: fd_referent_idx,

@@ -45,6 +45,7 @@ mod tests {
             shallow: sh,
             retained: ret,
             max_instance_shallow: 0,
+            incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
         }

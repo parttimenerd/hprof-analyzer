@@ -7,6 +7,8 @@ export interface HistRow {
   shallow: number;
   retained: number;
   max_instance_shallow: number;
+  /** Total inbound reference count for all instances of this class. Optional — absent in older reports. */
+  incoming_ref_count?: number;
   loader_id: number;
   // Human-readable class-loader label (the loader's runtime class name; the
   // boot loader is "<boot>"). Absent when unresolved. Preferred over the raw

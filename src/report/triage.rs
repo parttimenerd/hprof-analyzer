@@ -1804,6 +1804,7 @@ mod tests {
             shallow: 200_000, // avg 13 bytes — well under SWARM_MAX_INSTANCE_BYTES
             retained: 200_000,
             max_instance_shallow: 13,
+            incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
         }];
@@ -1827,6 +1828,7 @@ mod tests {
             shallow: 128_000_000,
             retained: 128_000_000,
             max_instance_shallow: 16,
+            incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
         }];
@@ -1962,6 +1964,7 @@ mod tests {
             shallow,
             retained: shallow,
             max_instance_shallow: shallow.checked_div(instances).unwrap_or(0),
+            incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
         }

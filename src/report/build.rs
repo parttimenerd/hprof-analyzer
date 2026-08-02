@@ -2156,6 +2156,13 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let mut shallow_total: Vec<u64> = vec![0; class_count];
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut max_shallow: Vec<u64> = vec![0; class_count];
+    // Per-class incoming reference count, remapped like the other per-class tallies.
+    let mut incoming_ref: Vec<u64> = vec![0; class_count];
+    for (ci_raw, &cnt) in g.incoming_refs_per_class.iter().enumerate() {
+        if ci_raw < class_count {
+            incoming_ref[remap[ci_raw] as usize] += cnt;
+        }
+    }
 
     // Single fused pass over all objects — computes totals, composition,
     // top-level retained, class histogram, and class-loader rollup together
@@ -2411,6 +2418,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             shallow: shallow_total[ci],
             retained: class_retained[ci],
             max_instance_shallow: max_shallow[ci],
+            incoming_ref_count: incoming_ref[ci],
             loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
             loader_label: {
                 // `ci` is the histogram row index, aligned with class_loader_id.
@@ -3300,6 +3308,7 @@ pub(crate) fn build_leak_suspects(
                         shallow: sh,
                         retained: ret,
                         max_instance_shallow: 0,
+                        incoming_ref_count: 0,
                         loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
                         loader_label: {
                             // `ci` = g.class_idx[ki], a valid histogram row

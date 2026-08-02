@@ -17,6 +17,12 @@ pub struct HistRow {
     /// pre-v5 reports (which lack the field) still deserialize.
     #[serde(default)]
     pub max_instance_shallow: u64,
+    /// Total number of inbound references (edges) pointing at instances of this
+    /// class across all captured objects. Answers "how many objects hold a ref to
+    /// an instance of this class?" Same semantics as JProfiler's incoming-ref count
+    /// in the histogram. Always present; `0` for synthetic rows (no backing objects).
+    #[serde(default)]
+    pub incoming_ref_count: u64,
     /// Class-loader object address that loaded this class (0 = boot loader).
     /// Distinct (class, loader) pairs are distinct rows, matching MAT's
     /// class-object-identity histogram keying.

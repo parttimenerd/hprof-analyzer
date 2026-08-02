@@ -1881,6 +1881,13 @@
       "description": "One row of the System-Overview class histogram (full, one row per class).",
       "type": "object",
       "properties": {
+        "incoming_ref_count": {
+          "description": "Total number of inbound references (edges) pointing at instances of this\nclass across all captured objects. Answers \"how many objects hold a ref to\nan instance of this class?\" Same semantics as JProfiler's incoming-ref count\nin the histogram. Always present; `0` for synthetic rows (no backing objects).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "instances": {
           "type": "integer",
           "format": "uint64",
