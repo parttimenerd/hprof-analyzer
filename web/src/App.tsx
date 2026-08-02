@@ -5143,6 +5143,7 @@ function WasmQueryPanel({
   const [result, setResult] = React.useState<QueryResult | null>(null);
   const [queryError, setQueryError] = React.useState<string | null>(null);
   const [running, setRunning] = React.useState(false);
+  const [history, setHistory] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     const n = data.nodes[String(nodeId)];
@@ -5156,6 +5157,10 @@ function WasmQueryPanel({
 
   const runQuery = () => {
     setRunning(true);
+    setHistory(prev => {
+      const deduped = prev.filter(q => q !== queryText);
+      return [queryText, ...deduped].slice(0, 10);
+    });
     setResult(null);
     setQueryError(null);
     try {
@@ -5180,6 +5185,18 @@ function WasmQueryPanel({
       <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0", fontWeight: 600 }}>
         OQL Query
       </p>
+      {history.length > 0 && (
+        <div style={{ marginBottom: "0.3rem", display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
+          {history.map((q, i) => (
+            <button key={i} className="btn-link"
+              style={{ fontSize: "0.72rem", background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 3, padding: "1px 5px", maxWidth: "24em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              title={q}
+              onClick={() => setQueryText(q)}>
+              {q.length > 40 ? q.slice(0, 38) + "…" : q}
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "flex-start" }}>
         <textarea
           value={queryText}
