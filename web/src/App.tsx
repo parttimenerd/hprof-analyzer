@@ -5406,6 +5406,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [wasmCollEntries, setWasmCollEntries] = React.useState<{type: string; entries: any[]; truncated: boolean} | null>(null);
   const [wasmAllPaths, setWasmAllPaths] = React.useState<{paths: {path: {dense_idx: number; display_class: string; shallow: number; retained: number}[]; root_type: string}[]; total_found: number} | null>(null);
   const [showAllPaths, setShowAllPaths] = React.useState(false);
+  const [pinnedNodes, setPinnedNodes] = React.useState<{nodeId: number; label: string}[]>([]);
+
+  const togglePin = (id: number, label: string) => {
+    setPinnedNodes(prev => {
+      if (prev.some(p => p.nodeId === id)) return prev.filter(p => p.nodeId !== id);
+      return [...prev.slice(-4), { nodeId: id, label }];
+    });
+  };
 
   React.useEffect(() => {
     setWasmOutboundEdges(null);
@@ -5800,6 +5808,22 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     ? data.root_dom_trees?.find(([idx]) => idx === nodeId)?.[1]
     : undefined;
 
+  const pinStrip = pinnedNodes.length > 0 ? (
+    <div style={{ display: "flex", gap: "0.3rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.4rem", fontSize: "0.78rem" }}>
+      <span style={{ color: "var(--muted)", flexShrink: 0 }}>📌</span>
+      {pinnedNodes.map(p => (
+        <button key={p.nodeId} className="btn-link"
+          style={{ background: "var(--accent-muted, #dbeafe)", color: "var(--accent)", borderRadius: 4, padding: "1px 6px", fontSize: "0.76rem" }}
+          title={`Jump to pinned: ${p.label}#${p.nodeId}`}
+          onClick={() => navigate("explore", p.nodeId, p.label)}>
+          {p.label.split(".").pop()}#{p.nodeId}
+          <span style={{ marginLeft: "0.2rem", opacity: 0.5, cursor: "pointer" }}
+            onClick={e => { e.stopPropagation(); togglePin(p.nodeId, p.label); }}>×</span>
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   // ── Root list ──────────────────────────────────────────────────────────────
   if (nodeId === null) {
     const allCaptured = Object.entries(data.nodes)
@@ -5811,6 +5835,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     const displayRows = filtered.slice(0, showAll ? 200 : 50);
     return (
       <div ref={containerRef}>
+        {pinStrip}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
           <p className="subtitle" style={{ margin: 0 }}>
             {rootFilter
@@ -6141,6 +6166,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
   return (
     <div ref={containerRef}>
+      {pinStrip}
       {/* Breadcrumb */}
       {breadcrumb.length > 0 && (
         <div className="breadcrumb">
@@ -7031,6 +7057,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <span title="0-based dense index; use in 'Go to obj #' to navigate here">{nodeId}</span>
                     <CopyBtn text={String(nodeId)} />
                   </span>
+                </td>
+              </tr>
+              <tr>
+                <th>Pin</th>
+                <td>
+                  <button className="btn-link" style={{ fontSize: "0.82rem" }}
+                    title={pinnedNodes.some(p => p.nodeId === nodeId) ? "Unpin this object" : "Pin for quick return"}
+                    onClick={() => togglePin(nodeId!, currentNode.display_class)}>
+                    {pinnedNodes.some(p => p.nodeId === nodeId) ? "📌 Pinned" : "📌 Pin"}
+                  </button>
                 </td>
               </tr>
               <tr>
