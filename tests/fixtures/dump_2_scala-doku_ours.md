@@ -789,19 +789,19 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                          | Count | Shallow | Retained |
 | ----------------------------------------------- | ----: | ------: | -------: |
-| `cafesat/sat/Solver`                            |    ×2 |   168 B |   4.6 MB |
-| `scala/collection/immutable/$colon$colon`       |     1 |    24 B |   3.2 MB |
-| `scala/collection/immutable/$colon$colon`       |     1 |    24 B | 962.2 KB |
-| `scala/runtime/ObjectRef`                       |    ×2 |    16 B | 962.1 KB |
-| `cafesat/asts/core/Trees$ConnectiveApplication` |     1 |    24 B | 208.8 KB |
-| `scala/collection/immutable/SetIterator`        |    ×2 |    40 B |    160 B |
-| `cafesat/sat/Solver$$Lambda+0x00007de4a41f7bd0` |     1 |    24 B |     24 B |
-| `scala/collection/immutable/HashSet`            |    ×3 |    16 B |     16 B |
-| `cafesat/sat/Solver$$Lambda+0x00007de4a41f5a08` |    ×3 |    16 B |     16 B |
-| `scala/collection/immutable/Nil$`               |     1 |    16 B |     16 B |
-| `cafesat/api/Solver$`                           |     1 |    16 B |     16 B |
-| `[Lcafesat/sat/Literal;`                        |     1 |    16 B |     16 B |
-| `cafesat/api/Formulas$Formula`                  |     1 |    16 B |     16 B |
+| `cafesat.sat.Solver`                            |    ×2 |   168 B |   4.6 MB |
+| `scala.collection.immutable.$colon$colon`       |     1 |    24 B |   3.2 MB |
+| `scala.collection.immutable.$colon$colon`       |     1 |    24 B | 962.2 KB |
+| `scala.runtime.ObjectRef`                       |    ×2 |    16 B | 962.1 KB |
+| `cafesat.asts.core.Trees$ConnectiveApplication` |     1 |    24 B | 208.8 KB |
+| `scala.collection.immutable.SetIterator`        |    ×2 |    40 B |    160 B |
+| `cafesat.sat.Solver$$Lambda+0x00007de4a41f7bd0` |     1 |    24 B |     24 B |
+| `scala.collection.immutable.HashSet`            |    ×3 |    16 B |     16 B |
+| `cafesat.sat.Solver$$Lambda+0x00007de4a41f5a08` |    ×3 |    16 B |     16 B |
+| `scala.collection.immutable.Nil$`               |     1 |    16 B |     16 B |
+| `cafesat.api.Solver$`                           |     1 |    16 B |     16 B |
+| `cafesat.sat.Literal[]`                         |     1 |    16 B |     16 B |
+| `cafesat.api.Formulas$Formula`                  |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 22.9 MB retained heap._
 
@@ -855,9 +855,9 @@ _Local roots: 7._
 
 | Object                                    | Count | Shallow | Retained |
 | ----------------------------------------- | ----: | ------: | -------: |
-| `java/lang/ref/NativeReferenceQueue`      |    ×3 |    40 B |     40 B |
-| `java/lang/ref/NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
-| `java/lang/System$2`                      |     1 |    16 B |     16 B |
+| `java.lang.ref.NativeReferenceQueue`      |    ×3 |    40 B |     40 B |
+| `java.lang.ref.NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
+| `java.lang.System$2`                      |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 208 B retained heap._
 
@@ -885,12 +885,12 @@ _Local roots: 12._
 
 | Object                                                                  | Count | Shallow | Retained |
 | ----------------------------------------------------------------------- | ----: | ------: | -------: |
-| `java/lang/Class`                                                       |    ×2 |    32 B |    128 B |
-| `java/util/concurrent/TimeUnit`                                         |     1 |    80 B |     80 B |
-| `java/lang/ref/ReferenceQueue`                                          |    ×3 |    32 B |     48 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionNode`   |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
-| `jdk/internal/ref/CleanerImpl`                                          |    ×3 |    24 B |     24 B |
+| `java.lang.Class`                                                       |    ×2 |    32 B |    128 B |
+| `java.util.concurrent.TimeUnit`                                         |     1 |    80 B |     80 B |
+| `java.lang.ref.ReferenceQueue`                                          |    ×3 |    32 B |     48 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionNode`   |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
+| `jdk.internal.ref.CleanerImpl`                                          |    ×3 |    24 B |     24 B |
 
 _Frame percentages are of this thread's 168 B retained heap._
 

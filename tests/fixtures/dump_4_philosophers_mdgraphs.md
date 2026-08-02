@@ -5829,16 +5829,16 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                                                          | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$CameraThread`                |     1 |   120 B | 155.3 KB |
-| `scala/collection/immutable/Vector`                                             |     1 |    56 B |    776 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread`           |    ×7 |   128 B |    584 B |
-| `[Lorg/renaissance/scala/stm/RealityShowPhilosophers$Fork;`                     |     1 |   528 B |    528 B |
-| `[Lorg/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread;`        |     1 |   528 B |    528 B |
-| `org/renaissance/core/BenchmarkSuite$SuiteBenchmarkContext`                     |     1 |    24 B |    296 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$$$Lambda+0x00007e41c01c5608` |    ×3 |    16 B |     64 B |
-| `org/renaissance/scala/stm/Philosophers`                                        |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$`                            |    ×2 |    16 B |     16 B |
-| `scala/collection/mutable/ArrayOps$ofRef`                                       |    ×2 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`                |     1 |   120 B | 155.3 KB |
+| `scala.collection.immutable.Vector`                                             |     1 |    56 B |    776 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`           |    ×7 |   128 B |    584 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$Fork[]`                      |     1 |   528 B |    528 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread[]`         |     1 |   528 B |    528 B |
+| `org.renaissance.core.BenchmarkSuite$SuiteBenchmarkContext`                     |     1 |    24 B |    296 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$$$Lambda+0x00007e41c01c5608` |    ×3 |    16 B |     64 B |
+| `org.renaissance.scala.stm.Philosophers`                                        |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$`                            |    ×2 |    16 B |     16 B |
+| `scala.collection.mutable.ArrayOps$ofRef`                                       |    ×2 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 302.4 KB retained heap._
 
@@ -5893,9 +5893,9 @@ _Local roots: 7._
 
 | Object                                    | Count | Shallow | Retained |
 | ----------------------------------------- | ----: | ------: | -------: |
-| `java/lang/ref/NativeReferenceQueue`      |    ×3 |    40 B |     40 B |
-| `java/lang/ref/NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
-| `java/lang/System$2`                      |     1 |    16 B |     16 B |
+| `java.lang.ref.NativeReferenceQueue`      |    ×3 |    40 B |     40 B |
+| `java.lang.ref.NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
+| `java.lang.System$2`                      |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 208 B retained heap._
 
@@ -5923,12 +5923,12 @@ _Local roots: 12._
 
 | Object                                                                  | Count | Shallow | Retained |
 | ----------------------------------------------------------------------- | ----: | ------: | -------: |
-| `java/lang/Class`                                                       |    ×2 |    32 B |    128 B |
-| `java/util/concurrent/TimeUnit`                                         |     1 |    80 B |     80 B |
-| `java/lang/ref/ReferenceQueue`                                          |    ×3 |    32 B |     48 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionNode`   |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
-| `jdk/internal/ref/CleanerImpl`                                          |    ×3 |    24 B |     24 B |
+| `java.lang.Class`                                                       |    ×2 |    32 B |    128 B |
+| `java.util.concurrent.TimeUnit`                                         |     1 |    80 B |     80 B |
+| `java.lang.ref.ReferenceQueue`                                          |    ×3 |    32 B |     48 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionNode`   |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
+| `jdk.internal.ref.CleanerImpl`                                          |    ×3 |    24 B |     24 B |
 
 _Frame percentages are of this thread's 168 B retained heap._
 
@@ -5973,14 +5973,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |    ×2 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |    ×2 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6013,12 +6013,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6046,12 +6046,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6079,12 +6079,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -6113,12 +6113,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×3 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×3 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6148,12 +6148,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6181,13 +6181,13 @@ _Local roots: 13._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |    ×2 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |    ×2 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -6220,13 +6220,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6259,12 +6259,12 @@ _Local roots: 7._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |     1 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |     1 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6290,15 +6290,15 @@ _Local roots: 13._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/WakeupManager`                                                       |    ×2 |    32 B |   8.7 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.WakeupManager`                                                       |    ×2 |    32 B |   8.7 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -6333,16 +6333,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6376,13 +6376,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6408,15 +6408,15 @@ _Local roots: 15._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×6 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `scala/Some`                                                                                     |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×6 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `scala.Some`                                                                                     |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 600 B retained heap._
 
@@ -6454,12 +6454,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6487,12 +6487,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -6521,13 +6521,13 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6556,13 +6556,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6595,13 +6595,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -6627,12 +6627,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6660,14 +6660,14 @@ _Local roots: 15._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6704,13 +6704,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6743,12 +6743,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6776,13 +6776,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6815,14 +6815,14 @@ _Local roots: 15._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6859,13 +6859,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6897,12 +6897,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -6930,13 +6930,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -6969,12 +6969,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7001,13 +7001,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -7033,12 +7033,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7067,12 +7067,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7099,12 +7099,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -7133,12 +7133,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -7166,13 +7166,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -7198,13 +7198,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7236,13 +7236,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -7274,13 +7274,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7312,13 +7312,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -7350,13 +7350,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7388,13 +7388,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -7425,12 +7425,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7457,16 +7457,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.9 KB retained heap._
 
@@ -7500,13 +7500,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7538,12 +7538,12 @@ _Local roots: 7._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |     1 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |     1 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -7569,12 +7569,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -7602,13 +7602,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7640,13 +7640,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7678,13 +7678,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -7710,13 +7710,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7748,14 +7748,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |    ×2 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |    ×2 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7788,13 +7788,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7826,12 +7826,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -7860,12 +7860,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7892,13 +7892,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7931,14 +7931,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -7972,13 +7972,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8004,14 +8004,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8045,13 +8045,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8077,12 +8077,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -8110,13 +8110,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8147,14 +8147,14 @@ _Local roots: 16._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×7 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×7 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8194,12 +8194,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8228,12 +8228,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8262,13 +8262,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8300,13 +8300,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8339,13 +8339,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8373,14 +8373,14 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×7 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×7 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8425,13 +8425,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8463,14 +8463,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |    ×2 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |    ×2 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8503,13 +8503,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8541,12 +8541,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -8574,13 +8574,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8612,12 +8612,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8644,13 +8644,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8681,16 +8681,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -8724,13 +8724,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8761,12 +8761,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8793,13 +8793,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8830,14 +8830,14 @@ _Local roots: 15._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8874,12 +8874,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8908,12 +8908,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -8942,13 +8942,13 @@ _Local roots: 10._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -8980,14 +8980,14 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×7 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×7 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9032,13 +9032,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    168 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    168 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9071,14 +9071,14 @@ _Local roots: 14._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×6 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `scala/Some`                                                                                     |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×6 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `scala.Some`                                                                                     |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 600 B retained heap._
 
@@ -9114,13 +9114,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9152,13 +9152,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -9189,14 +9189,14 @@ _Local roots: 15._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×3 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9233,13 +9233,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9271,14 +9271,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |    ×2 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |    ×2 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9311,13 +9311,13 @@ _Local roots: 13._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×7 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×7 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9352,13 +9352,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9391,16 +9391,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.9 KB retained heap._
 
@@ -9434,12 +9434,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×3 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×3 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -9469,14 +9469,14 @@ _Local roots: 13._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `scala/None$`                                                                                    |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `scala.None$`                                                                                    |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -9510,14 +9510,14 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/Txn$RolledBack`                                                            |     1 |    16 B |     56 B |
-| `scala/concurrent/stm/skel/RollbackError$`                                                       |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.Txn$RolledBack`                                                            |     1 |    16 B |     56 B |
+| `scala.concurrent.stm.skel.RollbackError$`                                                       |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -9545,12 +9545,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -9579,12 +9579,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9611,14 +9611,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9652,16 +9652,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.9 KB retained heap._
 
@@ -9695,13 +9695,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9733,13 +9733,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -9765,12 +9765,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -9798,12 +9798,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -9832,16 +9832,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -9875,16 +9875,16 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
-| `java/util/concurrent/locks/AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode`                            |     1 |    32 B |     32 B |
+| `java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode`                               |     1 |    32 B |     32 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -9918,15 +9918,15 @@ _Local roots: 13._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/WakeupManager`                                                       |    ×2 |    32 B |   8.7 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.WakeupManager`                                                       |    ×2 |    32 B |   8.7 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.WakeupManager$EventImpl`                                             |     1 |    40 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -9961,13 +9961,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -9999,13 +9999,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -10031,12 +10031,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10063,14 +10063,14 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/Txn$RolledBack`                                                            |     1 |    16 B |     56 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.Txn$RolledBack`                                                            |     1 |    16 B |     56 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.7 KB retained heap._
 
@@ -10098,12 +10098,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×3 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    144 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10130,12 +10130,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10164,12 +10164,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -10198,12 +10198,12 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/RetrySet`                                                            |    ×2 |    24 B |    216 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                                            |    ×2 |    24 B |    216 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 29.8 KB retained heap._
 
@@ -10231,13 +10231,13 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10270,14 +10270,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10311,13 +10311,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10343,15 +10343,15 @@ _Local roots: 15._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×2 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10389,12 +10389,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -10425,14 +10425,14 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `jdk/internal/reflect/DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×7 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTM$`                                                              |     1 |    72 B |     96 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                                                |     1 |    32 B |    400 B |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×7 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTM$`                                                              |     1 |    72 B |     96 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |    ×3 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10477,13 +10477,13 @@ _Local roots: 8._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×2 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10509,14 +10509,14 @@ _Local roots: 12._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                                                      |     1 |    24 B |   8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10550,13 +10550,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10588,13 +10588,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -10625,13 +10625,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
-| `scala/concurrent/stm/ccstm/CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×5 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    112 B |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                                                |     1 |    24 B |     40 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
@@ -10663,13 +10663,13 @@ _Local roots: 11._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `scala/runtime/BoxedUnit`                                                                        |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |    ×2 |   112 B |    112 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `scala.runtime.BoxedUnit`                                                                        |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01deae0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 560 B retained heap._
 
@@ -10700,12 +10700,12 @@ _Local roots: 9._
 
 | Object                                                                                           | Count | Shallow | Retained |
 | ------------------------------------------------------------------------------------------------ | ----: | ------: | -------: |
-| `scala/concurrent/stm/ccstm/InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
-| `scala/concurrent/stm/ccstm/TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
-| `scala/collection/immutable/Range`                                                               |     1 |    40 B |     40 B |
-| `scala/concurrent/stm/ccstm/CCSTM`                                                               |     1 |    24 B |     24 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
-| `org/renaissance/scala/stm/RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                                           |    ×4 |   144 B |  29.0 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                                                        |     1 |   112 B |    168 B |
+| `scala.collection.immutable.Range`                                                               |     1 |    40 B |     40 B |
+| `scala.concurrent.stm.ccstm.CCSTM`                                                               |     1 |    24 B |     24 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` |     1 |    16 B |     16 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` |     1 |    16 B |     16 B |
 
 _Frame percentages are of this thread's 584 B retained heap._
 
