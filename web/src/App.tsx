@@ -7385,6 +7385,39 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     : "—"}%
                 </td>
               </tr>
+              {(() => {
+                if (dominatorChain.length <= 1) {
+                  return (
+                    <tr>
+                      <th>Why alive?</th>
+                      <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>GC root (not dominated)</td>
+                    </tr>
+                  );
+                }
+                const rootIdx = dominatorChain[dominatorChain.length - 1];
+                const rootNode = data.nodes[String(rootIdx)];
+                const rootLabel = rootNode
+                  ? `${rootNode.display_class.split(".").pop()}#${rootIdx}`
+                  : `obj#${rootIdx}`;
+                const hops = dominatorChain.length - 1;
+                const hopPhrase = hops === 1 ? "directly" : `via ${hops} hops`;
+                return (
+                  <tr>
+                    <th>Why alive?</th>
+                    <td style={{ fontSize: "0.82rem" }}>
+                      <button
+                        className="btn-link"
+                        style={{ fontSize: "inherit" }}
+                        title="Navigate to the GC root holding this object"
+                        onClick={() => navigate("explore", rootIdx, rootNode?.display_class ?? `obj#${rootIdx}`)}
+                      >
+                        {rootLabel}
+                      </button>
+                      {" (GC root) "}{hopPhrase}
+                    </td>
+                  </tr>
+                );
+              })()}
               {nodeId !== null && (() => {
                 const wasm = (window as any).__wasmExploration;
                 if (!wasm?.get_object_address) return null;
