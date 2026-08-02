@@ -880,11 +880,26 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
     [rows],
   );
 
-  // Filter by class name text + optionally skip tiny rows
+  // Filter by class name text (substring or /regex/) + optionally skip tiny rows
   const filtered = React.useMemo(() => {
-    const lc = filter.toLowerCase();
+    let testFn: (s: string) => boolean = () => true;
+    if (filter) {
+      const reMatch = filter.match(/^\/(.+)\/([gi]*)$/);
+      if (reMatch) {
+        try {
+          const re = new RegExp(reMatch[1], reMatch[2] || "i");
+          testFn = (s) => re.test(s);
+        } catch {
+          const lc = filter.toLowerCase();
+          testFn = (s) => s.toLowerCase().includes(lc);
+        }
+      } else {
+        const lc = filter.toLowerCase();
+        testFn = (s) => s.toLowerCase().includes(lc);
+      }
+    }
     return rows.filter((r) => {
-      if (lc && !r.pretty_class.toLowerCase().includes(lc)) return false;
+      if (filter && !testFn(r.pretty_class)) return false;
       if (!showAll && pctOf(r.retained, totalShallow) < HIST_MIN_PCT) return false;
       return true;
     });
@@ -1050,10 +1065,10 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         <input
           type="text"
           className="filter"
-          placeholder="Filter by class name…"
+          placeholder="Filter by class name (or /regex/)…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          aria-label="Filter histogram by class name"
+          aria-label="Filter histogram by class name or regex"
         />
         <span className="hint">{fmtCount(displayRows.length)} shown</span>
         {hasNonBootLoader && (
@@ -6100,18 +6115,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             }
           </p>
           <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
-            {rootFilter && (
-              <span style={{ display: "inline-flex", borderRadius: 4, overflow: "hidden", border: "1px solid var(--border, #e2e8f0)", fontSize: "0.78rem" }}>
-                <button
-                  className={rootViewMode === "instances" ? "btn-active" : "btn-link"}
-                  style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0 }}
-                  onClick={() => setRootViewMode("instances")}>Instances</button>
-                <button
-                  className={rootViewMode === "classes" ? "btn-active" : "btn-link"}
-                  style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0, borderLeft: "1px solid var(--border, #e2e8f0)" }}
-                  onClick={() => setRootViewMode("classes")}>By class</button>
-              </span>
-            )}
+            <span style={{ display: "inline-flex", borderRadius: 4, overflow: "hidden", border: "1px solid var(--border, #e2e8f0)", fontSize: "0.78rem" }}>
+              <button
+                className={rootViewMode === "instances" ? "btn-active" : "btn-link"}
+                style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0 }}
+                onClick={() => setRootViewMode("instances")}>Instances</button>
+              <button
+                className={rootViewMode === "classes" ? "btn-active" : "btn-link"}
+                style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0, borderLeft: "1px solid var(--border, #e2e8f0)" }}
+                onClick={() => setRootViewMode("classes")}>By class</button>
+            </span>
             <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
               <input
                 type="text"
@@ -6187,7 +6200,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </div>
           );
         })()}
-        {rootFilter && rootViewMode === "classes" && (() => {
+        {rootViewMode === "classes" && (() => {
           const byClass = new Map<string, { count: number; totalShallow: number; totalRetained: number; topIdx: number }>();
           for (const [idStr, n] of filtered) {
             const entry = byClass.get(n.display_class) ?? { count: 0, totalShallow: 0, totalRetained: 0, topIdx: parseInt(idStr, 10) };
@@ -6234,7 +6247,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </table>
           );
         })()}
-        {(!rootFilter || rootViewMode === "instances") && <table className="std-table">
+        {rootViewMode === "instances" && <table className="std-table">
           <thead>
             <tr>
               <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "class" ? { col: "class", asc: !s.asc } : { col: "class", asc: true })}>Class {rootSort.col === "class" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
@@ -6735,7 +6748,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   {(window as any).__wasmSession?.outbound_refs && "Enable exploration for full refs."}
                 </p>
               )}
-              {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && (
+              {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
                   All fields unnamed — re-run with <code>--ref-paths</code> to see field names.
                 </p>
@@ -7550,7 +7563,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   return (
                     <tr>
                       <th>Why alive?</th>
-                      <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>GC root (not dominated)</td>
+                      <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                        Held directly by GC roots — no single dominating object
+                      </td>
                     </tr>
                   );
                 }
