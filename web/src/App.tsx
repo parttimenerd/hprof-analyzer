@@ -6633,6 +6633,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {groupedEdges.length > 0 && currentEdges.length > groupedEdges.length && (
                 <p className="subtitle" style={{ fontSize: "0.8rem" }}>
                   {currentEdges.length} edges grouped into {groupedEdges.length} unique field×class combinations.
+                  {refFilter && filteredEdges.length < groupedEdges.length && (
+                    <> Showing {filteredEdges.length} matching.</>
+                  )}
                 </p>
               )}
               {pagedEdges.length > 0 && (
@@ -6743,7 +6746,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </td>
                               <td>
                                 <span className="copy-cell" style={{ paddingLeft: "0.5rem" }}>
-                                  <button className="btn-link" style={{ fontSize: "0.8rem" }}
+                                  <button className="btn-link" title="Navigate to outbound refs" style={{ fontSize: "0.8rem" }}
                                     onClick={() => navigate("explore", m.child_idx, m.child_class, edge.field_name || undefined)}>
                                     <code>{m.child_class}</code>
                                   </button>
@@ -6757,7 +6760,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 </span>
                               </td>
                               <td style={{ textAlign: "right", whiteSpace: "nowrap", fontSize: "0.8rem" }}>{fmtB(m.child_retained)}</td>
-                              <td>{mShared && <span className="shared-badge" style={{ fontSize: "0.75rem" }}>&#8635;</span>}</td>
+                              <td>
+                                {mShared && <span className="shared-badge" style={{ fontSize: "0.75rem" }}>&#8635;</span>}
+                                {breadcrumbIdSet.has(m.child_idx) && (
+                                  <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)", fontSize: "0.75rem" }}>↩ visited</span>
+                                )}
+                              </td>
                             </tr>
                           );
                         }
@@ -7389,7 +7397,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       const q = `SELECT * FROM ${currentNode.display_class} s WHERE s.@objectId = ${nodeId}`;
                       navigator.clipboard?.writeText(q);
                     }}>
-                    Query this object ↗
+                    Copy OQL ⎘
                   </button>
                 </td>
               </tr>
