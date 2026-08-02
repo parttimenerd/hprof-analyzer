@@ -299,8 +299,8 @@ mod tests {
         }
         build_model(
             g,
-            dc_off,
-            dc_tgt,
+            dc_off.to_vec(),
+            dc_tgt.to_vec(),
             cap,
             &depth_counts,
             &crate::AnalyzeOptions::default(),

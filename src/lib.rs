@@ -399,15 +399,14 @@ fn analyze_to_report_inner(
 
     let report = report::build_model(
         &g,
-        &dc_off,
-        &dc_tgt,
+        dc_off,
+        dc_tgt,
         opts.leak_children_cap,
         &depth_counts,
         opts,
         alloc_sites,
     );
-    drop(dc_off);
-    drop(dc_tgt);
+    // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
     // Extract the per-object retained-size array before g is dropped.
     // The caller (analyze_to_report_with_retained) stores this for OQL reuse.

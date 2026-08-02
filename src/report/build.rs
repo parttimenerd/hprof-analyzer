@@ -472,13 +472,13 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
 /// the same free-as-you-go RSS discipline: the system-overview group is
 /// computed first (the only reader of `has_same_class_ancestor`), then the
 /// leak-suspect group (the only reader of `dc_offsets`/`dc_targets`), then top
-/// consumers. Because the returned `Report` holds only small aggregates, the
-/// caller may free `has_same_class_ancestor` and `dc_offsets`/`dc_targets`
-/// immediately after this returns.
+/// consumers. Takes `dc_offsets` and `dc_targets` by value so it can free them
+/// (~4 GB on large dumps) immediately after their last use (before the remaining
+/// collection/attribution/framework sections allocate intermediate data).
 pub fn build_model(
     g: &Graph,
-    dc_offsets: &[u32],
-    dc_targets: &[u32],
+    dc_offsets: Vec<u32>,
+    dc_targets: Vec<u32>,
     leak_children_cap: usize,
     depth_counts: &[u64],
     opts: &crate::AnalyzeOptions,
@@ -490,8 +490,8 @@ pub fn build_model(
     crate::trace::probe("build_model: after system_overview aggregates");
     let leaks = build_leak_suspects(
         g,
-        dc_offsets,
-        dc_targets,
+        &dc_offsets,
+        &dc_targets,
         leak_children_cap,
         opts.root_path_max_depth,
         opts.dominator_tree_max_nodes,
@@ -505,13 +505,19 @@ pub fn build_model(
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
-    let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
+    let dominator_analysis = build_dominator_analysis(g, &dc_offsets, &dc_targets);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let obj_graph_flat = if opts.obj_graph {
-        Some(build_obj_graph_flat(g, dc_offsets, dc_targets, opts.report_size.edge_cap(), opts.report_size.tier_name()))
+        Some(build_obj_graph_flat(g, &dc_offsets, &dc_targets, opts.report_size.edge_cap(), opts.report_size.tier_name()))
     } else {
         None
     };
+    // dc_offsets and dc_targets are not used after this point. Drop them now
+    // (~4 GB on large dumps) before the remaining sections allocate intermediate
+    // data, reducing the report-phase peak by ~4 GB.
+    drop(dc_offsets);
+    drop(dc_targets);
+    crate::trace::probe("build_model: after drop(dc) — before type_ref/references/collections");
     let type_ref_graph = if opts.obj_graph {
         build_type_ref_graph(g)
     } else {

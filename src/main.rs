@@ -1040,15 +1040,14 @@ fn analyze_to_report_inner(
 
     let report = report::build_model(
         &g,
-        &dc_off,
-        &dc_tgt,
+        dc_off,
+        dc_tgt,
         opts.leak_children_cap,
         &depth_counts,
         opts,
         alloc_sites,
     );
-    drop(dc_off);
-    drop(dc_tgt);
+    // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
     // Extract the per-object retained-size array before g is dropped.
     // The caller (analyze_to_report_with_retained) stores this for OQL reuse.
@@ -3072,8 +3071,8 @@ fn run(
     // separate ~2GB per-object memo scan).
     let mut report = report::build_model(
         &g,
-        &dc_off,
-        &dc_tgt,
+        dc_off,
+        dc_tgt,
         opts.leak_children_cap,
         &depth_counts,
         &opts,
@@ -3081,8 +3080,7 @@ fn run(
     );
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
-    drop(dc_off);
-    drop(dc_tgt);
+    // dc_off and dc_tgt were moved into build_model and freed early inside it.
     crate::trace::trim();
     // Fill in blank oql text and default names (from-target-derived, else
     // `q{N}`) for the printed tables.
