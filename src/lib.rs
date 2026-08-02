@@ -372,7 +372,6 @@ fn analyze_to_report_inner(
     let class_count = g.class_names.len();
     let (retained, has_same, depth_counts) = retained::compute_retained(
         g.n,
-        &g.idom,
         &g.shallow,
         &g.class_idx,
         class_count,

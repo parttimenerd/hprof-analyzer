@@ -54,7 +54,6 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
 ///
 /// # Arguments
 /// * `n`                   - number of real objects (vroot has index n)
-/// * `idom`                - immediate dominator per node, len = n+1; idom[n]=n (vroot self-loop)
 /// * `shallow`             - shallow size per object, len = n
 /// * `class_idx`           - class index per object, len = n
 /// * `class_count`         - number of distinct classes (bounds class-indexed scratch)
@@ -66,7 +65,6 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
 /// bitset have length n, `depth_counts[d-1]` counts reachable nodes at dom depth d.
 pub fn compute_retained(
     n: usize,
-    idom: &[u32],
     shallow: &[u32],
     class_idx: &[u32],
     class_count: usize,
@@ -181,11 +179,16 @@ pub fn compute_retained(
             stk_cls.push(cls);
             stk_ci.push(ci);
         } else {
-            // All children of v processed — roll up retained size into idom[v]
+            // All children of v processed — roll up retained size into parent
             // (subtree total now final), then restore saved state and pop.
-            let parent = idom[v as usize];
-            if parent != undef && parent != vroot {
-                retained[parent as usize] += retained[v as usize];
+            // Parent is stk_node[top-1]: the node that pushed v in this DFS
+            // over the dominator tree, which is exactly idom[v]. This avoids
+            // keeping the ~2 GB idom array live during compute_retained.
+            if top > 0 {
+                let parent = stk_node[top - 1];
+                if parent != vroot {
+                    retained[parent as usize] += retained[v as usize];
+                }
             }
             let cls = stk_cls[top];
             let ci = stk_ci[top];
@@ -225,7 +228,6 @@ mod tests {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
-                &idom,
                 &shallow,
                 &class_idx,
                 1,
@@ -251,7 +253,6 @@ mod tests {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
-                &idom,
                 &shallow,
                 &class_idx,
                 1,
@@ -281,7 +282,6 @@ mod tests {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
-                &idom,
                 &shallow,
                 &class_idx,
                 2,
@@ -313,7 +313,6 @@ mod tests {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
-                &idom,
                 &shallow,
                 &class_idx,
                 2,

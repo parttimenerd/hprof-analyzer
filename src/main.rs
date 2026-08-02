@@ -1014,7 +1014,6 @@ fn analyze_to_report_inner(
     let class_count = g.class_names.len();
     let (retained, has_same, depth_counts) = retained::compute_retained(
         g.n,
-        &g.idom,
         &g.shallow,
         &g.class_idx,
         class_count,
@@ -2734,6 +2733,19 @@ fn run(
     let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
     crate::trace::probe("main: after build_dom_children_csr");
 
+    // For the non-MAT path compress g.idom (~2 GB) now that the CSR is built.
+    // compute_retained no longer reads idom (uses the stack for parent lookups).
+    // Saves ~2 GB during the compute_retained window; decompressed before build_model.
+    let non_mat_idom_c: Option<cvec::CompressedU32> = if mat.is_none() && compress != cvec::Codec::None {
+        let c = cvec::CompressedU32::compress(&g.idom, compress)?;
+        g.idom = Vec::new();
+        crate::trace::trim();
+        Some(c)
+    } else {
+        None
+    };
+    crate::trace::probe("main: after compress idom (non-MAT path, before restore shallow/class_idx)");
+
     // MAT: emit the `domOut` IntArray1N (unsorted) in MAT id order.
     // Layout: entry[0] = vroot's dom-children (= MAT GC roots), entry[1] = dom-
     // children of mat-id 0 (synthetic root, always empty), entries[2..mc+1] =
@@ -2819,7 +2831,6 @@ fn run(
     let class_count = g.class_names.len();
     let (retained, has_same, depth_counts) = retained::compute_retained(
         g.n,
-        &g.idom,
         &g.shallow,
         &g.class_idx,
         class_count,
@@ -3063,6 +3074,10 @@ fn run(
 
     let t = Instant::now();
     progress::phase("building report");
+    // Restore g.idom (compressed after build_dom_children_csr in the non-MAT path).
+    if let Some(c) = non_mat_idom_c {
+        g.idom = c.restore()?;
+    }
     crate::trace::probe("report: before build_model");
     // build_model reads has_same_class_ancestor (system-overview group) and
     // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
