@@ -314,11 +314,6 @@ impl Pass2 {
         };
         p1.elem_count = Vec::new();
 
-        // ── Phase 1: Sub-pass 2a — count degrees ────────────────────────
-        let mut out_degree: Vec<u32> = vec![0u32; n];
-        let mut in_degree: Vec<u32> = vec![0u32; n];
-        crate::trace::probe("pass2: after out/in_degree alloc");
-
         // Precompute per-class instance-field plans once (offset + excluded flag).
         // Borrowed immutably in the hot scan loop — no per-instance allocation.
         let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
@@ -343,26 +338,14 @@ impl Pass2 {
         }
         drop(field_plans);
 
-        // ── OQL: build live resolver, answer HistogramOnly now, arm SingleScan ──
-        // Built here (not at the return) because class_idx/shallow are compressed
-        // and emptied below (class_idx just after this block, shallow after the
-        // scan), while class_map/strings are freed only much later. class_names is
-        // the live Vec that moves into Graph at the end.
-        let query_resolver = crate::query::run::LiveResolver::new(
-            &p1.class_map,
-            &p1.strings,
-            id_size as usize,
-            &p1.id_map,
-            &shallow,
-        );
         let has_histogram = queries
             .iter()
             .any(|(_, p)| p.kind == crate::query::plan::StageKind::HistogramOnly);
         // Tally per-class counts/shallow NOW (class_idx & shallow are live and about
-        // to be compressed/emptied). Vectors are sized by the max histogram index
-        // seen and padded to class_names.len() in the deferred build below; we
-        // cannot read class_names.len() here because the `get_or_insert_class`
-        // closure still holds a mutable borrow of `class_names`.
+        // to be compressed). Vectors are sized by the max histogram index seen and
+        // padded to class_names.len() in the deferred build below; we cannot read
+        // class_names.len() here because the `get_or_insert_class` closure still
+        // holds a mutable borrow of `class_names`.
         let hist_tally: Option<(Vec<u64>, Vec<u64>)> = if has_histogram {
             let cap = class_idx
                 .iter()
@@ -391,6 +374,47 @@ impl Pass2 {
         } else {
             None
         };
+
+        // Compress class_idx and alloc_stack_serial BEFORE allocating out_degree
+        // and in_degree (~4 GB). Both arrays are final at this point and not read
+        // again until the retained/report phases. Freeing their ~2 GB dense Vecs
+        // here removes ~2 GB from the 2a-scan binding peak (previously class_idx
+        // was freed only after the degree arrays were already live).
+        let class_idx_c = if compress != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
+            class_idx = Vec::new();
+            c
+        } else {
+            crate::cvec::CompressedU32::compress(&class_idx, crate::cvec::Codec::None)?
+        };
+        let alloc_serial_c = if compress != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, compress)?;
+            p1.alloc_stack_serial = Vec::new();
+            Some(c)
+        } else {
+            None
+        };
+        crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before degree alloc)");
+
+        // ── Phase 1: Sub-pass 2a — count degrees ────────────────────────
+        // class_idx is now compressed (freed above); only shallow(~2GB) + id_map(~2GB)
+        // remain alongside the new degree arrays (~4 GB total), lowering the scan peak.
+        let mut out_degree: Vec<u32> = vec![0u32; n];
+        let mut in_degree: Vec<u32> = vec![0u32; n];
+        crate::trace::probe("pass2: after out/in_degree alloc");
+
+        // ── OQL: build live resolver, answer HistogramOnly now, arm SingleScan ──
+        // Built here (not at the return) because shallow is used by the resolver
+        // and compressed/emptied below (after the scan), while class_map/strings
+        // are freed only much later. class_names is the live Vec that moves into
+        // Graph at the end.
+        let query_resolver = crate::query::run::LiveResolver::new(
+            &p1.class_map,
+            &p1.strings,
+            id_size as usize,
+            &p1.id_map,
+            &shallow,
+        );
         // Arm one executor per valid SingleScan query. Plan-time field
         // validation runs here (earliest point a live schema exists): a query
         // referencing a field absent from its FROM class's super-chain is
@@ -487,25 +511,6 @@ impl Pass2 {
             Vec::new()
         };
 
-        // Compress class_idx and alloc_stack_serial NOW — before the 2a scan
-        // allocates out_degree and in_degree (~4 GB). Both arrays are final at
-        // this point and not read again until the retained/report phases. Freeing
-        // their ~2 GB dense Vecs here removes ~4 GB from the 2a-scan binding peak.
-        let class_idx_c = if compress != crate::cvec::Codec::None {
-            let c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
-            class_idx = Vec::new();
-            c
-        } else {
-            crate::cvec::CompressedU32::compress(&class_idx, crate::cvec::Codec::None)?
-        };
-        let alloc_serial_c = if compress != crate::cvec::Codec::None {
-            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, compress)?;
-            p1.alloc_stack_serial = Vec::new();
-            Some(c)
-        } else {
-            None
-        };
-        crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before 2a scan)");
 
         // Collect thread object addresses for capture during 2a scan.
         let capture_thread_addrs: std::collections::HashSet<u64> =
