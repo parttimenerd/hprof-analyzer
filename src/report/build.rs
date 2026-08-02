@@ -1919,7 +1919,7 @@ pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOver
                                     .class_idx
                                     .get(li as usize)
                                     .and_then(|&ci| g.class_names.get(ci as usize))
-                                    .cloned()
+                                    .map(|s| pretty_class_name(s))
                                     .unwrap_or_else(|| "<unknown>".to_string());
                                 ThreadLocalObj {
                                     obj_index_1based: li as usize + 1,
@@ -2049,7 +2049,7 @@ fn build_significant_frames(
                     .class_idx
                     .get(li as usize)
                     .and_then(|&ci| g.class_names.get(ci as usize))
-                    .cloned()
+                    .map(|s| pretty_class_name(s))
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let retained = g.retained.get(li as usize).copied().unwrap_or(0);
                 max_local_retained = max_local_retained.max(retained);
