@@ -5373,9 +5373,10 @@ function RetentionChain({
     setExpanded(s => {
       const next = new Set(s);
       if (next.has(denseIdx)) { next.delete(denseIdx); }
-      else { next.add(denseIdx); fetchRefs(denseIdx); }
+      else { next.add(denseIdx); }
       return next;
     });
+    if (!expanded.has(denseIdx)) fetchRefs(denseIdx);
   };
 
   return (
