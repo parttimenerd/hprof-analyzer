@@ -7846,9 +7846,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <div style={{ fontWeight: 600, padding: "2px 4px", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Class</div>
                 <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Instances</div>
                 <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)" }}>Shallow</div>
-                <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)", color: "var(--muted)" }}>%</div>
-                {currentNode.subtree_classes.map((row, i) => {
-                  const pct = currentNode.retained > 0 ? row.total_shallow / currentNode.retained : 0;
+                <div style={{ fontWeight: 600, padding: "2px 4px", textAlign: "right", borderBottom: "1px solid var(--border, #e2e8f0)", color: "var(--muted)" }} title="% of captured subtree shallow heap">%</div>
+                {(() => {
+                  const subtreeShallowTotal = currentNode.subtree_classes!.reduce((s, r) => s + r.total_shallow, 0);
+                  return currentNode.subtree_classes!.map((row, i) => {
+                  const pct = subtreeShallowTotal > 0 ? row.total_shallow / subtreeShallowTotal : 0;
                   return (
                     <React.Fragment key={i}>
                       <div style={{ padding: "1px 2px", overflow: "hidden" }}>
@@ -7866,7 +7868,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       </div>
                     </React.Fragment>
                   );
-                })}
+                  });
+                })()}
               </div>
             </div>
           )}
