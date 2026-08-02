@@ -7397,7 +7397,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 const rootIdx = dominatorChain[dominatorChain.length - 1];
                 const rootNode = data.nodes[String(rootIdx)];
                 const rootLabel = rootNode
-                  ? `${rootNode.display_class.split(".").pop()}#${rootIdx}`
+                  ? `${shortClass(rootNode.display_class)}#${rootIdx}`
                   : `obj#${rootIdx}`;
                 const hops = dominatorChain.length - 1;
                 const hopPhrase = hops === 1 ? "directly" : `via ${hops} hops`;
@@ -7413,7 +7413,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       >
                         {rootLabel}
                       </button>
-                      {" (GC root) "}{hopPhrase}
+                      {" (GC root) "}<span title="Dominator-tree hops; actual reference path may differ">{hopPhrase}</span>
                     </td>
                   </tr>
                 );
