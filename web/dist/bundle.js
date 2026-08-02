@@ -61,6 +61,8 @@ Error generating stack: `+i.message+`
   --warn-bg: #fff4e5;
   --warn-border: #f0b429;
   --ok: #22c55e;
+  --ok-bg: #d1fae5;
+  --ok-border: #a7f3d0;
 }
 
 .stack-detail summary { cursor: pointer; list-style: none; }
@@ -84,6 +86,8 @@ tfoot tr { border-top: 2px solid var(--border); }
     --warn-bg: #2a2318;
     --warn-border: #b8860b;
     --ok: #4ade80;
+    --ok-bg: #052e16;
+    --ok-border: #166534;
   }
 }
 :root[data-theme="dark"] {
@@ -97,6 +101,8 @@ tfoot tr { border-top: 2px solid var(--border); }
   --warn-bg: #2a2318;
   --warn-border: #b8860b;
   --ok: #4ade80;
+  --ok-bg: #052e16;
+  --ok-border: #166534;
 }
 :root[data-theme="light"] {
   --bg: #ffffff;
@@ -109,6 +115,8 @@ tfoot tr { border-top: 2px solid var(--border); }
   --warn-bg: #fff4e5;
   --warn-border: #f0b429;
   --ok: #22c55e;
+  --ok-bg: #d1fae5;
+  --ok-border: #a7f3d0;
 }
 
 * { box-sizing: border-box; }
