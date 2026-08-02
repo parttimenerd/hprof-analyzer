@@ -5895,6 +5895,17 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             )}
           </p>
         )}
+        {!rootFilter && totalHeap > 0 && (() => {
+          const top3 = data.roots.slice(0, 3).map(id => data.nodes[String(id)]?.retained ?? 0);
+          const top3total = top3.reduce((s, r) => s + r, 0);
+          const pct = top3total / totalHeap * 100;
+          if (pct < 50) return null;
+          return (
+            <div style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.75rem", background: "var(--warn-bg, #fef3c7)", border: "1px solid var(--warn-border, #fde68a)", borderRadius: 5, fontSize: "0.82rem", color: "var(--warn, #92400e)" }}>
+              ⚠ Top 3 objects hold <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(top3total)}) — likely a small number of large leaks. Investigate these first.
+            </div>
+          );
+        })()}
         <table className="std-table">
           <thead>
             <tr>
