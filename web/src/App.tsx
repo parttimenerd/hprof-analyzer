@@ -5548,6 +5548,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [expandFilter, setExpandFilter] = React.useState("");
   const [refFilter, setRefFilter] = React.useState("");
   const [rootFilter, setRootFilter] = React.useState("");
+  const [rootSort, setRootSort] = React.useState<{ col: "class" | "idx" | "shallow" | "retained"; asc: boolean }>({ col: "retained", asc: false });
   const [showAllInbound, setShowAllInbound] = React.useState(false);
   const [pathDepth, setPathDepth] = React.useState(8);
   const [activeRefTab, setActiveRefTab] = React.useState<"outbound" | "inbound">("outbound");
@@ -6026,7 +6027,16 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       ? allCaptured.filter(([, n]) => n.display_class.toLowerCase().includes(rootFilter.toLowerCase()))
       : data.roots.map(id => [String(id), data.nodes[String(id)]] as [string, typeof data.nodes[string]]).filter(([, n]) => n != null);
     const showAll = !!rootFilter;
-    const displayRows = filtered.slice(0, showAll ? 200 : 50);
+    const sorted = [...filtered].sort((a, b) => {
+      const [ak, an] = a; const [bk, bn] = b;
+      let cmp = 0;
+      if (rootSort.col === "class") cmp = an.display_class.localeCompare(bn.display_class);
+      else if (rootSort.col === "idx") cmp = parseInt(ak) - parseInt(bk);
+      else if (rootSort.col === "shallow") cmp = an.shallow - bn.shallow;
+      else cmp = an.retained - bn.retained;
+      return rootSort.asc ? cmp : -cmp;
+    });
+    const displayRows = sorted.slice(0, showAll ? 200 : 50);
     return (
       <div ref={containerRef}>
         {pinStrip}
@@ -6118,10 +6128,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         <table className="std-table">
           <thead>
             <tr>
-              <th>Class</th>
-              <th style={{ whiteSpace: "nowrap" }} title="Dense index — use in 'Go to obj #' to navigate directly">#</th>
-              <th>Shallow</th>
-              <th style={{ textAlign: "right" }}>Retained</th>
+              <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "class" ? { col: "class", asc: !s.asc } : { col: "class", asc: true })}>Class {rootSort.col === "class" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
+              <th style={{ whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }} title="Dense index — use in 'Go to obj #' to navigate directly" onClick={() => setRootSort(s => s.col === "idx" ? { col: "idx", asc: !s.asc } : { col: "idx", asc: true })}># {rootSort.col === "idx" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
+              <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "shallow" ? { col: "shallow", asc: !s.asc } : { col: "shallow", asc: false })}>Shallow {rootSort.col === "shallow" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
+              <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "retained" ? { col: "retained", asc: !s.asc } : { col: "retained", asc: false })}>Retained {rootSort.col === "retained" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
               <th style={{ textAlign: "right" }}>% Heap</th>
             </tr>
           </thead>
