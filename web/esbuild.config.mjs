@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 852 KB minified bundle budget (raised from 850 KB to accommodate WASM below-threshold node panel).
-const BUDGET_BYTES = 852 * 1024;
+// ≤ 856 KB minified bundle budget (raised from 852 KB to accommodate forward nav, peer instances panel, cycle badge).
+const BUDGET_BYTES = 856 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

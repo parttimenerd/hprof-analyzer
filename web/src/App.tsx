@@ -5340,6 +5340,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [tab, setTab] = React.useState<"explore" | "domtree">("explore");
   const [nodeId, setNodeId] = React.useState<number | null>(null);
   const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string; edge?: string; sourceTab?: "explore" | "domtree" }[]>([]);
+  const [forwardStack, setForwardStack] = React.useState<{ nodeId: number; label: string; edge?: string; sourceTab?: "explore" | "domtree" }[]>([]);
   const [page, setPage] = React.useState(0);
   const [showSvg, setShowSvg] = React.useState(false);
   const [jumpInput, setJumpInput] = React.useState("");
@@ -5382,6 +5383,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [wasmBelowOutbound, setWasmBelowOutbound] = React.useState<{dst_idx: number; field_name: string; display_class: string; shallow: number; retained: number}[] | null>(null);
   const [wasmBelowInbound, setWasmBelowInbound] = React.useState<{src_idx: number; field_name: string; display_class: string; shallow: number; retained: number}[] | null>(null);
   const [showBelowGcPath, setShowBelowGcPath] = React.useState(false);
+  const [wasmPeerInstances, setWasmPeerInstances] = React.useState<{dense_idx: number; display_class: string; retained: number}[] | null>(null);
+  const [wasmPeerTotal, setWasmPeerTotal] = React.useState(0);
 
   React.useEffect(() => {
     setWasmOutboundEdges(null);
@@ -5409,6 +5412,23 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     } catch {}
     void inCapture; // suppress lint
   }, [nodeId, data.edges, data.nodes]);
+
+  // Peer instances panel: find top instances of same class via WASM find_instances
+  React.useEffect(() => {
+    setWasmPeerInstances(null);
+    setWasmPeerTotal(0);
+    const wasm = (window as any).__wasmExploration;
+    const node = nodeId !== null ? data.nodes[String(nodeId)] : null;
+    if (!wasm?.find_instances || nodeId === null || !node) return;
+    try {
+      const r = JSON.parse(wasm.find_instances(node.display_class, 11));
+      if (r.ok && r.matches) {
+        const peers = (r.matches as any[]).filter((m: any) => m.dense_idx !== nodeId).slice(0, 10);
+        setWasmPeerInstances(peers);
+        setWasmPeerTotal(r.total);
+      }
+    } catch {}
+  }, [nodeId, data.nodes]);
 
   // Below-threshold node: fetch WASM info when the node isn't in the static graph but WASM exploration is live
   React.useEffect(() => {
@@ -5480,18 +5500,32 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     setExpandFilter("");
   }, [nodeId]);
 
-  // Keyboard: Escape / Alt+Left = go back in explorer
+  // Keyboard: Escape / Alt+Left = go back; Alt+Right = go forward in explorer
   React.useEffect(() => {
     if (nodeId === null) return;
     const onKey = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
       const isEsc = e.key === "Escape";
       const isAltLeft = e.key === "ArrowLeft" && e.altKey;
-      if (!isEsc && !isAltLeft) return;
+      const isAltRight = e.key === "ArrowRight" && e.altKey;
+      if (!isEsc && !isAltLeft && !isAltRight) return;
       e.preventDefault();
+      const curLabel = nodeId !== null ? (data.nodes[String(nodeId)]?.display_class ?? String(nodeId)) : String(nodeId);
+      if (isAltRight) {
+        setForwardStack(fs => {
+          if (fs.length === 0) return fs;
+          const fwd = fs[0];
+          setBreadcrumb(prev => [...prev.slice(-9), { nodeId: nodeId!, label: curLabel, sourceTab: tab }]);
+          lastInternalNavRef.current = fwd.nodeId;
+          window.location.hash = `${fwd.sourceTab ?? tab}/${fwd.nodeId}`;
+          return fs.slice(1);
+        });
+        return;
+      }
       setBreadcrumb(prev => {
         if (prev.length > 0) {
           const last = prev[prev.length - 1];
+          setForwardStack(fs => [{ nodeId: nodeId!, label: curLabel, sourceTab: tab }, ...fs.slice(0, 19)]);
           lastInternalNavRef.current = last.nodeId;
           window.location.hash = `${last.sourceTab ?? tab}/${last.nodeId}`;
           return prev.slice(0, -1);
@@ -5502,7 +5536,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [nodeId, tab]);
+  }, [nodeId, tab, data.nodes]);
 
   const navigate = (newTab: "explore" | "domtree", id: number, childClass: string, edgeLabel?: string, expandGroup?: string) => {
     // Save rootFilter so going back to root list restores the filter context
@@ -5513,6 +5547,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       if (nodeId === null) return [];
       return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass, sourceTab: tab }];
     });
+    setForwardStack([]);
     lastInternalNavRef.current = id;
     setPendingLabel(childClass);
     setPage(0);
@@ -5530,6 +5565,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
   const goToRoot = (filter?: string) => {
     setBreadcrumb([]);
+    setForwardStack([]);
     const newFilter = filter ?? savedRootFilter.current;
     savedRootFilter.current = newFilter;
     setRootFilter(newFilter);
@@ -5542,6 +5578,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     (window as any).__explorerNavigate = (tab: string, id: number) => {
       lastInternalNavRef.current = null; // mark as external
       setBreadcrumb([]);
+      setForwardStack([]);
       const hash = `${tab}/${id}`;
       if (window.location.hash === `#${hash}`) {
         // Hash won't change → manually trigger the same logic as onHash
@@ -5596,6 +5633,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     }
     return chain; // target → root order; reversed for display
   }, [currentNode, nodeId, data.nodes]);
+
+  // Set of node IDs in the breadcrumb trail — used to detect cycles in ref navigation
+  const breadcrumbIdSet = React.useMemo(
+    () => new Set(breadcrumb.map(b => b.nodeId)),
+    [breadcrumb]
+  );
 
   // Sorted same-class siblings for prev/next navigation (computed before early returns to satisfy hook rules)
   const currentDisplayClass = nodeId !== null ? (data.nodes[String(nodeId)]?.display_class ?? null) : null;
@@ -6093,6 +6136,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           onClick={() => {
           if (breadcrumb.length > 0) {
             const prev = breadcrumb[breadcrumb.length - 1];
+            setForwardStack(fs => [{ nodeId: nodeId!, label: currentNode?.display_class ?? String(nodeId), sourceTab: tab }, ...fs.slice(0, 19)]);
             setBreadcrumb(b => b.slice(0, -1));
             lastInternalNavRef.current = prev.nodeId;
             window.location.hash = `${prev.sourceTab ?? tab}/${prev.nodeId}`;
@@ -6102,6 +6146,19 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         }}>
           {breadcrumb.length > 0 ? `← ${breadcrumb[breadcrumb.length - 1].sourceTab === "domtree" ? "⌞ " : ""}${(breadcrumb[breadcrumb.length - 1].label.split(".").pop() ?? breadcrumb[breadcrumb.length - 1].label)}#${breadcrumb[breadcrumb.length - 1].nodeId}` : "⌂ Roots"}
         </button>
+        {forwardStack.length > 0 && (
+          <button className="btn-link"
+            title="Go forward (Alt+→)"
+            onClick={() => {
+              const fwd = forwardStack[0];
+              setForwardStack(fs => fs.slice(1));
+              setBreadcrumb(prev => [...prev.slice(-9), { nodeId: nodeId!, label: currentNode?.display_class ?? String(nodeId), sourceTab: tab }]);
+              lastInternalNavRef.current = fwd.nodeId;
+              window.location.hash = `${fwd.sourceTab ?? tab}/${fwd.nodeId}`;
+            }}>
+            → {(forwardStack[0].label.split(".").pop() ?? forwardStack[0].label)}#{forwardStack[0].nodeId}
+          </button>
+        )}
         {classSiblings.length > 1 && (
           <span style={{ display: "flex", gap: "0.1rem", alignItems: "center", fontSize: "0.78rem", color: "var(--muted)" }} title="Navigate same-class instances by retained size (lateral — no breadcrumb push). Keyboard: [ / ]">
             <button className="btn-link" style={{ fontSize: "0.78rem", padding: "0 3px", opacity: siblingIdx > 0 ? 1 : 0.3 }}
@@ -6231,7 +6288,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
                 <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references (leaf object or all refs are to primitives)."}</p>
               )}
-              {groupedEdges.length > 5 && (
+              {groupedEdges.length > 1 && (
                 <input
                   type="text"
                   value={refFilter}
@@ -6313,6 +6370,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           <td>
                             {edge.any_shared && (
                               <span className="shared-badge" title="Shared: this child's retained heap belongs to another subtree — value is a gross sum">&#8635; shared</span>
+                            )}
+                            {breadcrumbIdSet.has(edge.child_idx) && (
+                              <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)" }}>↩ visited</span>
                             )}
                           </td>
                         </tr>
@@ -6633,7 +6693,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   ))}
                 </div>
               )}
-              {currentDomChildren.length > 5 && domViewMode === "flat" && (
+              {currentDomChildren.length > 5 && (domViewMode === "flat" || domViewMode === "grouped") && (
                 <input
                   type="text"
                   value={domFilter}
@@ -6659,6 +6719,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     }
                     const rows = [...byClass.entries()]
                       .map(([cls, v]) => ({ cls, ...v }))
+                      .filter(r => !domFilter || r.cls.toLowerCase().includes(domFilter.toLowerCase()))
                       .sort((a, b) => b.total_retained - a.total_retained);
                     return (
                       <table className="std-table">
@@ -7002,6 +7063,22 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   {showAllInbound ? "Show fewer" : `+${inboundRefs.length - 8} more`}
                 </button>
               )}
+            </div>
+          )}
+          {wasmPeerInstances && wasmPeerInstances.length > 0 && currentNode && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
+                Other {currentNode.display_class.split(".").pop()} instances ({wasmPeerTotal} total)
+              </div>
+              {wasmPeerInstances.map((m) => (
+                <div key={m.dense_idx} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem" }}>
+                  <button className="btn-link" style={{ fontSize: "0.78rem" }}
+                    onClick={() => navigate("explore", m.dense_idx, m.display_class)}>
+                    #{m.dense_idx}
+                  </button>
+                  <span style={{ color: "var(--muted)", fontSize: "0.74rem" }}>{fmtB(m.retained)}</span>
+                </div>
+              ))}
             </div>
           )}
           {currentDomChildren.length > 0 && tab === "explore" && (
