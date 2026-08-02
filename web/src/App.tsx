@@ -954,6 +954,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
             <CopyBtn text={r.pretty_class} />
             <PivotBtn cls={r.pretty_class} />
             <OqlBtn cls={r.pretty_class} />
+            <ListObjectsBtn cls={r.pretty_class} />
           </span>
         ),
         sortable: true,
@@ -1198,6 +1199,27 @@ function ExploreBtn({ denseIdx, label }: { denseIdx: number; label?: string }) {
       aria-label="Open in Object Graph Explorer"
       style={{ visibility: "visible", opacity: 0.7 }}>
       ⬡↗
+    </button>
+  );
+}
+
+// Navigates to Object Graph Explorer with a class filter pre-filled.
+// Dispatches "explore-class" event which ObjGraphTab listens for.
+function ListObjectsBtn({ cls }: { cls: string }) {
+  const nodes = React.useContext(ObjGraphCtx);
+  if (!nodes) return null;
+  const click = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent("explore-class", { detail: cls }));
+    window.location.hash = "object-graph";
+    setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  };
+  return (
+    <button className="copy-btn" onClick={click}
+      title={`List all instances of "${cls}" in Object Graph Explorer`}
+      aria-label="List objects in Object Graph Explorer"
+      style={{ visibility: "visible", opacity: 0.7 }}>
+      ⬡≡
     </button>
   );
 }
@@ -5841,6 +5863,22 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       }
     };
     return () => { delete (window as any).__explorerNavigate; };
+  }, []);
+
+  // Listen for cross-section "explore-class" events (from ListObjectsBtn).
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const cls = (e as CustomEvent<string>).detail;
+      if (!cls) return;
+      lastInternalNavRef.current = null;
+      setBreadcrumb([]);
+      setForwardStack([]);
+      setNodeId(null);
+      setRootFilter(cls);
+      setRootViewMode("instances");
+    };
+    window.addEventListener("explore-class", handler);
+    return () => window.removeEventListener("explore-class", handler);
   }, []);
 
   const currentNode: ObjGraphFlatNode | null =
