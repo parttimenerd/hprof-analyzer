@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 865 KB minified bundle budget (raised to 865 KB to accommodate path-between-objects feature).
-const BUDGET_BYTES = 865 * 1024;
+// ≤ 868 KB minified bundle budget (raised to accommodate interactive RetentionChain).
+const BUDGET_BYTES = 868 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

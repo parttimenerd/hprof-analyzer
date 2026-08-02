@@ -5287,40 +5287,184 @@ function WasmGcPathPanel({ nodeId, session, data, fmtB, navigate }: {
   if (loading) return <p className="subtitle">Computing shortest path…</p>;
   if (!pathData) return <p className="subtitle">No path to GC root found.</p>;
 
+  const chainNodes: ChainNode[] = (pathData.path as any[]).map((step: any, i: number, arr: any[]) => ({
+    denseIdx: step.dense_idx,
+    displayClass: step.display_class || data.nodes[String(step.dense_idx)]?.display_class || `obj#${step.dense_idx}`,
+    retained: step.retained ?? data.nodes[String(step.dense_idx)]?.retained ?? 0,
+    fieldName: step.field_name || undefined,
+    isFirst: i === 0,
+    isCurrent: i === arr.length - 1,
+  }));
+  return (
+    <RetentionChain
+      nodes={chainNodes}
+      rootBadge={pathData.root_type}
+      data={data}
+      session={session}
+      fmtB={fmtB}
+      navigate={navigate}
+    />
+  );
+}
+
+type ChainNode = {
+  denseIdx: number;
+  displayClass: string;
+  retained: number;
+  fieldName?: string;
+  isFirst?: boolean;
+  isCurrent?: boolean;
+};
+
+function RetentionChain({
+  nodes,
+  rootBadge,
+  data,
+  session,
+  fmtB,
+  navigate,
+}: {
+  nodes: ChainNode[];
+  rootBadge?: string;
+  data: ObjGraphFlat;
+  session?: any;
+  fmtB: (b: number) => string;
+  navigate: (denseIdx: number) => void;
+}) {
+  const [expanded, setExpanded] = React.useState<Set<number>>(new Set());
+  const [refs, setRefs] = React.useState<Map<number, { field: string; denseIdx: number; displayClass: string; retained: number }[]>>(new Map());
+  const [showAllRefs, setShowAllRefs] = React.useState<Set<number>>(new Set());
+
+  const fetchRefs = (denseIdx: number) => {
+    if (refs.has(denseIdx)) return;
+    const staticEdges = data.edges[String(denseIdx)] ?? [];
+    if (staticEdges.length > 0) {
+      setRefs(m => {
+        const next = new Map(m);
+        next.set(denseIdx, staticEdges.map(e => ({
+          field: e.field_name || "",
+          denseIdx: e.child_idx,
+          displayClass: data.nodes[String(e.child_idx)]?.display_class ?? `#${e.child_idx}`,
+          retained: data.nodes[String(e.child_idx)]?.retained ?? 0,
+        })));
+        return next;
+      });
+      return;
+    }
+    if (!session?.outbound_refs) return;
+    try {
+      const r = JSON.parse(session.outbound_refs(denseIdx, 50));
+      if (r.ok) {
+        setRefs(m => {
+          const next = new Map(m);
+          next.set(denseIdx, (r.refs as any[]).map(ref => ({
+            field: ref.field_name || "",
+            denseIdx: ref.dst_idx,
+            displayClass: ref.display_class ?? `#${ref.dst_idx}`,
+            retained: ref.retained ?? 0,
+          })));
+          return next;
+        });
+      }
+    } catch {}
+  };
+
+  const toggleExpand = (denseIdx: number) => {
+    setExpanded(s => {
+      const next = new Set(s);
+      if (next.has(denseIdx)) { next.delete(denseIdx); }
+      else { next.add(denseIdx); fetchRefs(denseIdx); }
+      return next;
+    });
+  };
+
   return (
     <div style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-      <div style={{
-        display: "inline-block", border: "2px solid var(--accent, #3b82f6)",
-        borderRadius: 4, padding: "2px 8px", background: "var(--accent-muted, #dbeafe)",
-        color: "var(--accent)", fontWeight: 600, fontSize: "0.76rem", marginBottom: "2px",
-      }}>
-        [{pathData.root_type}]
-      </div>
-      {(pathData.path as any[]).map((step: any, i: number) => {
-        const isLast = i === (pathData.path as any[]).length - 1;
-        const nextStep: any = (pathData.path as any[])[i + 1];
+      {rootBadge && (
+        <div style={{
+          display: "inline-block", border: "2px solid var(--accent, #3b82f6)",
+          borderRadius: 4, padding: "2px 8px", background: "var(--accent-muted, #dbeafe)",
+          color: "var(--accent)", fontWeight: 600, fontSize: "0.76rem", marginBottom: "2px",
+        }}>
+          [{rootBadge}]
+        </div>
+      )}
+      {nodes.map((node, i) => {
+        const isExp = expanded.has(node.denseIdx);
+        const nodeRefs = refs.get(node.denseIdx) ?? [];
+        const showAll = showAllRefs.has(node.denseIdx);
+        const visibleRefs = showAll ? nodeRefs : nodeRefs.slice(0, 8);
+        const canExpand = !node.isCurrent;
         return (
-          <React.Fragment key={i}>
-            <div style={{ color: "var(--muted)", fontSize: "0.74rem", paddingLeft: "0.5rem" }}>
-              │{nextStep?.field_name ? ` .${nextStep.field_name}` : ""}
-            </div>
-            <div style={{ color: "var(--muted)", paddingLeft: "0.5rem", fontSize: "0.78rem" }}>▼</div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              {isLast ? (
+          <React.Fragment key={`${node.denseIdx}-${i}`}>
+            {(!node.isFirst || rootBadge) && (
+              <div style={{ color: "var(--muted)", fontSize: "0.74rem", paddingLeft: "0.5rem" }}>
+                │{node.fieldName ? ` .${node.fieldName}` : ""}
+              </div>
+            )}
+            {(!node.isFirst || rootBadge) && (
+              <div style={{ color: "var(--muted)", paddingLeft: "0.5rem", fontSize: "0.78rem" }}>▼</div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              {canExpand ? (
+                <button
+                  className="btn-link"
+                  style={{ fontSize: "0.7rem", width: "1.2em", flexShrink: 0, color: "var(--muted)" }}
+                  title={isExp ? "Collapse outbound refs" : "Expand outbound refs"}
+                  onClick={() => toggleExpand(node.denseIdx)}
+                >
+                  {isExp ? "▼" : "▶"}
+                </button>
+              ) : (
+                <span style={{ fontSize: "0.7rem", width: "1.2em", flexShrink: 0, color: "var(--accent)" }}>●</span>
+              )}
+              {node.isCurrent ? (
                 <span style={{ fontFamily: "monospace", fontSize: "0.8rem", fontWeight: 600 }}>
-                  {step.display_class || `obj#${step.dense_idx}`}
+                  {node.displayClass}
                 </span>
               ) : (
                 <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.8rem" }}
-                  onClick={() => navigate(step.dense_idx)}>
-                  {step.display_class || `obj#${step.dense_idx}`}
+                  onClick={() => navigate(node.denseIdx)}>
+                  {node.displayClass}
                 </button>
               )}
               <span style={{ color: "var(--muted)", fontSize: "0.74rem", whiteSpace: "nowrap" }}>
-                {fmtB(step.retained)}
+                {fmtB(node.retained)}
               </span>
-              {isLast && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← here</span>}
+              {node.isCurrent && (
+                <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← here</span>
+              )}
             </div>
+            {isExp && (
+              <div style={{ paddingLeft: "2rem", marginTop: "1px", marginBottom: "2px" }}>
+                {visibleRefs.length === 0 ? (
+                  <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>No refs captured</span>
+                ) : visibleRefs.map((ref, ri) => (
+                  <div key={ri} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.76rem", padding: "1px 0" }}>
+                    <span style={{ color: "var(--muted)", flexShrink: 0 }}>
+                      {ri === visibleRefs.length - 1 && !(!showAll && nodeRefs.length > 8) ? "└─" : "├─"}
+                    </span>
+                    {ref.field && <code style={{ fontSize: "0.72rem", color: "var(--muted)", flexShrink: 0 }}>.{ref.field}</code>}
+                    <button className="btn-link" style={{ fontSize: "0.76rem", fontFamily: "monospace" }}
+                      onClick={() => navigate(ref.denseIdx)}>
+                      {ref.displayClass.split(".").pop()}
+                    </button>
+                    <span style={{ color: "var(--muted)", fontSize: "0.72rem", whiteSpace: "nowrap" }}>{fmtB(ref.retained)}</span>
+                    <button className="btn-link" style={{ fontSize: "0.72rem", opacity: 0.6 }}
+                      title="Navigate to this object"
+                      onClick={() => navigate(ref.denseIdx)}>→</button>
+                  </div>
+                ))}
+                {!showAll && nodeRefs.length > 8 && (
+                  <div style={{ fontSize: "0.74rem", color: "var(--muted)", paddingLeft: "1.2em" }}>
+                    <button className="btn-link" style={{ fontSize: "0.74rem" }}
+                      onClick={() => setShowAllRefs(s => { const n = new Set(s); n.add(node.denseIdx); return n; })}>
+                      … {nodeRefs.length - 8} more
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </React.Fragment>
         );
       })}
@@ -6790,17 +6934,22 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           <summary style={{ fontSize: "0.82rem", cursor: "pointer", userSelect: "none" }}>
                             Path {pi + 1} via <strong>{p.root_type}</strong> ({p.path.length} hop{p.path.length !== 1 ? "s" : ""})
                           </summary>
-                          <div style={{ paddingLeft: "0.75rem", marginTop: "0.2rem" }}>
-                            {p.path.map((step, si) => (
-                              <div key={si} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.8rem", padding: "1px 0" }}>
-                                {si > 0 && <span style={{ color: "var(--muted)", flexShrink: 0 }}>↓</span>}
-                                <button className="btn-link" style={{ fontFamily: "monospace", fontSize: "0.8rem", flex: 1, textAlign: "left" }}
-                                  onClick={() => navigate("explore", step.dense_idx, step.display_class ?? `#${step.dense_idx}`)}>
-                                  {step.display_class ?? `obj#${step.dense_idx}`}
-                                </button>
-                                <span style={{ color: "var(--muted)", fontSize: "0.74rem", whiteSpace: "nowrap" }}>{fmtB(step.retained)}</span>
-                              </div>
-                            ))}
+                          <div style={{ paddingLeft: "0.5rem", marginTop: "0.2rem" }}>
+                            <RetentionChain
+                              nodes={(p.path as any[]).map((step: any, si: number, arr: any[]) => ({
+                                denseIdx: step.dense_idx,
+                                displayClass: step.display_class ?? `obj#${step.dense_idx}`,
+                                retained: step.retained ?? 0,
+                                fieldName: undefined,
+                                isFirst: si === 0,
+                                isCurrent: si === arr.length - 1,
+                              }))}
+                              rootBadge={p.root_type}
+                              data={data}
+                              session={(window as any).__wasmExploration}
+                              fmtB={fmtB}
+                              navigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)}
+                            />
                           </div>
                         </details>
                       ))}
@@ -7307,54 +7456,57 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           )}
           {/* Retaining path: walk idom links up to GC root */}
           {(() => {
-            const path: { id: number; node: ObjGraphFlatNode; fieldToChild?: string }[] = [];
+            const chainNodes: ChainNode[] = [];
             let cur = currentNode.idom;
             let childId: number = nodeId!;
             const seen = new Set<number>();
-            const MAX_PATH = pathDepth;
-            while (cur != null && !seen.has(cur) && path.length < MAX_PATH) {
+            while (cur != null && !seen.has(cur) && chainNodes.length < pathDepth) {
               seen.add(cur);
               const n = data.nodes[String(cur)];
               if (!n) break;
-              // Find the field name from parent (cur) that points to child (childId)
               const edgeToChild = (data.edges[String(cur)] ?? []).find(e => e.child_idx === childId);
-              path.push({ id: cur, node: n, fieldToChild: edgeToChild?.field_name || undefined });
+              chainNodes.push({
+                denseIdx: cur,
+                displayClass: n.display_class,
+                retained: n.retained,
+                fieldName: edgeToChild?.field_name || undefined,
+                isFirst: false,
+                isCurrent: false,
+              });
               childId = cur;
               cur = n.idom;
             }
-            if (path.length === 0) return null;
-            const hasMore = cur != null && path.length === MAX_PATH;
+            if (chainNodes.length === 0) return null;
+            chainNodes.reverse();
+            chainNodes.push({
+              denseIdx: nodeId!,
+              displayClass: currentNode.display_class,
+              retained: currentNode.retained,
+              fieldName: undefined,
+              isFirst: false,
+              isCurrent: true,
+            });
+            chainNodes[0].isFirst = true;
+            const hasMore = cur != null && chainNodes.length >= pathDepth + 1;
+            const wasmSession = (window as any).__wasmExploration;
             return (
               <div style={{ marginTop: "0.5rem" }}>
-                <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>Retaining path ↑</div>
-                {path.map(({ id, node: n, fieldToChild }, i) => (
-                  <div key={id} style={{ display: "flex", alignItems: "center", gap: "0.2rem", fontSize: "0.78rem", paddingLeft: `${i * 8}px` }}>
-                    <span style={{ color: "var(--muted)", flexShrink: 0 }}>↑</span>
-                    {fieldToChild && (
-                      <code style={{ fontSize: "0.72rem", color: "var(--muted)", flexShrink: 0 }}>.{fieldToChild}</code>
-                    )}
-                    <button className="btn-link" style={{ fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      title={`${n.display_class} · retained ${n.retained} B`}
-                      onClick={() => navigate("explore", id, n.display_class)}>
-                      <code style={{ fontSize: "0.76rem" }}>{n.display_class.split(".").pop()}#{id}</code>
-                    </button>
-                    <button className="btn-link" style={{ fontSize: "0.72rem", opacity: 0.6, flexShrink: 0 }}
-                      title="Open in dominator tree"
-                      onClick={() => navigate("domtree", id, n.display_class)}>
-                      ⌞
-                    </button>
-                    <span style={{ color: "var(--muted)", flexShrink: 0, fontSize: "0.74rem" }}>{fmtB(n.retained)}</span>
-                  </div>
-                ))}
-                {!hasMore && cur == null ? (
-                  <div style={{ fontSize: "0.74rem", color: "var(--muted)", paddingLeft: `${Math.min(path.length, MAX_PATH) * 8}px` }}>↑ GC root</div>
-                ) : hasMore ? (
-                  <button className="btn-link" style={{ fontSize: "0.74rem", paddingLeft: `${path.length * 8}px` }}
+                <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
+                  Retaining path (dominator chain)
+                  <span title="Objects that dominate this object's memory. Not necessarily the actual reference path." style={{ cursor: "help", borderBottom: "1px dotted var(--muted)", marginLeft: "0.3rem", fontSize: "0.74rem" }}>(?)</span>
+                </div>
+                <RetentionChain
+                  nodes={chainNodes}
+                  data={data}
+                  session={wasmSession}
+                  fmtB={fmtB}
+                  navigate={(id) => navigate("explore", id, data.nodes[String(id)]?.display_class ?? `#${id}`)}
+                />
+                {hasMore && (
+                  <button className="btn-link" style={{ fontSize: "0.74rem", marginTop: "2px" }}
                     onClick={() => setPathDepth(d => d + 20)}>
                     ↑ … show more
                   </button>
-                ) : (
-                  <div style={{ fontSize: "0.74rem", color: "var(--muted)", paddingLeft: `${path.length * 8}px` }}>↑ … (not in captured graph)</div>
                 )}
               </div>
             );
