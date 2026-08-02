@@ -3925,6 +3925,17 @@ function shortClass(name: string): string {
   return dot >= 0 ? name.slice(dot + 1) : name;
 }
 
+const KNOWN_COLLECTION_FRAGMENTS = [
+  "HashMap", "HashSet", "LinkedHashMap", "LinkedHashSet",
+  "ArrayList", "LinkedList", "ArrayDeque", "PriorityQueue",
+  "ConcurrentHashMap", "TreeMap", "TreeSet",
+  "Vector", "Stack",
+  "scala.collection", "kotlin.collections",
+] as const;
+
+const isCollectionClass = (cls: string) =>
+  KNOWN_COLLECTION_FRAGMENTS.some(f => cls.includes(f));
+
 type SankeyColCount = 3 | 5 | 7;
 
 // side encodes column position: L2/L1 = left hops, C = center, R1/R2 = right hops
@@ -6674,6 +6685,19 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </button>
                               <PivotBtn cls={edge.child_class} />
                               <OqlBtn cls={edge.child_class} />
+                              {edge.count >= 2 && !edge.any_shared && isCollectionClass(edge.child_class) && (
+                                <span
+                                  style={{
+                                    fontSize: "0.72rem",
+                                    color: "var(--muted)",
+                                    marginLeft: "0.25rem",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                  title={`${edge.count} outbound references of this type — proxy for collection size`}
+                                >
+                                  ×{edge.count} entries
+                                </span>
+                              )}
                             </span>
                           </td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
