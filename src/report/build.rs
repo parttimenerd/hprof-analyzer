@@ -1701,28 +1701,20 @@ fn build_dominator_analysis(
         pairs: pairs_vec,
     };
 
-    // Build children list for dominator tree
-    let vroot = g.n as u32;
-    let mut children: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
-    for i in 0..n {
-        let p = g.idom[i];
-        if p < vroot {
-            children[p as usize].push(i as u32);
-        } else if p == vroot {
-            children[n].push(i as u32);
-        }
-        // p == u32::MAX → unreachable, skip
-    }
-    // Iterative DFS from virtual root to find longest chain
+    // Iterative DFS from virtual root to find longest chain.
+    // Reuse the already-built dc_offsets/dc_targets CSR — no separate
+    // Vec<Vec<u32>> allocation (~12 GB @514M objects).
+    let vroot_idx = n; // dc_offsets[n]..dc_offsets[n+1] = vroot's children
     let mut longest: u32 = 0;
-    let mut stack: Vec<(u32, u32)> = vec![(vroot, 0u32)];
-    while let Some((node, depth)) = stack.pop() {
+    let mut stack: Vec<(usize, u32)> = vec![(vroot_idx, 0u32)];
+    while let Some((idx, depth)) = stack.pop() {
         if depth > longest {
             longest = depth;
         }
-        let idx = if node == vroot { n } else { node as usize };
-        for &child in &children[idx] {
-            stack.push((child, depth + 1));
+        let lo = dc_offsets[idx] as usize;
+        let hi = dc_offsets[idx + 1] as usize;
+        for &child in &dc_targets[lo..hi] {
+            stack.push((child as usize, depth + 1));
         }
     }
 
