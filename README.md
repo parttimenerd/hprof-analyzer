@@ -87,6 +87,23 @@ engine work the same way in the browser and in the CLI. Useful shell commands:
 
 Tab-completion and named-query browsing work fully offline via WASM.
 
+## Browser mode
+
+Load `web/dist/hprof-analyzer-browser.html` in Chrome or Firefox — no install needed.
+Drag and drop a `.hprof` file to analyze it entirely in-browser via WebAssembly.
+
+**Analysis modes:**
+- **Full Analysis** — complete report with dominator tree, leak suspects, top consumers, and interactive Heap Inspector
+- **Fast Analysis** — skips retained-heap computation; histogram and OQL work but Leak Suspects are unavailable. Use for dumps > 2 GB.
+
+**Interactive features (WASM only):**
+- **Heap Inspector** — click any class or instance to open a panel with fields, GC root path, and peer navigation
+- **Field Scan** — top instances of any class ranked by retained heap
+- **Object Graph Explorer** — force-directed graph with edge labels and neighbor dimming
+- **OQL REPL** — run queries against the loaded dump
+
+**Memory limits:** up to ~3 GB HPROF files in Chrome (4 GB WASM address space). After full analysis, large arrays are deflate-compressed (~75% reduction) to fit within memory limits.
+
 ## Quick start
 
 Grab a prebuilt binary and analyze a dump in two commands. No Rust, no Node, no
@@ -261,6 +278,24 @@ Add `--find-duplicates` or `--collections` to enable the opt-in sections.
 
 **Progress** on long runs is printed to stderr when it is a terminal; control
 with `--progress auto|always|never`.
+
+### Flag reference
+
+| Flag | Description |
+|------|-------------|
+| `--find-duplicates` | Detect content-identical `String` values and primitive arrays; reports wasted bytes and top offenders. Hashes to 64 bits — does not retain raw data. Adds a few extra heap scans. |
+| `--collections` | Container attribution by holder `Class#field`: fill ratios, size distributions, collision rates. Adds ~300 MB peak RSS on large dumps. |
+| `--obj-graph[=small\|medium\|large]` | Capture the outbound-reference graph for the top retained objects. Enables the interactive Object Graph Explorer in HTML reports. Implied by `--full-analysis`. |
+| `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. `--ref-paths` is excluded because it can add 100–500 MB on top; pass it separately when needed. |
+| `--field-stats` | Per-class reference-field null/non-null/retained stats for the top-50 classes by instance count. Shows which fields are null-heavy or hold the most retained heap. |
+| `--skip-retained` | Skip dominator tree and retained-heap computation. Histogram and OQL work; Leak Suspects section is empty. Use for dumps too large for full analysis. |
+| `--ref-paths` | Capture field-name labels on reference edges (~2 bytes/edge). Enables named field breakdowns in `--field-stats` and richer root paths. |
+| `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default so the report stays byte-stable. |
+| `--detail minimal\|default\|max` | Adjust output-size caps (leak suspects, dominator subtree, alloc sites, thread locals, top consumers). See the [detail preset table](#tune-the-report-size-with---detail) below. |
+| `--mat <DIR>` | Emit Eclipse MAT-compatible binary index files into `DIR` alongside the normal analysis. See [Speeding up Eclipse MAT](#speeding-up-eclipse-mat). |
+| `--query <OQL>` | Run an OQL query and embed results in the report. May be repeated. See [OQL queries](#oql-queries-query-subcommand). |
+| `--query-file <PATH>` | Read one OQL query per non-empty line from a file. |
+| `--progress auto\|always\|never` | Control the live progress line on stderr. Default: `auto` (terminal only). |
 
 ### Tune the report size with `--detail`
 
@@ -488,6 +523,15 @@ All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
 | Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13:21 | 27:16 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
 | HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1:20 | 1:48 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
 | VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 0:22 | 1:27 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
+
+The table below shows numbers from the test fixtures included in the repository
+(small synthetic dumps, macOS Apple Silicon, no MAT comparison):
+
+| Fixture | Dump file | RSS (ours) | Wall (ours) | Measured |
+|---------|-----------|------------|-------------|----------|
+| Renaissance scala-doku | 51 MiB | 166 MiB | 2.92 s | 2026-08-03, [`f3c5f4e`](https://github.com/parttimenerd/hprof-analyzer/commit/f3c5f4e) |
+| gauss-mix | 70 MiB | 149 MiB | 5.07 s | 2026-08-03, [`f3c5f4e`](https://github.com/parttimenerd/hprof-analyzer/commit/f3c5f4e) |
+| large_1g (synthetic) | 47 MiB | 91 MiB | 1.51 s | 2026-08-03, [`f3c5f4e`](https://github.com/parttimenerd/hprof-analyzer/commit/f3c5f4e) |
 
 MAT was run with `ParseHeapDump.sh` (leak-suspects + top-components). Its
 `MemoryAnalyzer.ini` was set to `-Xmx60g` to avoid OOM during analysis — MAT
