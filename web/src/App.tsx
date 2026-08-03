@@ -20,6 +20,7 @@ import {
 import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 import { sankey, sankeyLinkHorizontal } from "d3-sankey";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
+import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto. Persists the choice in localStorage so it
@@ -2771,6 +2772,53 @@ function PkgTreeTable({ nodes, maxRetained }: { nodes: PackageNode[]; maxRetaine
   );
 }
 
+function TopConsumersTreemap({ rows }: { rows: Array<{ pretty_class: string; retained: number }> }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(680);
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(entries => {
+      const bw = entries[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const H = 400;
+  const data = { name: "root", children: rows.slice(0, 60).map(r => ({ name: r.pretty_class, value: r.retained })) };
+  const root = hierarchy(data).sum((d: any) => d.value ?? 0).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+  treemap<any>().size([w, H]).tile(treemapSquarify).padding(2)(root);
+
+  return (
+    <div ref={ref} style={{ width: "100%" }}>
+      <svg width={w} height={H} style={{ display: "block", border: "1px solid var(--border)", borderRadius: 4 }}>
+        {root.leaves().map((leaf: any, i: number) => {
+          const lw = leaf.x1 - leaf.x0, lh = leaf.y1 - leaf.y0;
+          return (
+            <g key={i} style={{ cursor: "pointer" }}
+               onClick={() => fireInspect({ kind: "class", cls: leaf.data.name })}>
+              <rect x={leaf.x0} y={leaf.y0} width={lw} height={lh}
+                fill={tpfgColor(leaf.data.name)} opacity={0.82} rx={2} />
+              {lw > 36 && lh > 18 && (
+                <text x={leaf.x0 + lw / 2} y={leaf.y0 + lh / 2}
+                  textAnchor="middle" dominantBaseline="middle"
+                  fontSize={Math.min(12, lw / 7)} fill="var(--bg, #fff)"
+                  style={{ pointerEvents: "none" }}>
+                  {leaf.data.name.split(".").pop()?.slice(0, Math.floor(lw / 7))}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "4px 0 0" }}>
+        Top {Math.min(60, rows.length)} classes by retained heap. Click to inspect.
+      </p>
+    </div>
+  );
+}
+
 function TopConsumersSection({ report }: { report: Report }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const [fmtBcls, kbBtnCls, useKBcls] = useFmtBytes();
@@ -2841,11 +2889,26 @@ function TopConsumersSection({ report }: { report: Report }) {
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
   ];
 
+  const [topView, setTopView] = React.useState<"tables" | "treemap">("tables");
+
   return (
     <section id="top-consumers">
       <h2>Top Consumers</h2>
       <p className="subtitle">Biggest individual objects, classes, and packages by retained heap.</p>
-
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+        {(["tables", "treemap"] as const).map(v => (
+          <button key={v} onClick={() => setTopView(v)} style={{
+            padding: "0.25rem 0.85rem", fontSize: "0.88rem",
+            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+            background: topView === v ? "var(--accent)" : "transparent",
+            color: topView === v ? "#fff" : "var(--fg)",
+          }}>{v === "tables" ? "⊞ Tables" : "▦ Treemap"}</button>
+        ))}
+      </div>
+      {topView === "treemap" && (
+        <TopConsumersTreemap rows={t.biggest_classes} />
+      )}
+      {topView === "tables" && (<>
       <h3>Biggest Objects</h3>
       {objHasOwner && (
         <p className="subtitle">
@@ -2915,6 +2978,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <PkgTreeTable nodes={pkgRoot.children} maxRetained={maxPkgRetained} />
         </>
       )}
+      </>)}
     </section>
   );
 }
