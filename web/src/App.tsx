@@ -8784,13 +8784,16 @@ export default function App({ report }: { report: Report }) {
         fetch("/download/offline")
           .then(r => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.blob();
+            const cd = r.headers.get("Content-Disposition") ?? "";
+            const match = cd.match(/filename="([^"]+)"/);
+            const filename = match?.[1] ?? "report-offline.html";
+            return r.blob().then(blob => ({ blob, filename }));
           })
-          .then(blob => {
+          .then(({ blob, filename }) => {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "report-offline.html";
+            a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
             setSaveState("done");
