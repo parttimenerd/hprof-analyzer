@@ -5665,11 +5665,6 @@ function runForceLayout(
   return ns;
 }
 
-type TRGPage =
-  | { kind: "class"; cls: string }
-  | { kind: "instances"; cls: string; page: number }
-  | { kind: "instance"; idx: number; cls: string };
-
 // ── Heap Inspector types ──────────────────────────────────────────────────────
 type InspectPage =
   | { kind: "class"; cls: string }
@@ -5680,404 +5675,6 @@ type InspectPage =
 
 function fireInspect(page: InspectPage) {
   window.dispatchEvent(new CustomEvent("inspect", { detail: page }));
-}
-
-// ── TRG modal page components ─────────────────────────────────────────────────
-
-function TRGDomContext({ cls, histogram }: { cls: string; histogram: HistRow[] }) {
-  const ogCtx = React.useContext(ObjGraphCtx);
-  const wasm = (window as any).__wasmExploration;
-
-  if (!ogCtx && !wasm) {
-    return <p className="trg-no-data">Run with --obj-graph or open in WASM mode for more details.</p>;
-  }
-
-  const hist = histogram.find(h => h.pretty_class === cls);
-  if (!hist) return null;
-
-  return (
-    <div className="trg-dom-ctx">
-      <strong>Heap summary:</strong>{" "}
-      {fmtCount(hist.instances)} instance{hist.instances !== 1 ? "s" : ""},
-      {" "}{formatBytes(hist.shallow)} shallow,
-      {" "}{formatBytes(hist.retained)} retained
-      {wasm && <span className="trg-wasm-badge"> (live data)</span>}
-    </div>
-  );
-}
-
-function TRGClassPage({
-  cls, histogram, edges, onNavigate, onClose,
-}: {
-  cls: string;
-  histogram: HistRow[];
-  edges: TypeEdge[];
-  onNavigate: (p: TRGPage) => void;
-  onClose: () => void;
-}) {
-  const hist = histogram.find(h => h.pretty_class === cls);
-  const outEdges = edges.filter(e => e.src_class === cls).sort((a, b) => b.retained_weight - a.retained_weight);
-  const inEdges  = edges.filter(e => e.dst_class === cls).sort((a, b) => b.retained_weight - a.retained_weight);
-
-  return (
-    <div className="trg-class-page">
-      <h3 className="trg-page-title"><code>{cls}</code></h3>
-
-      {hist && (
-        <table className="trg-stat-table">
-          <tbody>
-            <tr><th>Instances</th><td>{fmtCount(hist.instances)}</td></tr>
-            <tr><th>Shallow heap</th><td>{formatBytes(hist.shallow)}</td></tr>
-            <tr><th>Retained heap</th><td>{formatBytes(hist.retained)}</td></tr>
-          </tbody>
-        </table>
-      )}
-
-      <TRGDomContext cls={cls} histogram={histogram} />
-
-      <div className="trg-edge-cols">
-        <div>
-          <h4>References to ({outEdges.length})</h4>
-          <ul className="trg-edge-list">
-            {outEdges.slice(0, 10).map(e => (
-              <li key={e.dst_class}>
-                <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.dst_class })}>
-                  {e.dst_class.split(".").pop()}
-                </button>
-                <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <h4>Referenced by ({inEdges.length})</h4>
-          <ul className="trg-edge-list">
-            {inEdges.slice(0, 10).map(e => (
-              <li key={e.src_class}>
-                <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.src_class })}>
-                  {e.src_class.split(".").pop()}
-                </button>
-                <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-
-      <div className="trg-page-actions">
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
-          List all instances →
-        </button>
-        <button className="show-more-btn"
-          onClick={() => {
-            const section = document.getElementById("system-overview");
-            section?.scrollIntoView({ behavior: "smooth" });
-            window.dispatchEvent(new CustomEvent("highlight-class", { detail: { cls } }));
-            onClose();
-          }}>
-          Show in histogram →
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── TRG Instance list page ────────────────────────────────────────────────────
-
-const TRG_PAGE_SIZE = 100;
-
-interface TRGInstRow { idx: number; cls: string; shallow: number; retained: number; }
-
-function TRGInstancePage({
-  idx, cls, onNavigate, onClose,
-}: {
-  idx: number;
-  cls: string;
-  onNavigate: (p: TRGPage) => void;
-  onClose: () => void;
-}) {
-  const ogCtx = React.useContext(ObjGraphCtx);
-  const wasm = (window as any).__wasmExploration;
-  const useWasm = !!wasm?.get_node_info;
-
-  const staticNode: ObjGraphFlatNode | null = ogCtx ? (ogCtx[String(idx)] ?? null) : null;
-  const [wasmInfo, setWasmInfo] = React.useState<{ shallow: number; retained: number } | null>(null);
-  const [outRefs, setOutRefs] = React.useState<TRGRefEntry[]>([]);
-  const [outTotal, setOutTotal] = React.useState(0);
-  const [inRefs, setInRefs] = React.useState<TRGRefEntry[]>([]);
-  const [inTotal, setInTotal] = React.useState(0);
-  const [fields, setFields] = React.useState<any[] | null>(null);
-  const [loading, setLoading] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!useWasm) return;
-    setLoading(true);
-    try {
-      const info = JSON.parse(wasm.get_node_info(idx));
-      if (info.ok) setWasmInfo({ shallow: info.shallow, retained: info.retained });
-
-      const out = JSON.parse(wasm.outbound_refs(idx, 50));
-      if (out.ok) {
-        setOutRefs(out.refs.map((r: any) => ({
-          idx: r.dst_idx, fieldName: r.field_name ?? "", cls: r.display_class, shallow: r.shallow, retained: r.retained,
-        })));
-        setOutTotal(out.total);
-      }
-
-      const inp = JSON.parse(wasm.inbound_refs(idx, 50));
-      if (inp.ok) {
-        setInRefs(inp.refs.map((r: any) => ({
-          idx: r.src_idx, fieldName: r.field_name ?? "", cls: r.display_class, shallow: r.shallow, retained: r.retained,
-        })));
-        setInTotal(inp.total);
-      }
-
-      const fv = JSON.parse(wasm.get_field_values(idx));
-      if (fv.ok) setFields(fv.fields);
-    } catch (e) { /* ignore */ } finally {
-      setLoading(false);
-    }
-  }, [idx]);
-
-  const node = useWasm ? wasmInfo : staticNode ? { shallow: staticNode.shallow, retained: staticNode.retained } : null;
-  const idomIdx: number | undefined = staticNode?.idom;
-  const idomNode: ObjGraphFlatNode | null = idomIdx != null && ogCtx
-    ? (ogCtx[String(idomIdx)] ?? null)
-    : null;
-
-  if (!node && !loading) {
-    return <p className="trg-no-data">Object #{idx} not available. WASM or --obj-graph required.</p>;
-  }
-
-  return (
-    <div className="trg-inst-detail">
-      <h3 className="trg-page-title">
-        <code>{cls}</code>
-        <span className="trg-page-subtitle"> — object #{idx}</span>
-      </h3>
-      {loading && <p className="trg-no-data">Loading…</p>}
-      {node && (
-        <table className="trg-stat-table">
-          <tbody>
-            <tr><th>Shallow</th><td>{formatBytes(node.shallow)}</td></tr>
-            <tr><th>Retained</th><td>{formatBytes(node.retained)}</td></tr>
-            {idomNode && (
-              <tr>
-                <th>Dominated by</th>
-                <td>
-                  <button className="trg-link-btn"
-                    onClick={() => onNavigate({ kind: "instance", idx: idomIdx!, cls: idomNode.display_class })}>
-                    #{idomIdx} {idomNode.display_class?.split(".").pop()}
-                  </button>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      )}
-      {fields && fields.length > 0 && (
-        <>
-          <h4>Fields</h4>
-          <ul className="trg-edge-list">
-            {fields.map((f: any, i: number) => (
-              <li key={i}>
-                <code className="trg-field-name">{f.name}</code>
-                {f.kind === "ref" ? (
-                  <button className="trg-link-btn"
-                    onClick={() => onNavigate({ kind: "instance", idx: f.dense_idx, cls: f.display_class ?? "?" })}>
-                    #{f.dense_idx} {(f.display_class ?? "?").split(".").pop()}
-                  </button>
-                ) : (
-                  <span className="trg-edge-stat">{String(f.value ?? "null")}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {outRefs.length > 0 && (
-        <>
-          <h4>References to ({outTotal}{outTotal > outRefs.length ? `, showing ${outRefs.length}` : ""})</h4>
-          <ul className="trg-edge-list">
-            {outRefs.map((e, i) => (
-              <li key={i}>
-                <code className="trg-field-name">{e.fieldName}</code>
-                <button className="trg-link-btn"
-                  onClick={() => onNavigate({ kind: "instance", idx: e.idx, cls: e.cls })}>
-                  #{e.idx} {e.cls.split(".").pop()}
-                </button>
-                <span className="trg-edge-stat">{formatBytes(e.retained)} retained</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {inRefs.length > 0 && (
-        <>
-          <h4>Referenced by ({inTotal}{inTotal > inRefs.length ? `, showing ${inRefs.length}` : ""})</h4>
-          <ul className="trg-edge-list">
-            {inRefs.map((e, i) => (
-              <li key={i}>
-                <button className="trg-link-btn"
-                  onClick={() => onNavigate({ kind: "instance", idx: e.idx, cls: e.cls })}>
-                  #{e.idx} {e.cls.split(".").pop()}
-                </button>
-                {e.fieldName && <code className="trg-field-name"> .{e.fieldName}</code>}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      <div className="trg-page-actions">
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "class", cls })}>
-          ← Class view
-        </button>
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
-          All instances →
-        </button>
-        <button className="show-more-btn"
-          onClick={() => {
-            onClose();
-            (window as any).__explorerNavigate?.(idx + 1);
-          }}>
-          View in Object Explorer →
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface TRGRefEntry { idx: number; fieldName: string; cls: string; shallow: number; retained: number; }
-
-function TRGInstanceListPage({
-  cls, page, onNavigate,
-}: {
-  cls: string;
-  page: number;
-  onNavigate: (p: TRGPage) => void;
-}) {
-  const ogCtx = React.useContext(ObjGraphCtx);
-  const wasm = (window as any).__wasmExploration;
-
-  const [wasmInstances, setWasmInstances] = React.useState<TRGInstRow[] | null>(null);
-  const [wasmTotal, setWasmTotal] = React.useState(0);
-  const [wasmLoading, setWasmLoading] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!wasm?.find_instances) return;
-    setWasmLoading(true);
-    try {
-      const limit = (page + 2) * TRG_PAGE_SIZE;
-      const r = JSON.parse(wasm.find_instances(cls, limit));
-      if (r.ok) {
-        setWasmInstances(r.matches.map((m: any) => ({
-          idx: m.dense_idx, cls: m.display_class, shallow: m.shallow, retained: m.retained,
-        })));
-        setWasmTotal(r.total);
-      }
-    } catch (e) { /* ignore */ } finally {
-      setWasmLoading(false);
-    }
-  }, [cls, page]);
-
-  const staticInstances = React.useMemo<TRGInstRow[]>(() => {
-    if (!ogCtx) return [];
-    return Object.entries(ogCtx)
-      .map(([idxStr, n]) => ({ idx: Number(idxStr), cls: n.display_class, shallow: n.shallow, retained: n.retained }))
-      .filter(n => n.cls === cls)
-      .sort((a, b) => b.retained - a.retained);
-  }, [ogCtx, cls]);
-
-  const useWasm = !!wasm?.find_instances;
-  const instances = useWasm ? (wasmInstances ?? []) : staticInstances;
-  const totalCount = useWasm ? wasmTotal : staticInstances.length;
-  const totalPages = Math.max(1, Math.ceil(totalCount / TRG_PAGE_SIZE));
-  const slice = instances.slice(page * TRG_PAGE_SIZE, (page + 1) * TRG_PAGE_SIZE);
-
-  if (!useWasm && !ogCtx) {
-    return (
-      <div>
-        <h3 className="trg-page-title">Instances of <code>{cls}</code></h3>
-        <p className="trg-no-data">
-          Instance list requires WASM (open report in browser with live session) or
-          re-run with <code>--obj-graph</code> for static instance data.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="trg-inst-list-page">
-      <h3 className="trg-page-title">
-        Instances of <code>{cls}</code>
-        <span className="trg-page-count"> — {fmtCount(totalCount)} total{useWasm ? "" : " (captured)"}</span>
-      </h3>
-      {wasmLoading && <p className="trg-no-data">Loading…</p>}
-      <table className="trg-inst-table">
-        <thead>
-          <tr><th>#</th><th>Index</th><th>Shallow</th><th>Retained</th></tr>
-        </thead>
-        <tbody>
-          {slice.map((n, i) => (
-            <tr key={n.idx} className="trg-inst-row"
-                onClick={() => onNavigate({ kind: "instance", idx: n.idx, cls: n.cls })}>
-              <td>{page * TRG_PAGE_SIZE + i + 1}</td>
-              <td><code>{n.idx}</code></td>
-              <td>{formatBytes(n.shallow)}</td>
-              <td>{formatBytes(n.retained)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {totalPages > 1 && (
-        <div className="trg-pagination">
-          <button className="show-more-btn" disabled={page === 0}
-            onClick={() => onNavigate({ kind: "instances", cls, page: page - 1 })}>← Prev</button>
-          <span>Page {page + 1} / {totalPages}</span>
-          <button className="show-more-btn" disabled={page >= totalPages - 1}
-            onClick={() => onNavigate({ kind: "instances", cls, page: page + 1 })}>Next →</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TRGBreadcrumb({
-  stack, forward, onBack, onForward, onClose, onJump,
-}: {
-  stack: TRGPage[];
-  forward: TRGPage[];
-  onBack: () => void;
-  onForward: () => void;
-  onClose: () => void;
-  onJump: (idx: number) => void;
-}) {
-  const pageLabel = (p: TRGPage) => {
-    if (p.kind === "class") return p.cls.split(".").pop() ?? p.cls;
-    if (p.kind === "instances") return `Instances of ${p.cls.split(".").pop() ?? p.cls}`;
-    return `Object #${p.idx}`;
-  };
-  return (
-    <div className="trg-breadcrumb">
-      <button className="trg-nav-btn" disabled={stack.length <= 1} onClick={onBack} title="Back">←</button>
-      <button className="trg-nav-btn" disabled={forward.length === 0} onClick={onForward} title="Forward">→</button>
-      <span className="trg-crumb-trail">
-        {stack.map((p, i) => (
-          <React.Fragment key={i}>
-            {i > 0 && <span className="trg-crumb-sep">›</span>}
-            <button
-              className={`trg-crumb-item${i === stack.length - 1 ? " trg-crumb-current" : ""}`}
-              onClick={() => i < stack.length - 1 && onJump(i)}
-              disabled={i === stack.length - 1}
-            >
-              {pageLabel(p)}
-            </button>
-          </React.Fragment>
-        ))}
-      </span>
-      <button className="trg-close-btn" onClick={onClose} title="Close">✕</button>
-    </div>
-  );
 }
 
 function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: HistRow[] }) {
@@ -6095,51 +5692,6 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
 
   // Hover tooltip state
   const [tooltip, setTooltip] = React.useState<{ x: number; y: number; cls: string; retained: number; instances: number } | null>(null);
-
-  // TRG modal navigation state
-  const [navStack, setNavStack] = React.useState<TRGPage[]>([]);
-  const [navForward, setNavForward] = React.useState<TRGPage[]>([]);
-
-  const trgNavigate = React.useCallback((page: TRGPage) => {
-    setNavStack(s => [...s, page]);
-    setNavForward([]);
-  }, []);
-
-  const trgBack = React.useCallback(() => {
-    setNavStack(s => {
-      if (s.length === 0) return s;
-      const next = s.slice(0, -1);
-      setNavForward(f => [s[s.length - 1], ...f]);
-      return next;
-    });
-  }, []);
-
-  const trgForward = React.useCallback(() => {
-    setNavForward(f => {
-      if (f.length === 0) return f;
-      const page = f[0];
-      setNavStack(s => [...s, page]);
-      return f.slice(1);
-    });
-  }, []);
-
-  const trgClose = React.useCallback(() => {
-    setNavStack([]);
-    setNavForward([]);
-  }, []);
-
-  const currentPage: TRGPage | null = navStack.length > 0 ? navStack[navStack.length - 1] : null;
-
-  const dialogRef = React.useRef<HTMLDialogElement>(null);
-
-  React.useEffect(() => {
-    if (currentPage) {
-      dialogRef.current?.showModal();
-    } else {
-      dialogRef.current?.close();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage !== null]);
 
   // Build histogram lookup map once
   const histMap = React.useMemo(() => {
@@ -6162,24 +5714,11 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   // Esc closes fullscreen / popover
   React.useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setFullscreen(false); setSelected(null); trgClose(); }
-      if (currentPage && (e.target as HTMLElement).tagName !== "INPUT") {
-        if (e.key === "ArrowLeft" && navStack.length > 1) trgBack();
-        if (e.key === "ArrowRight" && navForward.length > 0) trgForward();
-      }
+      if (e.key === "Escape") { setFullscreen(false); setSelected(null); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [trgClose, currentPage, navStack.length, navForward.length, trgBack, trgForward]);
-
-  // Listen for external "open class in TRG" events (from OGE)
-  React.useEffect(() => {
-    const handler = (e: CustomEvent) => {
-      trgNavigate({ kind: "class", cls: e.detail.cls });
-    };
-    window.addEventListener("trg-open-class", handler as EventListener);
-    return () => window.removeEventListener("trg-open-class", handler as EventListener);
-  }, [trgNavigate]);
+  }, []);
 
   // Build node set, filtered to topN by combined retained/edge weight
   const { nodeInfos, graphEdges } = React.useMemo(() => {
@@ -6558,7 +6097,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
           {!selected ? (
             <div className="trg-sidebar-empty">
               <p>Click a class node to preview its stats and connections here.</p>
-              <p className="trg-sidebar-hint">Double-click or use "Full details →" to open the in-depth navigation modal.</p>
+              <p className="trg-sidebar-hint">Double-click or use "Full details →" to open the in-depth view in the Inspector panel.</p>
             </div>
           ) : selInfo ? (
             <div className="trg-sidebar-content">
@@ -6607,10 +6146,10 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                 </>
               )}
               <div className="trg-sidebar-actions">
-                <button className="show-more-btn" onClick={() => trgNavigate({ kind: "class", cls: selected })}>
+                <button className="show-more-btn" onClick={() => fireInspect({ kind: "class", cls: selected })}>
                   Full details →
                 </button>
-                <button className="show-more-btn" onClick={() => trgNavigate({ kind: "instances", cls: selected, page: 0 })}>
+                <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
                   Instances →
                 </button>
               </div>
@@ -6636,57 +6175,6 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
           defaultSortAsc={false}
           extraBtns={<CopyTsvBtn rows={[["Source Class","Dest Class","Edge Count","Retained Flow (bytes)"],...edges.map(e=>[e.src_class,e.dst_class,String(e.edge_count),String(e.retained_weight)])]} label="Copy as TSV" />}
         />
-      )}
-
-      {/* TRG Modal */}
-      {currentPage !== null && (
-        <dialog
-          ref={dialogRef}
-          className="trg-modal"
-          onClose={trgClose}
-          onClick={(e) => { if (e.target === dialogRef.current) trgClose(); }}
-        >
-          <TRGBreadcrumb
-            stack={navStack}
-            forward={navForward}
-            onBack={trgBack}
-            onForward={trgForward}
-            onClose={trgClose}
-            onJump={(idx) => {
-              setNavStack(s => {
-                const cut = s.slice(0, idx + 1);
-                setNavForward(f => [...s.slice(idx + 1), ...f]);
-                return cut;
-              });
-            }}
-          />
-          <div className="trg-modal-body">
-            {currentPage?.kind === "class" && (
-              <TRGClassPage
-                cls={currentPage.cls}
-                histogram={histogram}
-                edges={edges}
-                onNavigate={trgNavigate}
-                onClose={trgClose}
-              />
-            )}
-            {currentPage?.kind === "instances" && (
-              <TRGInstanceListPage
-                cls={currentPage.cls}
-                page={currentPage.page}
-                onNavigate={trgNavigate}
-              />
-            )}
-            {currentPage?.kind === "instance" && (
-              <TRGInstancePage
-                idx={currentPage.idx}
-                cls={currentPage.cls}
-                onNavigate={trgNavigate}
-                onClose={trgClose}
-              />
-            )}
-          </div>
-        </dialog>
       )}
     </div>
   );
@@ -9494,7 +8982,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     title={`Open ${currentNode.display_class} in Type Reference Graph`}
                     onClick={() => {
                       document.getElementById("type-ref-graph")?.scrollIntoView({ behavior: "smooth" });
-                      window.dispatchEvent(new CustomEvent("trg-open-class", { detail: { cls: currentNode.display_class } }));
+                      fireInspect({ kind: "class", cls: currentNode.display_class });
                     }}>
                     Open in Type Graph →
                   </button>
@@ -10311,7 +9799,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           Instances →
         </button>
         <button className="show-more-btn"
-          onClick={() => window.dispatchEvent(new CustomEvent("trg-open-class", { detail: { cls } }))}>
+          onClick={() => fireInspect({ kind: "class", cls })}>
           Type Graph →
         </button>
         <button className="show-more-btn"
