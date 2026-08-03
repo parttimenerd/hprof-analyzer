@@ -547,9 +547,9 @@ pub fn build_model(
     // Framework Auto-Analysis — always-on; each framework only emits when its
     // sentinel class is present in the heap.
     let framework_analysis = crate::pass2::scan_frameworks(g);
-    let field_stats = if let Some(fs) = precomputed_field_stats {
+    let field_stats = if precomputed_field_stats.is_some() {
         // Precomputed before build_model to free the fwd CSR copy early (saves ~2 GB peak RSS).
-        Some(fs)
+        precomputed_field_stats
     } else if opts.field_stats {
         let fs = Some(build_field_stats(g));
         // Free the restored fwd CSR (only alive when --field-stats was passed).

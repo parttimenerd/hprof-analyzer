@@ -401,7 +401,8 @@ fn analyze_to_report_inner(
 
     // build_from_fwd needs dfn alive; it is cleared afterward (matching run()).
     // When --field-stats is requested, save the fwd CSR before inbound consumes it.
-    // It is restored into g after retained computation so build_field_stats can use it.
+    // build_field_stats is called right after retained is populated, then the copy is freed
+    // before build_model to avoid keeping ~2 GB extra through that function's allocations.
     let field_stats_fwd: Option<(Vec<u32>, crate::chunkvec::ChunkU32)> = if opts.field_stats {
         let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
         let fwd_off_copy = g.fwd_offsets.clone();
