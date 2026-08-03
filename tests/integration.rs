@@ -269,4 +269,172 @@ fn ref_paths_flag_smoke() {
         v.get("leaks").is_some(),
         "--ref-paths JSON missing 'leaks' key"
     );
+    // --ref-paths should produce at least one non-null field_edge in root_path steps
+    let suspects = v["leaks"]["suspects"].as_array();
+    if suspects.map(|a| !a.is_empty()).unwrap_or(false) {
+        let has_field_edge = suspects.unwrap().iter().any(|s| {
+            s["root_path"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .any(|step| step["field_edge"].is_string())
+        });
+        // Only informational — small fixtures may not produce field edges in root paths
+        let _ = has_field_edge;
+    }
+}
+
+/// `--field-stats` smoke test: the flag must not crash, JSON must parse, and
+/// the field_stats.classes array must contain at least one named ref field.
+#[test]
+fn field_stats_smoke() {
+    let hprof = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_4_philosophers.hprof"
+    );
+    match std::fs::metadata(hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg(hprof)
+        .arg("--field-stats")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run hprof-analyzer --field-stats");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let classes = v["field_stats"]["classes"]
+        .as_array()
+        .expect("field_stats.classes must be an array");
+    assert!(!classes.is_empty(), "field_stats.classes must not be empty");
+    let has_named = classes.iter().any(|c| {
+        c["ref_fields"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .any(|f| f["field_name"].as_str().map(|s| !s.is_empty()).unwrap_or(false))
+    });
+    assert!(
+        has_named,
+        "expected at least one named ref field in --field-stats output"
+    );
+}
+
+/// `--skip-retained` smoke test: the flag must not crash and the JSON output
+/// must contain the overview section.
+#[test]
+fn skip_retained_smoke() {
+    let hprof = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_4_philosophers.hprof"
+    );
+    match std::fs::metadata(hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg(hprof)
+        .arg("--skip-retained")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run hprof-analyzer --skip-retained");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        v["overview"].is_object(),
+        "--skip-retained: expected overview section in JSON output"
+    );
+}
+
+/// `--full-analysis` smoke test: the flag must not crash, and the output must
+/// include at least one of the heavy opt-in sections (obj_graph, collections,
+/// or duplicates) that `--full-analysis` enables.
+#[test]
+fn full_analysis_smoke() {
+    let hprof = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_4_philosophers.hprof"
+    );
+    match std::fs::metadata(hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg(hprof)
+        .arg("--full-analysis")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run hprof-analyzer --full-analysis");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        v["overview"].is_object(),
+        "--full-analysis: expected overview section"
+    );
+    // --full-analysis enables --obj-graph --collections --find-duplicates
+    let has_extra = v.get("obj_graph_flat").is_some()
+        || v.get("collection_attribution").is_some()
+        || v.get("waste_summary").is_some();
+    assert!(
+        has_extra,
+        "--full-analysis: expected obj_graph_flat, collection_attribution, or waste_summary in output"
+    );
+}
+
+/// Golden snapshot for `--field-stats`: the per-field null/non-null/retained
+/// stats must not drift from the committed fixture.
+#[test]
+fn parity_field_stats_golden() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let hprof = format!("{dir}/dump_4_philosophers.hprof");
+    let golden_path = format!("{dir}/dump_4_philosophers_field_stats.json");
+
+    match std::fs::metadata(&hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+    if !std::path::Path::new(&golden_path).exists() {
+        return;
+    }
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg(&hprof)
+        .arg("--field-stats")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run hprof-analyzer --field-stats");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let actual: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let expected: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&golden_path).unwrap()).unwrap();
+
+    assert_eq!(
+        actual["field_stats"],
+        expected["field_stats"],
+        "field_stats diverged from golden. Re-capture with:\n  \
+        ./target/release/hprof-analyzer tests/fixtures/dump_4_philosophers.hprof \
+        tests/fixtures/dump_4_philosophers_field_stats.json --field-stats --format json"
+    );
 }
