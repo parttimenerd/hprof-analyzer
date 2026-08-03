@@ -10181,6 +10181,94 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
   );
 }
 
+function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
+  cls: string; fieldName: string; onNavigate: (p: InspectPage) => void;
+}) {
+  const wasm = (window as any).__wasmExploration;
+  const [rows, setRows] = React.useState<any[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!wasm) return;
+    setLoading(true);
+    try {
+      const found = JSON.parse(wasm.find_instances(cls, 50));
+      if (!found.ok) { setLoading(false); return; }
+      const scanRows: any[] = [];
+      for (const inst of found.matches ?? []) {
+        try {
+          const fv = JSON.parse(wasm.get_field_values(inst.dense_idx));
+          if (fv.ok) {
+            const field = fieldName
+              ? (fv.fields ?? []).find((f: any) => f.name === fieldName)
+              : (fv.fields ?? [])[0];
+            scanRows.push({
+              dense_idx: inst.dense_idx,
+              display_class: inst.display_class ?? cls,
+              retained: inst.retained,
+              field_name: field?.name ?? "",
+              field_kind: field?.kind ?? "",
+              field_value: field?.value ?? null,
+              field_display_class: field?.display_class ?? null,
+            });
+          }
+        } catch {}
+      }
+      setRows(scanRows);
+    } catch {}
+    setLoading(false);
+  }, [cls, fieldName, wasm]);
+
+  return (
+    <div className="inspector-page">
+      <h3 className="inspector-page-title">
+        Instances of <code>{cls.split(".").pop()}</code>
+        {fieldName && <> · field <code>{fieldName}</code></>}
+      </h3>
+      <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "0 0 0.5rem" }}>
+        Top 50 by retained heap.{!wasm && " Requires WASM mode."}
+      </p>
+      {loading && <p className="trg-no-data">Scanning…</p>}
+      {rows && rows.length === 0 && <p className="trg-no-data">No instances found.</p>}
+      {rows && rows.length > 0 && (
+        <table className="trg-inst-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>idx</th>
+              {fieldName && <th>{fieldName}</th>}
+              <th>Retained</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row: any, i: number) => (
+              <tr key={i} className="trg-inst-row"
+                style={{ cursor: "pointer" }}
+                onClick={() => onNavigate({ kind: "instance", idx: row.dense_idx, cls: row.display_class })}>
+                <td>{i + 1}</td>
+                <td><code>{row.dense_idx}</code></td>
+                {fieldName && (
+                  <td style={{ maxWidth: "8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {row.field_kind === "ref"
+                      ? (row.field_display_class ?? "").split(".").pop()
+                      : String(row.field_value ?? "null")}
+                  </td>
+                )}
+                <td>{formatBytes(row.retained)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="trg-page-actions">
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "class", cls })}>
+          ← Class view
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── HeapInspector panel ───────────────────────────────────────────────────────
 
 function HeapInspector({ report, histogram }: { report: any; histogram: any[] }) {
@@ -10280,6 +10368,8 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
           <InspectorGCRootPage idx={current.idx} cls={current.cls} onNavigate={navigate} />
         ) : current.kind === "fields" ? (
           <InspectorFieldsPage idx={current.idx} cls={current.cls} onNavigate={navigate} />
+        ) : current.kind === "field-scan" ? (
+          <InspectorFieldScanPage cls={current.cls} fieldName={current.fieldName} onNavigate={navigate} />
         ) : null}
       </div>
     </div>
