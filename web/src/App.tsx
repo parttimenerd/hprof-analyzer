@@ -5259,7 +5259,7 @@ function runForceLayout(
   w: number, h: number,
 ): FDNode[] {
   const ns = nodes.map(n => ({ ...n }));
-  const KR = 4000, KA = 0.06, REST = 90, DAMP = 0.85, ITER = 250;
+  const KR = 8000, KA = 0.06, REST = 70, DAMP = 0.85, ITER = 400;
   for (let t = 0; t < ITER; t++) {
     // Repulsion
     for (let i = 0; i < ns.length; i++) {
@@ -6139,14 +6139,14 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                         strokeWidth={isSelected ? 2 : 0}
                       />
                       <text
-                        fontSize={Math.min(10, Math.max(8, p.r * 0.7))}
+                        fontSize={Math.min(9, Math.max(6, p.r * 0.55))}
                         fill="var(--bg, #fff)"
                         textAnchor="middle"
                         dominantBaseline="middle"
                         opacity={dimmed ? 0.2 : 1}
                         style={{ pointerEvents: "none", userSelect: "none" }}
                       >
-                        {tpfgShortName(p.id).slice(0, Math.floor(p.r / 3.5) + 3)}
+                        {tpfgShortName(p.id).slice(0, Math.floor(p.r / 2.8) + 4)}
                       </text>
                     </g>
                   );
@@ -6707,8 +6707,388 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree
   );
 }
 
+// ── OGE Graph View ──────────────────────────────────────────────────────────────
+
+function OGEGraphView({ data, onNavigate }: {
+  data: ObjGraphFlat;
+  onNavigate: (nodeId: number, label: string) => void;
+}) {
+  const [topN, setTopN] = React.useState(80);
+  const [layoutKey, setLayoutKey] = React.useState(0);
+  const [graphSelected, setGraphSelected] = React.useState<number | null>(null);
+  const [fmtB] = useFmtBytes();
+
+  const svgW = 700, svgH = 440;
+
+  // Select top-N nodes by retained
+  const topNodes = React.useMemo(() => {
+    return Object.entries(data.nodes)
+      .map(([k, n]) => ({ id: k, nodeId: parseInt(k, 10), ...n }))
+      .sort((a, b) => b.retained - a.retained)
+      .slice(0, topN);
+  }, [data.nodes, topN]);
+
+  const topNodeSet = React.useMemo(() => new Set(topNodes.map(n => n.id)), [topNodes]);
+
+  // Build FD nodes and edges
+  const { fdNodes, fdEdges } = React.useMemo(() => {
+    const maxRet = topNodes.reduce((m, n) => Math.max(m, n.retained), 1);
+    const fdNodes: FDNode[] = topNodes.map((n, i) => {
+      const angle = (i / topNodes.length) * 2 * Math.PI;
+      const radius = Math.min(svgW, svgH) * 0.35;
+      return {
+        id: n.id,
+        x: svgW / 2 + radius * Math.cos(angle),
+        y: svgH / 2 + radius * Math.sin(angle),
+        vx: 0,
+        vy: 0,
+        r: Math.max(6, Math.min(28, Math.sqrt(n.retained / maxRet) * 32)),
+      };
+    });
+    const idxMap = new Map(fdNodes.map((n, i) => [n.id, i]));
+    const fdEdges: { src: number; dst: number }[] = [];
+    for (const n of topNodes) {
+      const srcEdges = data.edges[n.id] ?? [];
+      for (const e of srcEdges) {
+        const dstKey = String(e.child_idx);
+        if (topNodeSet.has(dstKey)) {
+          const srcIdx = idxMap.get(n.id);
+          const dstIdx = idxMap.get(dstKey);
+          if (srcIdx !== undefined && dstIdx !== undefined && srcIdx !== dstIdx) {
+            fdEdges.push({ src: srcIdx, dst: dstIdx });
+          }
+        }
+      }
+    }
+    return { fdNodes, fdEdges };
+  }, [topNodes, topNodeSet, data.edges]);
+
+  const positions = React.useMemo(() => {
+    // layoutKey read to trigger re-run
+    void layoutKey;
+    return runForceLayout(fdNodes, fdEdges, svgW, svgH);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fdNodes, fdEdges, layoutKey]);
+
+  // Pan / zoom / drag state
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = React.useState(1);
+  const nodeOverrides = React.useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [overrideVersion, setOverrideVersion] = React.useState(0);
+
+  React.useEffect(() => {
+    nodeOverrides.current = new Map();
+    setOverrideVersion(v => v + 1);
+    setPan({ x: 0, y: 0 });
+    setZoom(1);
+  }, [positions]);
+
+  const svgInteract = React.useRef<{
+    mode: "none" | "pan" | "drag";
+    startX: number; startY: number;
+    panStart: { x: number; y: number };
+    dragId: string | null;
+    hasMoved: boolean;
+  }>({ mode: "none", startX: 0, startY: 0, panStart: { x: 0, y: 0 }, dragId: null, hasMoved: false });
+
+  const handleSvgMouseDown = React.useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    svgInteract.current = {
+      mode: "pan", startX: e.clientX, startY: e.clientY,
+      panStart: { x: pan.x, y: pan.y }, dragId: null, hasMoved: false,
+    };
+    e.preventDefault();
+  }, [pan]);
+
+  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    svgInteract.current = {
+      mode: "drag", startX: e.clientX, startY: e.clientY,
+      panStart: { x: pan.x, y: pan.y }, dragId: id, hasMoved: false,
+    };
+    e.preventDefault();
+  }, [pan]);
+
+  const svgDivRef = React.useRef<HTMLDivElement>(null);
+  const svgElRef = React.useRef<SVGSVGElement>(null);
+
+  React.useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const s = svgInteract.current;
+      if (s.mode === "none") return;
+      const dx = e.clientX - s.startX;
+      const dy = e.clientY - s.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) s.hasMoved = true;
+      if (s.mode === "pan") {
+        setPan({ x: s.panStart.x + dx, y: s.panStart.y + dy });
+      } else if (s.mode === "drag" && s.dragId) {
+        const rect = svgElRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const newX = (e.clientX - rect.left - s.panStart.x) / zoom;
+        const newY = (e.clientY - rect.top - s.panStart.y) / zoom;
+        nodeOverrides.current.set(s.dragId!, { x: newX, y: newY });
+        setOverrideVersion(v => v + 1);
+      }
+    };
+    const onUp = () => { svgInteract.current.mode = "none"; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [zoom]);
+
+  const handleWheel = React.useCallback((e: React.WheelEvent<SVGSVGElement>) => {
+    e.preventDefault();
+    const rect = svgDivRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const newZoom = Math.max(0.15, Math.min(8, zoom * factor));
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    setPan(p => ({
+      x: mx - (mx - p.x) * (newZoom / zoom),
+      y: my - (my - p.y) * (newZoom / zoom),
+    }));
+    setZoom(newZoom);
+  }, [zoom]);
+
+  const effectivePositions = React.useMemo(() => {
+    void overrideVersion;
+    if (nodeOverrides.current.size === 0) return positions;
+    return positions.map(p => {
+      const ov = nodeOverrides.current.get(p.id);
+      return ov ? { ...p, x: ov.x, y: ov.y } : p;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, overrideVersion]);
+
+  const effectivePosMap = React.useMemo(
+    () => new Map(effectivePositions.map(p => [p.id, p])),
+    [effectivePositions],
+  );
+
+  // Selected node sidebar data
+  const selectedNodeData = graphSelected !== null ? data.nodes[String(graphSelected)] : null;
+  const selectedStaticEdges = graphSelected !== null ? (data.edges[String(graphSelected)] ?? []) : [];
+  const [wasmFields, setWasmFields] = React.useState<any[] | null>(null);
+  const [wasmOutRefs, setWasmOutRefs] = React.useState<any[] | null>(null);
+
+  React.useEffect(() => {
+    setWasmFields(null);
+    setWasmOutRefs(null);
+    if (graphSelected === null) return;
+    const session = (window as any).__wasmSession;
+    if (!session) return;
+    try {
+      if (session.get_field_values) {
+        const r = JSON.parse(session.get_field_values(graphSelected));
+        if (r.ok) setWasmFields(r.fields ?? []);
+      }
+    } catch { /* ignore */ }
+    try {
+      if (session.outbound_refs) {
+        const r = JSON.parse(session.outbound_refs(graphSelected, 20));
+        if (r.ok) setWasmOutRefs(r.refs ?? []);
+      }
+    } catch { /* ignore */ }
+  }, [graphSelected]);
+
+  // Build visible edges for rendering
+  const visibleEdges = React.useMemo(() => {
+    const result: { x1: number; y1: number; x2: number; y2: number; key: string }[] = [];
+    for (const n of topNodes) {
+      const srcPos = effectivePosMap.get(n.id);
+      if (!srcPos) continue;
+      const srcEdges = data.edges[n.id] ?? [];
+      for (const e of srcEdges) {
+        const dstKey = String(e.child_idx);
+        if (!topNodeSet.has(dstKey)) continue;
+        const dstPos = effectivePosMap.get(dstKey);
+        if (!dstPos) continue;
+        result.push({ x1: srcPos.x, y1: srcPos.y, x2: dstPos.x, y2: dstPos.y, key: `${n.id}-${dstKey}` });
+      }
+    }
+    return result;
+  }, [topNodes, topNodeSet, effectivePosMap, data.edges]);
+
+  const shortLabel = (cls: string) => cls.split(".").pop() ?? cls;
+
+  return (
+    <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+      {/* Controls */}
+      <div style={{ width: "100%" }}>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.4rem", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Top N:</span>
+          {([40, 80, 120] as const).map(n => (
+            <button key={n}
+              className={topN === n ? "btn-active" : "btn-link"}
+              style={{ fontSize: "0.8rem", padding: "1px 7px" }}
+              onClick={() => { setTopN(n); setGraphSelected(null); }}>
+              {n}
+            </button>
+          ))}
+          <button className="btn-link" style={{ fontSize: "0.8rem", marginLeft: "0.5rem" }}
+            onClick={() => { setLayoutKey(k => k + 1); }}>
+            ↺ Re-layout
+          </button>
+          <span style={{ fontSize: "0.75rem", color: "var(--muted)", marginLeft: "auto" }}>
+            {topNodes.length} nodes · {visibleEdges.length} edges
+          </span>
+        </div>
+      </div>
+
+      {/* SVG graph */}
+      <div ref={svgDivRef} style={{ flex: "1 1 480px", minWidth: 0, position: "relative", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", background: "var(--card)", cursor: "grab" }}>
+        <svg
+          ref={svgElRef}
+          width={svgW}
+          height={svgH}
+          style={{ display: "block", width: "100%", height: svgH, touchAction: "none" }}
+          onMouseDown={handleSvgMouseDown}
+          onWheel={handleWheel}
+        >
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+            {/* Edges */}
+            {visibleEdges.map(e => (
+              <line key={e.key} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                stroke="var(--muted, #888)" strokeWidth={0.8 / zoom} opacity={0.35} />
+            ))}
+            {/* Nodes */}
+            {effectivePositions.map(p => {
+              const nodeInfo = data.nodes[p.id];
+              if (!nodeInfo) return null;
+              const isSelected = graphSelected === parseInt(p.id, 10);
+              const label = shortLabel(nodeInfo.display_class);
+              return (
+                <g key={p.id} style={{ cursor: "pointer" }}
+                  onMouseDown={e => handleNodeMouseDown(e, p.id)}
+                  onClick={e => {
+                    if (!(svgInteract.current as any).hasMoved) {
+                      setGraphSelected(parseInt(p.id, 10));
+                    }
+                    e.stopPropagation();
+                  }}>
+                  <circle
+                    cx={p.x} cy={p.y} r={p.r}
+                    fill={tpfgColor(nodeInfo.display_class)}
+                    stroke={isSelected ? "var(--fg, #222)" : "none"}
+                    strokeWidth={isSelected ? 2 / zoom : 0}
+                    opacity={0.82}
+                  />
+                  <text
+                    x={p.x} y={p.y}
+                    fontSize={Math.min(8, Math.max(6, p.r * 0.55))}
+                    fill="var(--bg, #fff)"
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    {label.slice(0, Math.floor(p.r / 2.8) + 4)}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+        <p style={{ fontSize: "0.72rem", color: "var(--muted)", margin: "0.2rem 0.4rem", padding: 0 }}>
+          Scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect
+        </p>
+      </div>
+
+      {/* Sidebar */}
+      <div style={{ flex: "0 0 220px", minWidth: 180, fontSize: "0.82rem" }}>
+        {!graphSelected || !selectedNodeData ? (
+          <div style={{ color: "var(--muted)", padding: "0.5rem 0" }}>
+            <p style={{ margin: "0 0 0.3rem" }}>Click a node to see details.</p>
+            <p style={{ margin: 0, fontSize: "0.76rem" }}>Nodes sized by retained heap, colored by class.</p>
+          </div>
+        ) : (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.3rem", marginBottom: "0.4rem" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: tpfgColor(selectedNodeData.display_class), display: "inline-block", flexShrink: 0 }} />
+                  <code style={{ fontSize: "0.78rem", wordBreak: "break-all" }} title={selectedNodeData.display_class}>
+                    {shortLabel(selectedNodeData.display_class)}
+                  </code>
+                </div>
+                <div style={{ color: "var(--muted)", fontSize: "0.75rem", marginTop: "0.15rem", paddingLeft: "1.2rem" }}>
+                  #{graphSelected}
+                </div>
+              </div>
+              <button className="copy-btn" onClick={() => setGraphSelected(null)} title="Close">✕</button>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", marginBottom: "0.4rem" }}>
+              <tbody>
+                <tr>
+                  <th style={{ textAlign: "left", color: "var(--muted)", fontWeight: 400, paddingRight: "0.5rem" }}>Shallow</th>
+                  <td style={{ textAlign: "right" }}>{fmtB(selectedNodeData.shallow)}</td>
+                </tr>
+                <tr>
+                  <th style={{ textAlign: "left", color: "var(--muted)", fontWeight: 400, paddingRight: "0.5rem" }}>Retained</th>
+                  <td style={{ textAlign: "right" }}><strong>{fmtB(selectedNodeData.retained)}</strong></td>
+                </tr>
+              </tbody>
+            </table>
+            <button className="btn-link"
+              style={{ fontSize: "0.8rem", marginBottom: "0.5rem", display: "block" }}
+              onClick={() => onNavigate(graphSelected, selectedNodeData.display_class)}>
+              Open in Explorer →
+            </button>
+            {/* WASM fields */}
+            {wasmFields && wasmFields.length > 0 && (
+              <>
+                <p style={{ margin: "0 0 0.2rem", color: "var(--muted)", fontSize: "0.75rem" }}>Fields</p>
+                <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: "0.77rem" }}>
+                  {wasmFields.slice(0, 8).map((f: any, i: number) => (
+                    <li key={i} style={{ marginBottom: "0.1rem" }}>
+                      <span style={{ color: "var(--muted)" }}>{f.name}: </span>
+                      <span>{String(f.value ?? f.display_class ?? "")}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {/* WASM outbound refs */}
+            {wasmOutRefs && wasmOutRefs.length > 0 && (
+              <>
+                <p style={{ margin: "0.4rem 0 0.2rem", color: "var(--muted)", fontSize: "0.75rem" }}>Refs →</p>
+                <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: "0.77rem" }}>
+                  {wasmOutRefs.slice(0, 8).map((r: any, i: number) => (
+                    <li key={i} style={{ marginBottom: "0.1rem" }}>
+                      <button className="btn-link" style={{ fontSize: "0.77rem" }}
+                        onClick={() => onNavigate(r.dst_idx, r.display_class)}>
+                        {shortLabel(r.display_class)}#{r.dst_idx}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {/* Static edges (when no WASM) */}
+            {!wasmOutRefs && selectedStaticEdges.length > 0 && (
+              <>
+                <p style={{ margin: "0.4rem 0 0.2rem", color: "var(--muted)", fontSize: "0.75rem" }}>Edges →</p>
+                <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: "0.77rem" }}>
+                  {selectedStaticEdges.slice(0, 8).map((e, i) => (
+                    <li key={i} style={{ marginBottom: "0.1rem" }}>
+                      <button className="btn-link" style={{ fontSize: "0.77rem" }}
+                        onClick={() => onNavigate(e.child_idx, e.child_class)}>
+                        {shortLabel(e.child_class)}#{e.child_idx}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
-  const [tab, setTab] = React.useState<"explore" | "domtree">("explore");
+  const [tab, setTab] = React.useState<"explore" | "domtree" | "graph">("explore");
   const [nodeId, setNodeId] = React.useState<number | null>(null);
   const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string; edge?: string; sourceTab?: "explore" | "domtree" }[]>([]);
   const [forwardStack, setForwardStack] = React.useState<{ nodeId: number; label: string; edge?: string; sourceTab?: "explore" | "domtree" }[]>([]);
@@ -6940,9 +7320,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         setForwardStack(fs => {
           if (fs.length === 0) return fs;
           const fwd = fs[0];
-          setBreadcrumb(prev => [...prev.slice(-9), { nodeId: nodeId!, label: curLabel, sourceTab: tab }]);
+          setBreadcrumb(prev => [...prev.slice(-9), { nodeId: nodeId!, label: curLabel, sourceTab: (tab === "graph" ? "explore" : tab) as "explore" | "domtree" }]);
           lastInternalNavRef.current = fwd.nodeId;
-          window.location.hash = `${fwd.sourceTab ?? tab}/${fwd.nodeId}`;
+          window.location.hash = `${fwd.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${fwd.nodeId}`;
           return fs.slice(1);
         });
         return;
@@ -6950,9 +7330,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       setBreadcrumb(prev => {
         if (prev.length > 0) {
           const last = prev[prev.length - 1];
-          setForwardStack(fs => [{ nodeId: nodeId!, label: curLabel, sourceTab: tab }, ...fs.slice(0, 19)]);
+          setForwardStack(fs => [{ nodeId: nodeId!, label: curLabel, sourceTab: (tab === "graph" ? "explore" : tab) as "explore" | "domtree" }, ...fs.slice(0, 19)]);
           lastInternalNavRef.current = last.nodeId;
-          window.location.hash = `${last.sourceTab ?? tab}/${last.nodeId}`;
+          window.location.hash = `${last.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${last.nodeId}`;
           return prev.slice(0, -1);
         }
         window.location.hash = "object-graph";
@@ -6970,7 +7350,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     if (expandGroup && nodeId !== null) pendingExpandByNode.current.set(nodeId, expandGroup);
     setBreadcrumb(prev => {
       if (nodeId === null) return [];
-      return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass, sourceTab: tab }];
+      const stab: "explore" | "domtree" = tab === "graph" ? "explore" : tab;
+      return [...prev.slice(-9), { nodeId, label: currentNode?.display_class ?? String(nodeId), edge: edgeLabel ?? childClass, sourceTab: stab }];
     });
     setForwardStack([]);
     lastInternalNavRef.current = id;
@@ -7102,10 +7483,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       const idx = classSiblings.findIndex(s => s.id === nodeId);
       if (e.key === "[" && idx > 0) {
         setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
-        window.location.hash = `${tab}/${classSiblings[idx - 1].id}`;
+        window.location.hash = `${tab === "graph" ? "explore" : tab}/${classSiblings[idx - 1].id}`;
       } else if (e.key === "]" && idx < classSiblings.length - 1) {
         setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
-        window.location.hash = `${tab}/${classSiblings[idx + 1].id}`;
+        window.location.hash = `${tab === "graph" ? "explore" : tab}/${classSiblings[idx + 1].id}`;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -7522,7 +7903,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   className="breadcrumb-item"
                   onClick={() => {
                     setBreadcrumb(prev => prev.slice(0, i));
-                    window.location.hash = `${b.sourceTab ?? tab}/${b.nodeId}`;
+                    window.location.hash = `${b.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${b.nodeId}`;
                   }}
                   title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
                 >
@@ -7558,7 +7939,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (breadcrumb.length > 0) {
                   const prev = breadcrumb[breadcrumb.length - 1];
                   setBreadcrumb(b => b.slice(0, -1));
-                  window.location.hash = `${prev.sourceTab ?? tab}/${prev.nodeId}`;
+                  window.location.hash = `${prev.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${prev.nodeId}`;
                 } else {
                   goToRoot();
                 }
@@ -7599,7 +7980,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 {sameClassNodes.map(([idxStr, n]) => (
                   <button key={idxStr} className="btn-link"
                     style={{ fontSize: "0.78rem", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 5px", background: "var(--hover-bg, rgba(0,0,0,0.04))" }}
-                    onClick={() => navigate(tab, parseInt(idxStr, 10), n.display_class)}>
+                    onClick={() => navigate(tab === "graph" ? "explore" : tab, parseInt(idxStr, 10), n.display_class)}>
                     #{idxStr} <span style={{ color: "var(--muted)" }}>{fmtB(n.retained)}</span>
                   </button>
                 ))}
@@ -7673,7 +8054,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 onClick={() => {
                   setBreadcrumb(prev => prev.slice(0, i));
                   lastInternalNavRef.current = b.nodeId;
-                  window.location.hash = `${b.sourceTab ?? tab}/${b.nodeId}`;
+                  window.location.hash = `${b.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${b.nodeId}`;
                 }}
                 title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
               >
@@ -7714,15 +8095,21 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         >
           Dominator Tree
         </button>
+        <button
+          className={tab === "graph" ? "btn-active" : "btn-link"}
+          onClick={() => setTab("graph")}
+        >
+          Graph
+        </button>
         <button className="btn-link" style={{ marginLeft: "auto" }}
           title="Go back (Esc or Alt+←)"
           onClick={() => {
           if (breadcrumb.length > 0) {
             const prev = breadcrumb[breadcrumb.length - 1];
-            setForwardStack(fs => [{ nodeId: nodeId!, label: currentNode?.display_class ?? String(nodeId), sourceTab: tab }, ...fs.slice(0, 19)]);
+            setForwardStack(fs => [{ nodeId: nodeId!, label: currentNode?.display_class ?? String(nodeId), sourceTab: (tab === "graph" ? "explore" : tab) as "explore" | "domtree" }, ...fs.slice(0, 19)]);
             setBreadcrumb(b => b.slice(0, -1));
             lastInternalNavRef.current = prev.nodeId;
-            window.location.hash = `${prev.sourceTab ?? tab}/${prev.nodeId}`;
+            window.location.hash = `${prev.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${prev.nodeId}`;
           } else {
             goToRoot();
           }
@@ -7735,9 +8122,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             onClick={() => {
               const fwd = forwardStack[0];
               setForwardStack(fs => fs.slice(1));
-              setBreadcrumb(prev => [...prev.slice(-9), { nodeId: nodeId!, label: currentNode?.display_class ?? String(nodeId), sourceTab: tab }]);
+              setBreadcrumb(prev => [...prev.slice(-9), { nodeId: nodeId!, label: currentNode?.display_class ?? String(nodeId), sourceTab: (tab === "graph" ? "explore" : tab) as "explore" | "domtree" }]);
               lastInternalNavRef.current = fwd.nodeId;
-              window.location.hash = `${fwd.sourceTab ?? tab}/${fwd.nodeId}`;
+              window.location.hash = `${fwd.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${fwd.nodeId}`;
             }}>
             → {(forwardStack[0].label.split(".").pop() ?? forwardStack[0].label)}#{forwardStack[0].nodeId}
           </button>
@@ -7751,7 +8138,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (siblingIdx > 0) {
                   const s = classSiblings[siblingIdx - 1];
                   setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
-                  window.location.hash = `${tab}/${s.id}`;
+                  window.location.hash = `${tab === "graph" ? "explore" : tab}/${s.id}`;
                 }
               }}>
               ‹
@@ -7764,7 +8151,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (siblingIdx < classSiblings.length - 1) {
                   const s = classSiblings[siblingIdx + 1];
                   setPage(0); setExpandedGroups(new Set()); setDomFilter(""); setDomViewMode("flat"); setExpandedDomList(null); setExpandFilter(""); setRefFilter(""); setShowAllInbound(false); setPathDepth(8);
-                  window.location.hash = `${tab}/${s.id}`;
+                  window.location.hash = `${tab === "graph" ? "explore" : tab}/${s.id}`;
                 }
               }}>
               ›
@@ -7784,7 +8171,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   const r = JSON.parse(wasm.find_dense_by_address(addr));
                   if (r.ok) {
                     setJumpInput("");
-                    navigate(tab, r.dense_idx, data.nodes[String(r.dense_idx)]?.display_class ?? `#${r.dense_idx}`);
+                    navigate(tab === "graph" ? "explore" : tab, r.dense_idx, data.nodes[String(r.dense_idx)]?.display_class ?? `#${r.dense_idx}`);
                   }
                 } catch {}
               }
@@ -7792,7 +8179,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               const n = parseInt(raw, 10);
               if (!isNaN(n) && n >= 0) {
                 setJumpInput("");
-                navigate(tab, n, data.nodes[String(n)]?.display_class ?? `#${n}`);
+                navigate(tab === "graph" ? "explore" : tab, n, data.nodes[String(n)]?.display_class ?? `#${n}`);
               }
             }
           }}>
@@ -7842,7 +8229,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         </div>
       )}
 
-      <div className="obj-explorer">
+      {tab === "graph" && (
+        <OGEGraphView
+          data={data}
+          onNavigate={(nid, label) => { navigate("explore", nid, label); }}
+        />
+      )}
+
+      <div className="obj-explorer" style={{ display: tab === "graph" ? "none" : undefined }}>
         {/* Left panel */}
         <div className="obj-explorer-left">
           {tab === "explore" ? (

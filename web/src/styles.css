@@ -36,6 +36,8 @@ tfoot tr { border-top: 2px solid var(--border); }
     --ok: #4ade80;
     --ok-bg: #052e16;
     --ok-border: #166534;
+    --accent-bg: #1e3a5f;
+    --accent-border: #1d4ed8;
   }
 }
 :root[data-theme="dark"] {
@@ -51,6 +53,8 @@ tfoot tr { border-top: 2px solid var(--border); }
   --ok: #4ade80;
   --ok-bg: #052e16;
   --ok-border: #166534;
+  --accent-bg: #1e3a5f;
+  --accent-border: #1d4ed8;
 }
 :root[data-theme="light"] {
   --bg: #ffffff;
