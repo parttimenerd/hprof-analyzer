@@ -9882,6 +9882,10 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
   );
 }
 
+const TRG_PAGE_SIZE = 50;
+interface TRGInstRow { idx: number; cls: string; shallow: number; retained: number; }
+interface TRGRefEntry { idx: number; fieldName: string; cls: string; shallow: number; retained: number; }
+
 function InspectorInstanceListPage({ cls, page, onNavigate }: {
   cls: string;
   page: number;
