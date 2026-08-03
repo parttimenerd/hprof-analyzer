@@ -117,6 +117,32 @@ impl ServeState {
         }
     }
 
+    /// Build the offline HTML download response for `GET /download/offline`.
+    ///
+    /// Returns `(html_bytes, filename_stem)` when the report is ready, or
+    /// an error string + 503 status when the analysis hasn't finished yet.
+    fn offline_html(&self) -> Result<(Vec<u8>, String), (u16, String)> {
+        match self.report() {
+            Some(report) => {
+                let html = crate::html::render_html(&report);
+                let stem = std::path::Path::new(&self.path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("report")
+                    .to_string();
+                Ok((html.into_bytes(), stem))
+            }
+            None => {
+                let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let msg = match *guard {
+                    AnalysisState::Failed(ref e) => format!("analysis failed: {e}"),
+                    _ => "analysis not complete yet — retry in a few seconds".to_string(),
+                };
+                Err((503, msg))
+            }
+        }
+    }
+
     /// Route (method, url, body) → (http_status, body_string, content_type).
     pub fn route(&self, method: &str, url: &str, body: &str) -> (u16, String, &'static str) {
         let (path, query) = split_path_query(url);
@@ -261,6 +287,7 @@ const KNOWN_PATHS: &[&str] = &[
     "/report/threads",
     "/help",
     "/schema",
+    "/download/offline",
 ];
 
 fn not_found(path: &str) -> (u16, String, &'static str) {
@@ -320,6 +347,7 @@ pub fn version_json() -> serde_json::Value {
             {"method":"POST", "path":"/stream",          "desc":"run OQL, NDJSON rows"},
             {"method":"GET",  "path":"/help",            "desc":"OQL language reference JSON"},
             {"method":"GET",  "path":"/schema",          "desc":"JSON Schema for QueryResult"},
+            {"method":"GET",  "path":"/download/offline", "desc":"download a self-contained offline HTML report (no WASM)"},
             {"method":"GET",  "path":"/version",         "desc":"this document"}
         ]
     })
@@ -343,6 +371,7 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
     println!("  GET  /report/leaks              → LeakSuspects JSON");
     println!("  GET  /report/top                → TopConsumers JSON");
     println!("  GET  /report/threads            → ThreadOverview JSON");
+    println!("  GET  /download/offline          → self-contained offline HTML file (no WASM)");
     println!();
     println!("OQL queries:");
     println!("  POST /         -d 'SELECT …'    → JSON QueryResult");
@@ -395,6 +424,37 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                     let _ = request.respond(resp);
                     continue;
                 }
+
+                // ── Offline download — needs Content-Disposition header ────────
+                let (path, _) = split_path_query(&url);
+                if method == "GET" && path == "/download/offline" {
+                    state.ensure_analysis();
+                    let resp = match state.offline_html() {
+                        Ok((bytes, stem)) => {
+                            let disposition = format!(
+                                "attachment; filename=\"{stem}-report.html\""
+                            );
+                            Response::from_data(bytes)
+                                .with_status_code(200)
+                                .with_header(tiny_http::Header::from_bytes(
+                                    "Content-Type", "text/html; charset=utf-8",
+                                ).unwrap())
+                                .with_header(tiny_http::Header::from_bytes(
+                                    "Content-Disposition", disposition.as_bytes(),
+                                ).unwrap())
+                        }
+                        Err((status, msg)) => {
+                            Response::from_string(msg)
+                                .with_status_code(status)
+                                .with_header(tiny_http::Header::from_bytes(
+                                    "Content-Type", "text/plain; charset=utf-8",
+                                ).unwrap())
+                        }
+                    };
+                    let _ = request.respond(resp);
+                    continue;
+                }
+
                 let (status, resp_body, ctype) = state.route(&method, &url, &body);
                 let resp = Response::from_string(resp_body)
                     .with_status_code(status)
@@ -561,6 +621,30 @@ mod tests {
         ] {
             assert!(paths.contains(&p), "missing {p}: {v}");
         }
+    }
+
+    #[test]
+    fn offline_html_returns_valid_html_after_analysis() {
+        let s = make_state();
+        s.route("POST", "/analyze", "");
+        wait_for_ready(&s);
+        let result = s.offline_html();
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
+        let (bytes, stem) = result.unwrap();
+        let html = String::from_utf8(bytes).expect("valid UTF-8");
+        assert!(html.starts_with("<!DOCTYPE html>"), "expected HTML, got: {}", &html[..html.len().min(100)]);
+        assert!(html.contains("<title>"), "expected <title> in HTML");
+        assert!(!stem.is_empty(), "expected non-empty stem");
+    }
+
+    #[test]
+    fn offline_html_returns_503_when_not_ready() {
+        let s = make_state();
+        // Don't trigger analysis; report() returns None → error path
+        let result = s.offline_html();
+        assert!(result.is_err(), "expected Err when analysis not started");
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, 503, "expected 503 status");
     }
 
     #[test]
