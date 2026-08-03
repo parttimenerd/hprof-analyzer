@@ -21,11 +21,69 @@ fn call_progress(cb: &js_sys::Function, phase: &str, fraction: f32) {
     );
 }
 // ──────────────────────────────────────────────────────────────────────────────
-// ExplorationData
+// ExplorationHolder
 // ──────────────────────────────────────────────────────────────────────────────
 
-struct ExplorationData {
+struct ExplorationHolder {
     result: hprof_analyzer::ExplorationResult,
+    retained_c:    Option<hprof_analyzer::cvec::CompressedU64>,
+    shallow_c:     Option<hprof_analyzer::cvec::CompressedU32>,
+    fwd_targets_c: Option<hprof_analyzer::cvec::CompressedU32>,
+}
+
+impl ExplorationHolder {
+    fn get_retained(&self, i: usize) -> u64 {
+        if !self.result.retained.is_empty() {
+            return self.result.retained.get(i).copied().unwrap_or(0);
+        }
+        self.retained_c
+            .as_ref()
+            .and_then(|c| c.get_at(i).ok().flatten())
+            .unwrap_or(0)
+    }
+
+    fn get_shallow(&self, i: usize) -> u32 {
+        if !self.result.shallow.is_empty() {
+            return self.result.shallow.get(i).copied().unwrap_or(0);
+        }
+        self.shallow_c
+            .as_ref()
+            .and_then(|c| c.get_at(i).ok().flatten())
+            .unwrap_or(0)
+    }
+
+    fn fwd_slice(&self, start: usize, end: usize) -> std::io::Result<std::borrow::Cow<'_, [u32]>> {
+        if !self.result.fwd_targets.is_empty() {
+            let len = self.result.fwd_targets.len();
+            return Ok(std::borrow::Cow::Borrowed(
+                &self.result.fwd_targets[start.min(len)..end.min(len)],
+            ));
+        }
+        match &self.fwd_targets_c {
+            Some(c) => c.slice_at(start, end).map(std::borrow::Cow::Owned),
+            None => Ok(std::borrow::Cow::Borrowed(&[])),
+        }
+    }
+
+    fn restore_retained(&self) -> std::io::Result<Vec<u64>> {
+        if !self.result.retained.is_empty() {
+            return Ok(self.result.retained.clone());
+        }
+        match &self.retained_c {
+            Some(c) => c.restore(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn restore_fwd_targets(&self) -> std::io::Result<std::borrow::Cow<'_, [u32]>> {
+        if !self.result.fwd_targets.is_empty() {
+            return Ok(std::borrow::Cow::Borrowed(&self.result.fwd_targets));
+        }
+        match &self.fwd_targets_c {
+            Some(c) => c.restore().map(std::borrow::Cow::Owned),
+            None => Ok(std::borrow::Cow::Borrowed(&[])),
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -46,7 +104,7 @@ pub struct HprofSession {
     retained_c: Option<hprof_analyzer::cvec::CompressedU64>,
     cache: Option<hprof_analyzer::query::run::ReplCache>,
     cached_report_html: Option<String>,
-    exploration: Option<ExplorationData>,
+    exploration: Option<ExplorationHolder>,
 }
 
 #[wasm_bindgen]
@@ -545,7 +603,28 @@ impl HprofSession {
             .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
         let result = hprof_analyzer::build_exploration(&self.source, &retained)
             .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
-        self.exploration = Some(ExplorationData { result });
+        self.exploration = Some(ExplorationHolder {
+            result,
+            retained_c: None,
+            shallow_c: None,
+            fwd_targets_c: None,
+        });
+        // Compress the three big arrays to save ~4 GB WASM address space
+        if let Some(h) = self.exploration.as_mut() {
+            use hprof_analyzer::cvec::{Codec, CompressedU32, CompressedU64};
+            if let Ok(c) = CompressedU64::compress(&h.result.retained, Codec::Deflate9) {
+                h.retained_c = Some(c);
+                h.result.retained = Vec::new();
+            }
+            if let Ok(c) = CompressedU32::compress(&h.result.shallow, Codec::Deflate9) {
+                h.shallow_c = Some(c);
+                h.result.shallow = Vec::new();
+            }
+            if let Ok(c) = CompressedU32::compress(&h.result.fwd_targets, Codec::Deflate9) {
+                h.fwd_targets_c = Some(c);
+                h.result.fwd_targets = Vec::new();
+            }
+        }
         Ok(())
     }
 
@@ -556,10 +635,11 @@ impl HprofSession {
     ///
     /// Each ref entry: `{"src_idx":N,"field_name":"","display_class":"...","shallow":N,"retained":N}`
     pub fn inbound_refs(&self, dense_idx: u32, limit: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         let dense = dense_idx as usize;
         let pre = exp.dense_to_pre.get(dense).copied().unwrap_or(u32::MAX);
@@ -585,26 +665,29 @@ impl HprofSession {
                 let src = src_dense as usize;
                 let display_class =
                     exp.class_names_by_idx.get(src).cloned().unwrap_or_default();
-                let shallow = exp.shallow.get(src).copied().unwrap_or(0) as u64;
-                let retained = exp.retained.get(src).copied().unwrap_or(0);
+                let shallow = h.get_shallow(src) as u64;
+                let retained = h.get_retained(src);
 
                 // Reverse-lookup field name: scan src's out-edges for an edge to dense_idx.
-                let field_name: &str = if src + 1 < exp.fwd_offsets.len() {
+                let field_name: String = if src + 1 < exp.fwd_offsets.len() {
                     let start = exp.fwd_offsets[src] as usize;
                     let end = exp.fwd_offsets[src + 1] as usize;
-                    exp.fwd_targets[start..end]
-                        .iter()
-                        .position(|&t| t == dense_idx)
-                        .and_then(|rel| {
-                            exp.fwd_field_name_idx
-                                .as_ref()
-                                .and_then(|idx| idx.get(start + rel).copied())
-                                .and_then(|ni| exp.field_name_pool.get(ni as usize))
-                                .map(|s| s.as_str())
+                    h.fwd_slice(start, end)
+                        .ok()
+                        .and_then(|slice| {
+                            slice.iter()
+                                .position(|&t| t == dense_idx)
+                                .and_then(|rel| {
+                                    exp.fwd_field_name_idx
+                                        .as_ref()
+                                        .and_then(|idx| idx.get(start + rel).copied())
+                                        .and_then(|ni| exp.field_name_pool.get(ni as usize))
+                                        .map(|s| s.clone())
+                                })
                         })
-                        .unwrap_or("")
+                        .unwrap_or_default()
                 } else {
-                    ""
+                    String::new()
                 };
 
                 serde_json::json!({
@@ -634,10 +717,11 @@ impl HprofSession {
     /// Each ref entry: `{"dst_idx":N,"field_name":"...","display_class":"...","shallow":N,"retained":N}`
     /// Field names are included when the dump was analyzed with `--ref-paths`; otherwise empty strings.
     pub fn outbound_refs(&self, dense_idx: u32, limit: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         let src = dense_idx as usize;
         if src + 1 >= exp.fwd_offsets.len() {
@@ -649,7 +733,14 @@ impl HprofSession {
         let limit = limit as usize;
         let truncated = total > limit;
 
-        let refs: Vec<serde_json::Value> = exp.fwd_targets[start..end]
+        let targets = match h.fwd_slice(start, end) {
+            Ok(t) => t,
+            Err(e) => {
+                return serde_json::json!({"error": e.to_string()}).to_string();
+            }
+        };
+
+        let refs: Vec<serde_json::Value> = targets
             .iter()
             .take(limit)
             .enumerate()
@@ -664,8 +755,8 @@ impl HprofSession {
                     .unwrap_or("");
                 let d = dst as usize;
                 let display_class = exp.class_names_by_idx.get(d).cloned().unwrap_or_default();
-                let shallow = exp.shallow.get(d).copied().unwrap_or(0) as u64;
-                let retained = exp.retained.get(d).copied().unwrap_or(0);
+                let shallow = h.get_shallow(d) as u64;
+                let retained = h.get_retained(d);
                 serde_json::json!({
                     "dst_idx": dst,
                     "field_name": field_name,
@@ -693,10 +784,11 @@ impl HprofSession {
     ///
     /// Path is ordered root → target. Each node: `{"dense_idx":N,"display_class":"...","shallow":N,"retained":N,"field_name":""}`
     pub fn gc_root_path(&self, dense_idx: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut queue: std::collections::VecDeque<(u32, Vec<u32>)> =
@@ -721,8 +813,8 @@ impl HprofSession {
                         serde_json::json!({
                             "dense_idx": idx,
                             "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
-                            "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
-                            "retained": exp.retained.get(i).copied().unwrap_or(0),
+                            "shallow": h.get_shallow(i) as u64,
+                            "retained": h.get_retained(i),
                             "field_name": "",
                         })
                     })
@@ -775,20 +867,27 @@ impl HprofSession {
     /// Results are sorted by retained heap descending.
     /// Requires `enable_exploration()` to have been called first.
     pub fn find_instances(&self, class_prefix: &str, limit: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         let needle = class_prefix.to_ascii_lowercase();
         let limit = limit as usize;
+
+        // Decompress retained once for the full scan
+        let retained_vec = match h.restore_retained() {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({"error": e.to_string()}).to_string(),
+        };
 
         let mut matches: Vec<(u32, u64)> = exp
             .class_names_by_idx
             .iter()
             .enumerate()
             .filter(|(_, name)| name.to_ascii_lowercase().contains(&needle))
-            .map(|(i, _)| (i as u32, exp.retained.get(i).copied().unwrap_or(0)))
+            .map(|(i, _)| (i as u32, retained_vec.get(i).copied().unwrap_or(0)))
             .collect();
 
         let total = matches.len();
@@ -803,7 +902,7 @@ impl HprofSession {
                 serde_json::json!({
                     "dense_idx": idx,
                     "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
-                    "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
+                    "shallow": h.get_shallow(i) as u64,
                     "retained": retained,
                 })
             })
@@ -824,10 +923,11 @@ impl HprofSession {
     /// or `{"error":"exploration_not_enabled"}` / `{"error":"out_of_range"}`.
     /// Requires `enable_exploration()` to have been called first.
     pub fn get_node_info(&self, dense_idx: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
         let i = dense_idx as usize;
         if i >= exp.class_names_by_idx.len() {
             return serde_json::json!({"error":"out_of_range"}).to_string();
@@ -835,8 +935,8 @@ impl HprofSession {
         serde_json::json!({
             "ok": true,
             "display_class": exp.class_names_by_idx[i],
-            "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
-            "retained": exp.retained.get(i).copied().unwrap_or(0),
+            "shallow": h.get_shallow(i) as u64,
+            "retained": h.get_retained(i),
         })
         .to_string()
     }
@@ -940,10 +1040,11 @@ impl HprofSession {
     /// Returns `{"ok":true,"paths":[{"path":[...],"root_type":"..."},...],"total_found":N}`.
     /// Each path is root→target order. Each node: `{"dense_idx":N,"display_class":"...","shallow":N,"retained":N}`.
     pub fn all_gc_root_paths(&self, dense_idx: u32, max_paths: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         let max_paths = (max_paths as usize).min(10);
         let mut found_paths: Vec<serde_json::Value> = Vec::new();
@@ -984,8 +1085,8 @@ impl HprofSession {
                         serde_json::json!({
                             "dense_idx": idx,
                             "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
-                            "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
-                            "retained": exp.retained.get(i).copied().unwrap_or(0),
+                            "shallow": h.get_shallow(i) as u64,
+                            "retained": h.get_retained(i),
                         })
                     })
                     .collect();
@@ -1061,15 +1162,17 @@ impl HprofSession {
         use hprof_analyzer::query::{optimize, parse, plan, run};
         use hprof_analyzer::query::model::QueryValue;
 
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
-            None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
-        };
-
-        let i = dense_idx as usize;
-        let class_name = match exp.class_names_by_idx.get(i) {
-            Some(c) if !c.is_empty() => c.clone(),
-            _ => return serde_json::json!({"ok":false,"error":"out_of_range"}).to_string(),
+        // Extract class_name from exploration (borrow released after clone)
+        let class_name: String = {
+            let h = match self.exploration.as_ref() {
+                Some(h) => h,
+                None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+            };
+            let i = dense_idx as usize;
+            match h.result.class_names_by_idx.get(i) {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => return serde_json::json!({"ok":false,"error":"out_of_range"}).to_string(),
+            }
         };
 
         let (coll_type, array_field) = match collection_info(&class_name) {
@@ -1134,10 +1237,11 @@ impl HprofSession {
         };
 
         // Step 2: outbound refs of the backing array — these are the entries
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         let arr_i = array_dense_idx as usize;
         if arr_i >= exp.fwd_offsets.len().saturating_sub(1) {
@@ -1146,9 +1250,13 @@ impl HprofSession {
 
         let start = exp.fwd_offsets[arr_i] as usize;
         let end = exp.fwd_offsets[arr_i + 1] as usize;
-        let targets = &exp.fwd_targets[start..end];
-
         let limit = limit as usize;
+
+        let targets = match h.fwd_slice(start, end) {
+            Ok(t) => t,
+            Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+        };
+
         let total = targets.len();
         let truncated = total > limit;
 
@@ -1178,10 +1286,11 @@ impl HprofSession {
     /// or `{"error":"exploration_not_enabled"}` / `{"error":"out_of_range"}` / `{"error":"no_addresses"}`.
     /// Requires `enable_exploration()` to have been called first.
     pub fn get_object_address(&self, dense_idx: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
         if exp.addrs.is_empty() {
             return serde_json::json!({"error":"no_addresses"}).to_string();
         }
@@ -1197,10 +1306,11 @@ impl HprofSession {
     }
 
     pub fn find_dense_by_address(&self, addr: u64) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
         if exp.addrs.is_empty() {
             return serde_json::json!({"error":"no_addresses"}).to_string();
         }
@@ -1211,21 +1321,28 @@ impl HprofSession {
     }
 
     pub fn find_path_between(&self, src_idx: u32, dst_idx: u32) -> String {
-        let exp = match self.exploration.as_ref() {
-            Some(e) => &e.result,
+        let h = match self.exploration.as_ref() {
+            Some(h) => h,
             None => return serde_json::json!({"error":"exploration_not_enabled"}).to_string(),
         };
+        let exp = &h.result;
 
         if src_idx == dst_idx {
             let i = src_idx as usize;
             let node = serde_json::json!({
                 "dense_idx": src_idx,
                 "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
-                "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
-                "retained": exp.retained.get(i).copied().unwrap_or(0),
+                "shallow": h.get_shallow(i) as u64,
+                "retained": h.get_retained(i),
             });
             return serde_json::json!({"ok":true,"path":[node]}).to_string();
         }
+
+        // Decompress fwd_targets once for the BFS
+        let fwd_targets = match h.restore_fwd_targets() {
+            Ok(t) => t,
+            Err(e) => return serde_json::json!({"error": e.to_string()}).to_string(),
+        };
 
         let n = exp.fwd_offsets.len().saturating_sub(1);
         let mut visited = vec![u32::MAX; n];
@@ -1238,7 +1355,7 @@ impl HprofSession {
             if ci + 1 >= exp.fwd_offsets.len() { continue; }
             let start = exp.fwd_offsets[ci] as usize;
             let end = exp.fwd_offsets[ci + 1] as usize;
-            for &nxt in &exp.fwd_targets[start..end] {
+            for &nxt in &fwd_targets[start..end] {
                 let ni = nxt as usize;
                 if ni >= n || visited[ni] != u32::MAX { continue; }
                 visited[ni] = cur;
@@ -1267,8 +1384,8 @@ impl HprofSession {
             serde_json::json!({
                 "dense_idx": idx,
                 "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
-                "shallow": exp.shallow.get(i).copied().unwrap_or(0) as u64,
-                "retained": exp.retained.get(i).copied().unwrap_or(0),
+                "shallow": h.get_shallow(i) as u64,
+                "retained": h.get_retained(i),
             })
         }).collect();
 
