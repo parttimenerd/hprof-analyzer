@@ -516,7 +516,11 @@ impl ObjGraphCapture {
 /// (`--ref-paths`); otherwise all edges are stored as unnamed (index 0).
 pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjGraphCapture {
     // Use g.n (object count) — g.shallow may be compressed/empty at call time.
-    let n = if g.shallow.is_empty() { g.n } else { g.shallow.len() };
+    let n = if g.shallow.is_empty() {
+        g.n
+    } else {
+        g.shallow.len()
+    };
     if n == 0 || g.fwd_offsets.is_empty() {
         return ObjGraphCapture::empty();
     }
@@ -1675,7 +1679,10 @@ mod obj_graph_tests {
         // Object 0 has 3 outbound edges to object 1. edge_cap=2.
         let g = make_graph(vec![0, 3, 3], vec![1, 1, 1]);
         let cap = capture_obj_graph_edges(&g, usize::MAX, 2);
-        assert!(cap.inbound_truncated.contains(&1), "inbound for 1 should be truncated");
+        assert!(
+            cap.inbound_truncated.contains(&1),
+            "inbound for 1 should be truncated"
+        );
         assert_eq!(cap.inbound.get(&1).map(|v| v.len()), Some(2));
     }
 

@@ -939,34 +939,36 @@ where
                         .rewind()
                         .or_not(),
                 )
-                .map(|((prefix, name), next_arith): ((Option<String>, String), _)| {
-                    if next_arith.is_some() {
-                        return None; // arithmetic follows; hand off to expr_item
-                    }
-                    let (attr, canonical) = match name.as_str() {
-                        "usedHeapSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
-                        "shallowHeapSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
-                        "shallowSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
-                        "retainedHeapSize" => (Attr::RetainedHeapSize, "@retainedHeapSize"),
-                        "retainedHeap" => (Attr::RetainedHeapSize, "@retainedHeapSize"),
-                        _ => return None,
-                    };
-                    // Single-segment prefix is just the FROM alias; strip it.
-                    let has_hops = prefix
-                        .as_deref()
-                        .map(|p| p.trim_end_matches('.').contains('.'))
-                        .unwrap_or(false);
-                    if has_hops {
-                        return None; // leave to expr_item for full RefPath handling
-                    }
-                    let written = format!("@{name}");
-                    let auto_alias = if written != canonical {
-                        Some(written)
-                    } else {
-                        None
-                    };
-                    Some((SelectItem::Attr(attr), auto_alias))
-                })
+                .map(
+                    |((prefix, name), next_arith): ((Option<String>, String), _)| {
+                        if next_arith.is_some() {
+                            return None; // arithmetic follows; hand off to expr_item
+                        }
+                        let (attr, canonical) = match name.as_str() {
+                            "usedHeapSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
+                            "shallowHeapSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
+                            "shallowSize" => (Attr::UsedHeapSize, "@usedHeapSize"),
+                            "retainedHeapSize" => (Attr::RetainedHeapSize, "@retainedHeapSize"),
+                            "retainedHeap" => (Attr::RetainedHeapSize, "@retainedHeapSize"),
+                            _ => return None,
+                        };
+                        // Single-segment prefix is just the FROM alias; strip it.
+                        let has_hops = prefix
+                            .as_deref()
+                            .map(|p| p.trim_end_matches('.').contains('.'))
+                            .unwrap_or(false);
+                        if has_hops {
+                            return None; // leave to expr_item for full RefPath handling
+                        }
+                        let written = format!("@{name}");
+                        let auto_alias = if written != canonical {
+                            Some(written)
+                        } else {
+                            None
+                        };
+                        Some((SelectItem::Attr(attr), auto_alias))
+                    },
+                )
                 .filter_map(|x| x);
 
             // `expr_item` covers all arithmetic expressions AND bare attrs (folded back).
@@ -1986,7 +1988,12 @@ pub fn parse_for_complete(src: &str, cursor_pos: usize) -> CompletionContext {
     let prefix = &src[..cursor_pos.min(src.len())];
     let toks = match tokenize_spanned(prefix) {
         Ok(t) => t,
-        Err(_) => return CompletionContext { labels: vec![], tokens: vec![] },
+        Err(_) => {
+            return CompletionContext {
+                labels: vec![],
+                tokens: vec![],
+            };
+        }
     };
     let eoi_span: SimpleSpan = (cursor_pos..cursor_pos).into();
     let stream = Stream::from_iter(toks).map(eoi_span, |(t, s)| (t, s));
@@ -2003,10 +2010,14 @@ pub fn parse_for_complete(src: &str, cursor_pos: usize) -> CompletionContext {
             match pat {
                 chumsky::error::RichPattern::Label(s) => {
                     let s = s.to_string();
-                    if !labels.contains(&s) { labels.push(s); }
+                    if !labels.contains(&s) {
+                        labels.push(s);
+                    }
                 }
                 chumsky::error::RichPattern::Token(t) => {
-                    if !tokens.contains(&**t) { tokens.push((**t).clone()); }
+                    if !tokens.contains(&**t) {
+                        tokens.push((**t).clone());
+                    }
                 }
                 _ => {}
             }

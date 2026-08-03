@@ -8,7 +8,10 @@ static SENTINELS: &[(&str, &str)] = &[
         "org/springframework/context/support/AbstractApplicationContext",
         "Spring",
     ),
-    ("java/util/concurrent/ThreadPoolExecutor", "ThreadPoolExecutor"),
+    (
+        "java/util/concurrent/ThreadPoolExecutor",
+        "ThreadPoolExecutor",
+    ),
     ("io/netty/buffer/AbstractReferenceCountedByteBuf", "Netty"),
     ("com/zaxxer/hikari/pool/HikariPool", "HikariCP"),
 ];
@@ -37,7 +40,6 @@ pub fn scan_frameworks(g: &Graph) -> Vec<FrameworkAnalysis> {
 
         for (obj_idx, &ci) in g.class_idx.iter().enumerate() {
             if ci_set.contains(&ci) {
-
                 count += 1;
                 if let Some(&r) = g.retained.get(obj_idx) {
                     total_retained += r;

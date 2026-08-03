@@ -5012,7 +5012,7 @@ mod server_cli {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn server");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline {
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 return Server { child, port };

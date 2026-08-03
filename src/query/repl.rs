@@ -5115,7 +5115,7 @@ fn handle_meta(
         }
         "plan" | "explain" => {
             // Parse flags: --raw --verbose --json (order-insensitive, any combination)
-            let mut raw     = false;
+            let mut raw = false;
             let mut verbose = false;
             let mut as_json = false;
             let mut query_text = rest;
@@ -5149,7 +5149,7 @@ fn handle_meta(
                         if as_json {
                             match serde_json::to_string_pretty(&plan) {
                                 Ok(json) => writeln!(out, "{json}")?,
-                                Err(e)   => writeln!(out, "{ce}json error: {e}{cr}")?,
+                                Err(e) => writeln!(out, "{ce}json error: {e}{cr}")?,
                             }
                         } else {
                             write!(out, "{}", plan.explain())?;
@@ -6103,7 +6103,11 @@ mod tests {
         // Must parse as valid JSON and contain "kind" key
         let v: serde_json::Value = serde_json::from_str(&out)
             .expect(&format!("--json output must be valid JSON; got: {}", out));
-        assert!(v.get("kind").is_some(), "JSON must have 'kind' key; got: {}", out);
+        assert!(
+            v.get("kind").is_some(),
+            "JSON must have 'kind' key; got: {}",
+            out
+        );
     }
 
     #[test]

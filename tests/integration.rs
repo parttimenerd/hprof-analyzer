@@ -318,7 +318,12 @@ fn field_stats_smoke() {
             .as_array()
             .unwrap_or(&vec![])
             .iter()
-            .any(|f| f["field_name"].as_str().map(|s| !s.is_empty()).unwrap_or(false))
+            .any(|f| {
+                f["field_name"]
+                    .as_str()
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false)
+            })
     });
     assert!(
         has_named,
@@ -400,8 +405,7 @@ fn parity_field_stats_golden() {
         serde_json::from_str(&std::fs::read_to_string(&golden_path).unwrap()).unwrap();
 
     assert_eq!(
-        actual["field_stats"],
-        expected["field_stats"],
+        actual["field_stats"], expected["field_stats"],
         "field_stats diverged from golden. Re-capture with:\n  \
         ./target/release/hprof-analyzer tests/fixtures/dump_4_philosophers.hprof \
         tests/fixtures/dump_4_philosophers_field_stats.json --field-stats --format json"

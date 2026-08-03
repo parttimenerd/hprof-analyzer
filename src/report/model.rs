@@ -510,7 +510,9 @@ pub struct DomTreeNode {
 }
 
 /// Outbound edge from one object to another (Reference Graph Explorer / V3).
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ObjGraphEdge {
     #[serde(default)]
     pub field_name: String,
@@ -520,7 +522,9 @@ pub struct ObjGraphEdge {
 }
 
 /// One inbound reference captured in the static report snapshot.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct InboundEdge {
     /// Dense index of the object holding the reference to this node.
     pub src_idx: u32,
@@ -535,7 +539,9 @@ pub struct InboundEdge {
 }
 
 /// Parameters used when capturing the object graph snapshot.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct CaptureParams {
     /// Max edges per object (outbound and inbound).
     pub edge_cap: usize,
@@ -544,7 +550,9 @@ pub struct CaptureParams {
 }
 
 /// One class row in a dominator-subtree class breakdown.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct SubtreeClassRow {
     pub class: String,
     pub instance_count: u32,
@@ -552,7 +560,9 @@ pub struct SubtreeClassRow {
 }
 
 /// One node in the flat object graph lookup table.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ObjGraphFlatNode {
     pub display_class: String,
     pub shallow: u64,
@@ -572,7 +582,9 @@ pub struct ObjGraphFlatNode {
 }
 
 /// One aggregated type-level reference edge for the TPFG (V13).
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct TypeEdge {
     pub src_class: String,
     pub dst_class: String,
@@ -583,7 +595,9 @@ pub struct TypeEdge {
 
 /// Flat lookup table powering V3 + V4 navigation (object graph + dominator explorer).
 /// Only present when --obj-graph is used.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ObjGraphFlat {
     /// All significant nodes (retained >= sig_floor_bytes). Key = dense index (u32).
     pub nodes: std::collections::HashMap<u32, ObjGraphFlatNode>,
@@ -1518,7 +1532,9 @@ pub struct TriageSignal {
 pub const SCHEMA_VERSION: u32 = 11;
 
 /// One detected framework's aggregate statistics.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct FrameworkAnalysis {
     /// Human-readable framework name (e.g. "Hibernate", "Spring").
     pub framework: String,
@@ -1532,7 +1548,9 @@ pub struct FrameworkAnalysis {
 /// entry counts (total + stale), and total retained heap of the stored values.
 /// A stale entry is one whose weak referent (the ThreadLocal key) has been
 /// GC'd but whose value is still strongly held — a classic TL leak signal.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ThreadLocalLeakRow {
     /// Pretty class name of the stored value object.
     pub value_class: String,
@@ -1567,7 +1585,9 @@ pub struct AllocSites {
 
 /// Per-class reference-field statistics: null/non-null ref counts and total
 /// retained size of pointees. Populated only when `--field-stats` is passed.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct FieldRefStat {
     pub field_name: String,
     pub null_count: u64,
@@ -1577,7 +1597,9 @@ pub struct FieldRefStat {
 }
 
 /// Per-class aggregation of reference-field statistics for a single class.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ClassFieldStats {
     pub class_name: String,
     pub instance_count: u64,
@@ -1586,7 +1608,9 @@ pub struct ClassFieldStats {
 
 /// Collection of per-class reference-field stats, present only when
 /// `--field-stats` was passed.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct FieldStats {
     pub classes: Vec<ClassFieldStats>,
 }

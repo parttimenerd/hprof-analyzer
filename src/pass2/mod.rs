@@ -394,7 +394,9 @@ impl Pass2 {
         } else {
             None
         };
-        crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before degree alloc)");
+        crate::trace::probe(
+            "pass2: after early-compress class_idx+alloc_serial (before degree alloc)",
+        );
 
         // ── Phase 1: Sub-pass 2a — count degrees ────────────────────────
         // class_idx is now compressed (freed above); only shallow(~2GB) + id_map(~2GB)
@@ -511,7 +513,6 @@ impl Pass2 {
         } else {
             Vec::new()
         };
-
 
         // Collect thread object addresses for capture during 2a scan.
         let capture_thread_addrs: std::collections::HashSet<u64> =
@@ -1279,7 +1280,10 @@ impl Pass2 {
             let mut schema: Vec<Vec<String>> = vec![Vec::new(); n_cls];
             for (ci, plan) in field_plans_named_dense.iter().enumerate() {
                 if ci < n_cls {
-                    schema[ci] = plan.iter().map(|(_off, _excl, name)| name.clone()).collect();
+                    schema[ci] = plan
+                        .iter()
+                        .map(|(_off, _excl, name)| name.clone())
+                        .collect();
                 }
             }
             graph.class_ref_field_names = schema;

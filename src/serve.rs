@@ -632,7 +632,11 @@ mod tests {
         assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
         let (bytes, stem) = result.unwrap();
         let html = String::from_utf8(bytes).expect("valid UTF-8");
-        assert!(html.starts_with("<!DOCTYPE html>"), "expected HTML, got: {}", &html[..html.len().min(100)]);
+        assert!(
+            html.starts_with("<!DOCTYPE html>"),
+            "expected HTML, got: {}",
+            &html[..html.len().min(100)]
+        );
         assert!(html.contains("<title>"), "expected <title> in HTML");
         assert!(!stem.is_empty(), "expected non-empty stem");
     }

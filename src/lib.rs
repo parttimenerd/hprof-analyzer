@@ -196,8 +196,10 @@ pub fn build_exploration(
     let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
     let saved_fwd_targets: Vec<u32> = (0..total_edges).map(|i| g.fwd_targets.get(i)).collect();
     let saved_fwd_field_name_idx: Option<Vec<u16>> = g.fwd_field_name_idx.clone();
-    let saved_field_name_pool: Vec<String> =
-        g.field_name_pool.clone().unwrap_or_else(|| vec![String::new()]);
+    let saved_field_name_pool: Vec<String> = g
+        .field_name_pool
+        .clone()
+        .unwrap_or_else(|| vec![String::new()]);
 
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
         std::mem::take(&mut g.fwd_offsets),
@@ -216,8 +218,7 @@ pub fn build_exploration(
         }
     }
 
-    let gc_root_set: std::collections::HashSet<u32> =
-        g.gc_root_indices.iter().copied().collect();
+    let gc_root_set: std::collections::HashSet<u32> = g.gc_root_indices.iter().copied().collect();
 
     // Decompress shallow + class_idx for class name lookup
     let shallow: Vec<u32> = shallow_c.restore()?;
@@ -228,7 +229,10 @@ pub fn build_exploration(
         .map(|&ci| {
             let ci = ci as usize;
             if ci < g.class_names.len() {
-                g.class_names[ci].replace('/', ".").replace("[[", "[").to_string()
+                g.class_names[ci]
+                    .replace('/', ".")
+                    .replace("[[", "[")
+                    .to_string()
             } else {
                 format!("obj#{}", ci)
             }

@@ -29,7 +29,38 @@ fn load_report(path: &str) -> io::Result<Report> {
         io::stdin().read_to_string(&mut buf)?;
         buf
     } else {
-        std::fs::read_to_string(path)?
+        std::fs::read_to_string(path).map_err(|e| {
+            // A binary HPROF dump passed to `compare reports` produces the opaque
+            // "stream did not contain valid UTF-8" error. Surface an actionable hint.
+            if e.kind() == io::ErrorKind::InvalidData {
+                let lower = path.to_ascii_lowercase();
+                let is_hprof_ext = lower.ends_with(".hprof")
+                    || lower.ends_with(".hprof.gz")
+                    || lower.ends_with(".hprof.zip");
+                let is_hprof_magic = std::fs::File::open(path)
+                    .ok()
+                    .and_then(|mut f| {
+                        let mut head = [0u8; 12];
+                        f.read_exact(&mut head).ok().map(|_| head)
+                    })
+                    .is_some_and(|h| h.starts_with(b"JAVA PROFILE"));
+                if is_hprof_ext || is_hprof_magic {
+                    return io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "'{path}' looks like a heap dump, not a Report JSON. \
+                             `compare reports` needs pre-built Report JSON files \
+                             (produced by: hprof-analyzer {path} --format json > report.json)"
+                        ),
+                    );
+                }
+                return io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("'{path}' is not valid UTF-8; expected a Report JSON file"),
+                );
+            }
+            e
+        })?
     };
     let report: Report = serde_json::from_str(&json).map_err(|e| {
         io::Error::new(

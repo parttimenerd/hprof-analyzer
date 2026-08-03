@@ -5,30 +5,32 @@
 /// Larger tiers produce bigger HTML reports but cover more of the heap.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ReportSize {
-    Small,   // edge_cap=100  (default, current behaviour)
-    Medium,  // edge_cap=150
-    Large,   // edge_cap=300
+    Small,  // edge_cap=100  (default, current behaviour)
+    Medium, // edge_cap=150
+    Large,  // edge_cap=300
 }
 
 impl ReportSize {
     pub fn edge_cap(self) -> usize {
         match self {
-            ReportSize::Small  => 100,
+            ReportSize::Small => 100,
             ReportSize::Medium => 150,
-            ReportSize::Large  => 300,
+            ReportSize::Large => 300,
         }
     }
     pub fn tier_name(self) -> &'static str {
         match self {
-            ReportSize::Small  => "small",
+            ReportSize::Small => "small",
             ReportSize::Medium => "medium",
-            ReportSize::Large  => "large",
+            ReportSize::Large => "large",
         }
     }
 }
 
 impl Default for ReportSize {
-    fn default() -> Self { ReportSize::Small }
+    fn default() -> Self {
+        ReportSize::Small
+    }
 }
 
 /// Output format for the analysis report.

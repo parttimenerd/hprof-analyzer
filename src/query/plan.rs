@@ -2072,17 +2072,15 @@ impl QueryPlan {
         // ── Summary line ────────────────────────────────────────────────────────
         let stage_label = match self.kind {
             StageKind::HistogramOnly => "class histogram scan (fast)",
-            StageKind::SingleScan    => "full heap scan",
-            StageKind::GroupBy       => "full heap scan + GROUP BY",
+            StageKind::SingleScan => "full heap scan",
+            StageKind::GroupBy => "full heap scan + GROUP BY",
         };
         let phase_label = match self.finalize_at {
             Phase::P1 => "Phase-1",
             Phase::P2 => "Phase-2 (ref-graph)",
             Phase::P3 => "Phase-3 (retained/dominators)",
         };
-        let mut summary_parts: Vec<String> = vec![
-            format!("{stage_label} → {phase_label}"),
-        ];
+        let mut summary_parts: Vec<String> = vec![format!("{stage_label} → {phase_label}")];
         if let Some(n) = self.scan_limit {
             summary_parts.push(format!("early-stop at {n} rows"));
         } else if self.order_sensitive && self.limit.is_some() {
@@ -2095,7 +2093,10 @@ impl QueryPlan {
             summary_parts.push(format!("UNION ×{}", self.union_branches.len() + 1));
         }
         if !self.intersect_branch_plans.is_empty() {
-            summary_parts.push(format!("INTERSECT ×{}", self.intersect_branch_plans.len() + 1));
+            summary_parts.push(format!(
+                "INTERSECT ×{}",
+                self.intersect_branch_plans.len() + 1
+            ));
         }
         if !self.except_branch_plans.is_empty() {
             summary_parts.push(format!("EXCEPT ×{}", self.except_branch_plans.len() + 1));
@@ -2116,41 +2117,62 @@ impl QueryPlan {
 
         // ── Needs (human-readable) ────────────────────────────────────────────
         let need_labels: &[(&str, bool)] = &[
-            ("class histogram (pre-aggregated, fast)", self.needs.histogram),
-            ("field values (blob decode)",             self.needs.instance_scalar),
-            ("string field decode",                    self.needs.instance_string),
-            ("runtime class name",                     self.needs.runtime_type),
-            ("retained heap (dominators)",             self.needs.retained),
-            ("dominator-tree children",                self.needs.dominator_children),
-            ("reference graph walk",                   self.needs.ref_walk),
-            ("toString() string values",               self.needs.string_values),
-            ("GC root descriptors",                    self.needs.gc_roots),
-            ("array element access",                   self.needs.array_index),
+            (
+                "class histogram (pre-aggregated, fast)",
+                self.needs.histogram,
+            ),
+            ("field values (blob decode)", self.needs.instance_scalar),
+            ("string field decode", self.needs.instance_string),
+            ("runtime class name", self.needs.runtime_type),
+            ("retained heap (dominators)", self.needs.retained),
+            ("dominator-tree children", self.needs.dominator_children),
+            ("reference graph walk", self.needs.ref_walk),
+            ("toString() string values", self.needs.string_values),
+            ("GC root descriptors", self.needs.gc_roots),
+            ("array element access", self.needs.array_index),
         ];
-        let armed: Vec<&str> = need_labels.iter()
+        let armed: Vec<&str> = need_labels
+            .iter()
             .filter(|(_, on)| *on)
             .map(|(label, _)| *label)
             .collect();
         s.push_str(&format!(
             "{pad}needs: {}\n",
-            if armed.is_empty() { "none".to_string() } else { armed.join(", ") }
+            if armed.is_empty() {
+                "none".to_string()
+            } else {
+                armed.join(", ")
+            }
         ));
 
         // ── Carry + finalize ──────────────────────────────────────────────────
         let carry_label = match &self.carry {
             CarryLayout::IndexOnly => "IndexOnly".to_string(),
-            CarryLayout::IndexPlusScalars { widths } =>
-                format!("IndexPlusScalars({} col{})", widths.len(), if widths.len() == 1 { "" } else { "s" }),
+            CarryLayout::IndexPlusScalars { widths } => format!(
+                "IndexPlusScalars({} col{})",
+                widths.len(),
+                if widths.len() == 1 { "" } else { "s" }
+            ),
             CarryLayout::AddrFrontier => "AddrFrontier".to_string(),
         };
         s.push_str(&format!("{pad}carry: {carry_label}\n"));
         s.push_str(&format!("{pad}finalize: {:?}\n", self.finalize_at));
 
         // ── Limits ───────────────────────────────────────────────────────────
-        if let Some(n) = self.limit      { s.push_str(&format!("{pad}limit: {n}\n")); }
-        if let Some(n) = self.scan_limit { s.push_str(&format!("{pad}scan_limit: {n}\n")); }
-        if self.order_sensitive          { s.push_str(&format!("{pad}order_sensitive: true  (ORDER BY prevents scan early-stop)\n")); }
-        if let Some(n) = self.union_limit { s.push_str(&format!("{pad}union_limit: {n}\n")); }
+        if let Some(n) = self.limit {
+            s.push_str(&format!("{pad}limit: {n}\n"));
+        }
+        if let Some(n) = self.scan_limit {
+            s.push_str(&format!("{pad}scan_limit: {n}\n"));
+        }
+        if self.order_sensitive {
+            s.push_str(&format!(
+                "{pad}order_sensitive: true  (ORDER BY prevents scan early-stop)\n"
+            ));
+        }
+        if let Some(n) = self.union_limit {
+            s.push_str(&format!("{pad}union_limit: {n}\n"));
+        }
 
         // ── WHERE predicates ──────────────────────────────────────────────────
         if !self.where_terms.is_empty() {
@@ -2162,7 +2184,11 @@ impl QueryPlan {
 
         // ── GROUP BY / HAVING ─────────────────────────────────────────────────
         if !self.group_by_exprs.is_empty() {
-            let exprs: Vec<String> = self.group_by_exprs.iter().map(|e| format!("{e:?}")).collect();
+            let exprs: Vec<String> = self
+                .group_by_exprs
+                .iter()
+                .map(|e| format!("{e:?}"))
+                .collect();
             s.push_str(&format!("{pad}group_by: {}\n", exprs.join(", ")));
         }
         if !self.having_terms.is_empty() {
@@ -2180,10 +2206,15 @@ impl QueryPlan {
 
         // ── Deferred projections ─────────────────────────────────────────────
         if !self.deferred_projections.is_empty() {
-            let indices: Vec<String> = self.deferred_projections.iter()
-                .map(|d| d.select_index.to_string()).collect();
-            s.push_str(&format!("{pad}deferred_projections: [{}]  (expensive SELECTs deferred past WHERE filter)\n",
-                indices.join(", ")));
+            let indices: Vec<String> = self
+                .deferred_projections
+                .iter()
+                .map(|d| d.select_index.to_string())
+                .collect();
+            s.push_str(&format!(
+                "{pad}deferred_projections: [{}]  (expensive SELECTs deferred past WHERE filter)\n",
+                indices.join(", ")
+            ));
         }
 
         // ── Subquery trees ────────────────────────────────────────────────────
@@ -2904,7 +2935,10 @@ mod tests {
         let plan = pq(&parse("SELECT * FROM C WHERE count > 3").unwrap()).unwrap();
         let text = plan.explain();
         let first_line = text.lines().next().unwrap_or("");
-        assert!(first_line.starts_with("summary:"), "first line should be summary:, got: {first_line}");
+        assert!(
+            first_line.starts_with("summary:"),
+            "first line should be summary:, got: {first_line}"
+        );
     }
 
     #[test]
@@ -2912,7 +2946,10 @@ mod tests {
         let plan = pq(&parse("SELECT count FROM C").unwrap()).unwrap();
         let text = plan.explain();
         assert!(text.contains("field values (blob decode)"), "got: {text}");
-        assert!(!text.contains("instance_scalar"), "raw name should not appear, got: {text}");
+        assert!(
+            !text.contains("instance_scalar"),
+            "raw name should not appear, got: {text}"
+        );
     }
 
     #[test]

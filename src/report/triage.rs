@@ -431,11 +431,10 @@ impl Rule for OneLeakOrMany {
         let top1_pct = rc.top1_bp as f64 / 100.0;
         let top10_pct = rc.top10_bp as f64 / 100.0;
         let top_obj = r.top.biggest_objects.first();
-        let detail = match top_obj
-            .map(|o| match o.owner.as_deref() {
-                Some(owner) => format!("`{}` (held by `{}`)", o.display_class, owner),
-                None => format!("`{}`", o.display_class),
-            }) {
+        let detail = match top_obj.map(|o| match o.owner.as_deref() {
+            Some(owner) => format!("`{}` (held by `{}`)", o.display_class, owner),
+            None => format!("`{}`", o.display_class),
+        }) {
             Some(name) => format!(
                 "the single biggest object, {}, retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
                 name, top1_pct, top10_pct, rc.num_objects_ge_1pct,

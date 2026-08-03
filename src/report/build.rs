@@ -126,7 +126,7 @@ fn build_obj_graph_flat(
                 edges_unknown: false, // set below
                 edges_truncated: false,
                 idom,
-                dom_subtree_count: 0, // computed below
+                dom_subtree_count: 0,        // computed below
                 subtree_classes: Vec::new(), // computed below
             },
         );
@@ -152,7 +152,10 @@ fn build_obj_graph_flat(
             let mut stack: Vec<(u32, usize)> = vec![(root, 0)];
             while let Some((node, child_idx)) = stack.last_mut() {
                 let node = *node;
-                let children = dom_children_map.get(&node).map(|v| v.as_slice()).unwrap_or(&[]);
+                let children = dom_children_map
+                    .get(&node)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
                 if *child_idx < children.len() {
                     let child = children[*child_idx];
                     *child_idx += 1;
@@ -163,7 +166,11 @@ fn build_obj_graph_flat(
                     stack.pop();
                     let child_sum: u32 = dom_children_map
                         .get(&node)
-                        .map(|kids| kids.iter().map(|k| *subtree_counts.get(k).unwrap_or(&1)).sum())
+                        .map(|kids| {
+                            kids.iter()
+                                .map(|k| *subtree_counts.get(k).unwrap_or(&1))
+                                .sum()
+                        })
                         .unwrap_or(0);
                     subtree_counts.insert(node, 1 + child_sum);
                 }
@@ -235,10 +242,8 @@ fn build_obj_graph_flat(
                 }
                 // If this is a significant node, extract top-K and store.
                 if nodes.contains_key(&node) {
-                    let mut rows: Vec<(u32, u32, u64)> = agg
-                        .iter()
-                        .map(|(&ci, &(cnt, sh))| (ci, cnt, sh))
-                        .collect();
+                    let mut rows: Vec<(u32, u32, u64)> =
+                        agg.iter().map(|(&ci, &(cnt, sh))| (ci, cnt, sh)).collect();
                     rows.sort_unstable_by(|a, b| b.2.cmp(&a.2));
                     rows.truncate(TOP_K);
                     let histogram: Vec<SubtreeClassRow> = rows
@@ -321,8 +326,10 @@ fn build_obj_graph_flat(
     }
 
     // Populate inbound_edges from ObjGraphCapture.inbound
-    let mut inbound_map: std::collections::HashMap<u32, Vec<InboundEdge>> = std::collections::HashMap::new();
-    let mut inbound_truncated_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut inbound_map: std::collections::HashMap<u32, Vec<InboundEdge>> =
+        std::collections::HashMap::new();
+    let mut inbound_truncated_set: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     if let Some(cap) = g.obj_graph_edges.as_ref() {
         for (&dst, raw_inbound) in &cap.inbound {
             if !nodes.contains_key(&dst) {
@@ -334,7 +341,10 @@ fn build_obj_graph_flat(
                     let field_name = if name_idx == 0 {
                         String::new()
                     } else {
-                        cap.field_name_pool.get(name_idx as usize).cloned().unwrap_or_default()
+                        cap.field_name_pool
+                            .get(name_idx as usize)
+                            .cloned()
+                            .unwrap_or_default()
                     };
                     let src_usize = src_idx as usize;
                     let src_ci = g.class_idx.get(src_usize).copied().unwrap_or(0) as usize;
@@ -345,7 +355,13 @@ fn build_obj_graph_flat(
                     };
                     let src_shallow = g.shallow.get(src_usize).copied().unwrap_or(0) as u64;
                     let src_retained = g.retained.get(src_usize).copied().unwrap_or(0);
-                    InboundEdge { src_idx, field_name, src_class, src_shallow, src_retained }
+                    InboundEdge {
+                        src_idx,
+                        field_name,
+                        src_class,
+                        src_shallow,
+                        src_retained,
+                    }
                 })
                 .collect();
             if !inbound_edges.is_empty() {
@@ -511,7 +527,13 @@ pub fn build_model(
     let dominator_analysis = build_dominator_analysis(g, &dc_offsets, &dc_targets);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let obj_graph_flat = if opts.obj_graph {
-        Some(build_obj_graph_flat(g, &dc_offsets, &dc_targets, opts.report_size.edge_cap(), opts.report_size.tier_name()))
+        Some(build_obj_graph_flat(
+            g,
+            &dc_offsets,
+            &dc_targets,
+            opts.report_size.edge_cap(),
+            opts.report_size.tier_name(),
+        ))
     } else {
         None
     };
@@ -764,12 +786,14 @@ fn build_threadlocal_analysis(g: &Graph) -> Vec<ThreadLocalLeakRow> {
 
     let mut rows: Vec<ThreadLocalLeakRow> = by_class
         .into_iter()
-        .map(|(value_class, (entry_count, stale_count, retained))| ThreadLocalLeakRow {
-            value_class,
-            entry_count,
-            stale_count,
-            retained,
-        })
+        .map(
+            |(value_class, (entry_count, stale_count, retained))| ThreadLocalLeakRow {
+                value_class,
+                entry_count,
+                stale_count,
+                retained,
+            },
+        )
         .collect();
 
     // Sort: retained desc, entry_count desc, value_class asc for determinism.
@@ -2458,8 +2482,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     // dominator chain up to the GC root (mirroring build_leak_suspects root_path).
     if !g.idom.is_empty() && !g.retained.is_empty() {
         // Build a map: object index → GC root type (minimum sub-tag, deterministic).
-        let mut root_type_of: std::collections::HashMap<u32, u8> =
-            std::collections::HashMap::new();
+        let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
         for (idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
             root_type_of
                 .entry(*idx)
@@ -2779,8 +2802,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let gc_roots_retained_by_type: Vec<crate::report::GcRootRetainedRow> = {
         use std::collections::HashMap;
         // by_type: root_type_label → (count, retained, HashMap<class_name → (count, retained)>)
-        let mut by_type: HashMap<String, (u64, u64, HashMap<String, (u64, u64)>)> =
-            HashMap::new();
+        let mut by_type: HashMap<String, (u64, u64, HashMap<String, (u64, u64)>)> = HashMap::new();
         for (&idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
             if let Some(label) = gc_root_type_label_opt(ty) {
                 let i = idx as usize;
@@ -4153,7 +4175,6 @@ mod dom_subtree_tests {
     }
 }
 
-
 // ── Field statistics ─────────────────────────────────────────────────────────
 
 /// Compute per-class reference-field statistics for the top-50 most common
@@ -4180,15 +4201,18 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
     ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     ranked.truncate(50);
 
-    let target_rows: std::collections::HashSet<usize> =
-        ranked.iter().map(|(i, _)| *i).collect();
+    let target_rows: std::collections::HashSet<usize> = ranked.iter().map(|(i, _)| *i).collect();
     let retained_len = g.retained.len();
 
     // Per-class, per-field accumulators: (non_null_counts, retained_sums)
     use std::collections::HashMap;
     let mut acc_map: HashMap<usize, (Vec<u64>, Vec<u64>)> = HashMap::new();
     for &(ci, _) in &ranked {
-        let n_fields = g.class_ref_field_names.get(ci).map(|v| v.len()).unwrap_or(0);
+        let n_fields = g
+            .class_ref_field_names
+            .get(ci)
+            .map(|v| v.len())
+            .unwrap_or(0);
         acc_map.insert(ci, (vec![0u64; n_fields], vec![0u64; n_fields]));
     }
 
@@ -4225,11 +4249,7 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
         .into_iter()
         .map(|(ci, instance_count)| {
             let class_name = g.class_names[ci].clone();
-            let names = g
-                .class_ref_field_names
-                .get(ci)
-                .cloned()
-                .unwrap_or_default();
+            let names = g.class_ref_field_names.get(ci).cloned().unwrap_or_default();
             let (nn, rt) = acc_map.remove(&ci).unwrap_or_default();
 
             let ref_fields = if names.is_empty() {

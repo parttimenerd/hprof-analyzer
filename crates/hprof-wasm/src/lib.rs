@@ -26,8 +26,8 @@ fn call_progress(cb: &js_sys::Function, phase: &str, fraction: f32) {
 
 struct ExplorationHolder {
     result: hprof_analyzer::ExplorationResult,
-    retained_c:    Option<hprof_analyzer::cvec::CompressedU64>,
-    shallow_c:     Option<hprof_analyzer::cvec::CompressedU32>,
+    retained_c: Option<hprof_analyzer::cvec::CompressedU64>,
+    shallow_c: Option<hprof_analyzer::cvec::CompressedU32>,
     fwd_targets_c: Option<hprof_analyzer::cvec::CompressedU32>,
 }
 
@@ -599,7 +599,8 @@ impl HprofSession {
     /// Must be called before `inbound_refs()` or `gc_root_path()`.
     /// If `run_full_analysis()` has been called, retained sizes are included.
     pub fn enable_exploration(&mut self) -> Result<(), wasm_bindgen::JsValue> {
-        let retained = self.decompress_retained()
+        let retained = self
+            .decompress_retained()
             .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
         let result = hprof_analyzer::build_exploration(&self.source, &retained)
             .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
@@ -660,11 +661,13 @@ impl HprofSession {
         let refs: Vec<serde_json::Value> = parent_pres
             .iter()
             .map(|&parent_pre| {
-                let src_dense =
-                    exp.rpo_vertex.get(parent_pre as usize).copied().unwrap_or(u32::MAX);
+                let src_dense = exp
+                    .rpo_vertex
+                    .get(parent_pre as usize)
+                    .copied()
+                    .unwrap_or(u32::MAX);
                 let src = src_dense as usize;
-                let display_class =
-                    exp.class_names_by_idx.get(src).cloned().unwrap_or_default();
+                let display_class = exp.class_names_by_idx.get(src).cloned().unwrap_or_default();
                 let shallow = h.get_shallow(src) as u64;
                 let retained = h.get_retained(src);
 
@@ -675,15 +678,13 @@ impl HprofSession {
                     h.fwd_slice(start, end)
                         .ok()
                         .and_then(|slice| {
-                            slice.iter()
-                                .position(|&t| t == dense_idx)
-                                .and_then(|rel| {
-                                    exp.fwd_field_name_idx
-                                        .as_ref()
-                                        .and_then(|idx| idx.get(start + rel).copied())
-                                        .and_then(|ni| exp.field_name_pool.get(ni as usize))
-                                        .map(|s| s.clone())
-                                })
+                            slice.iter().position(|&t| t == dense_idx).and_then(|rel| {
+                                exp.fwd_field_name_idx
+                                    .as_ref()
+                                    .and_then(|idx| idx.get(start + rel).copied())
+                                    .and_then(|ni| exp.field_name_pool.get(ni as usize))
+                                    .map(|s| s.clone())
+                            })
                         })
                         .unwrap_or_default()
                 } else {
@@ -725,7 +726,8 @@ impl HprofSession {
 
         let src = dense_idx as usize;
         if src + 1 >= exp.fwd_offsets.len() {
-            return serde_json::json!({"ok":true,"refs":[],"total":0,"truncated":false}).to_string();
+            return serde_json::json!({"ok":true,"refs":[],"total":0,"truncated":false})
+                .to_string();
         }
         let start = exp.fwd_offsets[src] as usize;
         let end = exp.fwd_offsets[src + 1] as usize;
@@ -832,8 +834,11 @@ impl HprofSession {
                 break;
             }
 
-            let pre =
-                exp.dense_to_pre.get(current as usize).copied().unwrap_or(u32::MAX);
+            let pre = exp
+                .dense_to_pre
+                .get(current as usize)
+                .copied()
+                .unwrap_or(u32::MAX);
             if pre != u32::MAX {
                 let (parents, _) = decode_inbound_parents(
                     pre as usize,
@@ -950,12 +955,15 @@ impl HprofSession {
     /// On failure: `{"ok":false,"error":"..."}`.
     /// Requires the OQL cache to have been built (call `query()` at least once, or `run_full_analysis()`).
     pub fn get_field_values(&mut self, dense_idx: u32) -> String {
-        use hprof_analyzer::query::{optimize, parse, plan, run};
         use hprof_analyzer::query::model::QueryValue;
+        use hprof_analyzer::query::{optimize, parse, plan, run};
 
         let exp = match self.exploration.as_ref() {
             Some(e) => &e.result,
-            None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+            None => {
+                return serde_json::json!({"ok":false,"error":"exploration_not_enabled"})
+                    .to_string();
+            }
         };
 
         let i = dense_idx as usize;
@@ -992,7 +1000,9 @@ impl HprofSession {
             run::run_resident_only(cache, &[(q, optimized)], true)
         } else {
             match self.decompress_retained() {
-                Ok(retained) => run::run_resident_with_retained(cache, &[(q, optimized)], true, &retained),
+                Ok(retained) => {
+                    run::run_resident_with_retained(cache, &[(q, optimized)], true, &retained)
+                }
                 Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
             }
         };
@@ -1012,21 +1022,34 @@ impl HprofSession {
             None => return serde_json::json!({"ok":true,"fields":[]}).to_string(),
         };
 
-        let fields: Vec<serde_json::Value> = result.columns.iter().zip(row.iter()).map(|(col, val)| {
-            match val {
-                QueryValue::Null => serde_json::json!({"name": col.name, "kind": "null", "value": null}),
-                QueryValue::Bool(b) => serde_json::json!({"name": col.name, "kind": "bool", "value": b}),
-                QueryValue::Int(n) => serde_json::json!({"name": col.name, "kind": "int", "value": n}),
-                QueryValue::Float(f) => serde_json::json!({"name": col.name, "kind": "float", "value": f}),
-                QueryValue::Str(s) => serde_json::json!({"name": col.name, "kind": "str", "value": s}),
+        let fields: Vec<serde_json::Value> = result
+            .columns
+            .iter()
+            .zip(row.iter())
+            .map(|(col, val)| match val {
+                QueryValue::Null => {
+                    serde_json::json!({"name": col.name, "kind": "null", "value": null})
+                }
+                QueryValue::Bool(b) => {
+                    serde_json::json!({"name": col.name, "kind": "bool", "value": b})
+                }
+                QueryValue::Int(n) => {
+                    serde_json::json!({"name": col.name, "kind": "int", "value": n})
+                }
+                QueryValue::Float(f) => {
+                    serde_json::json!({"name": col.name, "kind": "float", "value": f})
+                }
+                QueryValue::Str(s) => {
+                    serde_json::json!({"name": col.name, "kind": "str", "value": s})
+                }
                 QueryValue::ObjRef { index, class, .. } => serde_json::json!({
                     "name": col.name,
                     "kind": "ref",
                     "display_class": class,
                     "dense_idx": index,
                 }),
-            }
-        }).collect();
+            })
+            .collect();
 
         serde_json::json!({"ok": true, "fields": fields}).to_string()
     }
@@ -1052,7 +1075,8 @@ impl HprofSession {
         // BFS: queue entries are (current_node, path_from_target_to_here)
         // We need to find MULTIPLE paths, so we allow revisiting nodes in different paths
         // but cap total work with a node-visit counter.
-        let mut global_visited: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut global_visited: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
         let mut queue: std::collections::VecDeque<(u32, Vec<u32>)> =
             std::collections::VecDeque::new();
         queue.push_back((dense_idx, vec![dense_idx]));
@@ -1103,7 +1127,11 @@ impl HprofSession {
                 continue;
             }
 
-            let pre = exp.dense_to_pre.get(current as usize).copied().unwrap_or(u32::MAX);
+            let pre = exp
+                .dense_to_pre
+                .get(current as usize)
+                .copied()
+                .unwrap_or(u32::MAX);
             if pre != u32::MAX {
                 let (parents, _) = decode_inbound_parents(
                     pre as usize,
@@ -1159,14 +1187,17 @@ impl HprofSession {
     /// for list/set types.
     /// Returns `{"ok":true,"type":"unknown"}` when the class is not a known collection.
     pub fn get_collection_entries(&mut self, dense_idx: u32, limit: u32) -> String {
-        use hprof_analyzer::query::{optimize, parse, plan, run};
         use hprof_analyzer::query::model::QueryValue;
+        use hprof_analyzer::query::{optimize, parse, plan, run};
 
         // Extract class_name from exploration (borrow released after clone)
         let class_name: String = {
             let h = match self.exploration.as_ref() {
                 Some(h) => h,
-                None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+                None => {
+                    return serde_json::json!({"ok":false,"error":"exploration_not_enabled"})
+                        .to_string();
+                }
             };
             let i = dense_idx as usize;
             match h.result.class_names_by_idx.get(i) {
@@ -1207,7 +1238,9 @@ impl HprofSession {
             run::run_resident_only(cache, &[(q, optimized)], true)
         } else {
             match self.decompress_retained() {
-                Ok(retained) => run::run_resident_with_retained(cache, &[(q, optimized)], true, &retained),
+                Ok(retained) => {
+                    run::run_resident_with_retained(cache, &[(q, optimized)], true, &retained)
+                }
                 Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
             }
         };
@@ -1226,12 +1259,10 @@ impl HprofSession {
             let col_idx = result.columns.iter().position(|c| c.name == array_field);
             let row = result.rows.into_iter().next();
             match (col_idx, row) {
-                (Some(ci), Some(ref row)) => {
-                    match row.get(ci) {
-                        Some(QueryValue::ObjRef { index, .. }) => *index as u32,
-                        _ => return serde_json::json!({"ok":true,"type":"unknown"}).to_string(),
-                    }
-                }
+                (Some(ci), Some(ref row)) => match row.get(ci) {
+                    Some(QueryValue::ObjRef { index, .. }) => *index as u32,
+                    _ => return serde_json::json!({"ok":true,"type":"unknown"}).to_string(),
+                },
                 _ => return serde_json::json!({"ok":true,"type":"unknown"}).to_string(),
             }
         };
@@ -1239,13 +1270,17 @@ impl HprofSession {
         // Step 2: outbound refs of the backing array — these are the entries
         let h = match self.exploration.as_ref() {
             Some(h) => h,
-            None => return serde_json::json!({"ok":false,"error":"exploration_not_enabled"}).to_string(),
+            None => {
+                return serde_json::json!({"ok":false,"error":"exploration_not_enabled"})
+                    .to_string();
+            }
         };
         let exp = &h.result;
 
         let arr_i = array_dense_idx as usize;
         if arr_i >= exp.fwd_offsets.len().saturating_sub(1) {
-            return serde_json::json!({"ok":true,"type":coll_type,"entries":[],"truncated":false}).to_string();
+            return serde_json::json!({"ok":true,"type":coll_type,"entries":[],"truncated":false})
+                .to_string();
         }
 
         let start = exp.fwd_offsets[arr_i] as usize;
@@ -1260,24 +1295,29 @@ impl HprofSession {
         let total = targets.len();
         let truncated = total > limit;
 
-        let entries: Vec<serde_json::Value> = targets.iter().take(limit).map(|&t| {
-            let t_i = t as usize;
-            let dc = exp.class_names_by_idx.get(t_i).cloned().unwrap_or_default();
-            if coll_type == "map" {
-                // For maps the backing array holds Entry objects; we show them as elements
-                // (key/value would require a second level of field access)
-                serde_json::json!({"elem_idx": t, "elem_class": dc})
-            } else {
-                serde_json::json!({"elem_idx": t, "elem_class": dc})
-            }
-        }).collect();
+        let entries: Vec<serde_json::Value> = targets
+            .iter()
+            .take(limit)
+            .map(|&t| {
+                let t_i = t as usize;
+                let dc = exp.class_names_by_idx.get(t_i).cloned().unwrap_or_default();
+                if coll_type == "map" {
+                    // For maps the backing array holds Entry objects; we show them as elements
+                    // (key/value would require a second level of field access)
+                    serde_json::json!({"elem_idx": t, "elem_class": dc})
+                } else {
+                    serde_json::json!({"elem_idx": t, "elem_class": dc})
+                }
+            })
+            .collect();
 
         serde_json::json!({
             "ok": true,
             "type": coll_type,
             "entries": entries,
             "truncated": truncated,
-        }).to_string()
+        })
+        .to_string()
     }
 
     /// Returns the HPROF memory address (as a hex string) for a single object by dense index.
@@ -1352,15 +1392,23 @@ impl HprofSession {
 
         'bfs: while let Some(cur) = queue.pop_front() {
             let ci = cur as usize;
-            if ci + 1 >= exp.fwd_offsets.len() { continue; }
+            if ci + 1 >= exp.fwd_offsets.len() {
+                continue;
+            }
             let start = exp.fwd_offsets[ci] as usize;
             let end = exp.fwd_offsets[ci + 1] as usize;
             for &nxt in &fwd_targets[start..end] {
                 let ni = nxt as usize;
-                if ni >= n || visited[ni] != u32::MAX { continue; }
+                if ni >= n || visited[ni] != u32::MAX {
+                    continue;
+                }
                 visited[ni] = cur;
-                if nxt == dst_idx { break 'bfs; }
-                if queue.len() < 50_000 { queue.push_back(nxt); }
+                if nxt == dst_idx {
+                    break 'bfs;
+                }
+                if queue.len() < 50_000 {
+                    queue.push_back(nxt);
+                }
             }
         }
 
@@ -1372,22 +1420,29 @@ impl HprofSession {
         let mut cur = dst_idx;
         for _ in 0..500 {
             let parent = visited[cur as usize];
-            if parent == u32::MAX || parent == cur { break; }
+            if parent == u32::MAX || parent == cur {
+                break;
+            }
             path_indices.push(parent);
-            if parent == src_idx { break; }
+            if parent == src_idx {
+                break;
+            }
             cur = parent;
         }
         path_indices.reverse();
 
-        let path_json: Vec<serde_json::Value> = path_indices.iter().map(|&idx| {
-            let i = idx as usize;
-            serde_json::json!({
-                "dense_idx": idx,
-                "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
-                "shallow": h.get_shallow(i) as u64,
-                "retained": h.get_retained(i),
+        let path_json: Vec<serde_json::Value> = path_indices
+            .iter()
+            .map(|&idx| {
+                let i = idx as usize;
+                serde_json::json!({
+                    "dense_idx": idx,
+                    "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
+                    "shallow": h.get_shallow(i) as u64,
+                    "retained": h.get_retained(i),
+                })
             })
-        }).collect();
+            .collect();
 
         serde_json::json!({"ok":true,"path":path_json}).to_string()
     }
@@ -1424,8 +1479,6 @@ impl HprofSession {
         !self.retained.is_empty() || self.retained_c.is_some()
     }
 }
-
-
 
 /// Decode a single vbyte (little-endian base-128) value from `data[pos..]`.
 /// Returns `(value, bytes_consumed)` or `None` if out of bounds.
@@ -1547,21 +1600,18 @@ fn collection_info(class_name: &str) -> Option<(&'static str, &'static str)> {
         "java.util.TreeMap" => Some(("map", "table")),
         "java.util.concurrent.ConcurrentHashMap" => Some(("map", "table")),
         // ── JDK lists ─────────────────────────────────────────────────────────
-        "java.util.ArrayList"
-        | "java.util.Vector"
-        | "java.util.Stack" => Some(("list", "elementData")),
+        "java.util.ArrayList" | "java.util.Vector" | "java.util.Stack" => {
+            Some(("list", "elementData"))
+        }
         "java.util.LinkedList" => Some(("list", "first")), // first Node; we iterate via outbound refs
         "java.util.ArrayDeque" => Some(("list", "elements")),
         // ── JDK sets (backed by a map's key set — expose array field of inner map) ──
-        "java.util.HashSet"
-        | "java.util.LinkedHashSet" => Some(("list", "map")), // map is a HashMap; outbound_refs will give us the table
+        "java.util.HashSet" | "java.util.LinkedHashSet" => Some(("list", "map")), // map is a HashMap; outbound_refs will give us the table
         "java.util.TreeSet" => Some(("list", "m")),
         // ── Kotlin stdlib (thin JDK wrappers) ────────────────────────────────
         "kotlin.collections.ArrayList" => Some(("list", "elementData")),
-        "kotlin.collections.HashMap"
-        | "kotlin.collections.LinkedHashMap" => Some(("map", "table")),
-        "kotlin.collections.HashSet"
-        | "kotlin.collections.LinkedHashSet" => Some(("list", "map")),
+        "kotlin.collections.HashMap" | "kotlin.collections.LinkedHashMap" => Some(("map", "table")),
+        "kotlin.collections.HashSet" | "kotlin.collections.LinkedHashSet" => Some(("list", "map")),
         // ── Scala mutable ────────────────────────────────────────────────────
         "scala.collection.mutable.HashMap" => Some(("map", "table")),
         "scala.collection.mutable.ArrayBuffer" => Some(("list", "array")),
@@ -1571,8 +1621,7 @@ fn collection_info(class_name: &str) -> Option<(&'static str, &'static str)> {
         "org.eclipse.collections.impl.list.mutable.FastList" => Some(("list", "items")),
         "org.eclipse.collections.impl.set.mutable.UnifiedSet" => Some(("list", "table")),
         // ── Trove ─────────────────────────────────────────────────────────────
-        "gnu.trove.map.hash.THashMap"
-        | "gnu.trove.THashMap" => Some(("map", "_values")),
+        "gnu.trove.map.hash.THashMap" | "gnu.trove.THashMap" => Some(("map", "_values")),
         // ── Guava ─────────────────────────────────────────────────────────────
         "com.google.common.collect.ImmutableList" => Some(("list", "array")),
         "com.google.common.collect.ImmutableMap" => Some(("map", "table")),

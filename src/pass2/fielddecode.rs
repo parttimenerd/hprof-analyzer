@@ -932,8 +932,8 @@ type FieldDecodeViews = (
     Option<Vec<CollValuesRaw>>,
     Option<HashMap<u32, (u32, u32)>>, // node_kv: wrapper dense idx → (key, val)
     bool,
-    u64, // direct_byte_buffer_capacity_sum
-    u64, // thread_local_null_key_count
+    u64,              // direct_byte_buffer_capacity_sum
+    u64,              // thread_local_null_key_count
     Vec<(bool, u32)>, // tl_entry_records: (is_stale, value_dense_idx)
 );
 
@@ -1224,7 +1224,8 @@ where
                                             if vo + obj_ref_width <= blob.len() {
                                                 let val_addr = read_ref(&blob[vo..], obj_ref_width);
                                                 if val_addr != 0 {
-                                                    ic.index_of(&p1.id_map, val_addr).map(|i| i as u32)
+                                                    ic.index_of(&p1.id_map, val_addr)
+                                                        .map(|i| i as u32)
                                                 } else {
                                                     None
                                                 }

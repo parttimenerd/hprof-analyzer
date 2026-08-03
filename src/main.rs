@@ -307,6 +307,11 @@ enum Cmd {
         /// List all named queries and exit.
         #[arg(long = "list-named")]
         list_named: bool,
+        /// Output format for query results.
+        /// `text` (default) prints aligned ASCII tables; `json` emits a JSON
+        /// array of QueryResult objects suitable for scripting.
+        #[arg(short, long, value_enum, default_value_t = QueryFormatArg::Text)]
+        format: QueryFormatArg,
         /// When to show the live progress line on stderr.
         #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
         progress: ProgressWhen,
@@ -403,6 +408,15 @@ enum FormatArg {
     Json,
     /// Standalone HTML.
     Html,
+}
+
+/// Output format for the `query` subcommand.
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum QueryFormatArg {
+    /// Aligned ASCII tables (default).
+    Text,
+    /// JSON array of QueryResult objects.
+    Json,
 }
 
 /// Output-size preset. `Default` reproduces the historical cap values so
@@ -614,6 +628,7 @@ fn main() {
             all,
             run,
             list_named,
+            format,
             progress,
         }) => {
             if !input_is_hprof(&input) {
@@ -698,7 +713,8 @@ fn main() {
                     ProgressWhen::Auto => std::io::stderr().is_terminal(),
                 };
                 progress::set_enabled(show_progress);
-                if let Err(e) = run_queries(&input, opts) {
+                let json_out = format == QueryFormatArg::Json;
+                if let Err(e) = run_queries(&input, opts, json_out) {
                     fail(analyze_error_hint(&input, &e));
                 }
             }
@@ -775,7 +791,11 @@ fn run_default(cli: Cli) {
         let fmt = if cli.dev {
             // --dev implies HTML unless an explicit format or .html extension already means HTML.
             let base = resolve_format(cli.format, cli.output.as_deref());
-            if base != OutputFormat::Html { OutputFormat::Html } else { base }
+            if base != OutputFormat::Html {
+                OutputFormat::Html
+            } else {
+                base
+            }
         } else {
             resolve_format(cli.format, cli.output.as_deref())
         };
@@ -798,12 +818,19 @@ fn run_default(cli: Cli) {
             dev_report: cli.dev,
             ..opts
         };
-        opts.report_size = match cli.obj_graph.as_deref().map(|s| s.to_ascii_lowercase()).as_deref() {
+        opts.report_size = match cli
+            .obj_graph
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
             Some("medium") => crate::opts::ReportSize::Medium,
-            Some("large")  => crate::opts::ReportSize::Large,
+            Some("large") => crate::opts::ReportSize::Large,
             None | Some("small") => crate::opts::ReportSize::Small,
             Some(other) => {
-                eprintln!("error: unknown --obj-graph tier '{other}' (expected: small, medium, large)");
+                eprintln!(
+                    "error: unknown --obj-graph tier '{other}' (expected: small, medium, large)"
+                );
                 std::process::exit(2);
             }
         };
@@ -1047,16 +1074,17 @@ fn analyze_to_report_inner(
 
     // Compute field_stats now (while the saved fwd clone is live and retained is populated),
     // then immediately free the clone to avoid carrying it through build_model's allocations.
-    let precomputed_field_stats: Option<crate::report::FieldStats> = if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
-        g.fwd_offsets = fwd_off;
-        g.fwd_targets = fwd_tgt;
-        let fs = crate::report::build_field_stats(&g);
-        g.fwd_offsets = Vec::new();
-        g.fwd_targets = crate::chunkvec::ChunkU32::default();
-        Some(fs)
-    } else {
-        None
-    };
+    let precomputed_field_stats: Option<crate::report::FieldStats> =
+        if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
+            g.fwd_offsets = fwd_off;
+            g.fwd_targets = fwd_tgt;
+            let fs = crate::report::build_field_stats(&g);
+            g.fwd_offsets = Vec::new();
+            g.fwd_targets = crate::chunkvec::ChunkU32::default();
+            Some(fs)
+        } else {
+            None
+        };
 
     let alloc_sites = if let Some(c) = alloc_serial_c {
         let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
@@ -1690,8 +1718,9 @@ fn fmt_query_value(v: &query::model::QueryValue) -> String {
 }
 
 /// The `query` subcommand: run pass1+pass2 with the parsed queries and print
-/// each result as a simple aligned text table to stdout. Never writes a file.
-fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
+/// each result as a simple aligned text table (`json_out = false`) or as a
+/// JSON array of QueryResult objects (`json_out = true`). Never writes a file.
+fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<()> {
     let collected = collect_query_texts(&opts)?;
     if collected.is_empty() {
         // No `--query`, no `--query-file`, and no config `[[query]]` entries: the
@@ -1809,6 +1838,22 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     finalize_query_labels(&mut query_results, &query_texts, &parsed);
     annotate_missing_classes(input, &mut query_results, &parsed);
     attach_viz(&mut query_results, &collected);
+
+    if json_out {
+        // JSON output: emit a JSON array of QueryResult objects to stdout.
+        // Errors are represented inline via the `error` field; always exit 0
+        // so the caller can parse the JSON regardless.
+        match serde_json::to_string_pretty(&query_results) {
+            Ok(j) => println!("{j}"),
+            Err(e) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to serialize query results as JSON: {e}"),
+                ));
+            }
+        }
+        return Ok(());
+    }
 
     let mut out = String::new();
     let mut had_error = false;
@@ -2785,15 +2830,18 @@ fn run(
     // For the non-MAT path compress g.idom (~2 GB) now that the CSR is built.
     // compute_retained no longer reads idom (uses the stack for parent lookups).
     // Saves ~2 GB during the compute_retained window; decompressed before build_model.
-    let non_mat_idom_c: Option<cvec::CompressedU32> = if mat.is_none() && compress != cvec::Codec::None {
-        let c = cvec::CompressedU32::compress(&g.idom, compress)?;
-        g.idom = Vec::new();
-        crate::trace::trim();
-        Some(c)
-    } else {
-        None
-    };
-    crate::trace::probe("main: after compress idom (non-MAT path, before restore shallow/class_idx)");
+    let non_mat_idom_c: Option<cvec::CompressedU32> =
+        if mat.is_none() && compress != cvec::Codec::None {
+            let c = cvec::CompressedU32::compress(&g.idom, compress)?;
+            g.idom = Vec::new();
+            crate::trace::trim();
+            Some(c)
+        } else {
+            None
+        };
+    crate::trace::probe(
+        "main: after compress idom (non-MAT path, before restore shallow/class_idx)",
+    );
 
     // MAT: emit the `domOut` IntArray1N (unsorted) in MAT id order.
     // Layout: entry[0] = vroot's dom-children (= MAT GC roots), entry[1] = dom-
@@ -2893,16 +2941,17 @@ fn run(
 
     // Compute field_stats now (while the saved fwd clone is live and retained is populated),
     // then immediately free the clone to avoid carrying it through build_model's allocations.
-    let precomputed_field_stats_main: Option<crate::report::FieldStats> = if let Some((fwd_off, fwd_tgt)) = field_stats_fwd_main {
-        g.fwd_offsets = fwd_off;
-        g.fwd_targets = fwd_tgt;
-        let fs = crate::report::build_field_stats(&g);
-        g.fwd_offsets = Vec::new();
-        g.fwd_targets = crate::chunkvec::ChunkU32::default();
-        Some(fs)
-    } else {
-        None
-    };
+    let precomputed_field_stats_main: Option<crate::report::FieldStats> =
+        if let Some((fwd_off, fwd_tgt)) = field_stats_fwd_main {
+            g.fwd_offsets = fwd_off;
+            g.fwd_targets = fwd_tgt;
+            let fs = crate::report::build_field_stats(&g);
+            g.fwd_offsets = Vec::new();
+            g.fwd_targets = crate::chunkvec::ChunkU32::default();
+            Some(fs)
+        } else {
+            None
+        };
 
     // Finalize cross-phase (@retainedHeapSize) queries now that retained sizes
     // exist. Phase-1 results pass through; carried indices are joined against
