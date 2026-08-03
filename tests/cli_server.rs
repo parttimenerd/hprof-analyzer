@@ -5,8 +5,14 @@
 //! All tests are gated on the philosophers fixture being fully hydrated (≥1024
 //! bytes); when the fixture is absent (unhydrated LFS pointer) the test returns
 //! immediately, matching the pattern in `cli_query.rs`.
+//!
+//! Tests that require a fully-analysed server (those calling `wait_for_ready`)
+//! share a single long-lived server process via `READY_SERVER`.  This cuts the
+//! number of concurrent analysis jobs from ~12 down to 1, eliminating the
+//! "server did not reach ready" timeouts that occur under parallel test load.
 
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 
 const BIN: &str = env!("CARGO_BIN_EXE_hprof-analyzer");
 
@@ -21,6 +27,30 @@ fn philosophers() -> Option<String> {
         Ok(m) if m.len() >= 1024 => Some(p),
         _ => None,
     }
+}
+
+// ── Shared ready server ───────────────────────────────────────────────────────
+
+/// A single server process that has been fully analysed (POST /analyze done,
+/// GET /status returns `"ready"`).  Shared across all tests that call
+/// `ready_port()`, so only one analysis runs even under `cargo test`'s default
+/// parallel execution.  The `Child` is intentionally leaked; the OS reclaims it
+/// when the test binary exits.
+static READY_SERVER: OnceLock<u16> = OnceLock::new();
+
+/// Return the port of the shared, already-analysed server.
+/// Initialises it on first call (spawns + analyses); subsequent calls return
+/// immediately.  Returns `None` when the philosophers fixture is absent.
+fn ready_port() -> Option<u16> {
+    let hprof = philosophers()?;
+    let port = READY_SERVER.get_or_init(|| {
+        let (_, port) = start_server(&hprof);
+        // Trigger analysis and wait up to 120 s for it to complete.
+        curl_post(port, "/analyze", "");
+        wait_for_ready(port);
+        port
+    });
+    Some(*port)
 }
 
 /// Bind to an OS-assigned free port, record it, drop the listener, then start
@@ -38,12 +68,12 @@ fn start_server(hprof: &str) -> (Child, u16) {
         .spawn()
         .expect("failed to spawn server");
 
-    // Poll /status until the server is accepting connections (up to 30 s).
+    // Poll /status until the server is accepting connections (up to 60 s).
     let url = format!("http://127.0.0.1:{port}/status");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         if std::time::Instant::now() > deadline {
-            panic!("server on port {port} did not start within 30 s");
+            panic!("server on port {port} did not start within 60 s");
         }
         let ok = Command::new("curl")
             .args(["-s", "--max-time", "1", &url])
@@ -94,12 +124,12 @@ fn parse_curl_output(raw: &str) -> (u32, String) {
 }
 
 /// Poll GET /status until the body contains `"ready"` (analysis done).
-/// Panics if 30 s elapse without reaching ready.
+/// Panics if 120 s elapse without reaching ready.
 fn wait_for_ready(port: u16) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         if std::time::Instant::now() > deadline {
-            panic!("server on port {port} did not reach ready within 30 s");
+            panic!("server on port {port} did not reach ready within 120 s");
         }
         let (_, body) = curl_get(port, "/status");
         if body.contains("\"ready\"") {
@@ -150,13 +180,8 @@ fn server_analyze_returns_started() {
 /// After triggering analysis, GET /status must eventually reach `ready`.
 #[test]
 fn server_status_ready_after_analyze() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/status");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(status, 200, "expected HTTP 200 from /status, got {status}");
     assert!(
         body.contains("\"ready\""),
@@ -167,13 +192,8 @@ fn server_status_ready_after_analyze() {
 /// GET /report after analysis returns valid JSON (no top-level error key, starts with `{`).
 #[test]
 fn server_report_json_has_fields() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(status, 200, "expected HTTP 200 from /report, got {status}");
     let trimmed = body.trim();
     assert!(
@@ -196,13 +216,8 @@ fn server_report_json_has_fields() {
 /// GET /report/overview returns JSON containing a recognisable top-level field.
 #[test]
 fn server_report_overview_json() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/overview");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report/overview, got {status}"
@@ -217,13 +232,8 @@ fn server_report_overview_json() {
 /// GET /report/overview?format=md returns Markdown text mentioning "heap" (case-insensitive).
 #[test]
 fn server_report_overview_md() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/overview?format=md");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report/overview?format=md, got {status}"
@@ -238,13 +248,8 @@ fn server_report_overview_md() {
 /// GET /report/leaks returns a JSON object.
 #[test]
 fn server_report_leaks_json() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/leaks");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report/leaks, got {status}"
@@ -264,13 +269,8 @@ fn server_report_leaks_json() {
 /// GET /report/top returns a JSON object.
 #[test]
 fn server_report_top_json() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/top");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report/top, got {status}"
@@ -285,13 +285,8 @@ fn server_report_top_json() {
 /// GET /report/threads returns a JSON object.
 #[test]
 fn server_report_threads_json() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/threads");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report/threads, got {status}"
@@ -383,13 +378,8 @@ fn server_report_post_is_405() {
 /// GET /report/bogus (unknown section) must return 404 even after analysis.
 #[test]
 fn server_report_invalid_section_404() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, _body) = curl_get(port, "/report/bogus-section");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 404,
         "expected 404 for /report/bogus-section, got {status}"
@@ -472,13 +462,8 @@ fn server_stream_endpoint_works() {
 /// GET /report?format=md returns a Markdown string (starts with `#` heading or contains `##`).
 #[test]
 fn server_report_full_md() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report?format=md");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report?format=md, got {status}"
@@ -493,13 +478,8 @@ fn server_report_full_md() {
 /// GET /report/threads?format=md contains the word "Thread" (from thread names or section heading).
 #[test]
 fn server_report_threads_md_has_thread_names() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/threads?format=md");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 from /report/threads?format=md, got {status}"
@@ -660,13 +640,8 @@ fn server_unknown_route_404() {
 /// GET /report/leaks?limit=2 returns at most 2 suspects.
 #[test]
 fn server_report_leaks_limit() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/leaks?limit=2");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected 200 from /report/leaks?limit=2, got {status}"
@@ -690,13 +665,8 @@ fn server_report_leaks_limit() {
 /// GET /report/leaks (no limit) returns the full suspects list.
 #[test]
 fn server_report_leaks_no_limit() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_get(port, "/report/leaks");
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(status, 200, "expected 200 from /report/leaks, got {status}");
     assert!(
         body.contains("\"suspects\""),
@@ -711,18 +681,13 @@ fn server_report_leaks_no_limit() {
 /// "requires the full analysis pipeline".
 #[test]
 fn server_oql_retained_size_after_analysis() {
-    let Some(hprof) = philosophers() else { return };
-    let (mut child, port) = start_server(&hprof);
-    curl_post(port, "/analyze", "");
-    wait_for_ready(port);
+    let Some(port) = ready_port() else { return };
     let (status, body) = curl_post(
         port,
         "/",
         "SELECT @displayName, @retainedHeapSize FROM java.lang.Thread \
          ORDER BY @retainedHeapSize DESC LIMIT 3",
     );
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(
         status, 200,
         "expected HTTP 200 for @retainedHeapSize query after analysis, got {status}: {body}"
