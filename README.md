@@ -518,10 +518,10 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with
 | VS Code JVM (1.1 GiB) | 1.1 GiB | 0:43 | 216 MiB | 1:13 | 2.51 GiB | 0:28 | 2.39 GiB |
 | HeapothesYs 16g | 11 GiB | 2:49 | 565 MiB | 4:07 | 6.32 GiB | 1:06 | 4.99 GiB |
 | HeapothesYs 28g | 20 GiB | 5:31 | 1.05 GiB | 8:00 | 12.1 GiB | 2:10 | 5.27 GiB |
-| Real-world 34g | 34 GiB | 22:26 | 7.78 GiB | — (OOM) | — | (pending) | (pending) |
+| Real-world 34g | 34 GiB | 22:26 | 7.78 GiB | — (OOM) | — | 2:19:17 | 5.18 GiB |
 
 The 34g `--full-analysis` run OOM'd (12.1 GiB peak at 28g → ~18 GiB needed for 34g exceeds available headroom).
-Basic analysis on 34g peaks at 7.78 GiB. MAT numbers for 34g are still being measured.
+Basic analysis on 34g peaks at 7.78 GiB.
 
 MAT was run with `ParseHeapDump.sh -Xmx80g` (leak-suspects + top-components).
 MAT requires a JVM heap large enough to hold its in-memory index, so the RSS
