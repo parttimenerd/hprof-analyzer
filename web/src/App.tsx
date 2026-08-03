@@ -8773,6 +8773,8 @@ export default function App({ report }: { report: Report }) {
   // ── Offline-save state (WASM/online mode only) ────────────────────────────
   type SaveState = "idle" | "saving" | "done" | "error";
   const [saveState, setSaveState] = React.useState<SaveState>("idle");
+  const saveStateRef = React.useRef<SaveState>("idle");
+  const setSaveStateSync = (s: SaveState) => { saveStateRef.current = s; setSaveState(s); };
 
   // Ctrl+S / Cmd+S → fetch /download/offline and trigger browser download
   React.useEffect(() => {
@@ -8780,7 +8782,8 @@ export default function App({ report }: { report: Report }) {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        setSaveState("saving");
+        if (saveStateRef.current === "saving") return;
+        setSaveStateSync("saving");
         fetch("/download/offline")
           .then(r => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -8796,12 +8799,12 @@ export default function App({ report }: { report: Report }) {
             a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
-            setSaveState("done");
-            setTimeout(() => setSaveState("idle"), 2500);
+            setSaveStateSync("done");
+            setTimeout(() => setSaveStateSync("idle"), 2500);
           })
           .catch(() => {
-            setSaveState("error");
-            setTimeout(() => setSaveState("idle"), 3000);
+            setSaveStateSync("error");
+            setTimeout(() => setSaveStateSync("idle"), 3000);
           });
       }
     };
