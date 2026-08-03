@@ -510,19 +510,18 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with
 (`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0
 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak.
 
-| Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | RSS (MAT) |
-|----------|-----------|------------|-----------|-----------|----------|-----------|
-| Renaissance scala-doku | 51 MiB | 2.4 s | 40 MiB | 5.7 s | 373 MiB | 1.68 GiB |
-| gauss-mix | 70 MiB | 2.1 s | 44 MiB | 3.3 s | 195 MiB | 1.61 GiB |
-| naive-bayes (1.3 GiB) | 1.3 GiB | 5.0 s | 67 MiB | 8.2 s | 382 MiB | 1.73 GiB |
-| VS Code JVM (1.1 GiB) | 1.1 GiB | 0:43 | 216 MiB | 1:13 | 2.51 GiB | 2.37 GiB |
-| HeapothesYs 16g | 11 GiB | 2:49 | 565 MiB | 4:07 | 6.32 GiB | 4.76 GiB |
-| HeapothesYs 28g | 20 GiB | 5:31 | 1.05 GiB | 8:00 | 12.1 GiB | 5.24 GiB |
-| Real-world 34g | 34 GiB | 22:26 | 7.78 GiB | — (OOM) | — | (running) |
+| Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
+|----------|-----------|------------|-----------|-----------|----------|------------|-----------|
+| Renaissance scala-doku | 51 MiB | 2.4 s | 40 MiB | 5.7 s | 373 MiB | 0:04 | 1.63 GiB |
+| gauss-mix | 70 MiB | 2.1 s | 44 MiB | 3.3 s | 195 MiB | 0:04 | 1.61 GiB |
+| naive-bayes (1.3 GiB) | 1.3 GiB | 5.0 s | 67 MiB | 8.2 s | 382 MiB | 0:05 | 1.73 GiB |
+| VS Code JVM (1.1 GiB) | 1.1 GiB | 0:43 | 216 MiB | 1:13 | 2.51 GiB | 0:28 | 2.39 GiB |
+| HeapothesYs 16g | 11 GiB | 2:49 | 565 MiB | 4:07 | 6.32 GiB | 1:06 | 4.99 GiB |
+| HeapothesYs 28g | 20 GiB | 5:31 | 1.05 GiB | 8:00 | 12.1 GiB | 2:10 | 5.27 GiB |
+| Real-world 34g | 34 GiB | 22:26 | 7.78 GiB | — (OOM) | — | (pending) | (pending) |
 
-MAT wall-clock timings are pending (measurement script issue); RSS numbers are available now.
-The 34g `--full-analysis` run failed (out of memory with 12 GiB peak from 28g suggesting ~18 GiB needed for 34g).
-Basic analysis on the 34g dump peaks at 7.78 GiB RSS.
+The 34g `--full-analysis` run OOM'd (12.1 GiB peak at 28g → ~18 GiB needed for 34g exceeds available headroom).
+Basic analysis on 34g peaks at 7.78 GiB. MAT numbers for 34g are still being measured.
 
 MAT was run with `ParseHeapDump.sh -Xmx80g` (leak-suspects + top-components).
 MAT requires a JVM heap large enough to hold its in-memory index, so the RSS
