@@ -504,41 +504,30 @@ covers grammar, examples, and the full attribute reference.
 
 ## Performance
 
-Three representative workloads are measured below: a large real-world dump
-(resource numbers shared but the dump itself is not), a
-**[HeapothesYs](https://github.com/corretto/heapothesys) HyperAlloc** synthetic
-allocation dump (~10 GiB file), and a **VS Code / Eclipse-based JVM** dump
-(~1 GiB file). The latter two are reproducible public dumps you can regenerate.
-All sizes are in binary units (GiB/MiB), and wall-clock times are
-`minutes:seconds`. Each row records the exact commit so the numbers stay
-meaningful as the tool evolves.
+Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with
+123 GiB RAM, Linux, commit [`55eaca7`](https://github.com/parttimenerd/hprof-analyzer/commit/55eaca7),
+2026-08-03. "Basic" = default analysis; "Full" = `--full-analysis`
+(`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0
+(`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak.
 
-All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
-128 threads) with 123 GiB RAM. The "ours" columns are `hprof-analyzer`; the
-"MAT" columns are Eclipse MAT 1.17.0 on the same dump, for comparison.
+| Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | RSS (MAT) |
+|----------|-----------|------------|-----------|-----------|----------|-----------|
+| Renaissance scala-doku | 51 MiB | 2.4 s | 40 MiB | 5.7 s | 373 MiB | 1.68 GiB |
+| gauss-mix | 70 MiB | 2.1 s | 44 MiB | 3.3 s | 195 MiB | 1.61 GiB |
+| naive-bayes (1.3 GiB) | 1.3 GiB | 5.0 s | 67 MiB | 8.2 s | 382 MiB | 1.73 GiB |
+| VS Code JVM (1.1 GiB) | 1.1 GiB | 0:43 | 216 MiB | 1:13 | 2.51 GiB | 2.37 GiB |
+| HeapothesYs 16g | 11 GiB | 2:49 | 565 MiB | 4:07 | 6.32 GiB | 4.76 GiB |
+| HeapothesYs 28g | 20 GiB | 5:31 | 1.05 GiB | 8:00 | 12.1 GiB | 5.24 GiB |
+| Real-world 34g | 34 GiB | 22:26 | 7.78 GiB | — (OOM) | — | (running) |
 
-| Workload | Heap (live) | Dump file | RSS (ours) | RSS (MAT) | Wall (ours) | Wall (MAT) | Measured |
-|----------|-------------|-----------|------------|-----------|-------------|------------|----------|
-| Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13:21 | 27:16 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
-| HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1:20 | 1:48 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
-| VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 0:22 | 1:27 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
+MAT wall-clock timings are pending (measurement script issue); RSS numbers are available now.
+The 34g `--full-analysis` run failed (out of memory with 12 GiB peak from 28g suggesting ~18 GiB needed for 34g).
+Basic analysis on the 34g dump peaks at 7.78 GiB RSS.
 
-The table below shows numbers from the test fixtures included in the repository
-(small synthetic dumps, macOS Apple Silicon, no MAT comparison):
-
-| Fixture | Dump file | RSS (ours) | Wall (ours) | Measured |
-|---------|-----------|------------|-------------|----------|
-| Renaissance scala-doku | 51 MiB | 166 MiB | 2.92 s | 2026-08-03, [`f3c5f4e`](https://github.com/parttimenerd/hprof-analyzer/commit/f3c5f4e) |
-| gauss-mix | 70 MiB | 149 MiB | 5.07 s | 2026-08-03, [`f3c5f4e`](https://github.com/parttimenerd/hprof-analyzer/commit/f3c5f4e) |
-| large_1g (synthetic) | 47 MiB | 91 MiB | 1.51 s | 2026-08-03, [`f3c5f4e`](https://github.com/parttimenerd/hprof-analyzer/commit/f3c5f4e) |
-
-MAT was run with `ParseHeapDump.sh` (leak-suspects + top-components). Its
-`MemoryAnalyzer.ini` was set to `-Xmx60g` to avoid OOM during analysis — MAT
-requires a heap large enough to hold its in-memory index, so the RSS reported
-here reflects a generously provisioned run, not MAT's minimum. With a tighter
-`-Xmx` (e.g. `-Xmx5g` on the HeapothesYs dump) MAT completes successfully at
-lower RSS but takes longer due to GC pressure. `hprof-analyzer` holds peak RSS
-far below the dump size and needs no heap tuning. Correctness is validated
+MAT was run with `ParseHeapDump.sh -Xmx80g` (leak-suspects + top-components).
+MAT requires a JVM heap large enough to hold its in-memory index, so the RSS
+reported here reflects a generously provisioned run. `hprof-analyzer` holds peak
+RSS well below the dump size and needs no heap tuning. Correctness is validated
 against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview
 export against our JSON, and the parity fixtures gate on it (see
 [Compare against a MAT export](#compare-against-a-mat-export)).
