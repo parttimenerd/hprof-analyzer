@@ -4145,7 +4145,7 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
             let ref_fields = if names.is_empty() {
                 vec![FieldRefStat {
                     field_name: String::new(),
-                    null_count: 0,
+                    null_count: instance_count.saturating_sub(nn.iter().sum::<u64>()),
                     non_null_count: nn.iter().sum(),
                     total_retained: rt.iter().sum(),
                 }]
