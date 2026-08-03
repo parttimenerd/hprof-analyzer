@@ -736,7 +736,7 @@ function WasteSummarySection({ report }: { report: Report }) {
         return anchor ? <a href={`#${anchor}`}>{s.label}</a> : s.label;
       },
     },
-    { id: "reclaimable", name: useKB ? "Reclaimable (KB)" : "Reclaimable", right: true, minWidth: useKB ? "150px" : "130px", cell: byteCell(s => s.bytes, fmtB, useKB), selector: (s) => s.bytes, sortable: true },
+    { id: "reclaimable", name: useKB ? "Reclaimable (KB)" : "Reclaimable", right: true, width: useKB ? "150px" : "130px", cell: byteCell(s => s.bytes, fmtB, useKB), selector: (s) => s.bytes, sortable: true },
     {
       id: "bar", name: "", width: "100px",
       cell: (s) => (
@@ -1472,7 +1472,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
   const sizeCols: TableColumn<SizeBucket>[] = [
     { id: "upper", name: useKB ? "Size ≤ (KB)" : "Size ≤", right: true, width: useKB ? "140px" : "120px", cell: byteCell(b => b.upper_bytes, fmtB, useKB), selector: (b) => b.upper_bytes, sortable: true },
     { id: "count", name: "Count", right: true, width: "100px", format: (b) => fmtCount(b.count), selector: (b) => b.count, sortable: true },
-    { id: "pct", name: "% of Dominators", right: true, width: "150px", format: (b) => d.count > 0 ? fmtPct(b.count / d.count * 100) : "—", selector: (b) => b.count, sortable: true },
+    { id: "pct", name: "% of Dominators", right: true, width: "155px", format: (b) => d.count > 0 ? fmtPct(b.count / d.count * 100) : "—", selector: (b) => b.count, sortable: true },
   ];
   return (
     <section id="size-distribution">
@@ -1564,7 +1564,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
   const cols: TableColumn<DupPrimArrayRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "type", name: "Array type", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
-    { id: "groups", name: "Dup groups", right: true, minWidth: "125px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
+    { id: "groups", name: "Dup groups", right: true, width: "125px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.wasted_bytes, fmtB, useKB), selector: (r) => r.wasted_bytes, sortable: true },
   ];
   return (
@@ -1720,14 +1720,14 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
-    { id: "shallow", name: useKB ? "Total Shallow (KB)" : "Total Shallow", right: true, width: useKB ? "150px" : "120px", cell: byteCell(r => r.total_shallow, fmtB, useKB), selector: (r) => r.total_shallow, sortable: true },
-    { id: "pct", name: "% of Heap", right: true, width: "100px", format: (r) => total > 0 ? fmtPct(r.pct_of_heap_bp / 100) : "—", selector: (r) => r.pct_of_heap_bp, sortable: true },
-    { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
+    { id: "shallow", name: useKB ? "Total Shallow (KB)" : "Total Shallow", right: true, width: useKB ? "160px" : "130px", cell: byteCell(r => r.total_shallow, fmtB, useKB), selector: (r) => r.total_shallow, sortable: true },
+    { id: "pct", name: "% of Heap", right: true, width: "105px", format: (r) => total > 0 ? fmtPct(r.pct_of_heap_bp / 100) : "—", selector: (r) => r.pct_of_heap_bp, sortable: true },
+    { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "125px" : "105px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
   ];
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
-    { id: "refs", name: "Boxed refs", right: true, width: "120px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
+    { id: "refs", name: "Boxed refs", right: true, width: "115px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
   ];
   return (
     <section id="boxed-numbers">
@@ -1754,10 +1754,10 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
-    { id: "hdr", name: "Header/obj", right: true, minWidth: "110px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
-    { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "150px" : "130px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
-    { id: "pct", name: "% of Shallow", right: true, minWidth: "120px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp, sortable: true },
-    { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
+    { id: "hdr", name: "Header/obj", right: true, width: "110px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
+    { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "165px" : "135px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
+    { id: "pct", name: "% of Shallow", right: true, width: "120px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp, sortable: true },
+    { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "125px" : "105px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
   ];
   return (
     <section id="object-header-overhead">
@@ -1870,7 +1870,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         const compCols: TableColumn<KindStat>[] = [
           { id: "kind", name: "Kind", grow: 1, selector: (k) => k.kind, sortable: true },
           { id: "objects", name: "Objects", right: true, width: "120px", format: (k) => fmtCount(k.objects), selector: (k) => k.objects, sortable: true },
-          { id: "shallow", name: "Shallow Heap", right: true, width: "120px", format: (k) => fmtB(k.shallow_heap), selector: (k) => k.shallow_heap, sortable: true },
+          { id: "shallow", name: "Shallow Heap", right: true, width: "125px", format: (k) => fmtB(k.shallow_heap), selector: (k) => k.shallow_heap, sortable: true },
         ];
         return (
           <>
@@ -2020,11 +2020,11 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
     { id: "loader", name: "Loader", grow: 1,
       cell: pl => <code title={pl.loader_label ?? undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>,
       selector: pl => pl.loader_label ?? "", sortable: true },
-    { id: "instances", name: "Instances", right: true, width: "100px",
+    { id: "instances", name: "Instances", right: true, minWidth: "100px",
       format: pl => fmtCount(pl.instances), selector: pl => pl.instances, sortable: true },
-    { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "120px" : "100px",
+    { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, minWidth: useKB ? "120px" : "100px",
       cell: byteCell(pl => pl.shallow, fmtB, useKB), selector: pl => pl.shallow, sortable: true },
-    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "120px" : "100px",
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, minWidth: useKB ? "120px" : "100px",
       cell: byteCell(pl => pl.retained, fmtB, useKB), selector: pl => pl.retained, sortable: true },
   ];
   const cols: TableColumn<DuplicateClass>[] = [
@@ -2087,7 +2087,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
-    { id: "pct", name: "% of suspect", right: true, width: "120px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained, sortable: true },
+    { id: "pct", name: "% Suspect", right: true, width: "120px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained, sortable: true },
   ];
   return (
     <details open>
@@ -3165,11 +3165,11 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (threads.length === 0) return null;
   const cols: TableColumn<ThreadInfo>[] = [
-    { id: "name", name: "Name", grow: 1, minWidth: "120px", cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a>, selector: (t) => t.name ?? "", sortable: true },
+    { id: "name", name: "Name", grow: 1, width: "120px", cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a>, selector: (t) => t.name ?? "", sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "90px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "90px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained, sortable: true },
     { id: "max_local", name: useKB ? "Max. Locals' Retained (KB)" : "Max. Locals' Retained", right: true, width: useKB ? "200px" : "172px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained, sortable: true },
-    { id: "loader", name: "Context Class Loader", grow: 1, minWidth: "145px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
+    { id: "loader", name: "Context Class Loader", grow: 1, width: "145px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
     { id: "daemon", name: "Daemon", width: "85px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no", sortable: true },
     { id: "priority", name: "Priority", right: true, width: "80px", format: (t) => String(t.priority), selector: (t) => t.priority, sortable: true },
     { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state || "—"}</span>, sortable: true },
@@ -3323,7 +3323,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
   const components = data?.components ?? [];
   if (components.length === 0) return null;
   const cols: TableColumn<Component>[] = [
-    { id: "component", name: "Component", grow: 1, minWidth: "160px", maxWidth: "400px", cell: (c) => <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>, selector: (c) => c.loader_label ?? "", sortable: true },
+    { id: "component", name: "Component", grow: 1, width: "160px", maxWidth: "400px", cell: (c) => <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>, selector: (c) => c.loader_label ?? "", sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: "140px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
@@ -5086,8 +5086,8 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
         });
         const compCols: TableColumn<CompRow>[] = [
           { id: "kind", name: "Kind", grow: 1, cell: (r) => <span style={r.indent ? { paddingLeft: "1.5rem", fontSize: "0.88em", color: "var(--muted)" } : undefined}>{r.kind}</span>, selector: (r) => r.kind, sortable: true },
-          { id: "objects", name: "Objects", right: true, width: "110px", cell: (r) => <span style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtCount(r.objects)}</span>, selector: (r) => r.objects, sortable: true },
-          { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "130px" : "110px", cell: (r) => <span title={useKB ? fmtExactBytes(r.shallow_heap) : undefined} style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtB(r.shallow_heap)}</span>, selector: (r) => r.shallow_heap, sortable: true },
+          { id: "objects", name: "Objects", right: true, minWidth: "110px", cell: (r) => <span style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtCount(r.objects)}</span>, selector: (r) => r.objects, sortable: true },
+          { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, minWidth: useKB ? "130px" : "110px", cell: (r) => <span title={useKB ? fmtExactBytes(r.shallow_heap) : undefined} style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtB(r.shallow_heap)}</span>, selector: (r) => r.shallow_heap, sortable: true },
         ];
         return <StdTable columns={compCols} data={flatRows} searchKeys={["kind"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />;
       })()}
@@ -5941,8 +5941,8 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   const tableCols: TableColumn<TypeEdge>[] = [
     { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
     { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
-    { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, minWidth: "110px", format: r => fmtCount(r.edge_count) },
-    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, minWidth: "120px", format: r => fmtB(r.retained_weight) },
+    { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, width: "110px", format: r => fmtCount(r.edge_count) },
+    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, width: "120px", format: r => fmtB(r.retained_weight) },
   ];
 
   // Popover data for selected node
