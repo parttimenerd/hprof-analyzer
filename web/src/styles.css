@@ -780,7 +780,8 @@ kbd {
   padding: 8px 4px; cursor: pointer; font-size: 0.8rem; z-index: 200;
 }
 .inspector-page { display: flex; flex-direction: column; gap: 14px; }
-.inspector-page-title { margin: 0; font-size: 1rem; word-break: break-all; }
+.inspector-page-title { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.inspector-page-title code { font-size: 0.85rem; }
 .inspector-dom-path { margin: 0; padding-left: 1.2rem; font-size: 0.85rem; }
 .inspector-dom-path li { padding: 2px 0; }
 .leak-chain-svg { display: block; margin: 8px 0; }

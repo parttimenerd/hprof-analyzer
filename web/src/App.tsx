@@ -5941,8 +5941,8 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   const tableCols: TableColumn<TypeEdge>[] = [
     { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
     { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
-    { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, format: r => fmtCount(r.edge_count) },
-    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, format: r => fmtB(r.retained_weight) },
+    { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, minWidth: "110px", format: r => fmtCount(r.edge_count) },
+    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, minWidth: "120px", format: r => fmtB(r.retained_weight) },
   ];
 
   // Popover data for selected node
