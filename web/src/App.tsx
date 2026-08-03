@@ -5858,7 +5858,111 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeInfos, graphEdges, layoutKey, w, sizeBy, maxWeight]);
 
-  const posMap = React.useMemo(() => new Map(positions.map(p => [p.id, p])), [positions]);
+
+  // Pan / zoom / node-drag state
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = React.useState(1);
+  // Per-node position overrides (applied on top of force-layout positions)
+  const nodeOverrides = React.useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [overrideVersion, setOverrideVersion] = React.useState(0);
+  // Reset overrides when layout changes
+  React.useEffect(() => {
+    nodeOverrides.current = new Map();
+    setOverrideVersion(v => v + 1);
+    setPan({ x: 0, y: 0 });
+    setZoom(1);
+  }, [positions]);
+
+  const svgInteract = React.useRef<{
+    mode: "none" | "pan" | "drag";
+    startX: number; startY: number;
+    panStart: { x: number; y: number };
+    dragId: string | null;
+    hasMoved: boolean;
+  }>({ mode: "none", startX: 0, startY: 0, panStart: { x: 0, y: 0 }, dragId: null, hasMoved: false });
+
+  const handleSvgMouseDown = React.useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    svgInteract.current = {
+      mode: "pan", startX: e.clientX, startY: e.clientY,
+      panStart: { x: pan.x, y: pan.y }, dragId: null, hasMoved: false,
+    };
+    e.preventDefault();
+  }, [pan]);
+
+  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    svgInteract.current = {
+      mode: "drag", startX: e.clientX, startY: e.clientY,
+      panStart: { x: pan.x, y: pan.y }, dragId: id, hasMoved: false,
+    };
+    e.preventDefault();
+  }, [pan]);
+
+  const svgElRef = React.useRef<SVGSVGElement>(null);
+
+  React.useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const s = svgInteract.current;
+      if (s.mode === "none") return;
+      const dx = e.clientX - s.startX;
+      const dy = e.clientY - s.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) s.hasMoved = true;
+      if (s.mode === "pan") {
+        setPan({ x: s.panStart.x + dx, y: s.panStart.y + dy });
+      } else if (s.mode === "drag" && s.dragId) {
+        const base = positions.find(p => p.id === s.dragId!);
+        const prev = nodeOverrides.current.get(s.dragId!) ?? { x: base?.x ?? 0, y: base?.y ?? 0 };
+        const rect = svgElRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const newX = (e.clientX - rect.left - s.panStart.x) / zoom;
+        const newY = (e.clientY - rect.top - s.panStart.y) / zoom;
+        nodeOverrides.current.set(s.dragId!, { x: newX, y: newY });
+        setOverrideVersion(v => v + 1);
+      }
+    };
+    const onUp = (e: MouseEvent) => {
+      const s = svgInteract.current;
+      if (s.mode === "none") return;
+      svgInteract.current.mode = "none";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [positions, zoom]);
+
+  const handleWheel = React.useCallback((e: React.WheelEvent<SVGSVGElement>) => {
+    e.preventDefault();
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const newZoom = Math.max(0.15, Math.min(8, zoom * factor));
+    // Zoom toward mouse cursor
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    setPan(p => ({
+      x: mx - (mx - p.x) * (newZoom / zoom),
+      y: my - (my - p.y) * (newZoom / zoom),
+    }));
+    setZoom(newZoom);
+  }, [zoom]);
+
+  // Effective positions: force-layout + overrides
+  const effectivePositions = React.useMemo(() => {
+    // overrideVersion is read to trigger recompute when overrides change
+    void overrideVersion;
+    if (nodeOverrides.current.size === 0) return positions;
+    return positions.map(p => {
+      const ov = nodeOverrides.current.get(p.id);
+      return ov ? { ...p, x: ov.x, y: ov.y } : p;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, overrideVersion]);
+
+  const effectivePosMap = React.useMemo(
+    () => new Map(effectivePositions.map(p => [p.id, p])),
+    [effectivePositions],
+  );
 
   const ogCtxForHint = React.useContext(ObjGraphCtx);
 
@@ -5935,7 +6039,10 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
             </button>
             <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
               style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
-              title="Re-run force layout from scratch">↺ Reset</button>
+              title="Re-run force layout from scratch">↺ Layout</button>
+            <button onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1); }}
+              style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
+              title="Reset zoom and pan to default">⊡ View</button>
             <button onClick={() => setFullscreen(f => !f)}
               style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}>
               {fullscreen ? "⛶ Exit" : "⛶ Fullscreen"}
@@ -5954,19 +6061,23 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
           {positions.length > 0 && (
             <>
               <svg
+                ref={svgElRef}
                 width={w} height={svgH}
-                style={{ display: "block", background: "var(--card, #f7f7f8)", borderRadius: 6, border: "1px solid var(--border)" }}
-                onClick={e => { if (e.target === e.currentTarget) setSelected(null); }}
+                style={{ display: "block", background: "var(--card, #f7f7f8)", borderRadius: 6, border: "1px solid var(--border)", cursor: svgInteract.current.mode === "pan" ? "grabbing" : "grab" }}
+                onClick={e => { if ((e.target as SVGElement).tagName === "svg") setSelected(null); }}
+                onMouseDown={handleSvgMouseDown}
+                onWheel={handleWheel}
               >
                 <defs>
                   <marker id="tpfg-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
                     <path d="M0,0 L0,6 L6,3 z" fill="var(--muted, #888)" />
                   </marker>
                 </defs>
+                <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
                 {/* Edges */}
                 {graphEdges.map((e, i) => {
-                  const sp = posMap.get(e.src_class);
-                  const dp = posMap.get(e.dst_class);
+                  const sp = effectivePosMap.get(e.src_class);
+                  const dp = effectivePosMap.get(e.dst_class);
                   if (!sp || !dp) return null;
                   const highlighted = matchedNodes
                     ? (matchedNodes.has(e.src_class) && matchedNodes.has(e.dst_class))
@@ -5991,7 +6102,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                   );
                 })}
                 {/* Nodes */}
-                {positions.map(p => {
+                {effectivePositions.map(p => {
                   const isSelected = p.id === selected;
                   const inFilter = matchedNodes ? matchedNodes.has(p.id) : true;
                   const inConnected = connectedTo ? connectedTo.has(p.id) : true;
@@ -6012,10 +6123,13 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                         });
                       }}
                       onMouseLeave={() => setTooltip(null)}
+                      onMouseDown={(e) => { e.stopPropagation(); handleNodeMouseDown(e, p.id); }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (isSelected) { setSelected(null); }
-                        else { setSelected(p.id); }
+                        if (!svgInteract.current.hasMoved) {
+                          if (isSelected) { setSelected(null); }
+                          else { setSelected(p.id); }
+                        }
                       }}
                     >
                       <circle r={p.r + (isSelected ? 3 : 0)}
@@ -6037,6 +6151,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                     </g>
                   );
                 })}
+                </g>
               </svg>
               {tooltip && (
                 <div className="trg-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
@@ -6046,7 +6161,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
               )}
               <p style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "0.25rem 0 0" }}>
                 Showing top {positions.length} of {nodeInfos.length + (edges.length > 0 ? 0 : 0)} classes by retained flow.
-                Click a node to inspect · Use "Highlight class" to find a specific class · Switch to Table view for full data.
+                Scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect.
                 {(window as any).__wasmExploration
                   ? <> · <span className="trg-hint-wasm">WASM active — live instance browse available</span></>
                   : !ogCtxForHint
