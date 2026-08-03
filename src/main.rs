@@ -1045,12 +1045,18 @@ fn analyze_to_report_inner(
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
 
-    // If --field-stats was requested, restore the saved fwd CSR so
-    // build_field_stats can traverse edges to count refs and sum retained.
-    if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
+    // Compute field_stats now (while the saved fwd clone is live and retained is populated),
+    // then immediately free the clone to avoid carrying it through build_model's allocations.
+    let precomputed_field_stats: Option<crate::report::FieldStats> = if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
         g.fwd_offsets = fwd_off;
         g.fwd_targets = fwd_tgt;
-    }
+        let fs = crate::report::build_field_stats(&g);
+        g.fwd_offsets = Vec::new();
+        g.fwd_targets = crate::chunkvec::ChunkU32::default();
+        Some(fs)
+    } else {
+        None
+    };
 
     let alloc_sites = if let Some(c) = alloc_serial_c {
         let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
@@ -1073,7 +1079,7 @@ fn analyze_to_report_inner(
         &depth_counts,
         opts,
         alloc_sites,
-        None,
+        precomputed_field_stats,
     );
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
@@ -2885,12 +2891,18 @@ fn run(
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
 
-    // If --field-stats was requested, restore the saved fwd CSR so
-    // build_field_stats can traverse edges to count refs and sum retained.
-    if let Some((fwd_off, fwd_tgt)) = field_stats_fwd_main {
+    // Compute field_stats now (while the saved fwd clone is live and retained is populated),
+    // then immediately free the clone to avoid carrying it through build_model's allocations.
+    let precomputed_field_stats_main: Option<crate::report::FieldStats> = if let Some((fwd_off, fwd_tgt)) = field_stats_fwd_main {
         g.fwd_offsets = fwd_off;
         g.fwd_targets = fwd_tgt;
-    }
+        let fs = crate::report::build_field_stats(&g);
+        g.fwd_offsets = Vec::new();
+        g.fwd_targets = crate::chunkvec::ChunkU32::default();
+        Some(fs)
+    } else {
+        None
+    };
 
     // Finalize cross-phase (@retainedHeapSize) queries now that retained sizes
     // exist. Phase-1 results pass through; carried indices are joined against
@@ -3142,7 +3154,7 @@ fn run(
         &depth_counts,
         &opts,
         alloc_sites,
-        None,
+        precomputed_field_stats_main,
     );
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
