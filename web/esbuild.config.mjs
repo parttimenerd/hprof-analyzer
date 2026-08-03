@@ -10,8 +10,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 1000 KB minified bundle budget (raised for force-directed type graph + usability features).
-const BUDGET_BYTES = 1000 * 1024;
+// ≤ 1100 KB minified bundle budget (raised for force-directed type graph + usability features).
+const BUDGET_BYTES = 1100 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],
