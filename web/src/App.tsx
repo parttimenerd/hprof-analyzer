@@ -2532,6 +2532,43 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
   );
 }
 
+function LeakChainGraph({ steps }: { steps: RootPathStep[] }) {
+  const uid = React.useId().replace(/:/g, "");
+  const markerId = `lc-arr-${uid}`;
+  if (!steps || steps.length < 2) return null;
+  const W = 320, H = 70, pad = 20;
+  const step = (W - 2 * pad) / Math.max(1, steps.length - 1);
+  const nodes = steps.map((s, i) => ({
+    x: pad + i * step,
+    y: H / 2,
+    label: s.display_class.split(".").pop()?.slice(0, 9) ?? "?",
+    fieldEdge: s.field_edge ?? "",
+  }));
+  return (
+    <svg width={W} height={H} className="leak-chain-svg" style={{ overflow: "visible" }}>
+      <defs>
+        <marker id={markerId} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+          <path d="M0,0 L0,5 L5,2.5 z" fill="var(--muted)" />
+        </marker>
+      </defs>
+      {nodes.slice(0, -1).map((n, i) => (
+        <line key={i} x1={n.x + 7} y1={n.y} x2={nodes[i + 1].x - 7} y2={nodes[i + 1].y}
+          stroke="var(--muted)" strokeWidth={1.5} markerEnd={`url(#${markerId})`} />
+      ))}
+      {nodes.map((n, i) => (
+        <g key={i}>
+          <circle cx={n.x} cy={n.y} r={i === 0 ? 9 : 6}
+            fill={i === 0 ? "var(--accent)" : "var(--muted)"} opacity={0.75} />
+          <text x={n.x} y={n.y + 18} textAnchor="middle" fontSize={9} fill="var(--fg)">{n.label}</text>
+          {n.fieldEdge && i < nodes.length - 1 && (
+            <text x={n.x + step / 2} y={n.y - 8} textAnchor="middle" fontSize={8} fill="var(--muted)">.{n.fieldEdge}</text>
+          )}
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: number }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const share = pctOf(s.retained, total);
@@ -2555,6 +2592,9 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         </span>
         {s.shallow > 0 && <> · shallow {fmtB(s.shallow)}</>}.
       </p>
+      {s.root_path && s.root_path.length >= 2 && (
+        <LeakChainGraph steps={s.root_path} />
+      )}
       <p style={{ margin: "0.25rem 0" }}>
         <span className="label">Held by:</span>{" "}
         {s.root_type_label ? (

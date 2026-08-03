@@ -782,3 +782,4 @@ kbd {
 .inspector-page-title { margin: 0; font-size: 1rem; word-break: break-all; }
 .inspector-dom-path { margin: 0; padding-left: 1.2rem; font-size: 0.85rem; }
 .inspector-dom-path li { padding: 2px 0; }
+.leak-chain-svg { display: block; margin: 8px 0; }
