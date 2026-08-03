@@ -677,6 +677,7 @@ kbd {
 .trg-page-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .trg-dom-ctx { font-size: 0.85rem; color: var(--muted); background: var(--card); padding: 6px 10px; border-radius: 4px; }
 .trg-no-data { font-size: 0.85rem; color: var(--muted); font-style: italic; }
+.trg-no-data code { white-space: nowrap; }
 .trg-wasm-badge { font-weight: 600; color: var(--accent, #3b82f6); }
 
 /* \u2500\u2500 TRG instance list page \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
