@@ -2048,7 +2048,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
         {s.path.map((p, i) => (
           <li key={i}>
             <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
-              <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(p.display_class)}>{p.display_class}</code>
+              <code style={{ cursor: "pointer" }} title="Click to view in Inspector" onClick={() => pivotClass(p.display_class)}>{p.display_class}</code>
               <CopyBtn text={p.display_class} />
               <PivotBtn cls={p.display_class} />
               <OqlBtn cls={p.display_class} />
@@ -2578,7 +2578,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <h3 style={{ margin: "0 0 0.25rem" }}>
         <span className="rank">Suspect #{rank}</span>{" "}
         <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
-          <code style={{ cursor: "pointer" }} title="Click to view in Dominator Navigator" onClick={() => pivotClass(s.pretty_class)}>{s.pretty_class}</code>
+          <code style={{ cursor: "pointer" }} title="Click to view in Inspector" onClick={() => pivotClass(s.pretty_class)}>{s.pretty_class}</code>
           <CopyBtn text={s.pretty_class} />
           <PivotBtn cls={s.pretty_class} />
           <OqlBtn cls={s.pretty_class} />
@@ -2610,7 +2610,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <p style={{ margin: "0.25rem 0" }}>
           <span className="label">Keywords:</span>{" "}
           {s.keywords.map((k, i) => (
-            <span key={i} className="pill keyword" title="Click to view in Dominator Navigator"
+            <span key={i} className="pill keyword" title="Click to view in Inspector"
               style={{ cursor: "pointer" }}
               onClick={() => pivotClass(k)}>
               {k}
@@ -2666,7 +2666,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="View in Dominator Navigator">⬡</span> Dominator Navigator · <span title="Copy OQL query">⌗</span> copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> list instances</p>
+      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> list instances</p>
       {l.suspects.length === 0 ? (
         <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
       ) : (
@@ -10190,6 +10190,20 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
       return prev.slice(1);
     });
   }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+      if ((isMac ? e.metaKey : e.altKey) && e.key === "[") { e.preventDefault(); goBack(); }
+      else if ((isMac ? e.metaKey : e.altKey) && e.key === "]") { e.preventDefault(); goFwd(); }
+      else if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(); }
+      else if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); goFwd(); }
+      else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, goBack, goFwd]);
 
   const handleResizeMD = (e: React.MouseEvent) => {
     e.preventDefault();
