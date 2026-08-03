@@ -746,3 +746,39 @@ kbd {
   padding-top: 6px;
   border-top: 1px solid var(--border);
 }
+
+/* ── Heap Inspector Panel ─────────────────────────────────── */
+.heap-inspector {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  background: var(--bg); border-left: 1px solid var(--border);
+  box-shadow: -4px 0 20px rgba(0,0,0,0.12);
+  display: flex; flex-direction: column; z-index: 200;
+  min-width: 260px; max-width: 680px;
+}
+.inspector-resize-handle {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize;
+}
+.inspector-resize-handle:hover { background: var(--accent); opacity: 0.4; }
+.inspector-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--border);
+  background: var(--card); flex-shrink: 0;
+}
+.inspector-title { flex: 1; font-weight: 600; font-size: 0.9rem; }
+.inspector-nav-btn, .inspector-close-btn {
+  background: none; border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; padding: 2px 7px; font-size: 0.9rem; color: var(--fg);
+}
+.inspector-nav-btn:disabled { opacity: 0.3; cursor: default; }
+.inspector-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+.inspector-empty { color: var(--muted); font-size: 0.85rem; margin-top: 40px; text-align: center; }
+.inspector-tab-btn {
+  position: fixed; top: 50%; right: 0; writing-mode: vertical-rl;
+  transform: rotate(180deg); background: var(--card);
+  border: 1px solid var(--border); border-radius: 4px 0 0 4px;
+  padding: 8px 4px; cursor: pointer; font-size: 0.8rem; z-index: 200;
+}
+.inspector-page { display: flex; flex-direction: column; gap: 14px; }
+.inspector-page-title { margin: 0; font-size: 1rem; word-break: break-all; }
+.inspector-dom-path { margin: 0; padding-left: 1.2rem; font-size: 0.85rem; }
+.inspector-dom-path li { padding: 2px 0; }

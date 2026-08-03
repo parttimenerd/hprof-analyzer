@@ -1105,7 +1105,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   return (
     <div>
       <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
-        Next to each class: <span title="View in Dominator Navigator">⬡</span> = Dominator Navigator · <span title="Copy OQL query">⌗</span> = copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> = list instances · <span title="Copy class name">⎘</span> = copy name
+        Next to each class: <span title="Open in Inspector">⬡</span> = Open in Inspector · <span title="Copy OQL query">⌗</span> = copy OQL · <span title="Instances in Inspector">⬡≡</span> = Instances in Inspector · <span title="Copy class name">⎘</span> = copy name
       </p>
       <div className="tools">
         <input
@@ -1203,9 +1203,13 @@ function PivotBtn({ cls }: { cls: string }) {
   return (
     <button
       className="copy-btn"
-      title="View in Dominator Navigator"
-      aria-label="View in Dominator Navigator"
-      onClick={(e) => { e.stopPropagation(); pivotClass(cls); }}
+      title="Open in Inspector"
+      aria-label="Open in Inspector"
+      onClick={(e) => {
+        e.stopPropagation();
+        window.dispatchEvent(new CustomEvent("pivot-class", { detail: cls }));
+        fireInspect({ kind: "class", cls });
+      }}
       style={{ opacity: 0.6 }}
     >
       ⬡
@@ -1267,45 +1271,33 @@ function OqlBtn({ cls }: { cls: string }) {
   );
 }
 
-// Links to the Object Graph explorer for a given dense index.
-// Only renders when the index exists in the captured graph data.
+// Links to the HeapInspector instance view for a given dense index.
+// Also keeps the old Object Graph Explorer navigation for contexts where it exists.
 function ExploreBtn({ denseIdx, label }: { denseIdx: number; label?: string }) {
   const nodes = React.useContext(ObjGraphCtx);
-  if (!nodes || nodes[String(denseIdx)] == null) return null;
+  const wasm = (window as any).__wasmExploration;
+  if (!nodes && !wasm?.get_node_info) return null;
+  const cls = nodes?.[String(denseIdx)]?.display_class ?? "";
   const click = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if ((window as any).__explorerNavigate) {
-      (window as any).__explorerNavigate("explore", denseIdx);
-    } else {
-      window.location.hash = `explore/${denseIdx}`;
-      document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
-    }
+    fireInspect({ kind: "instance", idx: denseIdx, cls });
   };
   return (
     <button className="copy-btn" onClick={click}
-      title={label ? `Open "${label}" in Object Graph Explorer` : "Open in Object Graph Explorer"}
-      aria-label="Open in Object Graph Explorer"
+      title={label ? `Open "${label}" in Inspector` : "Open in Inspector"}
+      aria-label="Open in Inspector"
       style={{ visibility: "visible", opacity: 0.7 }}>
       ⬡↗
     </button>
   );
 }
 
-// Navigates to Object Graph Explorer with a class filter pre-filled.
-// Dispatches "explore-class" event which ObjGraphTab listens for.
+// Opens the class's instances in the HeapInspector panel.
 function ListObjectsBtn({ cls }: { cls: string }) {
-  const nodes = React.useContext(ObjGraphCtx);
-  if (!nodes) return null;
-  const click = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    window.dispatchEvent(new CustomEvent("explore-class", { detail: cls }));
-    window.location.hash = "object-graph";
-    setTimeout(() => document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
-  };
   return (
-    <button className="copy-btn" onClick={click}
-      title={`List all instances of "${cls}" in Object Graph Explorer`}
-      aria-label="List objects in Object Graph Explorer"
+    <button className="copy-btn" onClick={(e) => { e.stopPropagation(); fireInspect({ kind: "instances", cls, page: 0 }); }}
+      title={`Instances in Inspector: "${cls}"`}
+      aria-label="Instances in Inspector"
       style={{ visibility: "visible", opacity: 0.7 }}>
       ⬡≡
     </button>
@@ -5332,6 +5324,18 @@ type TRGPage =
   | { kind: "class"; cls: string }
   | { kind: "instances"; cls: string; page: number }
   | { kind: "instance"; idx: number; cls: string };
+
+// ── Heap Inspector types ──────────────────────────────────────────────────────
+type InspectPage =
+  | { kind: "class"; cls: string }
+  | { kind: "instances"; cls: string; page: number }
+  | { kind: "instance"; idx: number; cls: string }
+  | { kind: "fields"; idx: number; cls: string }
+  | { kind: "gcroot"; idx: number; cls: string };
+
+function fireInspect(page: InspectPage) {
+  window.dispatchEvent(new CustomEvent("inspect", { detail: page }));
+}
 
 // ── TRG modal page components ─────────────────────────────────────────────────
 
@@ -9865,6 +9869,506 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
   );
 }
 
+// ── Heap Inspector page components ───────────────────────────────────────────
+
+function InspectorClassPage({ cls, histogram, report, onNavigate }: {
+  cls: string;
+  histogram: any[];
+  report: any;
+  onNavigate: (p: InspectPage) => void;
+}) {
+  const hist = histogram.find((h: any) => h.pretty_class === cls);
+  const edges: any[] = report.type_ref_graph ?? [];
+  const outEdges = edges.filter((e: any) => e.src_class === cls).sort((a: any, b: any) => b.retained_weight - a.retained_weight);
+  const inEdges  = edges.filter((e: any) => e.dst_class === cls).sort((a: any, b: any) => b.retained_weight - a.retained_weight);
+
+  return (
+    <div className="inspector-page">
+      <h3 className="inspector-page-title"><code>{cls}</code></h3>
+      {hist && (
+        <table className="trg-stat-table">
+          <tbody>
+            <tr><th>Instances</th><td>{fmtCount(hist.instances)}</td></tr>
+            <tr><th>Shallow heap</th><td>{formatBytes(hist.shallow)}</td></tr>
+            <tr><th>Retained heap</th><td>{formatBytes(hist.retained)}</td></tr>
+          </tbody>
+        </table>
+      )}
+      <div className="trg-edge-cols">
+        <div>
+          <h4>References to ({outEdges.length})</h4>
+          <ul className="trg-edge-list">
+            {outEdges.slice(0, 8).map((e: any) => (
+              <li key={e.dst_class}>
+                <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.dst_class })}>
+                  {e.dst_class.split(".").pop()}
+                </button>
+                <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h4>Referenced by ({inEdges.length})</h4>
+          <ul className="trg-edge-list">
+            {inEdges.slice(0, 8).map((e: any) => (
+              <li key={e.src_class}>
+                <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.src_class })}>
+                  {e.src_class.split(".").pop()}
+                </button>
+                <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <div className="trg-page-actions">
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
+          Instances →
+        </button>
+        <button className="show-more-btn"
+          onClick={() => window.dispatchEvent(new CustomEvent("trg-open-class", { detail: { cls } }))}>
+          Type Graph →
+        </button>
+        <button className="show-more-btn"
+          onClick={() => {
+            document.getElementById("system-overview")?.scrollIntoView({ behavior: "smooth" });
+            window.dispatchEvent(new CustomEvent("highlight-class", { detail: { cls } }));
+          }}>
+          In Histogram →
+        </button>
+        <OqlBtn cls={cls} />
+      </div>
+    </div>
+  );
+}
+
+function InspectorInstanceListPage({ cls, page, onNavigate }: {
+  cls: string;
+  page: number;
+  onNavigate: (p: InspectPage) => void;
+}) {
+  const ogCtx = React.useContext(ObjGraphCtx);
+  const wasm = (window as any).__wasmExploration;
+
+  const [wasmInstances, setWasmInstances] = React.useState<TRGInstRow[] | null>(null);
+  const [wasmTotal, setWasmTotal] = React.useState(0);
+  const [wasmLoading, setWasmLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!wasm?.find_instances) return;
+    setWasmLoading(true);
+    try {
+      const limit = (page + 2) * TRG_PAGE_SIZE;
+      const r = JSON.parse(wasm.find_instances(cls, limit));
+      if (r.ok) {
+        setWasmInstances(r.matches.map((m: any) => ({
+          idx: m.dense_idx, cls: m.display_class, shallow: m.shallow, retained: m.retained,
+        })));
+        setWasmTotal(r.total);
+      }
+    } catch (e) { /* ignore */ } finally {
+      setWasmLoading(false);
+    }
+  }, [cls, page]);
+
+  const staticInstances = React.useMemo<TRGInstRow[]>(() => {
+    if (!ogCtx) return [];
+    return Object.entries(ogCtx)
+      .map(([idxStr, n]) => ({ idx: Number(idxStr), cls: n.display_class, shallow: n.shallow, retained: n.retained }))
+      .filter(n => n.cls === cls)
+      .sort((a, b) => b.retained - a.retained);
+  }, [ogCtx, cls]);
+
+  const useWasm = !!wasm?.find_instances;
+  const instances = useWasm ? (wasmInstances ?? []) : staticInstances;
+  const totalCount = useWasm ? wasmTotal : staticInstances.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / TRG_PAGE_SIZE));
+  const slice = instances.slice(page * TRG_PAGE_SIZE, (page + 1) * TRG_PAGE_SIZE);
+
+  if (!useWasm && !ogCtx) {
+    return (
+      <div className="inspector-page">
+        <h3 className="inspector-page-title">Instances of <code>{cls}</code></h3>
+        <p className="trg-no-data">
+          Instance list requires WASM or re-run with <code>--obj-graph</code>.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="inspector-page">
+      <h3 className="inspector-page-title">
+        Instances of <code>{cls.split(".").pop()}</code>
+        <span className="trg-page-count"> — {fmtCount(totalCount)} total{useWasm ? "" : " (captured)"}</span>
+      </h3>
+      {wasmLoading && <p className="trg-no-data">Loading…</p>}
+      <table className="trg-inst-table">
+        <thead>
+          <tr><th>#</th><th>Index</th><th>Shallow</th><th>Retained</th></tr>
+        </thead>
+        <tbody>
+          {slice.map((n, i) => (
+            <tr key={n.idx} className="trg-inst-row"
+                onClick={() => onNavigate({ kind: "instance", idx: n.idx, cls: n.cls })}>
+              <td>{page * TRG_PAGE_SIZE + i + 1}</td>
+              <td><code>{n.idx}</code></td>
+              <td>{formatBytes(n.shallow)}</td>
+              <td>{formatBytes(n.retained)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {totalPages > 1 && (
+        <div className="trg-pagination">
+          <button className="show-more-btn" disabled={page === 0}
+            onClick={() => onNavigate({ kind: "instances", cls, page: page - 1 })}>← Prev</button>
+          <span>Page {page + 1} / {totalPages}</span>
+          <button className="show-more-btn" disabled={page >= totalPages - 1}
+            onClick={() => onNavigate({ kind: "instances", cls, page: page + 1 })}>Next →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InspectorInstancePage({ idx, cls, onNavigate }: {
+  idx: number;
+  cls: string;
+  onNavigate: (p: InspectPage) => void;
+}) {
+  const ogCtx = React.useContext(ObjGraphCtx);
+  const wasm = (window as any).__wasmExploration;
+  const useWasm = !!wasm?.get_node_info;
+
+  const staticNode: ObjGraphFlatNode | null = ogCtx ? (ogCtx[String(idx)] ?? null) : null;
+  const [wasmInfo, setWasmInfo] = React.useState<{ shallow: number; retained: number } | null>(null);
+  const [outRefs, setOutRefs] = React.useState<TRGRefEntry[]>([]);
+  const [outTotal, setOutTotal] = React.useState(0);
+  const [inRefs, setInRefs] = React.useState<TRGRefEntry[]>([]);
+  const [inTotal, setInTotal] = React.useState(0);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!useWasm) return;
+    setLoading(true);
+    try {
+      const info = JSON.parse(wasm.get_node_info(idx));
+      if (info.ok) setWasmInfo({ shallow: info.shallow, retained: info.retained });
+
+      const out = JSON.parse(wasm.outbound_refs(idx, 50));
+      if (out.ok) {
+        setOutRefs(out.refs.map((r: any) => ({
+          idx: r.dst_idx, fieldName: r.field_name ?? "", cls: r.display_class, shallow: r.shallow, retained: r.retained,
+        })));
+        setOutTotal(out.total);
+      }
+
+      const inp = JSON.parse(wasm.inbound_refs(idx, 50));
+      if (inp.ok) {
+        setInRefs(inp.refs.map((r: any) => ({
+          idx: r.src_idx, fieldName: r.field_name ?? "", cls: r.display_class, shallow: r.shallow, retained: r.retained,
+        })));
+        setInTotal(inp.total);
+      }
+    } catch (e) { /* ignore */ } finally {
+      setLoading(false);
+    }
+  }, [idx]);
+
+  const node = useWasm ? wasmInfo : staticNode ? { shallow: staticNode.shallow, retained: staticNode.retained } : null;
+  const idomIdx: number | undefined = staticNode?.idom;
+  const idomNode: ObjGraphFlatNode | null = idomIdx != null && ogCtx
+    ? (ogCtx[String(idomIdx)] ?? null)
+    : null;
+
+  if (!node && !loading) {
+    return <p className="trg-no-data">Object #{idx} not available. WASM or --obj-graph required.</p>;
+  }
+
+  return (
+    <div className="inspector-page">
+      <h3 className="inspector-page-title">
+        <code>{cls.split(".").pop()}</code>
+        <span className="trg-page-subtitle"> #{idx}</span>
+      </h3>
+      {loading && <p className="trg-no-data">Loading…</p>}
+      {node && (
+        <table className="trg-stat-table">
+          <tbody>
+            <tr><th>Shallow</th><td>{formatBytes(node.shallow)}</td></tr>
+            <tr><th>Retained</th><td>{formatBytes(node.retained)}</td></tr>
+            {idomNode && (
+              <tr>
+                <th>Dominated by</th>
+                <td>
+                  <button className="trg-link-btn"
+                    onClick={() => onNavigate({ kind: "instance", idx: idomIdx!, cls: idomNode.display_class })}>
+                    #{idomIdx} {idomNode.display_class?.split(".").pop()}
+                  </button>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+      {outRefs.length > 0 && (
+        <>
+          <h4>References to ({outTotal}{outTotal > outRefs.length ? `, showing ${outRefs.length}` : ""})</h4>
+          <ul className="trg-edge-list">
+            {outRefs.map((e, i) => (
+              <li key={i}>
+                <code className="trg-field-name">{e.fieldName}</code>
+                <button className="trg-link-btn"
+                  onClick={() => onNavigate({ kind: "instance", idx: e.idx, cls: e.cls })}>
+                  #{e.idx} {e.cls.split(".").pop()}
+                </button>
+                <span className="trg-edge-stat">{formatBytes(e.retained)} retained</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {inRefs.length > 0 && (
+        <>
+          <h4>Referenced by ({inTotal}{inTotal > inRefs.length ? `, showing ${inRefs.length}` : ""})</h4>
+          <ul className="trg-edge-list">
+            {inRefs.map((e, i) => (
+              <li key={i}>
+                <button className="trg-link-btn"
+                  onClick={() => onNavigate({ kind: "instance", idx: e.idx, cls: e.cls })}>
+                  #{e.idx} {e.cls.split(".").pop()}
+                </button>
+                {e.fieldName && <code className="trg-field-name"> .{e.fieldName}</code>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <div className="trg-page-actions">
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "class", cls })}>
+          ← Class view
+        </button>
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
+          All instances →
+        </button>
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "gcroot", idx, cls })}>
+          GC Root Path →
+        </button>
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "fields", idx, cls })}>
+          Fields →
+        </button>
+        <button className="show-more-btn" onClick={() => {
+          (window as any).__explorerNavigate?.("explore", idx);
+          document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+        }}>
+          Object Explorer →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InspectorGCRootPage({ idx, cls, onNavigate }: {
+  idx: number; cls: string; onNavigate: (p: InspectPage) => void;
+}) {
+  const wasm = (window as any).__wasmExploration;
+  const [path, setPath] = React.useState<any[] | null>(null);
+  React.useEffect(() => {
+    if (!wasm?.gc_root_path) return;
+    try { setPath(JSON.parse(wasm.gc_root_path(idx))); } catch {}
+  }, [idx]);
+  return (
+    <div className="inspector-page">
+      <h3 className="inspector-page-title">GC Root Path — <code>{cls.split(".").pop()}</code></h3>
+      {!wasm?.gc_root_path && <p className="trg-no-data">Requires WASM mode.</p>}
+      {wasm?.gc_root_path && !path && <p className="trg-no-data">Loading…</p>}
+      {path && (
+        <ol className="inspector-dom-path">
+          {path.map((step: any, i: number) => (
+            <li key={i}>
+              <button className="trg-link-btn"
+                onClick={() => onNavigate({ kind: "instance", idx: step.dense_idx, cls: step.display_class })}>
+                {step.display_class.split(".").pop()}
+              </button>
+              {step.field_name && <span className="trg-edge-stat"> .{step.field_name}</span>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function InspectorFieldsPage({ idx, cls, onNavigate }: {
+  idx: number; cls: string; onNavigate: (p: InspectPage) => void;
+}) {
+  const wasm = (window as any).__wasmExploration;
+  const [fields, setFields] = React.useState<any[] | null>(null);
+  const [refSizes, setRefSizes] = React.useState<Map<number, number>>(new Map());
+
+  React.useEffect(() => {
+    if (!wasm?.get_field_values) return;
+    try {
+      const fv = JSON.parse(wasm.get_field_values(idx));
+      if (!fv.ok) return;
+      setFields(fv.fields);
+      const refs = fv.fields.filter((f: any) => f.kind === "ref" && f.dense_idx != null);
+      const sizes = new Map<number, number>();
+      for (const f of refs) {
+        try {
+          const info = JSON.parse(wasm.get_node_info(f.dense_idx));
+          if (info.ok) sizes.set(f.dense_idx, info.retained);
+        } catch {}
+      }
+      setRefSizes(new Map(sizes));
+    } catch {}
+  }, [idx]);
+
+  if (!wasm?.get_field_values) {
+    return (
+      <div className="inspector-page">
+        <h3 className="inspector-page-title">Fields — <code>{cls.split(".").pop()}</code></h3>
+        <p className="trg-no-data">Field drill-down requires WASM mode.</p>
+      </div>
+    );
+  }
+
+  const sorted = (fields ?? []).slice().sort((a: any, b: any) => {
+    const ra = a.kind === "ref" ? (refSizes.get(a.dense_idx) ?? 0) : -1;
+    const rb = b.kind === "ref" ? (refSizes.get(b.dense_idx) ?? 0) : -1;
+    return rb - ra;
+  });
+
+  return (
+    <div className="inspector-page">
+      <h3 className="inspector-page-title">Fields — <code>{cls.split(".").pop()}</code> #{idx}</h3>
+      <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: 0 }}>Reference fields ranked by retained heap.</p>
+      {!fields && <p className="trg-no-data">Loading…</p>}
+      <ul className="trg-edge-list">
+        {sorted.map((f: any, i: number) => (
+          <li key={i}>
+            <code className="trg-field-name">{f.name}</code>
+            {f.kind === "ref" ? (
+              <>
+                <button className="trg-link-btn"
+                  onClick={() => onNavigate({ kind: "instance", idx: f.dense_idx, cls: f.display_class ?? "?" })}>
+                  {(f.display_class ?? "?").split(".").pop()}
+                </button>
+                {refSizes.has(f.dense_idx) && (
+                  <span className="trg-edge-stat">{formatBytes(refSizes.get(f.dense_idx)!)} retained</span>
+                )}
+                <button className="trg-link-btn" style={{ fontSize: "0.75rem" }}
+                  onClick={() => onNavigate({ kind: "fields", idx: f.dense_idx, cls: f.display_class ?? "?" })}
+                  title="Drill into fields of this object">↳ fields</button>
+              </>
+            ) : (
+              <span className="trg-edge-stat">{String(f.value ?? "null")}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="trg-page-actions">
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instance", idx, cls })}>
+          ← Instance view
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── HeapInspector panel ───────────────────────────────────────────────────────
+
+function HeapInspector({ report, histogram }: { report: any; histogram: any[] }) {
+  const [open, setOpen] = React.useState(false);
+  const [stack, setStack] = React.useState<InspectPage[]>([]);
+  const [fwd, setFwd] = React.useState<InspectPage[]>([]);
+  const [width, setWidth] = React.useState(360);
+  const dragRef = React.useRef<{ startX: number; startW: number } | null>(null);
+
+  const current = stack[stack.length - 1] ?? null;
+
+  const navigate = React.useCallback((page: InspectPage) => {
+    setStack(s => [...s, page]);
+    setFwd([]);
+    setOpen(true);
+  }, []);
+
+  React.useEffect(() => {
+    const h = (e: Event) => navigate((e as CustomEvent).detail as InspectPage);
+    window.addEventListener("inspect", h);
+    return () => window.removeEventListener("inspect", h);
+  }, [navigate]);
+
+  const goBack = React.useCallback(() => {
+    setStack(prev => {
+      if (prev.length <= 1) return prev;
+      const popped = prev[prev.length - 1];
+      setFwd(f => [popped, ...f]);
+      return prev.slice(0, -1);
+    });
+  }, []);
+
+  const goFwd = React.useCallback(() => {
+    setFwd(prev => {
+      if (prev.length === 0) return prev;
+      const page = prev[0];
+      setStack(s => [...s, page]);
+      return prev.slice(1);
+    });
+  }, []);
+
+  const handleResizeMD = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startW: width };
+    const mv = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      setWidth(Math.max(260, Math.min(680, dragRef.current.startW + (dragRef.current.startX - ev.clientX))));
+    };
+    const up = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", mv);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", mv);
+    window.addEventListener("mouseup", up);
+  };
+
+  if (!open) return (
+    <button className="inspector-tab-btn" onClick={() => setOpen(true)} title="Open Heap Inspector">🔍</button>
+  );
+
+  return (
+    <div className="heap-inspector" style={{ width }}>
+      <div className="inspector-resize-handle" onMouseDown={handleResizeMD} />
+      <div className="inspector-header">
+        <button className="inspector-nav-btn" disabled={stack.length <= 1} onClick={goBack}>←</button>
+        <button className="inspector-nav-btn" disabled={fwd.length === 0} onClick={goFwd}>→</button>
+        <span className="inspector-title">Heap Inspector</span>
+        <button className="inspector-close-btn" onClick={() => setOpen(false)}>✕</button>
+      </div>
+      <div className="inspector-body">
+        {!current ? (
+          <div className="inspector-empty">
+            <p>Click <strong>⬡</strong> or <strong>⬡≡</strong> next to any class name to inspect it here.</p>
+          </div>
+        ) : current.kind === "class" ? (
+          <InspectorClassPage cls={current.cls} histogram={histogram} report={report} onNavigate={navigate} />
+        ) : current.kind === "instances" ? (
+          <InspectorInstanceListPage cls={current.cls} page={current.page} onNavigate={navigate} />
+        ) : current.kind === "instance" ? (
+          <InspectorInstancePage idx={current.idx} cls={current.cls} onNavigate={navigate} />
+        ) : current.kind === "gcroot" ? (
+          <InspectorGCRootPage idx={current.idx} cls={current.cls} onNavigate={navigate} />
+        ) : current.kind === "fields" ? (
+          <InspectorFieldsPage idx={current.idx} cls={current.cls} onNavigate={navigate} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function App({ report }: { report: Report }) {
   const [expandAllTables, setExpandAllTables] = React.useState(false);
   const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
@@ -10004,6 +10508,7 @@ export default function App({ report }: { report: Report }) {
         </div>
       )}
       <StickyHeader />
+      <HeapInspector report={report} histogram={report.overview?.histogram ?? []} />
       <OomTriage report={report} />
       <ExecSummaryCard report={report} />
       <WasteSummarySection report={report} />
