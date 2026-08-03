@@ -736,7 +736,7 @@ function WasteSummarySection({ report }: { report: Report }) {
         return anchor ? <a href={`#${anchor}`}>{s.label}</a> : s.label;
       },
     },
-    { id: "reclaimable", name: useKB ? "Reclaimable (KB)" : "Reclaimable", right: true, width: useKB ? "150px" : "120px", cell: byteCell(s => s.bytes, fmtB, useKB), selector: (s) => s.bytes, sortable: true },
+    { id: "reclaimable", name: useKB ? "Reclaimable (KB)" : "Reclaimable", right: true, minWidth: useKB ? "150px" : "130px", cell: byteCell(s => s.bytes, fmtB, useKB), selector: (s) => s.bytes, sortable: true },
     {
       id: "bar", name: "", width: "100px",
       cell: (s) => (
@@ -1564,7 +1564,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
   const cols: TableColumn<DupPrimArrayRow>[] = [
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "type", name: "Array type", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
-    { id: "groups", name: "Dup groups", right: true, width: "120px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
+    { id: "groups", name: "Dup groups", right: true, minWidth: "125px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.wasted_bytes, fmtB, useKB), selector: (r) => r.wasted_bytes, sortable: true },
   ];
   return (
@@ -1754,9 +1754,9 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
-    { id: "hdr", name: "Header/obj", right: true, width: "105px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
+    { id: "hdr", name: "Header/obj", right: true, minWidth: "110px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
     { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "150px" : "130px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
-    { id: "pct", name: "% of Shallow", right: true, width: "115px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp, sortable: true },
+    { id: "pct", name: "% of Shallow", right: true, minWidth: "120px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp, sortable: true },
     { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "120px" : "100px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
   ];
   return (
