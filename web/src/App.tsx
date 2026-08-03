@@ -19,6 +19,7 @@ import {
 } from "./charts";
 import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 import { sankey, sankeyLinkHorizontal } from "d3-sankey";
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto. Persists the choice in localStorage so it
@@ -5254,6 +5255,35 @@ function tpfgShortName(cls: string): string {
 
 // Force-directed layout: 250 Verlet iterations (static — no animation).
 interface FDNode { id: string; x: number; y: number; vx: number; vy: number; r: number; }
+
+function runForceLayoutD3(
+  nodes: FDNode[],
+  edges: { src: number; dst: number }[],
+  w: number,
+  h: number,
+): FDNode[] {
+  interface SimNode extends FDNode { fx?: number | null; fy?: number | null; }
+  const simNodes: SimNode[] = nodes.map(n => ({ ...n }));
+  const simLinks = edges
+    .filter(e => e.src >= 0 && e.src < simNodes.length && e.dst >= 0 && e.dst < simNodes.length)
+    .map(e => ({ source: e.src, target: e.dst }));
+
+  const sim = forceSimulation<SimNode>(simNodes)
+    .force("link", forceLink<SimNode, { source: number; target: number }>(simLinks).distance(90).strength(0.3))
+    .force("charge", forceManyBody<SimNode>().strength(-500))
+    .force("center", forceCenter<SimNode>(w / 2, h / 2))
+    .force("collide", forceCollide<SimNode>().radius((d) => d.r + 6).iterations(3))
+    .stop();
+
+  for (let i = 0; i < 300; i++) sim.tick();
+
+  return simNodes.map((sn, i) => ({
+    ...nodes[i],
+    x: Math.max(nodes[i].r + 5, Math.min(w - nodes[i].r - 5, sn.x ?? w / 2)),
+    y: Math.max(nodes[i].r + 5, Math.min(h - nodes[i].r - 5, sn.y ?? h / 2)),
+  }));
+}
+
 function runForceLayout(
   nodes: FDNode[], edges: { src: number; dst: number }[],
   w: number, h: number,
@@ -5854,7 +5884,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
       src: idxMap.get(e.src_class) ?? -1,
       dst: idxMap.get(e.dst_class) ?? -1,
     })).filter(e => e.src >= 0 && e.dst >= 0);
-    return runForceLayout(nodes, fdEdges, w, svgH);
+    return runForceLayoutD3(nodes, fdEdges, w, svgH);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeInfos, graphEdges, layoutKey, w, sizeBy, maxWeight]);
 
@@ -6767,7 +6797,7 @@ function OGEGraphView({ data, onNavigate }: {
   const positions = React.useMemo(() => {
     // layoutKey read to trigger re-run
     void layoutKey;
-    return runForceLayout(fdNodes, fdEdges, svgW, svgH);
+    return runForceLayoutD3(fdNodes, fdEdges, svgW, svgH);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdNodes, fdEdges, layoutKey]);
 
