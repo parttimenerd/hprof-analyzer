@@ -4842,6 +4842,19 @@ function DomGraphView({ pairs, idoms }: {
           })}
         </g>
       </svg>
+      {selected && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.4rem", fontSize: "0.82rem", flexWrap: "wrap" }}>
+          <code style={{ color: "var(--muted)", wordBreak: "break-all", flex: "1 1 auto" }}>{selected}</code>
+          <button className="show-more-btn" style={{ flexShrink: 0 }}
+            onClick={() => fireInspect({ kind: "class", cls: selected })}>
+            Inspect →
+          </button>
+          <button className="show-more-btn" style={{ flexShrink: 0 }}
+            onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
+            Instances →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -6948,13 +6961,21 @@ function OGEGraphView({ data, onNavigate }: {
               <>
                 <p style={{ margin: "0 0 0.2rem", color: "var(--muted)", fontSize: "0.75rem" }}>Fields</p>
                 <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: "0.77rem" }}>
-                  {wasmFields.slice(0, 8).map((f: any, i: number) => (
+                  {[...wasmFields].sort((a: any, b: any) => {
+                    if (a.kind === "ref" && b.kind !== "ref") return -1;
+                    if (a.kind !== "ref" && b.kind === "ref") return 1;
+                    return 0;
+                  }).slice(0, 5).map((f: any, i: number) => (
                     <li key={i} style={{ marginBottom: "0.1rem" }}>
                       <span style={{ color: "var(--muted)" }}>{f.name}: </span>
                       <span>{String(f.value ?? f.display_class ?? "")}</span>
                     </li>
                   ))}
                 </ul>
+                <button className="show-more-btn" style={{ marginTop: "0.3rem" }}
+                  onClick={() => fireInspect({ kind: "fields", idx: graphSelected!, cls: selectedNodeData!.display_class })}>
+                  All fields →
+                </button>
               </>
             )}
             {/* WASM outbound refs */}
