@@ -4089,15 +4089,12 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
         ranked.iter().map(|(i, _)| *i).collect();
     let retained_len = g.retained.len();
 
-    // Per-class, per-field accumulators
-    let mut nn_map: std::collections::HashMap<usize, Vec<u64>> =
-        std::collections::HashMap::new();
-    let mut ret_map: std::collections::HashMap<usize, Vec<u64>> =
-        std::collections::HashMap::new();
+    // Per-class, per-field accumulators: (non_null_counts, retained_sums)
+    use std::collections::HashMap;
+    let mut acc_map: HashMap<usize, (Vec<u64>, Vec<u64>)> = HashMap::new();
     for &(ci, _) in &ranked {
         let n_fields = g.class_ref_field_names.get(ci).map(|v| v.len()).unwrap_or(0);
-        nn_map.insert(ci, vec![0u64; n_fields]);
-        ret_map.insert(ci, vec![0u64; n_fields]);
+        acc_map.insert(ci, (vec![0u64; n_fields], vec![0u64; n_fields]));
     }
 
     for (obj, &ci_u32) in g.class_idx.iter().enumerate() {
@@ -4105,11 +4102,10 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
         if !target_rows.contains(&ci) {
             continue;
         }
-        let nn = match nn_map.get_mut(&ci) {
+        let (nn, rt) = match acc_map.get_mut(&ci) {
             Some(v) => v,
             None => continue,
         };
-        let rt = ret_map.get_mut(&ci).unwrap();
         if obj + 1 >= g.fwd_offsets.len() {
             continue;
         }
@@ -4139,15 +4135,15 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
                 .get(ci)
                 .cloned()
                 .unwrap_or_default();
-            let nn = nn_map.remove(&ci).unwrap_or_default();
-            let rt = ret_map.remove(&ci).unwrap_or_default();
+            let (nn, rt) = acc_map.remove(&ci).unwrap_or_default();
 
             let ref_fields = if names.is_empty() {
+                // No reference field schema for this class — report no field data
                 vec![FieldRefStat {
                     field_name: String::new(),
-                    null_count: instance_count.saturating_sub(nn.iter().sum::<u64>()),
-                    non_null_count: nn.iter().sum(),
-                    total_retained: rt.iter().sum(),
+                    null_count: 0,
+                    non_null_count: 0,
+                    total_retained: 0,
                 }]
             } else {
                 names
