@@ -112,6 +112,50 @@ impl CompressedU32 {
         }
     }
 
+    /// Decompress the element at `target_idx` by streaming through the data. O(n).
+    /// Use only for single-element lookups; prefer `restore()` for batch access.
+    pub fn get_at(&self, target_idx: usize) -> io::Result<Option<u32>> {
+        match self.codec {
+            Codec::None => Ok(self.raw.get(target_idx).copied()),
+            Codec::Deflate9 => {
+                let mut cur = 0usize;
+                let mut found = None;
+                self.for_each_u32(|x| {
+                    if cur == target_idx {
+                        found = Some(x);
+                    }
+                    cur += 1;
+                })?;
+                Ok(found)
+            }
+        }
+    }
+
+    /// Decompress elements in `[start, end)` by streaming. O(end).
+    /// Use only for range lookups; prefer `restore()` for batch access.
+    pub fn slice_at(&self, start: usize, end: usize) -> io::Result<Vec<u32>> {
+        if start >= end {
+            return Ok(Vec::new());
+        }
+        match self.codec {
+            Codec::None => {
+                let len = self.raw.len();
+                Ok(self.raw[start.min(len)..end.min(len)].to_vec())
+            }
+            Codec::Deflate9 => {
+                let mut result = Vec::with_capacity(end - start);
+                let mut i = 0usize;
+                self.for_each_u32(|x| {
+                    if i >= start && i < end {
+                        result.push(x);
+                    }
+                    i += 1;
+                })?;
+                Ok(result)
+            }
+        }
+    }
+
     /// Bytes currently held (blob for Deflate9, raw*4 for None).
     #[allow(dead_code)]
     pub fn held_bytes(&self) -> usize {
@@ -175,6 +219,33 @@ pub struct CompressedU64 {
 }
 
 impl CompressedU64 {
+    /// Decompress the element at `target_idx` by streaming through the data. O(n).
+    /// Use only for single-element lookups; prefer `restore()` for batch access.
+    pub fn get_at(&self, target_idx: usize) -> io::Result<Option<u64>> {
+        match self.codec {
+            Codec::None => Ok(self.raw.get(target_idx).copied()),
+            Codec::Deflate9 => {
+                let mut r = flate2::read::DeflateDecoder::new(&self.blob[..]);
+                let mut buf = [0u8; 8];
+                let mut i = 0usize;
+                loop {
+                    match r.read_exact(&mut buf) {
+                        Ok(()) => {
+                            if i == target_idx {
+                                return Ok(Some(u64::from_le_bytes(buf)));
+                            }
+                            i += 1;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+    }
+
     pub fn compress(v: &[u64], codec: Codec) -> io::Result<Self> {
         let len = v.len();
         match codec {
@@ -327,5 +398,36 @@ mod tests {
         assert_eq!(Codec::parse("deflate9"), Some(Codec::Deflate9));
         assert_eq!(Codec::parse("deflate"), Some(Codec::Deflate9));
         assert_eq!(Codec::parse("zstd"), None);
+    }
+
+    #[test]
+    fn test_get_at_u32() {
+        let data: Vec<u32> = (0..1000).collect();
+        let c = CompressedU32::compress(&data, Codec::Deflate9).unwrap();
+        assert_eq!(c.get_at(0).unwrap(), Some(0));
+        assert_eq!(c.get_at(999).unwrap(), Some(999));
+        assert_eq!(c.get_at(1000).unwrap(), None);
+        assert_eq!(c.slice_at(10, 15).unwrap(), vec![10u32, 11, 12, 13, 14]);
+        assert_eq!(c.slice_at(0, 0).unwrap(), Vec::<u32>::new());
+        assert_eq!(c.slice_at(998, 1001).unwrap(), vec![998u32, 999]);
+
+        // Also test Codec::None path
+        let c2 = CompressedU32::compress(&data, Codec::None).unwrap();
+        assert_eq!(c2.get_at(500).unwrap(), Some(500));
+        assert_eq!(c2.slice_at(5, 8).unwrap(), vec![5u32, 6, 7]);
+    }
+
+    #[test]
+    fn test_get_at_u64() {
+        let data: Vec<u64> = (0..500u64).map(|i| i * 1_000_000).collect();
+        let c = CompressedU64::compress(&data, Codec::Deflate9).unwrap();
+        assert_eq!(c.get_at(0).unwrap(), Some(0));
+        assert_eq!(c.get_at(499).unwrap(), Some(499 * 1_000_000));
+        assert_eq!(c.get_at(500).unwrap(), None);
+
+        // Also test Codec::None path
+        let c2 = CompressedU64::compress(&data, Codec::None).unwrap();
+        assert_eq!(c2.get_at(100).unwrap(), Some(100 * 1_000_000));
+        assert_eq!(c2.get_at(500).unwrap(), None);
     }
 }
