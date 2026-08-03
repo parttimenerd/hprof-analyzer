@@ -9833,6 +9833,35 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         </button>
         <OqlBtn cls={cls} />
       </div>
+      {report?.field_stats && (() => {
+        const cfs = report.field_stats!.classes.find((c: any) => c.class_name === cls);
+        if (!cfs || cfs.ref_fields.length === 0) return null;
+        return (
+          <details style={{ marginTop: "0.5rem" }}>
+            <summary style={{ fontSize: "0.82rem", cursor: "pointer" }}>
+              Field statistics ({cfs.ref_fields.length} ref field{cfs.ref_fields.length !== 1 ? "s" : ""})
+            </summary>
+            <table style={{ fontSize: "0.78rem", width: "100%", borderCollapse: "collapse", marginTop: "0.3rem" }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left" }}>Field</th>
+                  <th style={{ textAlign: "right" }}>Non-null refs</th>
+                  <th style={{ textAlign: "right" }}>Total retained</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cfs.ref_fields.map((f: any, i: number) => (
+                  <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td><code>{f.field_name || "(all refs)"}</code></td>
+                    <td style={{ textAlign: "right" }}>{f.non_null_count.toLocaleString()}</td>
+                    <td style={{ textAlign: "right" }}>{formatBytes(f.total_retained)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        );
+      })()}
     </div>
   );
 }

@@ -546,6 +546,15 @@ pub fn build_model(
     // Framework Auto-Analysis — always-on; each framework only emits when its
     // sentinel class is present in the heap.
     let framework_analysis = crate::pass2::scan_frameworks(g);
+    let field_stats = if opts.field_stats {
+        let fs = Some(build_field_stats(g));
+        // Free the restored fwd CSR (only alive when --field-stats was passed).
+        g.fwd_offsets = Vec::new();
+        g.fwd_targets = crate::chunkvec::ChunkU32::zeroed(0);
+        fs
+    } else {
+        None
+    };
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -578,6 +587,7 @@ pub fn build_model(
         type_ref_graph,
         thread_local_analysis,
         framework_analysis,
+        field_stats,
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);
@@ -4046,6 +4056,96 @@ mod dom_subtree_tests {
         };
         assert_eq!(n.dom_subtree_count, 1);
     }
+}
+
+
+// ── Field statistics ─────────────────────────────────────────────────────────
+
+/// Compute per-class reference-field statistics for the top-50 most common
+/// classes by instance count. For each class, counts total outbound reference
+/// edges (non-null refs in the CSR forward graph) and sums the retained sizes
+/// of their targets. Field names are empty strings because the CSR does not
+/// carry field names unless `--ref-paths` was used.
+pub fn build_field_stats(g: &Graph) -> FieldStats {
+    use std::collections::HashMap;
+
+    // Count instances per class-histogram-row index.
+    let mut row_counts: Vec<u64> = vec![0u64; g.class_names.len()];
+    for &ci in &g.class_idx {
+        let ci = ci as usize;
+        if ci < row_counts.len() {
+            row_counts[ci] += 1;
+        }
+    }
+
+    // Build a ranked list of (class_name, row_index, instance_count),
+    // sorted descending by instance count, capped at 50.
+    let mut ranked: Vec<(usize, u64)> = row_counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c > 0)
+        .map(|(i, &c)| (i, c))
+        .collect();
+    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    ranked.truncate(50);
+
+    // Build a set of the target row indices for fast lookup.
+    let target_rows: std::collections::HashSet<usize> =
+        ranked.iter().map(|(i, _)| *i).collect();
+
+    // Build a reverse map: object dense index → class row index (only for
+    // objects whose class is in the top-50 set).
+    let n = g.class_idx.len();
+    let mut obj_to_row: HashMap<usize, usize> = HashMap::new();
+    for (obj, &ci) in g.class_idx.iter().enumerate() {
+        let ci = ci as usize;
+        if target_rows.contains(&ci) {
+            obj_to_row.insert(obj, ci);
+        }
+    }
+
+    // Accumulate non_null edge count and total_retained per class row.
+    let mut non_null_per_row: Vec<u64> = vec![0u64; g.class_names.len()];
+    let mut retained_per_row: Vec<u64> = vec![0u64; g.class_names.len()];
+    let retained_len = g.retained.len();
+
+    for (&obj, &ci) in &obj_to_row {
+        if obj + 1 >= g.fwd_offsets.len() {
+            continue;
+        }
+        let start = g.fwd_offsets[obj] as usize;
+        let end = g.fwd_offsets[obj + 1] as usize;
+        for pos in start..end {
+            let tgt = g.fwd_targets.get(pos) as usize;
+            if tgt < retained_len {
+                non_null_per_row[ci] += 1;
+                retained_per_row[ci] += g.retained[tgt];
+            }
+        }
+    }
+
+    // Assemble the output.
+    let classes = ranked
+        .into_iter()
+        .map(|(ci, instance_count)| {
+            let class_name = g.class_names[ci].clone();
+            let non_null = non_null_per_row[ci];
+            let total_ret = retained_per_row[ci];
+            let ref_fields = vec![FieldRefStat {
+                field_name: String::new(),
+                null_count: 0,
+                non_null_count: non_null,
+                total_retained: total_ret,
+            }];
+            ClassFieldStats {
+                class_name,
+                instance_count,
+                ref_fields,
+            }
+        })
+        .collect();
+
+    FieldStats { classes }
 }
 
 #[cfg(test)]

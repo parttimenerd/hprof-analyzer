@@ -120,6 +120,17 @@
         "longest_chain_depth": 0
       }
     },
+    "field_stats": {
+      "description": "Per-class reference-field statistics (null/non-null counts, total retained\nof pointees). Present only when `--field-stats` was passed; `None` otherwise.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FieldStats"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "fields_by_size": {
       "description": "Holder `Class#field` ranked by total retained size of their pointees,\npresent only when `--collections` was passed; `None` otherwise. Additive.",
       "anyOf": [
@@ -685,6 +696,31 @@
         "length",
         "used",
         "wasted_bytes"
+      ]
+    },
+    "ClassFieldStats": {
+      "description": "Per-class aggregation of reference-field statistics for a single class.",
+      "type": "object",
+      "properties": {
+        "class_name": {
+          "type": "string"
+        },
+        "instance_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ref_fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldRefStat"
+          }
+        }
+      },
+      "required": [
+        "class_name",
+        "instance_count",
+        "ref_fields"
       ]
     },
     "ClassRow": {
@@ -1649,6 +1685,52 @@
         "total_retained",
         "pointees",
         "holder_instances"
+      ]
+    },
+    "FieldRefStat": {
+      "description": "Per-class reference-field statistics: null/non-null ref counts and total\nretained size of pointees. Populated only when `--field-stats` is passed.",
+      "type": "object",
+      "properties": {
+        "field_name": {
+          "type": "string"
+        },
+        "non_null_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "null_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_retained": {
+          "description": "Sum of retained[] for all non-null pointees.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "field_name",
+        "null_count",
+        "non_null_count",
+        "total_retained"
+      ]
+    },
+    "FieldStats": {
+      "description": "Collection of per-class reference-field stats, present only when\n`--field-stats` was passed.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClassFieldStats"
+          }
+        }
+      },
+      "required": [
+        "classes"
       ]
     },
     "FieldsBySize": {

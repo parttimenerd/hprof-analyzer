@@ -774,6 +774,23 @@ export interface QueryResult {
   viz?: VizSpec;
 }
 
+export interface FieldRefStat {
+  field_name: string;
+  null_count: number;
+  non_null_count: number;
+  total_retained: number;
+}
+
+export interface ClassFieldStats {
+  class_name: string;
+  instance_count: number;
+  ref_fields: FieldRefStat[];
+}
+
+export interface FieldStats {
+  classes: ClassFieldStats[];
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -822,6 +839,8 @@ export interface Report {
   // Detected framework aggregate analyses. Empty when no framework classes present.
   // Always-on; each entry only emitted when its sentinel class is in the heap.
   framework_analysis?: FrameworkAnalysis[];
+  // Per-class reference-field statistics. Present only when --field-stats was passed.
+  field_stats?: FieldStats;
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.

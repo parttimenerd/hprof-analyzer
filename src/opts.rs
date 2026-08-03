@@ -93,6 +93,9 @@ pub struct AnalyzeOptions {
     pub dev_report: bool,
     /// Skip build_model + render. Used by `mat caches` which discards the report.
     pub skip_report: bool,
+    /// Compute per-class reference-field statistics (null/non-null counts, total
+    /// retained size of pointees). Opt-in; off by default. Adds O(n) pass.
+    pub field_stats: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -141,6 +144,7 @@ impl DetailLevel {
             report_size: ReportSize::Small,
             dev_report: false,
             skip_report: false,
+            field_stats: false,
         }
     }
 }

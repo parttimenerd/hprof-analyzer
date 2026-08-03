@@ -187,6 +187,12 @@ struct Cli {
     #[arg(long)]
     ref_paths: bool,
 
+    /// Collect per-class reference-field statistics: for the top-50 most
+    /// common classes by instance count, report total non-null ref counts and
+    /// sum of retained sizes for their pointees. Adds one O(n) pass.
+    #[arg(long)]
+    field_stats: bool,
+
     /// Enable all heavy opt-in analyses: equivalent to passing
     /// --obj-graph --collections --find-duplicates together.
     /// Adds ~330 MB peak RSS on large dumps (--obj-graph ~30 MB,
@@ -787,6 +793,7 @@ fn run_default(cli: Cli) {
             // Analyze defaults to raw (all); --reachable-only opts into pruning.
             reachable_only: cli.reachable_only,
             ref_paths: cli.ref_paths,
+            field_stats: cli.field_stats,
             obj_graph: cli.obj_graph.is_some() || cli.full_analysis,
             dev_report: cli.dev,
             ..opts
@@ -973,6 +980,20 @@ fn analyze_to_report_inner(
         ));
     }
 
+    // When --field-stats is requested, save the fwd CSR before inbound consumes it.
+    // It is restored into g after retained computation so build_field_stats can use it.
+    let field_stats_fwd: Option<(Vec<u32>, crate::chunkvec::ChunkU32)> = if opts.field_stats {
+        let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
+        let fwd_off_copy = g.fwd_offsets.clone();
+        let mut fwd_tgt_copy = crate::chunkvec::ChunkU32::zeroed(total_edges);
+        for i in 0..total_edges {
+            fwd_tgt_copy.set(i, g.fwd_targets.get(i));
+        }
+        Some((fwd_off_copy, fwd_tgt_copy))
+    } else {
+        None
+    };
+
     // build_from_fwd needs dfn alive; it is cleared afterward (matching run()).
     // Large dumps: drop fwd_targets first and rescan HPROF to avoid the
     // inb_flat+fwd_targets peak (saves ~7-10 GB on 30G+ dumps).
@@ -1023,6 +1044,13 @@ fn analyze_to_report_inner(
     );
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
+
+    // If --field-stats was requested, restore the saved fwd CSR so
+    // build_field_stats can traverse edges to count refs and sum retained.
+    if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
+        g.fwd_offsets = fwd_off;
+        g.fwd_targets = fwd_tgt;
+    }
 
     let alloc_sites = if let Some(c) = alloc_serial_c {
         let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
@@ -2305,6 +2333,20 @@ fn run(
         ));
     }
 
+    // When --field-stats is requested, save the fwd CSR before inbound consumes it.
+    // It is restored after retained computation so build_field_stats can use it.
+    let field_stats_fwd_main: Option<(Vec<u32>, crate::chunkvec::ChunkU32)> = if opts.field_stats {
+        let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
+        let fwd_off_copy = g.fwd_offsets.clone();
+        let mut fwd_tgt_copy = crate::chunkvec::ChunkU32::zeroed(total_edges);
+        for i in 0..total_edges {
+            fwd_tgt_copy.set(i, g.fwd_targets.get(i));
+        }
+        Some((fwd_off_copy, fwd_tgt_copy))
+    } else {
+        None
+    };
+
     let (inb_block_off, inb_data) = if mat.is_some() {
         // Drop fwd_targets BEFORE calling build_mat_scan so that inb_flat
         // allocation (6 GB) does not coexist with fwd_targets (8 GB).
@@ -2841,6 +2883,13 @@ fn run(
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
+
+    // If --field-stats was requested, restore the saved fwd CSR so
+    // build_field_stats can traverse edges to count refs and sum retained.
+    if let Some((fwd_off, fwd_tgt)) = field_stats_fwd_main {
+        g.fwd_offsets = fwd_off;
+        g.fwd_targets = fwd_tgt;
+    }
 
     // Finalize cross-phase (@retainedHeapSize) queries now that retained sizes
     // exist. Phase-1 results pass through; carried indices are joined against

@@ -338,6 +338,19 @@ fn analyze_to_report_inner(
     };
 
     // build_from_fwd needs dfn alive; it is cleared afterward (matching run()).
+    // When --field-stats is requested, save the fwd CSR before inbound consumes it.
+    // It is restored into g after retained computation so build_field_stats can use it.
+    let field_stats_fwd: Option<(Vec<u32>, crate::chunkvec::ChunkU32)> = if opts.field_stats {
+        let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
+        let fwd_off_copy = g.fwd_offsets.clone();
+        let mut fwd_tgt_copy = crate::chunkvec::ChunkU32::zeroed(total_edges);
+        for i in 0..total_edges {
+            fwd_tgt_copy.set(i, g.fwd_targets.get(i));
+        }
+        Some((fwd_off_copy, fwd_tgt_copy))
+    } else {
+        None
+    };
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
         std::mem::take(&mut g.fwd_offsets),
         std::mem::take(&mut g.fwd_targets),
@@ -382,6 +395,13 @@ fn analyze_to_report_inner(
     progress("retained", 1.0);
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
+
+    // If --field-stats was requested, restore the saved fwd CSR so
+    // build_field_stats can traverse edges to count refs and sum retained.
+    if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
+        g.fwd_offsets = fwd_off;
+        g.fwd_targets = fwd_tgt;
+    }
 
     let alloc_sites = if let Some(c) = alloc_serial_c {
         let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);

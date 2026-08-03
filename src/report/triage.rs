@@ -1656,6 +1656,7 @@ mod tests {
             type_ref_graph: vec![],
             thread_local_analysis: Vec::new(),
             framework_analysis: Vec::new(),
+            field_stats: None,
         }
     }
 

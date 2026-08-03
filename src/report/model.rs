@@ -1558,6 +1558,32 @@ pub struct AllocSites {
     pub sites: Vec<AllocSite>,
 }
 
+/// Per-class reference-field statistics: null/non-null ref counts and total
+/// retained size of pointees. Populated only when `--field-stats` is passed.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct FieldRefStat {
+    pub field_name: String,
+    pub null_count: u64,
+    pub non_null_count: u64,
+    /// Sum of retained[] for all non-null pointees.
+    pub total_retained: u64,
+}
+
+/// Per-class aggregation of reference-field statistics for a single class.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ClassFieldStats {
+    pub class_name: String,
+    pub instance_count: u64,
+    pub ref_fields: Vec<FieldRefStat>,
+}
+
+/// Collection of per-class reference-field stats, present only when
+/// `--field-stats` was passed.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct FieldStats {
+    pub classes: Vec<ClassFieldStats>,
+}
+
 /// Full report data model: only bounded aggregates, never a per-object Vec.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct Report {
@@ -1647,6 +1673,10 @@ pub struct Report {
     /// `#[serde(default)]` keeps older JSON loadable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub framework_analysis: Vec<FrameworkAnalysis>,
+    /// Per-class reference-field statistics (null/non-null counts, total retained
+    /// of pointees). Present only when `--field-stats` was passed; `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_stats: Option<FieldStats>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.
