@@ -1103,6 +1103,18 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
     return [header, ...data];
   }, [displayRows, totalShallow]);
 
+  const ExpandedHistRow = React.memo(({ data }: { data: HistRow }) => {
+    if (!data.root_path?.length) return null;
+    return (
+      <div style={{ padding: "0.5rem 1rem 0.5rem 2rem", background: "var(--bg2, #f8f8f8)" }}>
+        <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0 0 0.25rem" }}>
+          GC root path for highest-retained instance ({data.root_path.length} hops):
+        </p>
+        <RootPathChain steps={data.root_path} />
+      </div>
+    );
+  });
+
   return (
     <div>
       <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
@@ -1154,6 +1166,10 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
             classNames: ["hist-row-highlighted"],
           },
         ]}
+        expandableRows
+        expandableRowsHideExpander={false}
+        expandableRowDisabled={(row: HistRow) => !row.root_path?.length}
+        expandableRowsComponent={ExpandedHistRow as any}
       />
     </div>
   );
