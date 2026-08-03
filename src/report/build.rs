@@ -2452,9 +2452,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         })
         .collect();
 
-    // Populate root_path for the top-20 histogram rows by retained heap.
-    // The histogram is already sorted retained-desc, so rows 0..20 are the top-20.
-    // For each such class, find the highest-retained instance, then walk the
+    // Populate root_path for all histogram rows by retained heap.
+    // The histogram is already sorted retained-desc.
+    // For each class, find the highest-retained instance, then walk the
     // dominator chain up to the GC root (mirroring build_leak_suspects root_path).
     if !g.idom.is_empty() && !g.retained.is_empty() {
         // Build a map: object index → GC root type (minimum sub-tag, deterministic).
@@ -2469,13 +2469,12 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
 
         let vroot = n as u32;
         let undef_idom = u32::MAX;
-        const HIST_ROOT_PATH_TOP: usize = 20;
         const HIST_ROOT_PATH_DEPTH: usize = 30;
 
-        // For each of the top-20 histogram rows (by retained, already sorted),
-        // find the object of that class with the highest retained heap, then walk
-        // the dominator chain toward the GC root.
-        for hist_pos in 0..histogram.len().min(HIST_ROOT_PATH_TOP) {
+        // For every histogram row (by retained, already sorted), find the
+        // object of that class with the highest retained heap, then walk the
+        // dominator chain toward the GC root.
+        for hist_pos in 0..histogram.len() {
             let ci = order[hist_pos]; // class index for this histogram row
 
             // Find the highest-retained object of class `ci`.
