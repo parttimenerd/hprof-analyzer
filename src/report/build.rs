@@ -244,7 +244,7 @@ fn build_obj_graph_flat(
                 if nodes.contains_key(&node) {
                     let mut rows: Vec<(u32, u32, u64)> =
                         agg.iter().map(|(&ci, &(cnt, sh))| (ci, cnt, sh)).collect();
-                    rows.sort_unstable_by(|a, b| b.2.cmp(&a.2));
+                    rows.sort_unstable_by_key(|r| std::cmp::Reverse(r.2));
                     rows.truncate(TOP_K);
                     let histogram: Vec<SubtreeClassRow> = rows
                         .into_iter()
@@ -435,7 +435,7 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
         if src_idx_usize >= g.class_idx.len() {
             continue;
         }
-        let src_ci = g.class_idx[src_idx_usize] as u32;
+        let src_ci = g.class_idx[src_idx_usize];
         let src_retained = g.retained.get(src_idx_usize).copied().unwrap_or(0);
         let out_degree = edges.len() as u64;
         if out_degree == 0 {
@@ -448,7 +448,7 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
             if dst_idx_usize >= g.class_idx.len() {
                 continue;
             }
-            let dst_ci = g.class_idx[dst_idx_usize] as u32;
+            let dst_ci = g.class_idx[dst_idx_usize];
             let entry = pair_map.entry((src_ci, dst_ci)).or_insert((0, 0));
             entry.0 += 1;
             entry.1 += weight_per_edge;
@@ -477,7 +477,7 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
         })
         .collect();
 
-    edges.sort_unstable_by(|a, b| b.retained_weight.cmp(&a.retained_weight));
+    edges.sort_unstable_by_key(|e: &TypeEdge| std::cmp::Reverse(e.retained_weight));
     edges.truncate(500);
     edges
 }
@@ -2508,7 +2508,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                         && g.idom.get(i).copied().unwrap_or(undef_idom) != undef_idom
                     {
                         let ret = g.retained.get(i).copied().unwrap_or(0);
-                        if best.map_or(true, |(_, br)| ret > br) {
+                        if best.is_none_or(|(_, br)| ret > br) {
                             best = Some((i, ret));
                         }
                     }
@@ -2802,7 +2802,8 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let gc_roots_retained_by_type: Vec<crate::report::GcRootRetainedRow> = {
         use std::collections::HashMap;
         // by_type: root_type_label → (count, retained, HashMap<class_name → (count, retained)>)
-        let mut by_type: HashMap<String, (u64, u64, HashMap<String, (u64, u64)>)> = HashMap::new();
+        type ByTypeMap = HashMap<String, (u64, u64, HashMap<String, (u64, u64)>)>;
+        let mut by_type: ByTypeMap = HashMap::new();
         for (&idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
             if let Some(label) = gc_root_type_label_opt(ty) {
                 let i = idx as usize;
@@ -4198,7 +4199,7 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
         .filter(|(_, c)| **c > 0)
         .map(|(i, &c)| (i, c))
         .collect();
-    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    ranked.sort_unstable_by_key(|r: &(usize, u64)| std::cmp::Reverse(r.1));
     ranked.truncate(50);
 
     let target_rows: std::collections::HashSet<usize> = ranked.iter().map(|(i, _)| *i).collect();

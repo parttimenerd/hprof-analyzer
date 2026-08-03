@@ -1694,6 +1694,6 @@ mod obj_graph_tests {
         let cap = capture_obj_graph_edges(&g, 1, 100);
         // Object 0 is captured (only one), object 1 is not.
         // Since 1 is not captured, no inbound entry for 1.
-        assert!(cap.inbound.get(&1).is_none());
+        assert!(!cap.inbound.contains_key(&1));
     }
 }

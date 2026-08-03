@@ -2014,10 +2014,8 @@ pub fn parse_for_complete(src: &str, cursor_pos: usize) -> CompletionContext {
                         labels.push(s);
                     }
                 }
-                chumsky::error::RichPattern::Token(t) => {
-                    if !tokens.contains(&**t) {
-                        tokens.push((**t).clone());
-                    }
+                chumsky::error::RichPattern::Token(t) if !tokens.contains(&**t) => {
+                    tokens.push((**t).clone());
                 }
                 _ => {}
             }

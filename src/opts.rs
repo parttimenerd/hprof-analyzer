@@ -3,9 +3,10 @@
 
 /// Controls the capture tier for --obj-graph: how many edges per object are included.
 /// Larger tiers produce bigger HTML reports but cover more of the heap.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum ReportSize {
-    Small,  // edge_cap=100  (default, current behaviour)
+    #[default]
+    Small, // edge_cap=100  (default, current behaviour)
     Medium, // edge_cap=150
     Large,  // edge_cap=300
 }
@@ -24,12 +25,6 @@ impl ReportSize {
             ReportSize::Medium => "medium",
             ReportSize::Large => "large",
         }
-    }
-}
-
-impl Default for ReportSize {
-    fn default() -> Self {
-        ReportSize::Small
     }
 }
 

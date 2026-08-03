@@ -1846,10 +1846,9 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
         match serde_json::to_string_pretty(&query_results) {
             Ok(j) => println!("{j}"),
             Err(e) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to serialize query results as JSON: {e}"),
-                ));
+                return Err(io::Error::other(format!(
+                    "failed to serialize query results as JSON: {e}"
+                )));
             }
         }
         return Ok(());

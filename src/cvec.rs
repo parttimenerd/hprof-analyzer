@@ -114,6 +114,7 @@ impl CompressedU32 {
 
     /// Decompress the element at `target_idx` by streaming through the data. O(n).
     /// Use only for single-element lookups; prefer `restore()` for batch access.
+    #[allow(dead_code)]
     pub fn get_at(&self, target_idx: usize) -> io::Result<Option<u32>> {
         match self.codec {
             Codec::None => Ok(self.raw.get(target_idx).copied()),
@@ -133,6 +134,7 @@ impl CompressedU32 {
 
     /// Decompress elements in `[start, end)` by streaming. O(end).
     /// Use only for range lookups; prefer `restore()` for batch access.
+    #[allow(dead_code)]
     pub fn slice_at(&self, start: usize, end: usize) -> io::Result<Vec<u32>> {
         if start >= end {
             return Ok(Vec::new());
@@ -221,6 +223,7 @@ pub struct CompressedU64 {
 impl CompressedU64 {
     /// Decompress the element at `target_idx` by streaming through the data. O(n).
     /// Use only for single-element lookups; prefer `restore()` for batch access.
+    #[allow(dead_code)]
     pub fn get_at(&self, target_idx: usize) -> io::Result<Option<u64>> {
         match self.codec {
             Codec::None => Ok(self.raw.get(target_idx).copied()),

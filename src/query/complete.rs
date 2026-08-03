@@ -26,6 +26,7 @@ impl ClassFieldIndex {
         Self::default()
     }
 
+    #[allow(dead_code)]
     /// Build from Pass1 class_map + string table.
     pub fn build(p1: &crate::pass1::Pass1) -> Self {
         let mut fields: HashMap<String, Vec<String>> = HashMap::new();
@@ -505,33 +506,27 @@ fn completions_from_context(
         .and_then(|(cls, _)| field_index.fields.get(cls.as_str()));
 
     for label in &ctx.labels {
-        match label.as_str() {
-            "class name" => {
-                // Filter classes to those that have all fields already referenced in SELECT.
-                let effective: Box<dyn Iterator<Item = &String>> =
-                    if info.required_fields.is_empty() {
-                        Box::new(class_names.iter())
-                    } else {
-                        Box::new(class_names.iter().filter(|c| {
-                            let fnames = field_index.fields.get(c.as_str());
-                            info.required_fields.iter().all(|req| {
-                                fnames.map(|fs| fs.iter().any(|f| f == req)).unwrap_or(true) // unknown class → don't filter out
-                            })
-                        }))
-                    };
-                // In a class-name context, offer classes even with empty prefix
-                // (chumsky told us a class is valid here, so min-length guard is relaxed).
-                if lower.is_empty() || lower.len() >= 2 || lower.contains('.') {
-                    res.extend(
-                        effective
-                            .filter(|c| {
-                                lower.is_empty() || c.to_ascii_lowercase().starts_with(&lower)
-                            })
-                            .map(|c| class(c)),
-                    );
-                }
+        if label.as_str() == "class name" {
+            // Filter classes to those that have all fields already referenced in SELECT.
+            let effective: Box<dyn Iterator<Item = &String>> = if info.required_fields.is_empty() {
+                Box::new(class_names.iter())
+            } else {
+                Box::new(class_names.iter().filter(|c| {
+                    let fnames = field_index.fields.get(c.as_str());
+                    info.required_fields.iter().all(|req| {
+                        fnames.map(|fs| fs.iter().any(|f| f == req)).unwrap_or(true) // unknown class → don't filter out
+                    })
+                }))
+            };
+            // In a class-name context, offer classes even with empty prefix
+            // (chumsky told us a class is valid here, so min-length guard is relaxed).
+            if lower.is_empty() || lower.len() >= 2 || lower.contains('.') {
+                res.extend(
+                    effective
+                        .filter(|c| lower.is_empty() || c.to_ascii_lowercase().starts_with(&lower))
+                        .map(|c| class(c)),
+                );
             }
-            _ => {} // keywords handled in second pass below
         }
     }
 
@@ -691,16 +686,14 @@ fn completions_from_context(
                         .map(|a| attr(a)),
                 );
             }
-            Token::Star => {
-                if "*".starts_with(&lower) {
-                    res.push(Completion {
-                        value: "*".into(),
-                        display: "*".into(),
-                        group: Some("operator".into()),
-                        description: Some("All columns".to_string()),
-                        trailing_space: true,
-                    });
-                }
+            Token::Star if "*".starts_with(&lower) => {
+                res.push(Completion {
+                    value: "*".into(),
+                    display: "*".into(),
+                    group: Some("operator".into()),
+                    description: Some("All columns".to_string()),
+                    trailing_space: true,
+                });
             }
             _ => {}
         }
@@ -1458,10 +1451,7 @@ mod tests {
         let cs = complete(line, line.len(), &classes(), &string_field_index());
         // Falls through to chumsky predicate expression completions
         let v = vals(&cs);
-        assert!(
-            !v.iter().any(|s| *s == "value"),
-            "no String fields for unknown class"
-        );
+        assert!(!v.contains(&"value"), "no String fields for unknown class");
     }
 
     // ── Trailing space ────────────────────────────────────────────────────────

@@ -550,7 +550,7 @@ mod tests {
         // A graph with one of each kind: an instance, an object array, a
         // primitive array, and a class object (present in class_obj_class_idx).
         // idom: all top-level under vroot=4.
-        let (mut g, _dc_off, _dc_tgt) = make_graph(
+        let (g, _dc_off, _dc_tgt) = make_graph(
             vec![4, 4, 4, 4], // idom (vroot = 4)
             vec![0, 1, 2, 3], // class_idx
             vec![16, 24, 32, 8],
@@ -1093,7 +1093,7 @@ mod tests {
         // A->B: 950 >= 1000*0.7=700 -> descend. B's largest child C=500 <
         //   950*0.7=665 -> BIG DROP -> accumulation point is B (the parent).
         // E->F: 700 >= 800*0.7=560 -> descend. F is a leaf -> accumulation is F.
-        let (mut g, dc_off, dc_tgt) = make_graph(
+        let (g, dc_off, dc_tgt) = make_graph(
             vec![6, 0, 1, 1, 6, 4],
             vec![0, 1, 2, 3, 4, 5],
             vec![10, 10, 10, 10, 10, 10],
@@ -1137,7 +1137,7 @@ mod tests {
         // A(obj0) is the accumulation point (its largest child drops below 0.7),
         // with 3 immediately-dominated children B,C,D.
         // retained: A=1000 B=100 C=90 D=80. 100 < 1000*0.7 -> A is accumulation.
-        let (mut g, dc_off, dc_tgt) = make_graph(
+        let (g, dc_off, dc_tgt) = make_graph(
             vec![4, 0, 0, 0],
             vec![0, 1, 2, 3],
             vec![10, 10, 10, 10],

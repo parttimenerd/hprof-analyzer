@@ -6102,7 +6102,7 @@ mod tests {
         let (_, out) = meta_out("plan --json SELECT * FROM java.lang.String");
         // Must parse as valid JSON and contain "kind" key
         let v: serde_json::Value = serde_json::from_str(&out)
-            .expect(&format!("--json output must be valid JSON; got: {}", out));
+            .unwrap_or_else(|_| panic!("--json output must be valid JSON; got: {}", out));
         assert!(
             v.get("kind").is_some(),
             "JSON must have 'kind' key; got: {}",
