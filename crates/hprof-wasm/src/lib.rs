@@ -43,6 +43,7 @@ pub struct HprofSession {
     class_names: Vec<String>,
     field_index: hprof_analyzer::query::complete::ClassFieldIndex,
     retained: Vec<u64>,
+    retained_c: Option<hprof_analyzer::cvec::CompressedU64>,
     cache: Option<hprof_analyzer::query::run::ReplCache>,
     cached_report_html: Option<String>,
     exploration: Option<ExplorationData>,
@@ -128,6 +129,7 @@ impl HprofSession {
             class_names,
             field_index,
             retained: Vec::new(),
+            retained_c: None,
             cache: Some(cache),
             cached_report_html: None,
             exploration: None,
@@ -180,10 +182,20 @@ impl HprofSession {
         }
         let cache = self.cache.as_ref().unwrap();
 
-        let results = if self.retained.is_empty() {
+        let results = if !self.has_any_retained() {
             run::run_resident_only(&cache, &pairs, true)
         } else {
-            run::run_resident_with_retained(&cache, &pairs, true, &self.retained)
+            let retained = match self.decompress_retained() {
+                Ok(r) => r,
+                Err(e) => {
+                    return serde_json::json!({
+                        "ok": false,
+                        "error": { "message": e.to_string() }
+                    })
+                    .to_string();
+                }
+            };
+            run::run_resident_with_retained(&cache, &pairs, true, &retained)
         };
 
         let results = match results {
@@ -231,7 +243,7 @@ impl HprofSession {
 
     /// Returns `true` if `run_full_analysis()` has been called.
     pub fn has_retained(&self) -> bool {
-        !self.retained.is_empty()
+        self.has_any_retained()
     }
 
     /// Returns the compressed size of the stored HPROF bytes (bytes).
@@ -265,6 +277,14 @@ impl HprofSession {
             hprof_analyzer::analyze_to_report_with_retained(&self.source, &opts)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.retained = retained;
+        // Compress retained[] to reduce WASM memory by ~1.8 GB for 300M-object dumps
+        if let Ok(c) = hprof_analyzer::cvec::CompressedU64::compress(
+            &self.retained,
+            hprof_analyzer::cvec::Codec::Deflate9,
+        ) {
+            self.retained_c = Some(c);
+            self.retained = Vec::new();
+        }
         let source_name = match &self.source {
             hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
             hprof_analyzer::HprofSource::Path(p) => p.clone(),
@@ -288,6 +308,14 @@ impl HprofSession {
             hprof_analyzer::analyze_to_report_with_retained(&self.source, &opts)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.retained = retained;
+        // Compress retained[] to reduce WASM memory by ~1.8 GB for 300M-object dumps
+        if let Ok(c) = hprof_analyzer::cvec::CompressedU64::compress(
+            &self.retained,
+            hprof_analyzer::cvec::Codec::Deflate9,
+        ) {
+            self.retained_c = Some(c);
+            self.retained = Vec::new();
+        }
         serde_json::to_string(&report).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -298,6 +326,14 @@ impl HprofSession {
             hprof_analyzer::analyze_to_report_with_retained(&self.source, &opts)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.retained = retained;
+        // Compress retained[] to reduce WASM memory by ~1.8 GB for 300M-object dumps
+        if let Ok(c) = hprof_analyzer::cvec::CompressedU64::compress(
+            &self.retained,
+            hprof_analyzer::cvec::Codec::Deflate9,
+        ) {
+            self.retained_c = Some(c);
+            self.retained = Vec::new();
+        }
         let source_name = match &self.source {
             hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
             hprof_analyzer::HprofSource::Path(p) => p.clone(),
@@ -417,6 +453,7 @@ impl HprofSession {
             class_names,
             field_index,
             retained: Vec::new(),
+            retained_c: None,
             cache: Some(cache),
             cached_report_html: None,
             exploration: None,
@@ -451,6 +488,14 @@ impl HprofSession {
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.retained = retained;
+        // Compress retained[] to reduce WASM memory by ~1.8 GB for 300M-object dumps
+        if let Ok(c) = hprof_analyzer::cvec::CompressedU64::compress(
+            &self.retained,
+            hprof_analyzer::cvec::Codec::Deflate9,
+        ) {
+            self.retained_c = Some(c);
+            self.retained = Vec::new();
+        }
         let source_name = match &self.source {
             hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
             hprof_analyzer::HprofSource::Path(p) => p.clone(),
@@ -496,8 +541,9 @@ impl HprofSession {
     /// Must be called before `inbound_refs()` or `gc_root_path()`.
     /// If `run_full_analysis()` has been called, retained sizes are included.
     pub fn enable_exploration(&mut self) -> Result<(), wasm_bindgen::JsValue> {
-        let retained = &self.retained;
-        let result = hprof_analyzer::build_exploration(&self.source, retained)
+        let retained = self.decompress_retained()
+            .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
+        let result = hprof_analyzer::build_exploration(&self.source, &retained)
             .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))?;
         self.exploration = Some(ExplorationData { result });
         Ok(())
@@ -842,10 +888,13 @@ impl HprofSession {
         }
         let cache = self.cache.as_ref().unwrap();
 
-        let results = if self.retained.is_empty() {
+        let results = if !self.has_any_retained() {
             run::run_resident_only(cache, &[(q, optimized)], true)
         } else {
-            run::run_resident_with_retained(cache, &[(q, optimized)], true, &self.retained)
+            match self.decompress_retained() {
+                Ok(retained) => run::run_resident_with_retained(cache, &[(q, optimized)], true, &retained),
+                Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+            }
         };
 
         let result = match results {
@@ -1051,10 +1100,13 @@ impl HprofSession {
         }
         let cache = self.cache.as_ref().unwrap();
 
-        let results = if self.retained.is_empty() {
+        let results = if !self.has_any_retained() {
             run::run_resident_only(cache, &[(q, optimized)], true)
         } else {
-            run::run_resident_with_retained(cache, &[(q, optimized)], true, &self.retained)
+            match self.decompress_retained() {
+                Ok(retained) => run::run_resident_with_retained(cache, &[(q, optimized)], true, &retained),
+                Err(e) => return serde_json::json!({"ok":false,"error":e.to_string()}).to_string(),
+            }
         };
 
         let result = match results {
@@ -1227,6 +1279,36 @@ impl HprofSession {
 // ──────────────────────────────────────────────────────────────────────────────
 // Free functions
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Private helpers (not exported to JS)
+impl HprofSession {
+    #[allow(dead_code)]
+    fn get_retained(&self, idx: usize) -> u64 {
+        if !self.retained.is_empty() {
+            self.retained.get(idx).copied().unwrap_or(0)
+        } else if let Some(c) = &self.retained_c {
+            c.get_at(idx).ok().flatten().unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    fn decompress_retained(&self) -> std::io::Result<Vec<u64>> {
+        if !self.retained.is_empty() {
+            Ok(self.retained.clone())
+        } else if let Some(c) = &self.retained_c {
+            c.restore()
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn has_any_retained(&self) -> bool {
+        !self.retained.is_empty() || self.retained_c.is_some()
+    }
+}
+
+
 
 /// Decode a single vbyte (little-endian base-128) value from `data[pos..]`.
 /// Returns `(value, bytes_consumed)` or `None` if out of bounds.
