@@ -96,9 +96,6 @@ pub struct AnalyzeOptions {
     /// Compute per-class reference-field statistics (null/non-null counts, total
     /// retained size of pointees). Opt-in; off by default. Adds O(n) pass.
     pub field_stats: bool,
-    /// Skip dominator tree and retained-heap computation for faster analysis of large dumps.
-    /// The dominator, retained, and leak-suspects sections will be empty/zeroed.
-    pub skip_retained: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -148,7 +145,6 @@ impl DetailLevel {
             dev_report: false,
             skip_report: false,
             field_stats: false,
-            skip_retained: false,
         }
     }
 }

@@ -327,66 +327,6 @@ fn analyze_to_report_inner(
         )?;
     }
 
-    // ── Fast path: skip dominator tree + retained-size computation ─────────────
-    // When --skip-retained is set we skip the O(n log n) dominator pass and the
-    // O(n) retained-size pass. The report will have no leak-suspect/dominator data,
-    // but class histogram, alloc sites, and OQL all work normally.
-    if opts.skip_retained {
-        // Free the forward CSR (no longer needed without the inbound pass).
-        drop(std::mem::take(&mut g.fwd_offsets));
-        drop(std::mem::take(&mut g.fwd_targets));
-        drop(rpo);
-
-        // Populate idom with UNDEFINED (u32::MAX) for all objects, plus the
-        // virtual-root self-domination entry at index n, so build_model's idom
-        // accessors don't panic.  vroot = n; idom[n] = n.
-        let mut idom_fast = vec![u32::MAX; g.n + 1];
-        idom_fast[g.n] = g.n as u32;
-        g.idom = idom_fast;
-
-        // All retained sizes are zero.
-        g.retained = vec![0u64; g.n];
-
-        // Restore shallow/class_idx so build_model can aggregate the histogram.
-        if compress != cvec::Codec::None {
-            g.shallow = shallow_c.restore()?;
-            g.class_idx = class_idx_c.restore()?;
-        }
-        drop(shallow_c);
-        drop(class_idx_c);
-
-        let alloc_sites = if let Some(c) = alloc_serial_c {
-            let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
-            c.for_each_u32(|serial| agg.push(serial))?;
-            let a = agg.finish();
-            g.alloc_frames_by_serial = None;
-            Some(a)
-        } else {
-            let a = report::build_alloc_sites(&g, opts.alloc_sites_top);
-            g.alloc_stack_serial = Vec::new();
-            g.alloc_frames_by_serial = None;
-            Some(a)
-        };
-
-        // Empty dominator-children CSR and depth_counts — leak suspects and
-        // dominator tree will be empty, which is the intended trade-off.
-        let dc_off_fast = vec![0u32; g.n + 1];
-        let dc_tgt_fast: Vec<u32> = Vec::new();
-        let depth_counts_fast: Vec<u64> = Vec::new();
-
-        let report = report::build_model(
-            &mut g,
-            dc_off_fast,
-            dc_tgt_fast,
-            opts.leak_children_cap,
-            &depth_counts_fast,
-            opts,
-            alloc_sites,
-            None,
-        );
-        let retained = std::mem::take(&mut g.retained);
-        return Ok((report, retained));
-    }
     // ── Normal path ─────────────────────────────────────────────────────────────
 
     let mut rpo = rpo;

@@ -326,37 +326,6 @@ fn field_stats_smoke() {
     );
 }
 
-/// `--skip-retained` smoke test: the flag must not crash and the JSON output
-/// must contain the overview section.
-#[test]
-fn skip_retained_smoke() {
-    let hprof = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/dump_4_philosophers.hprof"
-    );
-    match std::fs::metadata(hprof) {
-        Ok(m) if m.len() >= 1024 => {}
-        _ => return,
-    }
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-        .arg(hprof)
-        .arg("--skip-retained")
-        .arg("--format")
-        .arg("json")
-        .output()
-        .expect("failed to run hprof-analyzer --skip-retained");
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(
-        v["overview"].is_object(),
-        "--skip-retained: expected overview section in JSON output"
-    );
-}
-
 /// `--full-analysis` smoke test: the flag must not crash, and the output must
 /// include at least one of the heavy opt-in sections (obj_graph, collections,
 /// or duplicates) that `--full-analysis` enables.

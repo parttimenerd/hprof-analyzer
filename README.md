@@ -288,7 +288,6 @@ with `--progress auto|always|never`.
 | `--obj-graph[=small\|medium\|large]` | Capture the outbound-reference graph for the top retained objects. Enables the interactive Object Graph Explorer in HTML reports. Implied by `--full-analysis`. |
 | `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. `--ref-paths` is excluded because it can add 100–500 MB on top; pass it separately when needed. |
 | `--field-stats` | Per-class reference-field null/non-null/retained stats for the top-50 classes by instance count. Shows which fields are null-heavy or hold the most retained heap. |
-| `--skip-retained` | Skip dominator tree and retained-heap computation. Histogram and OQL work; Leak Suspects section is empty. Use for dumps too large for full analysis. |
 | `--ref-paths` | Capture field-name labels on reference edges (~2 bytes/edge). Enables named field breakdowns in `--field-stats` and richer root paths. |
 | `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default so the report stays byte-stable. |
 | `--detail minimal\|default\|max` | Adjust output-size caps (leak suspects, dominator subtree, alloc sites, thread locals, top consumers). See the [detail preset table](#tune-the-report-size-with---detail) below. |
