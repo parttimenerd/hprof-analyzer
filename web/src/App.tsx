@@ -7272,9 +7272,25 @@ function OGEGraphView({ data, onNavigate }: {
     } catch { /* ignore */ }
   }, [graphSelected]);
 
+  // connectedTo: set of node string-ids adjacent to the selected node (null = no selection = no dimming)
+  const connectedTo = React.useMemo(() => {
+    if (graphSelected === null) return null;
+    const selKey = String(graphSelected);
+    const s = new Set<string>([selKey]);
+    for (const n of topNodes) {
+      const srcEdges = data.edges[n.id] ?? [];
+      for (const e of srcEdges) {
+        const dstKey = String(e.child_idx);
+        if (n.id === selKey && topNodeSet.has(dstKey)) s.add(dstKey);
+        if (dstKey === selKey && topNodeSet.has(n.id)) s.add(n.id);
+      }
+    }
+    return s;
+  }, [graphSelected, topNodes, topNodeSet, data.edges]);
+
   // Build visible edges for rendering
   const visibleEdges = React.useMemo(() => {
-    const result: { x1: number; y1: number; x2: number; y2: number; key: string }[] = [];
+    const result: { x1: number; y1: number; x2: number; y2: number; key: string; fieldName: string; srcKey: string; dstKey: string }[] = [];
     for (const n of topNodes) {
       const srcPos = effectivePosMap.get(n.id);
       if (!srcPos) continue;
@@ -7284,7 +7300,7 @@ function OGEGraphView({ data, onNavigate }: {
         if (!topNodeSet.has(dstKey)) continue;
         const dstPos = effectivePosMap.get(dstKey);
         if (!dstPos) continue;
-        result.push({ x1: srcPos.x, y1: srcPos.y, x2: dstPos.x, y2: dstPos.y, key: `${n.id}-${dstKey}` });
+        result.push({ x1: srcPos.x, y1: srcPos.y, x2: dstPos.x, y2: dstPos.y, key: `${n.id}-${dstKey}`, fieldName: e.field_name ?? "", srcKey: n.id, dstKey });
       }
     }
     return result;
@@ -7328,10 +7344,30 @@ function OGEGraphView({ data, onNavigate }: {
         >
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {/* Edges */}
-            {visibleEdges.map(e => (
-              <line key={e.key} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-                stroke="var(--muted, #888)" strokeWidth={0.8 / zoom} opacity={0.35} />
-            ))}
+            {visibleEdges.map(e => {
+              const dimmed = connectedTo !== null && !(connectedTo.has(e.srcKey) && connectedTo.has(e.dstKey));
+              return (
+                <line key={e.key} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                  stroke="var(--muted, #888)" strokeWidth={0.8 / zoom}
+                  opacity={dimmed ? 0.08 : 0.35} />
+              );
+            })}
+            {/* Edge field labels (only when few edges) */}
+            {visibleEdges.length <= 25 && visibleEdges.map(e => {
+              if (!e.fieldName) return null;
+              const mx = (e.x1 + e.x2) / 2;
+              const my = (e.y1 + e.y2) / 2;
+              const dimmed = connectedTo !== null && !(connectedTo.has(e.srcKey) && connectedTo.has(e.dstKey));
+              return (
+                <text key={`lbl-${e.key}`}
+                  x={mx} y={my - 4 / zoom}
+                  textAnchor="middle" fontSize={7 / zoom}
+                  fill="var(--muted)" opacity={dimmed ? 0.1 : 0.7}
+                  style={{ pointerEvents: "none", userSelect: "none" }}>
+                  .{e.fieldName}
+                </text>
+              );
+            })}
             {/* Nodes */}
             {effectivePositions.map(p => {
               const nodeInfo = data.nodes[p.id];
@@ -7339,12 +7375,14 @@ function OGEGraphView({ data, onNavigate }: {
               const isSelected = graphSelected === parseInt(p.id, 10);
               const label = shortLabel(nodeInfo.display_class);
               const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
+              const dimmed = connectedTo !== null && !connectedTo.has(p.id);
               return (
                 <g key={p.id} style={{ cursor: "pointer" }}
                   onMouseDown={e => handleNodeMouseDown(e, p.id)}
                   onClick={e => {
                     if (!(svgInteract.current as any).hasMoved) {
                       setGraphSelected(parseInt(p.id, 10));
+                      fireInspect({ kind: "instance", idx: parseInt(p.id, 10), cls: nodeInfo.display_class });
                     }
                     e.stopPropagation();
                   }}>
@@ -7353,7 +7391,7 @@ function OGEGraphView({ data, onNavigate }: {
                     fill={tpfgColor(nodeInfo.display_class)}
                     stroke={isSelected ? "var(--fg, #222)" : "none"}
                     strokeWidth={isSelected ? 2 / zoom : 0}
-                    opacity={0.82}
+                    opacity={dimmed ? 0.15 : 0.82}
                   />
                   <text
                     x={p.x} y={p.y}
@@ -7362,6 +7400,7 @@ function OGEGraphView({ data, onNavigate }: {
                     textAnchor="middle"
                     dominantBaseline="middle"
                     style={{ pointerEvents: "none", userSelect: "none" }}
+                    opacity={dimmed ? 0.2 : 1}
                   >
                     {label.slice(0, Math.floor(screenR / 2.8) + 4)}
                   </text>
