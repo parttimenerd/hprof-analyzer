@@ -425,6 +425,7 @@ function BackToTop() {
     <button
       className="back-to-top"
       aria-label="Back to top"
+      title="Back to top"
       onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
     >
       ↑
@@ -1092,6 +1093,9 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
 
   return (
     <div>
+      <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
+        Next to each class: <span title="View in Dominator Navigator">⬡</span> = Dominator Navigator · <span title="Copy OQL query">⌗</span> = copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> = list instances · <span title="Copy class name">⎘</span> = copy name
+      </p>
       <div className="tools">
         <input
           type="text"
@@ -2612,7 +2616,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Ranked accumulation points holding the most retained heap.</p>
+      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="View in Dominator Navigator">⬡</span> Dominator Navigator · <span title="Copy OQL query">⌗</span> copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> list instances</p>
       {l.suspects.length === 0 ? (
         <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
       ) : (
@@ -5545,7 +5549,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
               </svg>
               <p style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "0.25rem 0 0" }}>
                 Showing top {positions.length} of {nodeInfos.length + (edges.length > 0 ? 0 : 0)} classes by retained flow.
-                Click a node to inspect · Scroll to zoom not supported (static layout).
+                Click a node to inspect · Use "Highlight class" to find a specific class · Switch to Table view for full data.
               </p>
             </>
           )}
@@ -6576,8 +6580,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             {rootFilter
               ? <>Searching all {Object.keys(data.nodes).length.toLocaleString()} captured objects (retained &ge; {fmtB(data.sig_floor_bytes)}).</>
               : <>Top dominator roots (retained &ge; {fmtB(data.sig_floor_bytes)}).{" "}
-              <strong>&rarr;</strong> explores outbound references;{" "}
-              <strong>⌞</strong> opens the dominator tree.</>
+              <strong>&rarr;</strong> click class name to explore outbound references;{" "}
+              <strong>⌞</strong> opens the dominator subtree.</>
             }
           </p>
           <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
@@ -8382,7 +8386,7 @@ function StickyHeader() {
   }, []);
 
   if (!title) return null;
-  return <div className="sticky-section-header">§ {title}</div>;
+  return <div className="sticky-section-header">{title}</div>;
 }
 
 function GlossarySection() {
@@ -8766,6 +8770,42 @@ export default function App({ report }: { report: Report }) {
   const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
   const objGraphNodes = report.obj_graph_flat?.nodes ?? null;
 
+  // ── Offline-save state (WASM/online mode only) ────────────────────────────
+  type SaveState = "idle" | "saving" | "done" | "error";
+  const [saveState, setSaveState] = React.useState<SaveState>("idle");
+
+  // Ctrl+S / Cmd+S → fetch /download/offline and trigger browser download
+  React.useEffect(() => {
+    if (!(window as any).__wasmSession) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        setSaveState("saving");
+        fetch("/download/offline")
+          .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.blob();
+          })
+          .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "report-offline.html";
+            a.click();
+            URL.revokeObjectURL(url);
+            setSaveState("done");
+            setTimeout(() => setSaveState("idle"), 2500);
+          })
+          .catch(() => {
+            setSaveState("error");
+            setTimeout(() => setSaveState("idle"), 3000);
+          });
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   // Scroll to the URL hash once the DOM has been painted after initial render.
   // The browser fires the native hash-scroll before React mounts, so we must
   // replay it here.
@@ -8841,10 +8881,22 @@ export default function App({ report }: { report: Report }) {
           {expandAllTables ? "⊟ Collapse tables" : "⊞ Expand all tables"}
         </button>
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml((report.overview.source_name || "heap-report").replace(/[^a-z0-9._-]/gi, "_") + ".html")}>⬇ Save HTML</button>
+        {(window as any).__wasmSession && (
+          <span className="save-hint" title="Downloads a self-contained HTML without WASM">
+            <kbd>Ctrl+S</kbd> Save offline
+          </span>
+        )}
         <ThemeToggle />
       </div>
       <Nav report={report} />
       <NavBreadcrumb />
+      {saveState !== "idle" && !!(window as any).__wasmSession && (
+        <div className={`save-toast save-toast-${saveState}`}>
+          {saveState === "saving" && "Generating offline report…"}
+          {saveState === "done"   && "✓ Saved as offline HTML"}
+          {saveState === "error"  && "✗ Failed to generate offline report"}
+        </div>
+      )}
       <StickyHeader />
       <OomTriage report={report} />
       <ExecSummaryCard report={report} />
@@ -8885,8 +8937,8 @@ export default function App({ report }: { report: Report }) {
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
           <p className="subtitle">
-            Interactive reference graph and dominator tree navigator.
-            Generated with <code>--obj-graph</code>.
+            Explore the object reference graph and dominator tree interactively.
+            Click a class name to explore its outbound references.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
         </section>
