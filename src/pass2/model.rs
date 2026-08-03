@@ -472,6 +472,10 @@ pub struct Graph {
     /// Captured before `fwd_offsets`/`fwd_targets` are consumed during inbound
     /// CSR construction. `None` until `capture_obj_graph_edges` is called.
     pub obj_graph_edges: Option<ObjGraphCapture>,
+    /// Per-class ordered reference-field names, indexed by class histogram row index.
+    /// `class_ref_field_names[ci][k]` = name of the k-th reference field of class ci.
+    /// Empty when `opts.field_stats` is false.
+    pub class_ref_field_names: Vec<Vec<String>>,
 }
 
 // ── Object-graph click-through capture ──────────────────────────────────────
@@ -1646,6 +1650,7 @@ mod obj_graph_tests {
             tl_entry_records: vec![],
             unreachable_retained: None,
             obj_graph_edges: None,
+            class_ref_field_names: vec![],
         }
     }
 

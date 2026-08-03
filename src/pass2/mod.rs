@@ -493,10 +493,11 @@ impl Pass2 {
         // pay zero extra allocation on the array path.
         let scan_wants_arrays = scan_driver.wants_arrays();
 
-        // When --ref-paths is set, also build named plans (field name strings) for
-        // use during the forward-CSR fill to annotate each edge with its field name.
-        // Gated: the extra allocations are acceptable only under this explicit flag.
-        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths {
+        // When --ref-paths or --field-stats is set, also build named plans (field name strings).
+        // For --ref-paths: used during the forward-CSR fill to annotate each edge with its field name.
+        // For --field-stats: used to populate class_ref_field_names on the Graph.
+        // Gated: the extra allocations are acceptable only under these explicit flags.
+        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths || opts.field_stats {
             let named = build_field_plans_named(&p1.class_map, &p1.strings, id_size as usize);
             let mut dense: Vec<FieldPlanNamed> = vec![Vec::new(); n_dense_classes];
             for (&class_addr, &hidx) in &class_addr_to_hist {
@@ -1209,7 +1210,7 @@ impl Pass2 {
             class_dumps: p1.class_dump_count,
             gc_root_tag_counts,
         };
-        let graph = Graph {
+        let mut graph = Graph {
             n,
             format: p1.format,
             file_size: p1.file_size,
@@ -1268,7 +1269,21 @@ impl Pass2 {
             },
             unreachable_retained: None,
             obj_graph_edges: None,
+            class_ref_field_names: vec![],
         };
+
+        // Populate class_ref_field_names when --field-stats is set (named plans were
+        // built above because the condition now includes opts.field_stats).
+        if opts.field_stats {
+            let n_cls = graph.class_names.len();
+            let mut schema: Vec<Vec<String>> = vec![Vec::new(); n_cls];
+            for (ci, plan) in field_plans_named_dense.iter().enumerate() {
+                if ci < n_cls {
+                    schema[ci] = plan.iter().map(|(_off, _excl, name)| name.clone()).collect();
+                }
+            }
+            graph.class_ref_field_names = schema;
+        }
 
         // Package the deferred inbound-CSR construction. Moves id_map,
         // class_addrs, field_plans and synthetic_edges out of build (all

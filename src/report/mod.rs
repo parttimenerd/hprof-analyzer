@@ -237,6 +237,7 @@ mod tests {
             fwd_field_name_idx: None,
             field_name_pool: None,
             obj_graph_edges: None,
+            class_ref_field_names: vec![],
         };
         (g, dc_off, dc_tgt)
     }
