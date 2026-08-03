@@ -482,14 +482,27 @@ mod tests {
         ServeState::new(FIXTURE, AnalyzeOptions::default()).expect("ServeState::new")
     }
 
+    /// Shared, lazily-initialized state that has already completed analysis.
+    /// All tests that need a ready report use this to avoid running 7+ concurrent
+    /// analyses (which races against the 30 s timeout on slow/loaded CI hosts).
+    fn ready_state() -> &'static ServeState {
+        static STATE: std::sync::OnceLock<ServeState> = std::sync::OnceLock::new();
+        STATE.get_or_init(|| {
+            let s = make_state();
+            s.route("POST", "/analyze", "");
+            wait_for_ready(&s);
+            s
+        })
+    }
+
     fn wait_for_ready(state: &ServeState) {
-        for _ in 0..60 {
+        for _ in 0..120 {
             if state.report_ready() {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        panic!("analysis did not complete within 30s");
+        panic!("analysis did not complete within 60s");
     }
 
     #[test]
@@ -517,9 +530,7 @@ mod tests {
 
     #[test]
     fn status_ready_after_analysis() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let (_, body, _) = s.route("GET", "/status", "");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["status"], "ready", "got: {v}");
@@ -527,9 +538,7 @@ mod tests {
 
     #[test]
     fn report_json_has_schema_version() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let (status, body, _) = s.route("GET", "/report", "");
         assert_eq!(status, 200, "body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -538,9 +547,7 @@ mod tests {
 
     #[test]
     fn report_overview_md_contains_heap() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let (status, body, ctype) = s.route("GET", "/report/overview?format=md", "");
         assert_eq!(status, 200, "body: {body}");
         assert!(ctype.starts_with("text/markdown"), "wrong ctype: {ctype}");
@@ -553,9 +560,7 @@ mod tests {
 
     #[test]
     fn report_leaks_json_has_expected_keys() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let (status, body, _) = s.route("GET", "/report/leaks", "");
         assert_eq!(status, 200, "body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -568,9 +573,7 @@ mod tests {
 
     #[test]
     fn report_top_json_is_valid() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let (status, body, _) = s.route("GET", "/report/top", "");
         assert_eq!(status, 200, "body: {body}");
         assert!(
@@ -581,9 +584,7 @@ mod tests {
 
     #[test]
     fn report_threads_json_is_valid() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let (status, body, _) = s.route("GET", "/report/threads", "");
         assert_eq!(status, 200, "body: {body}");
         assert!(
@@ -625,9 +626,7 @@ mod tests {
 
     #[test]
     fn offline_html_returns_valid_html_after_analysis() {
-        let s = make_state();
-        s.route("POST", "/analyze", "");
-        wait_for_ready(&s);
+        let s = ready_state();
         let result = s.offline_html();
         assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
         let (bytes, stem) = result.unwrap();
