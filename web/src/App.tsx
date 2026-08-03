@@ -5708,7 +5708,6 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   const [topN, setTopN] = React.useState(100);
   const [sizeBy, setSizeBy] = React.useState<"retained" | "edges">("retained");
   const [selected, setSelected] = React.useState<string | null>(null);
-  const [popoverPos, setPopoverPos] = React.useState<{ x: number; y: number } | null>(null);
   const [fullscreen, setFullscreen] = React.useState(false);
   const [layoutKey, setLayoutKey] = React.useState(0);
   const svgRef = React.useRef<HTMLDivElement>(null);
@@ -5947,7 +5946,8 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
 
       {/* Graph view */}
       {view === "graph" && (
-        <div ref={svgRef} style={{ position: "relative" }}>
+        <div className="trg-graph-layout">
+        <div ref={svgRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
           {positions.length === 0 && (
             <p className="subtitle">No type reference data — run with <code>--obj-graph</code>.</p>
           )}
@@ -6014,12 +6014,8 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                       onMouseLeave={() => setTooltip(null)}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (isSelected) { setSelected(null); setPopoverPos(null); }
-                        else {
-                          setSelected(p.id);
-                          setPopoverPos({ x: e.clientX, y: e.clientY });
-                          trgNavigate({ kind: "class", cls: p.id });
-                        }
+                        if (isSelected) { setSelected(null); }
+                        else { setSelected(p.id); }
                       }}
                     >
                       <circle r={p.r + (isSelected ? 3 : 0)}
@@ -6060,53 +6056,41 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
             </>
           )}
 
-          {/* Node popover */}
-          {selected && selInfo && popoverPos && (
-            <div
-              style={{
-                position: "fixed",
-                left: Math.min(popoverPos.x + 12, window.innerWidth - 340),
-                top: Math.min(popoverPos.y + 12, window.innerHeight - 320),
-                zIndex: 99999,
-                background: "var(--card-bg, var(--bg))",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                boxShadow: "0 4px 20px rgba(0,0,0,0.18)",
-                padding: "0.75rem 0.9rem",
-                maxWidth: 320,
-                minWidth: 200,
-                fontSize: "0.82rem",
-              }}
-              onClick={e => e.stopPropagation()}
-            >
-              <div style={{ display: "flex", alignItems: "flex-start", gap: "0.4rem", marginBottom: "0.4rem" }}>
-                <div style={{ width: 10, height: 10, borderRadius: "50%", background: tpfgColor(selected), flexShrink: 0, marginTop: 2 }} />
-                <code style={{ fontWeight: 700, fontSize: "0.8rem", wordBreak: "break-all", flex: 1 }}>{selected}</code>
-                <button className="copy-btn" style={{ flexShrink: 0 }} onClick={() => { setSelected(null); trgClose(); }} title="Close">✕</button>
+        </div>
+
+        {/* Sidebar — class preview panel */}
+        <div className="trg-sidebar">
+          {!selected ? (
+            <div className="trg-sidebar-empty">
+              <p>Click a class node to preview its stats and connections here.</p>
+              <p className="trg-sidebar-hint">Double-click or use "Full details →" to open the in-depth navigation modal.</p>
+            </div>
+          ) : selInfo ? (
+            <div className="trg-sidebar-content">
+              <div className="trg-sidebar-header">
+                <div className="trg-sidebar-dot" style={{ background: tpfgColor(selected) }} />
+                <code className="trg-sidebar-cls" title={selected}>{selected}</code>
+                <button className="trg-close-btn" onClick={() => setSelected(null)} title="Close">✕</button>
               </div>
               {selInfo.hist && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.15rem 0.75rem", color: "var(--muted)", marginBottom: "0.4rem" }}>
-                  <span>Instances</span><span style={{ color: "var(--fg)", textAlign: "right" }}>{fmtCount(selInfo.hist.instances)}</span>
-                  <span>Shallow</span><span style={{ color: "var(--fg)", textAlign: "right" }}>{fmtB(selInfo.hist.shallow)}</span>
-                  <span>Retained</span><span style={{ color: "var(--fg)", textAlign: "right", fontWeight: 600 }}>{fmtB(selInfo.hist.retained)}</span>
-                </div>
+                <table className="trg-stat-table trg-sidebar-stats">
+                  <tbody>
+                    <tr><th>Instances</th><td>{fmtCount(selInfo.hist.instances)}</td></tr>
+                    <tr><th>Shallow</th><td>{fmtB(selInfo.hist.shallow)}</td></tr>
+                    <tr><th>Retained</th><td><strong>{fmtB(selInfo.hist.retained)}</strong></td></tr>
+                  </tbody>
+                </table>
               )}
-              <div style={{ marginBottom: "0.3rem" }}>
-                <span style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
-                  {selOutEdges.length} outbound edge type{selOutEdges.length !== 1 ? "s" : ""} ·{" "}
-                  {selInEdges.length} inbound edge type{selInEdges.length !== 1 ? "s" : ""}
-                </span>
-              </div>
               {selOutEdges.length > 0 && (
                 <>
-                  <p style={{ margin: "0 0 0.2rem", fontWeight: 600, fontSize: "0.76rem", color: "var(--muted)" }}>→ References:</p>
-                  <ul style={{ margin: 0, paddingLeft: "1rem", fontSize: "0.78rem" }}>
+                  <p className="trg-sidebar-section-label">→ References ({selOutEdges.length}{graphEdges.filter(e => e.src_class === selected).length > selOutEdges.length ? "+" : ""})</p>
+                  <ul className="trg-edge-list">
                     {selOutEdges.map((e, i) => (
-                      <li key={i} style={{ marginBottom: "0.1rem" }}>
-                        <button className="btn-link" onClick={() => { setSelected(e.dst_class); setPopoverPos(popoverPos); }}>
-                          <code>{tpfgShortName(e.dst_class)}</code>
+                      <li key={i}>
+                        <button className="trg-link-btn" onClick={() => setSelected(e.dst_class)}>
+                          {tpfgShortName(e.dst_class)}
                         </button>
-                        {" "}<span style={{ color: "var(--muted)" }}>×{fmtCount(e.edge_count)} ({fmtB(e.retained_weight)})</span>
+                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
                       </li>
                     ))}
                   </ul>
@@ -6114,31 +6098,36 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
               )}
               {selInEdges.length > 0 && (
                 <>
-                  <p style={{ margin: "0.35rem 0 0.2rem", fontWeight: 600, fontSize: "0.76rem", color: "var(--muted)" }}>← Referenced by:</p>
-                  <ul style={{ margin: 0, paddingLeft: "1rem", fontSize: "0.78rem" }}>
+                  <p className="trg-sidebar-section-label">← Referenced by ({selInEdges.length}{graphEdges.filter(e => e.dst_class === selected).length > selInEdges.length ? "+" : ""})</p>
+                  <ul className="trg-edge-list">
                     {selInEdges.map((e, i) => (
-                      <li key={i} style={{ marginBottom: "0.1rem" }}>
-                        <button className="btn-link" onClick={() => { setSelected(e.src_class); setPopoverPos(popoverPos); }}>
-                          <code>{tpfgShortName(e.src_class)}</code>
+                      <li key={i}>
+                        <button className="trg-link-btn" onClick={() => setSelected(e.src_class)}>
+                          {tpfgShortName(e.src_class)}
                         </button>
-                        {" "}<span style={{ color: "var(--muted)" }}>×{fmtCount(e.edge_count)} ({fmtB(e.retained_weight)})</span>
+                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
                       </li>
                     ))}
                   </ul>
                 </>
               )}
-              {/* Navigation buttons */}
-              <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap", marginTop: "0.5rem", paddingTop: "0.4rem", borderTop: "1px solid var(--border)" }}>
+              <div className="trg-sidebar-actions">
+                <button className="show-more-btn" onClick={() => trgNavigate({ kind: "class", cls: selected })}>
+                  Full details →
+                </button>
+                <button className="show-more-btn" onClick={() => trgNavigate({ kind: "instances", cls: selected, page: 0 })}>
+                  Instances →
+                </button>
+              </div>
+              <div className="trg-sidebar-btns">
                 <CopyBtn text={selected} />
                 <PivotBtn cls={selected} />
                 <OqlBtn cls={selected} />
                 <ListObjectsBtn cls={selected} />
-                <span style={{ fontSize: "0.72rem", color: "var(--muted)", display: "flex", alignItems: "center", marginLeft: "0.2rem" }}>
-                  {selInfo.hist ? `${fmtCount(selInfo.hist.instances)} instances` : ""}
-                </span>
               </div>
             </div>
-          )}
+          ) : null}
+        </div>
         </div>
       )}
 
