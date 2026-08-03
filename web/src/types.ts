@@ -14,6 +14,10 @@ export interface HistRow {
   // boot loader is "<boot>"). Absent when unresolved. Preferred over the raw
   // numeric loader_id for display.
   loader_label?: string | null;
+  // Dominator chain from the highest-retained instance of this class up to its
+  // GC root. Present for the top-20 histogram rows by retained heap.
+  // Absent for synthetic rows and rows outside the top-20.
+  root_path?: RootPathStep[];
 }
 
 export interface GcRootTypeRow {

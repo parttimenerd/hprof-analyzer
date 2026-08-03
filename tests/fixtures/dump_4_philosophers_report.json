@@ -1,9 +1,9 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-02T18:21:11.256701000Z",
+  "generated": "2026-08-03T14:35:12.621755000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
-    "file_path": "tests/fixtures/dump_4_philosophers.hprof",
+    "file_path": "/Users/i560383_1/code/experiments/hprof-analyzer/tests/fixtures/dump_4_philosophers.hprof",
     "format": "JAVA PROFILE 1.0.2",
     "file_size": 23731997,
     "identifier_size_bits": 64,
@@ -1061,7 +1061,19 @@
         "max_instance_shallow": 524304,
         "incoming_ref_count": 2427,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 1,
+            "display_class": "java.lang.Object[]",
+            "retained": 2621456
+          },
+          {
+            "obj_index_1based": 146448,
+            "display_class": "java.lang.Class",
+            "retained": 2622376
+          }
+        ]
       },
       {
         "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl",
@@ -1071,7 +1083,14 @@
         "max_instance_shallow": 144,
         "incoming_ref_count": 362,
         "loader_id": 2150632736,
-        "loader_label": "java/net/URLClassLoader"
+        "loader_label": "java/net/URLClassLoader",
+        "root_path": [
+          {
+            "obj_index_1based": 96333,
+            "display_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+            "retained": 29720
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.Class",
@@ -1081,7 +1100,14 @@
         "max_instance_shallow": 1112,
         "incoming_ref_count": 218017,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 146448,
+            "display_class": "java.lang.Class",
+            "retained": 2622376
+          }
+        ]
       },
       {
         "pretty_class": "byte[]",
@@ -1091,7 +1117,19 @@
         "max_instance_shallow": 261208,
         "incoming_ref_count": 25956,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 99101,
+            "display_class": "byte[]",
+            "retained": 261208
+          },
+          {
+            "obj_index_1based": 182101,
+            "display_class": "java.util.zip.ZipFile$Source",
+            "retained": 302304
+          }
+        ]
       },
       {
         "pretty_class": "scala.runtime.LazyVals$",
@@ -1101,7 +1139,19 @@
         "max_instance_shallow": 16,
         "incoming_ref_count": 1,
         "loader_id": 2390753352,
-        "loader_label": "java/net/URLClassLoader"
+        "loader_label": "java/net/URLClassLoader",
+        "root_path": [
+          {
+            "obj_index_1based": 146516,
+            "display_class": "scala.runtime.LazyVals$",
+            "retained": 16
+          },
+          {
+            "obj_index_1based": 146448,
+            "display_class": "java.lang.Class",
+            "retained": 2622376
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.Object",
@@ -1111,7 +1161,34 @@
         "max_instance_shallow": 16,
         "incoming_ref_count": 136654,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 189,
+            "display_class": "java.lang.Object",
+            "retained": 16
+          },
+          {
+            "obj_index_1based": 188,
+            "display_class": "java.util.concurrent.ConcurrentHashMap$Node",
+            "retained": 48
+          },
+          {
+            "obj_index_1based": 240798,
+            "display_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+            "retained": 58952
+          },
+          {
+            "obj_index_1based": 240797,
+            "display_class": "java.util.concurrent.ConcurrentHashMap",
+            "retained": 59016
+          },
+          {
+            "obj_index_1based": 240793,
+            "display_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+            "retained": 67504
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.String",
@@ -1121,7 +1198,14 @@
         "max_instance_shallow": 24,
         "incoming_ref_count": 52171,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 221961,
+            "display_class": "java.lang.String",
+            "retained": 12136
+          }
+        ]
       },
       {
         "pretty_class": "java.util.HashMap",
@@ -1131,7 +1215,29 @@
         "max_instance_shallow": 48,
         "incoming_ref_count": 462,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 39347,
+            "display_class": "java.util.HashMap",
+            "retained": 591096
+          },
+          {
+            "obj_index_1based": 39279,
+            "display_class": "java.util.jar.Manifest",
+            "retained": 598208
+          },
+          {
+            "obj_index_1based": 39278,
+            "display_class": "java.lang.ref.SoftReference",
+            "retained": 598248
+          },
+          {
+            "obj_index_1based": 39276,
+            "display_class": "java.util.jar.JarFile",
+            "retained": 598600
+          }
+        ]
       },
       {
         "pretty_class": "java.util.HashMap$Node[]",
@@ -1141,7 +1247,34 @@
         "max_instance_shallow": 16400,
         "incoming_ref_count": 396,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 39348,
+            "display_class": "java.util.HashMap$Node[]",
+            "retained": 591048
+          },
+          {
+            "obj_index_1based": 39347,
+            "display_class": "java.util.HashMap",
+            "retained": 591096
+          },
+          {
+            "obj_index_1based": 39279,
+            "display_class": "java.util.jar.Manifest",
+            "retained": 598208
+          },
+          {
+            "obj_index_1based": 39278,
+            "display_class": "java.lang.ref.SoftReference",
+            "retained": 598248
+          },
+          {
+            "obj_index_1based": 39276,
+            "display_class": "java.util.jar.JarFile",
+            "retained": 598600
+          }
+        ]
       },
       {
         "pretty_class": "java.util.HashMap$Node",
@@ -1151,7 +1284,45 @@
         "max_instance_shallow": 32,
         "incoming_ref_count": 9883,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 63956,
+            "display_class": "java.util.HashMap$Node",
+            "retained": 24072
+          },
+          {
+            "obj_index_1based": 63957,
+            "display_class": "java.util.HashMap$Node[]",
+            "retained": 75520
+          },
+          {
+            "obj_index_1based": 63059,
+            "display_class": "java.util.HashMap",
+            "retained": 75568
+          },
+          {
+            "obj_index_1based": 64764,
+            "display_class": "org.renaissance.core.ModuleLoader",
+            "retained": 75592
+          },
+          {
+            "obj_index_1based": 64765,
+            "display_class": "java.util.Optional",
+            "retained": 75608
+          },
+          {
+            "obj_index_1based": 64766,
+            "display_class": "org.renaissance.core.BenchmarkSuite",
+            "retained": 77112
+          },
+          {
+            "obj_index_1based": 182024,
+            "display_class": "java.lang.Thread",
+            "retained": 309608,
+            "root_type_label": "Thread"
+          }
+        ]
       },
       {
         "pretty_class": "java.util.zip.ZipFile$Source",
@@ -1161,7 +1332,14 @@
         "max_instance_shallow": 80,
         "incoming_ref_count": 39,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 182101,
+            "display_class": "java.util.zip.ZipFile$Source",
+            "retained": 302304
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.ref.SoftReference",
@@ -1171,7 +1349,19 @@
         "max_instance_shallow": 40,
         "incoming_ref_count": 151,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 39278,
+            "display_class": "java.lang.ref.SoftReference",
+            "retained": 598248
+          },
+          {
+            "obj_index_1based": 39276,
+            "display_class": "java.util.jar.JarFile",
+            "retained": 598600
+          }
+        ]
       },
       {
         "pretty_class": "long[]",
@@ -1181,7 +1371,19 @@
         "max_instance_shallow": 65552,
         "incoming_ref_count": 175,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 72680,
+            "display_class": "long[]",
+            "retained": 65552
+          },
+          {
+            "obj_index_1based": 72669,
+            "display_class": "scala.concurrent.stm.skel.SimpleRandom$",
+            "retained": 65576
+          }
+        ]
       },
       {
         "pretty_class": "java.util.jar.JarFile",
@@ -1191,7 +1393,14 @@
         "max_instance_shallow": 64,
         "incoming_ref_count": 57,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 39276,
+            "display_class": "java.util.jar.JarFile",
+            "retained": 598600
+          }
+        ]
       },
       {
         "pretty_class": "java.util.jar.Manifest",
@@ -1201,7 +1410,24 @@
         "max_instance_shallow": 24,
         "incoming_ref_count": 8,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 39279,
+            "display_class": "java.util.jar.Manifest",
+            "retained": 598208
+          },
+          {
+            "obj_index_1based": 39278,
+            "display_class": "java.lang.ref.SoftReference",
+            "retained": 598248
+          },
+          {
+            "obj_index_1based": 39276,
+            "display_class": "java.util.jar.JarFile",
+            "retained": 598600
+          }
+        ]
       },
       {
         "pretty_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
@@ -1211,7 +1437,15 @@
         "max_instance_shallow": 128,
         "incoming_ref_count": 392,
         "loader_id": 2150632736,
-        "loader_label": "java/net/URLClassLoader"
+        "loader_label": "java/net/URLClassLoader",
+        "root_path": [
+          {
+            "obj_index_1based": 96363,
+            "display_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+            "retained": 30592,
+            "root_type_label": "Thread"
+          }
+        ]
       },
       {
         "pretty_class": "scala.concurrent.stm.ccstm.Handle[]",
@@ -1221,7 +1455,19 @@
         "max_instance_shallow": 4112,
         "incoming_ref_count": 283,
         "loader_id": 2150632736,
-        "loader_label": "java/net/URLClassLoader"
+        "loader_label": "java/net/URLClassLoader",
+        "root_path": [
+          {
+            "obj_index_1based": 93869,
+            "display_class": "scala.concurrent.stm.ccstm.Handle[]",
+            "retained": 4112
+          },
+          {
+            "obj_index_1based": 97131,
+            "display_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+            "retained": 29704
+          }
+        ]
       },
       {
         "pretty_class": "int[]",
@@ -1231,7 +1477,19 @@
         "max_instance_shallow": 35144,
         "incoming_ref_count": 1384,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 182113,
+            "display_class": "int[]",
+            "retained": 35144
+          },
+          {
+            "obj_index_1based": 182101,
+            "display_class": "java.util.zip.ZipFile$Source",
+            "retained": 302304
+          }
+        ]
       },
       {
         "pretty_class": "java.util.concurrent.ConcurrentHashMap",
@@ -1241,7 +1499,25 @@
         "max_instance_shallow": 64,
         "incoming_ref_count": 127,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 34891,
+            "display_class": "java.util.concurrent.ConcurrentHashMap",
+            "retained": 118480
+          },
+          {
+            "obj_index_1based": 34886,
+            "display_class": "java.time.zone.TzdbZoneRulesProvider",
+            "retained": 121008
+          },
+          {
+            "obj_index_1based": 32971,
+            "display_class": "java.lang.Class",
+            "retained": 203112,
+            "root_type_label": "Sticky Class"
+          }
+        ]
       },
       {
         "pretty_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
@@ -1251,7 +1527,30 @@
         "max_instance_shallow": 8208,
         "incoming_ref_count": 93,
         "loader_id": 0,
-        "loader_label": "<boot>"
+        "loader_label": "<boot>",
+        "root_path": [
+          {
+            "obj_index_1based": 34892,
+            "display_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+            "retained": 118416
+          },
+          {
+            "obj_index_1based": 34891,
+            "display_class": "java.util.concurrent.ConcurrentHashMap",
+            "retained": 118480
+          },
+          {
+            "obj_index_1based": 34886,
+            "display_class": "java.time.zone.TzdbZoneRulesProvider",
+            "retained": 121008
+          },
+          {
+            "obj_index_1based": 32971,
+            "display_class": "java.lang.Class",
+            "retained": 203112,
+            "root_type_label": "Sticky Class"
+          }
+        ]
       },
       {
         "pretty_class": "java.util.LinkedHashMap",

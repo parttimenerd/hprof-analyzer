@@ -48,6 +48,7 @@ mod tests {
             incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
+            root_path: None,
         }
     }
 
@@ -132,6 +133,7 @@ mod tests {
             type_ref_graph: vec![],
             thread_local_analysis: Vec::new(),
             framework_analysis: Vec::new(),
+            field_stats: None,
         }
     }
 

@@ -2428,8 +2428,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         .filter(|&ci| remap[ci] as usize == ci)
         .collect();
     order.sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
-    let histogram: Vec<HistRow> = order
-        .into_iter()
+    let mut histogram: Vec<HistRow> = order
+        .iter()
+        .copied()
         .map(|ci| HistRow {
             pretty_class: pretty_class_name(&g.class_names[ci]),
             instances: inst_count[ci],
@@ -2447,8 +2448,98 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                     g.loader_labels.get(&lid).cloned()
                 }
             },
+            root_path: None,
         })
         .collect();
+
+    // Populate root_path for the top-20 histogram rows by retained heap.
+    // The histogram is already sorted retained-desc, so rows 0..20 are the top-20.
+    // For each such class, find the highest-retained instance, then walk the
+    // dominator chain up to the GC root (mirroring build_leak_suspects root_path).
+    if !g.idom.is_empty() && !g.retained.is_empty() {
+        // Build a map: object index → GC root type (minimum sub-tag, deterministic).
+        let mut root_type_of: std::collections::HashMap<u32, u8> =
+            std::collections::HashMap::new();
+        for (idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
+            root_type_of
+                .entry(*idx)
+                .and_modify(|e| *e = (*e).min(ty))
+                .or_insert(ty);
+        }
+
+        let vroot = n as u32;
+        let undef_idom = u32::MAX;
+        const HIST_ROOT_PATH_TOP: usize = 20;
+        const HIST_ROOT_PATH_DEPTH: usize = 30;
+
+        // For each of the top-20 histogram rows (by retained, already sorted),
+        // find the object of that class with the highest retained heap, then walk
+        // the dominator chain toward the GC root.
+        for hist_pos in 0..histogram.len().min(HIST_ROOT_PATH_TOP) {
+            let ci = order[hist_pos]; // class index for this histogram row
+
+            // Find the highest-retained object of class `ci`.
+            let best_obj: Option<usize> = {
+                let mut best: Option<(usize, u64)> = None;
+                for i in 0..n {
+                    if g.class_idx.get(i).copied().unwrap_or(u32::MAX) as usize == ci
+                        && g.idom.get(i).copied().unwrap_or(undef_idom) != undef_idom
+                    {
+                        let ret = g.retained.get(i).copied().unwrap_or(0);
+                        if best.map_or(true, |(_, br)| ret > br) {
+                            best = Some((i, ret));
+                        }
+                    }
+                }
+                best.map(|(i, _)| i)
+            };
+
+            let Some(start_obj) = best_obj else {
+                continue;
+            };
+
+            let mut chain: Vec<RootPathStep> = Vec::new();
+            let mut cur = start_obj as u32;
+            for _ in 0..HIST_ROOT_PATH_DEPTH {
+                let cur_usize = cur as usize;
+                if cur_usize >= n {
+                    break;
+                }
+                let display = {
+                    let raw_ci = g.class_idx.get(cur_usize).copied().unwrap_or(0) as usize;
+                    if raw_ci < g.class_names.len() {
+                        pretty_class_name(&g.class_names[raw_ci])
+                    } else {
+                        String::new()
+                    }
+                };
+                let retained_val = g.retained.get(cur_usize).copied().unwrap_or(0);
+                let root_label: Option<String> = root_type_of
+                    .get(&cur)
+                    .and_then(|&ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
+
+                chain.push(RootPathStep {
+                    obj_index_1based: cur_usize + 1,
+                    display_class: display,
+                    retained: retained_val,
+                    root_type_label: root_label.clone(),
+                    field_edge: None,
+                });
+
+                if root_label.is_some() {
+                    break;
+                }
+                let parent = g.idom.get(cur_usize).copied().unwrap_or(undef_idom);
+                if parent == undef_idom || parent == vroot || parent == cur {
+                    break;
+                }
+                cur = parent;
+            }
+            if !chain.is_empty() {
+                histogram[hist_pos].root_path = Some(chain);
+            }
+        }
+    }
 
     // ── Boxed Numbers: filter histogram for Java boxed types ─────────────────
     const BOXED_TYPES: &[&str] = &[
@@ -3338,6 +3429,7 @@ pub(crate) fn build_leak_suspects(
                                 g.loader_labels.get(&lid).cloned()
                             }
                         },
+                        root_path: None,
                     });
                 }
             }

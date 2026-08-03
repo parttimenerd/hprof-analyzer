@@ -34,6 +34,13 @@ pub struct HistRow {
     /// the histogram-row index is not readily available). Purely descriptive —
     /// NOT parity-gated and never compared numerically.
     pub loader_label: Option<String>,
+    /// Dominator chain from the highest-retained instance of this class up to its
+    /// GC root. Populated for the top-20 histogram rows by retained heap in the
+    /// System Overview. `None` for synthetic rows (no backing objects) and for
+    /// rows outside the top-20. Additive; `#[serde(default)]` so older JSON still
+    /// deserializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_path: Option<Vec<RootPathStep>>,
 }
 
 /// One row of the unreachable-objects histogram: objects that are not

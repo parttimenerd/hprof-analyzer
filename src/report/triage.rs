@@ -1808,6 +1808,7 @@ mod tests {
             incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
+            root_path: None,
         }];
         let s = ObjectSwarm
             .eval(&r)
@@ -1832,6 +1833,7 @@ mod tests {
             incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
+            root_path: None,
         }];
         let s = BoxedPrimitiveBloat
             .eval(&r)
@@ -1968,6 +1970,7 @@ mod tests {
             incoming_ref_count: 0,
             loader_id: 0,
             loader_label: None,
+            root_path: None,
         }
     }
 

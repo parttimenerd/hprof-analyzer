@@ -2003,6 +2003,16 @@
           "format": "uint64",
           "minimum": 0
         },
+        "root_path": {
+          "description": "Dominator chain from the highest-retained instance of this class up to its\nGC root. Populated for the top-20 histogram rows by retained heap in the\nSystem Overview. `None` for synthetic rows (no backing objects) and for\nrows outside the top-20. Additive; `#[serde(default)]` so older JSON still\ndeserializes.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/RootPathStep"
+          }
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
