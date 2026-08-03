@@ -5671,7 +5671,8 @@ type InspectPage =
   | { kind: "instances"; cls: string; page: number }
   | { kind: "instance"; idx: number; cls: string }
   | { kind: "fields"; idx: number; cls: string }
-  | { kind: "gcroot"; idx: number; cls: string };
+  | { kind: "gcroot"; idx: number; cls: string }
+  | { kind: "field-scan"; cls: string; fieldName: string };
 
 function fireInspect(page: InspectPage) {
   window.dispatchEvent(new CustomEvent("inspect", { detail: page }));
@@ -10079,6 +10080,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
   const wasm = (window as any).__wasmExploration;
   const [fields, setFields] = React.useState<any[] | null>(null);
   const [refSizes, setRefSizes] = React.useState<Map<number, number>>(new Map());
+  const [instanceRetained, setInstanceRetained] = React.useState<number>(0);
 
   React.useEffect(() => {
     if (!wasm?.get_field_values) return;
@@ -10095,6 +10097,10 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
         } catch {}
       }
       setRefSizes(new Map(sizes));
+      try {
+        const info = JSON.parse(wasm.get_node_info(idx));
+        if (info && info.ok) setInstanceRetained(info.retained ?? 0);
+      } catch {}
     } catch {}
   }, [idx]);
 
@@ -10121,7 +10127,9 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
       <ul className="trg-edge-list">
         {sorted.map((f: any, i: number) => (
           <li key={i}>
-            <code className="trg-field-name">{f.name}</code>
+            <code className="trg-field-name">
+              {f.name || <span style={{color:"var(--muted)"}}>(unnamed ref)</span>}
+            </code>
             {f.kind === "ref" ? (
               <>
                 <button className="trg-link-btn"
@@ -10129,19 +10137,42 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
                   {(f.display_class ?? "?").split(".").pop()}
                 </button>
                 {refSizes.has(f.dense_idx) && (
-                  <span className="trg-edge-stat">{formatBytes(refSizes.get(f.dense_idx)!)} retained</span>
+                  <span className="trg-edge-stat">
+                    {formatBytes(refSizes.get(f.dense_idx)!)} retained
+                    {instanceRetained > 0 && (
+                      <span style={{color:"var(--muted)",fontSize:"0.75em"}}>
+                        {" "}({(refSizes.get(f.dense_idx)! / instanceRetained * 100).toFixed(1)}%)
+                      </span>
+                    )}
+                  </span>
                 )}
                 <button className="trg-link-btn" style={{ fontSize: "0.75rem" }}
                   onClick={() => onNavigate({ kind: "fields", idx: f.dense_idx, cls: f.display_class ?? "?" })}
                   title="Drill into fields of this object">↳ fields</button>
               </>
             ) : (
-              <span className="trg-edge-stat">{String(f.value ?? "null")}</span>
+              <span className="trg-edge-stat">
+                <span style={{color:"var(--muted)",fontSize:"0.75em",marginRight:"0.25em"}}>{f.kind}</span>
+                {f.kind === "str" ? `"${f.value}"` : String(f.value ?? "null")}
+                {(f.kind === "int" || f.kind === "long" || f.kind === "float") && f.value != null && (
+                  <button style={{
+                    background:"none",border:"none",cursor:"pointer",padding:"0 0.2em",fontSize:"0.85em",
+                    color:"var(--muted)"
+                  }} title="Copy value"
+                    onClick={() => navigator.clipboard?.writeText(String(f.value))}>⎘</button>
+                )}
+              </span>
             )}
           </li>
         ))}
       </ul>
       <div className="trg-page-actions">
+        {cls && (
+          <button className="show-more-btn"
+            onClick={() => onNavigate({ kind: "field-scan", cls, fieldName: "" })}>
+            Scan all instances →
+          </button>
+        )}
         <button className="show-more-btn" onClick={() => onNavigate({ kind: "instance", idx, cls })}>
           ← Instance view
         </button>
