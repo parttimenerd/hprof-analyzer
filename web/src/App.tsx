@@ -6095,7 +6095,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                   const y2 = dp.y - (dy / len) * (dp.r + 6);
                   return (
                     <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-                      stroke="var(--muted, #888)" strokeWidth={sw}
+                      stroke="var(--muted, #888)" strokeWidth={sw / zoom}
                       opacity={opacity}
                       markerEnd="url(#tpfg-arrow)"
                     />
@@ -6107,6 +6107,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                   const inFilter = matchedNodes ? matchedNodes.has(p.id) : true;
                   const inConnected = connectedTo ? connectedTo.has(p.id) : true;
                   const dimmed = (matchedNodes && !inFilter) || (connectedTo && !inConnected);
+                  const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
                   return (
                     <g key={p.id}
                       transform={`translate(${p.x},${p.y})`}
@@ -6132,21 +6133,21 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                         }
                       }}
                     >
-                      <circle r={p.r + (isSelected ? 3 : 0)}
+                      <circle r={screenR + (isSelected ? 3 / zoom : 0)}
                         fill={tpfgColor(p.id)}
                         opacity={dimmed ? 0.12 : 0.85}
                         stroke={isSelected ? "var(--fg)" : "transparent"}
-                        strokeWidth={isSelected ? 2 : 0}
+                        strokeWidth={isSelected ? 2 / zoom : 0}
                       />
                       <text
-                        fontSize={Math.min(9, Math.max(6, p.r * 0.55))}
+                        fontSize={Math.min(9, Math.max(6, p.r * 0.55)) / zoom}
                         fill="var(--bg, #fff)"
                         textAnchor="middle"
                         dominantBaseline="middle"
                         opacity={dimmed ? 0.2 : 1}
                         style={{ pointerEvents: "none", userSelect: "none" }}
                       >
-                        {tpfgShortName(p.id).slice(0, Math.floor(p.r / 2.8) + 4)}
+                        {tpfgShortName(p.id).slice(0, Math.floor(screenR / 2.8) + 4)}
                       </text>
                     </g>
                   );
@@ -6958,6 +6959,7 @@ function OGEGraphView({ data, onNavigate }: {
               if (!nodeInfo) return null;
               const isSelected = graphSelected === parseInt(p.id, 10);
               const label = shortLabel(nodeInfo.display_class);
+              const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
               return (
                 <g key={p.id} style={{ cursor: "pointer" }}
                   onMouseDown={e => handleNodeMouseDown(e, p.id)}
@@ -6968,7 +6970,7 @@ function OGEGraphView({ data, onNavigate }: {
                     e.stopPropagation();
                   }}>
                   <circle
-                    cx={p.x} cy={p.y} r={p.r}
+                    cx={p.x} cy={p.y} r={screenR}
                     fill={tpfgColor(nodeInfo.display_class)}
                     stroke={isSelected ? "var(--fg, #222)" : "none"}
                     strokeWidth={isSelected ? 2 / zoom : 0}
@@ -6976,13 +6978,13 @@ function OGEGraphView({ data, onNavigate }: {
                   />
                   <text
                     x={p.x} y={p.y}
-                    fontSize={Math.min(8, Math.max(6, p.r * 0.55))}
+                    fontSize={Math.min(8, Math.max(6, p.r * 0.55)) / zoom}
                     fill="var(--bg, #fff)"
                     textAnchor="middle"
                     dominantBaseline="middle"
                     style={{ pointerEvents: "none", userSelect: "none" }}
                   >
-                    {label.slice(0, Math.floor(p.r / 2.8) + 4)}
+                    {label.slice(0, Math.floor(screenR / 2.8) + 4)}
                   </text>
                 </g>
               );
