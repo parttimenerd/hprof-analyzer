@@ -643,3 +643,20 @@ kbd {
   background: var(--highlight-bg, #fffde7) !important;
   transition: background 0.5s;
 }
+
+/* ── TRG hover tooltip ───────────────────────────────────────────────────────── */
+.trg-tooltip {
+  position: absolute;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 0.8rem;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+/* ── TRG hint text ───────────────────────────────────────────────────────────── */
+.trg-hint-wasm { color: var(--accent, #3b82f6); }

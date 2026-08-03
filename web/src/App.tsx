@@ -5715,6 +5715,9 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   const [w, setW] = React.useState(800);
   const svgH = 520;
 
+  // Hover tooltip state
+  const [tooltip, setTooltip] = React.useState<{ x: number; y: number; cls: string; retained: number; instances: number } | null>(null);
+
   // TRG modal navigation state
   const [navStack, setNavStack] = React.useState<TRGPage[]>([]);
   const [navForward, setNavForward] = React.useState<TRGPage[]>([]);
@@ -5782,10 +5785,23 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   React.useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === "Escape") { setFullscreen(false); setSelected(null); trgClose(); }
+      if (currentPage && (e.target as HTMLElement).tagName !== "INPUT") {
+        if (e.key === "ArrowLeft" && navStack.length > 1) trgBack();
+        if (e.key === "ArrowRight" && navForward.length > 0) trgForward();
+      }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [trgClose]);
+  }, [trgClose, currentPage, navStack.length, navForward.length, trgBack, trgForward]);
+
+  // Listen for external "open class in TRG" events (from OGE)
+  React.useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      trgNavigate({ kind: "class", cls: e.detail.cls });
+    };
+    window.addEventListener("trg-open-class", handler as EventListener);
+    return () => window.removeEventListener("trg-open-class", handler as EventListener);
+  }, [trgNavigate]);
 
   // Build node set, filtered to topN by combined retained/edge weight
   const { nodeInfos, graphEdges } = React.useMemo(() => {
@@ -5844,6 +5860,8 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
   }, [nodeInfos, graphEdges, layoutKey, w, sizeBy, maxWeight]);
 
   const posMap = React.useMemo(() => new Map(positions.map(p => [p.id, p])), [positions]);
+
+  const ogCtxForHint = React.useContext(ObjGraphCtx);
 
   // Filter highlight set
   const filterLc = filter.toLowerCase().trim();
@@ -5982,6 +6000,18 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                     <g key={p.id}
                       transform={`translate(${p.x},${p.y})`}
                       style={{ cursor: "pointer" }}
+                      onMouseEnter={(e) => {
+                        const rect = svgRef.current?.getBoundingClientRect();
+                        const h = histMap.get(p.id);
+                        setTooltip({
+                          x: e.clientX - (rect?.left ?? 0) + 12,
+                          y: e.clientY - (rect?.top ?? 0) - 10,
+                          cls: p.id,
+                          retained: h?.retained ?? 0,
+                          instances: h?.instances ?? 0,
+                        });
+                      }}
+                      onMouseLeave={() => setTooltip(null)}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (isSelected) { setSelected(null); setPopoverPos(null); }
@@ -6012,9 +6042,20 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                   );
                 })}
               </svg>
+              {tooltip && (
+                <div className="trg-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
+                  <strong>{tooltip.cls.split(".").pop()}</strong><br/>
+                  {fmtCount(tooltip.instances)} instances · {formatBytes(tooltip.retained)}
+                </div>
+              )}
               <p style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "0.25rem 0 0" }}>
                 Showing top {positions.length} of {nodeInfos.length + (edges.length > 0 ? 0 : 0)} classes by retained flow.
                 Click a node to inspect · Use "Highlight class" to find a specific class · Switch to Table view for full data.
+                {(window as any).__wasmExploration
+                  ? <> · <span className="trg-hint-wasm">WASM active — live instance browse available</span></>
+                  : !ogCtxForHint
+                    ? <> · Tip: re-run with <code>--obj-graph</code> to enable instance browsing</>
+                  : null}
               </p>
             </>
           )}
@@ -8525,6 +8566,19 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       navigator.clipboard?.writeText(q);
                     }}>
                     Copy OQL ⎘
+                  </button>
+                </td>
+              </tr>
+              <tr>
+                <th>Type Graph</th>
+                <td>
+                  <button className="btn-link" style={{ fontSize: "0.82rem" }}
+                    title={`Open ${currentNode.display_class} in Type Reference Graph`}
+                    onClick={() => {
+                      document.getElementById("type-ref-graph")?.scrollIntoView({ behavior: "smooth" });
+                      window.dispatchEvent(new CustomEvent("trg-open-class", { detail: { cls: currentNode.display_class } }));
+                    }}>
+                    Open in Type Graph →
                   </button>
                 </td>
               </tr>
