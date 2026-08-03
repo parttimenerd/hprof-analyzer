@@ -308,6 +308,7 @@ mod tests {
             &depth_counts,
             &crate::AnalyzeOptions::default(),
             None,
+            None,
         );
         // Restore idom so tests that call build_model_t multiple times on the
         // same graph can still inspect g.idom between calls.

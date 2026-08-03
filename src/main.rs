@@ -1081,6 +1081,7 @@ fn analyze_to_report_inner(
         &depth_counts,
         opts,
         alloc_sites,
+        None,
     );
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
@@ -3149,6 +3150,7 @@ fn run(
         &depth_counts,
         &opts,
         alloc_sites,
+        None,
     );
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model

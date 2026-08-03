@@ -485,6 +485,7 @@ pub fn build_model(
     depth_counts: &[u64],
     opts: &crate::AnalyzeOptions,
     alloc_sites: Option<AllocSites>,
+    precomputed_field_stats: Option<FieldStats>,
 ) -> Report {
     let generated = now_iso8601();
     crate::trace::probe("build_model: before system_overview aggregates");
@@ -546,7 +547,10 @@ pub fn build_model(
     // Framework Auto-Analysis — always-on; each framework only emits when its
     // sentinel class is present in the heap.
     let framework_analysis = crate::pass2::scan_frameworks(g);
-    let field_stats = if opts.field_stats {
+    let field_stats = if let Some(fs) = precomputed_field_stats {
+        // Precomputed before build_model to free the fwd CSR copy early (saves ~2 GB peak RSS).
+        Some(fs)
+    } else if opts.field_stats {
         let fs = Some(build_field_stats(g));
         // Free the restored fwd CSR (only alive when --field-stats was passed).
         g.fwd_offsets = Vec::new();

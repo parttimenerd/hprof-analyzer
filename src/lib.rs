@@ -382,6 +382,7 @@ fn analyze_to_report_inner(
             &depth_counts_fast,
             opts,
             alloc_sites,
+            None,
         );
         let retained = std::mem::take(&mut g.retained);
         return Ok((report, retained));
@@ -457,12 +458,23 @@ fn analyze_to_report_inner(
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
 
-    // If --field-stats was requested, restore the saved fwd CSR so
-    // build_field_stats can traverse edges to count refs and sum retained.
-    if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
-        g.fwd_offsets = fwd_off;
-        g.fwd_targets = fwd_tgt;
-    }
+    // If --field-stats was requested, compute field_stats now using the saved fwd
+    // copy, then drop the copy immediately. This frees the ~2 GB clone before
+    // build_model runs, reducing the peak RSS compared to restoring it into g and
+    // keeping it alive through all the heavy build_model allocations.
+    let precomputed_field_stats: Option<crate::report::FieldStats> =
+        if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
+            // Temporarily place saved fwd data into g for build_field_stats.
+            g.fwd_offsets = fwd_off;
+            g.fwd_targets = fwd_tgt;
+            let fs = crate::report::build_field_stats(&g);
+            // Immediately free the copy — we no longer need it.
+            g.fwd_offsets = Vec::new();
+            g.fwd_targets = crate::chunkvec::ChunkU32::default();
+            Some(fs)
+        } else {
+            None
+        };
 
     let alloc_sites = if let Some(c) = alloc_serial_c {
         let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
@@ -485,6 +497,7 @@ fn analyze_to_report_inner(
         &depth_counts,
         opts,
         alloc_sites,
+        precomputed_field_stats,
     );
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
