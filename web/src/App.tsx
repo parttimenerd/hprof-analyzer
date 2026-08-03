@@ -4519,6 +4519,229 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
   );
 }
 
+function DomGraphView({ pairs, idoms }: {
+  pairs: ImmDomPair[];
+  idoms: import("./types").ImmediateDominatorRow[];
+}) {
+  const W = 700, H = 440;
+  const [layoutKey, setLayoutKey] = React.useState(0);
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = React.useState(1);
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const nodeOverrides = React.useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [overrideVersion, setOverrideVersion] = React.useState(0);
+  const svgRef = React.useRef<SVGSVGElement>(null);
+  const svgInteract = React.useRef<{
+    mode: "none" | "pan" | "drag";
+    startX: number; startY: number;
+    panStart: { x: number; y: number };
+    dragId: string | null;
+    hasMoved: boolean;
+  }>({ mode: "none", startX: 0, startY: 0, panStart: { x: 0, y: 0 }, dragId: null, hasMoved: false });
+
+  // Build retained map per class (sum dominated_retained for each dominator_class)
+  const retMap = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of pairs) {
+      m.set(p.dominator_class, (m.get(p.dominator_class) ?? 0) + p.dominated_retained);
+      if (!m.has(p.dominated_class)) m.set(p.dominated_class, 0);
+    }
+    // Also seed from idoms rows
+    for (const r of idoms) {
+      if (!m.has(r.dominator_class)) m.set(r.dominator_class, 0);
+    }
+    return m;
+  }, [pairs, idoms]);
+
+  const topN = 50;
+  const fdNodes = React.useMemo(() => {
+    const sorted = [...retMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN);
+    const maxRet = Math.max(...sorted.map(([, r]) => r), 1);
+    return sorted.map(([cls, ret], i): FDNode => ({
+      id: cls,
+      x: W / 2 + Math.cos((i / sorted.length) * 2 * Math.PI) * 150,
+      y: H / 2 + Math.sin((i / sorted.length) * 2 * Math.PI) * 150,
+      r: Math.max(8, Math.min(28, 8 + 20 * Math.sqrt(ret / maxRet))),
+      vx: 0,
+      vy: 0,
+    }));
+  }, [retMap, layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const nodeIds = React.useMemo(() => new Set(fdNodes.map(n => n.id)), [fdNodes]);
+  const idxMap = React.useMemo(() => new Map(fdNodes.map((n, i) => [n.id, i])), [fdNodes]);
+
+  const fdEdges = React.useMemo(() =>
+    pairs
+      .filter(p => nodeIds.has(p.dominator_class) && nodeIds.has(p.dominated_class) && p.dominator_class !== p.dominated_class)
+      .map(p => ({ src: idxMap.get(p.dominator_class)!, dst: idxMap.get(p.dominated_class)! }))
+      .filter(e => e.src !== undefined && e.dst !== undefined),
+    [pairs, nodeIds, idxMap]
+  );
+
+  const positions = React.useMemo(
+    () => runForceLayoutD3(fdNodes, fdEdges, W, H),
+    [fdNodes, fdEdges] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  React.useEffect(() => {
+    nodeOverrides.current = new Map();
+    setOverrideVersion(v => v + 1);
+    setPan({ x: 0, y: 0 });
+    setZoom(1);
+  }, [positions]);
+
+  const effectivePositions = React.useMemo(() => {
+    void overrideVersion;
+    if (nodeOverrides.current.size === 0) return positions;
+    return positions.map(p => {
+      const ov = nodeOverrides.current.get(p.id);
+      return ov ? { ...p, x: ov.x, y: ov.y } : p;
+    });
+  }, [positions, overrideVersion]);
+
+  const connectedTo = React.useMemo(() => {
+    if (!selected) return null;
+    const s = new Set([selected]);
+    for (const p of pairs) {
+      if (p.dominator_class === selected) s.add(p.dominated_class);
+      if (p.dominated_class === selected) s.add(p.dominator_class);
+    }
+    return s;
+  }, [selected, pairs]);
+
+  const handleSvgMouseDown = React.useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    svgInteract.current = { mode: "pan", startX: e.clientX, startY: e.clientY, panStart: { x: pan.x, y: pan.y }, dragId: null, hasMoved: false };
+    e.preventDefault();
+  }, [pan]);
+
+  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    svgInteract.current = { mode: "drag", startX: e.clientX, startY: e.clientY, panStart: { x: pan.x, y: pan.y }, dragId: id, hasMoved: false };
+    e.preventDefault();
+  }, [pan]);
+
+  React.useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const s = svgInteract.current;
+      if (s.mode === "none") return;
+      const dx = e.clientX - s.startX;
+      const dy = e.clientY - s.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) s.hasMoved = true;
+      if (s.mode === "pan") {
+        setPan({ x: s.panStart.x + dx, y: s.panStart.y + dy });
+      } else if (s.mode === "drag" && s.dragId) {
+        const rect = svgRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const newX = (e.clientX - rect.left - s.panStart.x) / zoom;
+        const newY = (e.clientY - rect.top - s.panStart.y) / zoom;
+        nodeOverrides.current.set(s.dragId!, { x: newX, y: newY });
+        setOverrideVersion(v => v + 1);
+      }
+    };
+    const onUp = () => { svgInteract.current.mode = "none"; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [positions, zoom]);
+
+  const handleWheel = React.useCallback((e: React.WheelEvent<SVGSVGElement>) => {
+    e.preventDefault();
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const newZoom = Math.max(0.15, Math.min(8, zoom * factor));
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    setPan(p => ({
+      x: mx - (mx - p.x) * (newZoom / zoom),
+      y: my - (my - p.y) * (newZoom / zoom),
+    }));
+    setZoom(newZoom);
+  }, [zoom]);
+
+  if (pairs.length === 0) {
+    return <p className="subtitle">No dominator pair data available.</p>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
+          style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
+          title="Re-run force layout">↺ Layout</button>
+        <button onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1); }}
+          style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
+          title="Reset view">⊡ View</button>
+        <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Top {Math.min(topN, fdNodes.length)} classes · drag nodes · scroll to zoom · click to inspect</span>
+      </div>
+      <svg
+        ref={svgRef}
+        width={W} height={H}
+        style={{ display: "block", background: "var(--card, #f7f7f8)", borderRadius: 6, border: "1px solid var(--border)", cursor: "grab", maxWidth: "100%" }}
+        onMouseDown={handleSvgMouseDown}
+        onWheel={handleWheel}
+        onClick={e => { if ((e.target as SVGElement).tagName === "svg" && !svgInteract.current.hasMoved) setSelected(null); }}
+      >
+        <defs>
+          <marker id="dom-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="var(--muted, #888)" />
+          </marker>
+        </defs>
+        <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+          {/* Edges */}
+          {fdEdges.map((e, i) => {
+            const src = effectivePositions[e.src];
+            const dst = effectivePositions[e.dst];
+            if (!src || !dst) return null;
+            const dimmed = connectedTo !== null && (!connectedTo.has(src.id) || !connectedTo.has(dst.id));
+            return (
+              <line key={i}
+                x1={src.x} y1={src.y} x2={dst.x} y2={dst.y}
+                stroke="var(--muted, #aaa)"
+                strokeWidth={1 / zoom}
+                opacity={dimmed ? 0.1 : 0.4}
+                markerEnd="url(#dom-arrow)"
+              />
+            );
+          })}
+          {/* Nodes */}
+          {effectivePositions.map((p) => {
+            const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
+            const isSelected = p.id === selected;
+            const dimmed = connectedTo !== null && !connectedTo.has(p.id);
+            return (
+              <g key={p.id}
+                style={{ cursor: "pointer" }}
+                onMouseDown={e => handleNodeMouseDown(e, p.id)}
+                onClick={e => { e.stopPropagation(); if (!isSelected) { setSelected(p.id); fireInspect({ kind: "class", cls: p.id }); } else setSelected(null); }}
+              >
+                <circle
+                  cx={p.x} cy={p.y} r={screenR}
+                  fill={tpfgColor(p.id)}
+                  opacity={dimmed ? 0.2 : 0.85}
+                  stroke={isSelected ? "var(--accent, #0066cc)" : "var(--border, #ccc)"}
+                  strokeWidth={isSelected ? 2.5 / zoom : 1 / zoom}
+                />
+                <text
+                  x={p.x} y={p.y + screenR + 11 / zoom}
+                  textAnchor="middle"
+                  fontSize={9 / zoom}
+                  fill="var(--fg)"
+                  opacity={dimmed ? 0.3 : 1}
+                  style={{ pointerEvents: "none", userSelect: "none" }}
+                >
+                  {p.id.split(".").pop()?.slice(0, 14)}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
 function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
@@ -4526,6 +4749,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
   const idoms = data?.immediate_dominators?.rows ?? [];
   const pairs = data?.immediate_dominators?.pairs ?? [];
+  const [domView, setDomView] = React.useState<"tables" | "graph">("tables");
 
   // Navigator state lifted so tables can drive it.
   const [navTarget, setNavTarget] = React.useState<string | null>(null);
@@ -4564,6 +4788,17 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
 
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+        {(["tables", "graph"] as const).map(v => (
+          <button key={v} onClick={() => setDomView(v)} style={{
+            padding: "0.25rem 0.85rem", fontSize: "0.88rem",
+            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+            background: domView === v ? "var(--accent)" : "transparent",
+            color: domView === v ? "#fff" : "var(--fg)",
+          }}>{v === "tables" ? "⊞ Tables" : "⬡ Graph"}</button>
+        ))}
+      </div>
+
       {/* Context menu */}
       {ctxMenu && (
         <div style={{ position: "fixed", left: ctxMenu.x, top: ctxMenu.y, zIndex: 9999, background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 6, boxShadow: "0 4px 14px rgba(0,0,0,0.18)", padding: "0.25rem 0", minWidth: 190 }}>
@@ -4577,6 +4812,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         </div>
       )}
 
+      {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
         Dominators where retained heap concentrates: retained heap minus the largest single child. Threshold{" "}
@@ -4669,6 +4905,11 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
             onPivot={setNavTarget}
           />
         </div>
+      )}
+      </>)}
+
+      {domView === "graph" && (
+        <DomGraphView pairs={pairs} idoms={idoms} />
       )}
     </section>
   );
