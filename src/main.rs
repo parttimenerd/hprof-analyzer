@@ -222,6 +222,13 @@ struct Cli {
     #[arg(long)]
     dev: bool,
 
+    /// Skip dominator tree and retained-heap computation (faster, but leak
+    /// suspects and dominator sections will be empty). Useful for very large
+    /// dumps where the dominator pass would exhaust memory.
+    /// Analyze-only.
+    #[arg(long)]
+    skip_retained: bool,
+
     /// Emit Eclipse MAT-compatible binary index files into DIR while running
     /// the normal analysis (the report output is unaffected). The files are
     /// named `<dump>.<kind>.index` using the input basename as the prefix.
@@ -796,6 +803,7 @@ fn run_default(cli: Cli) {
             field_stats: cli.field_stats,
             obj_graph: cli.obj_graph.is_some() || cli.full_analysis,
             dev_report: cli.dev,
+            skip_retained: cli.skip_retained,
             ..opts
         };
         opts.report_size = match cli.obj_graph.as_deref().map(|s| s.to_ascii_lowercase()).as_deref() {

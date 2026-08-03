@@ -518,6 +518,35 @@ impl HprofSession {
         })
     }
 
+    /// Fast analysis: class histogram + OQL queries work, but dominator tree
+    /// and retained-heap sizes are skipped. Use for dumps too large for full
+    /// analysis (the dominator pass is the main memory bottleneck). Fires a
+    /// JS progress callback `(phase: string, fraction: number)` at each phase;
+    /// phases: "pass1", "pass2", "rpo".
+    ///
+    /// After this call `has_retained()` returns `false` and
+    /// `@retainedHeapSize` in OQL queries returns 0. `get_report_html()` returns
+    /// a report without leak-suspect or dominator-tree sections.
+    pub fn run_fast_analysis_with_progress(&mut self, cb: js_sys::Function) -> Result<(), JsValue> {
+        let mut opts = hprof_analyzer::AnalyzeOptions::default();
+        opts.skip_retained = true;
+        let (report, _retained) = hprof_analyzer::analyze_to_report_with_progress(
+            &self.source,
+            &opts,
+            &mut |phase, frac| call_progress(&cb, phase, frac),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        // retained is all zeros for the fast path — no need to store or compress.
+        let source_name = match &self.source {
+            hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
+            hprof_analyzer::HprofSource::Path(p) => p.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&report) {
+            self.cached_report_html = Some(hprof_analyzer::render_report_html(&source_name, &json));
+        }
+        Ok(())
+    }
+
     /// Like `run_full_analysis()` but fires a JS progress callback at each phase.
     ///
     /// Callback receives `(phase: string, fraction: number)`.  Phases in order:
