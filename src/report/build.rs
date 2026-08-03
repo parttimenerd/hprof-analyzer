@@ -4067,19 +4067,15 @@ mod dom_subtree_tests {
 /// of their targets. Field names are empty strings because the CSR does not
 /// carry field names unless `--ref-paths` was used.
 pub fn build_field_stats(g: &Graph) -> FieldStats {
-    use std::collections::HashMap;
-
-    // Count instances per class-histogram-row index.
+    // Count instances per class histogram row index
     let mut row_counts: Vec<u64> = vec![0u64; g.class_names.len()];
     for &ci in &g.class_idx {
-        let ci = ci as usize;
-        if ci < row_counts.len() {
-            row_counts[ci] += 1;
+        if (ci as usize) < row_counts.len() {
+            row_counts[ci as usize] += 1;
         }
     }
 
-    // Build a ranked list of (class_name, row_index, instance_count),
-    // sorted descending by instance count, capped at 50.
+    // Top-50 classes by instance count
     let mut ranked: Vec<(usize, u64)> = row_counts
         .iter()
         .enumerate()
@@ -4089,54 +4085,85 @@ pub fn build_field_stats(g: &Graph) -> FieldStats {
     ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     ranked.truncate(50);
 
-    // Build a set of the target row indices for fast lookup.
     let target_rows: std::collections::HashSet<usize> =
         ranked.iter().map(|(i, _)| *i).collect();
-
-    // Build a reverse map: object dense index → class row index (only for
-    // objects whose class is in the top-50 set).
-    let n = g.class_idx.len();
-    let mut obj_to_row: HashMap<usize, usize> = HashMap::new();
-    for (obj, &ci) in g.class_idx.iter().enumerate() {
-        let ci = ci as usize;
-        if target_rows.contains(&ci) {
-            obj_to_row.insert(obj, ci);
-        }
-    }
-
-    // Accumulate non_null edge count and total_retained per class row.
-    let mut non_null_per_row: Vec<u64> = vec![0u64; g.class_names.len()];
-    let mut retained_per_row: Vec<u64> = vec![0u64; g.class_names.len()];
     let retained_len = g.retained.len();
 
-    for (&obj, &ci) in &obj_to_row {
+    // Per-class, per-field accumulators
+    let mut nn_map: std::collections::HashMap<usize, Vec<u64>> =
+        std::collections::HashMap::new();
+    let mut ret_map: std::collections::HashMap<usize, Vec<u64>> =
+        std::collections::HashMap::new();
+    for &(ci, _) in &ranked {
+        let n_fields = g.class_ref_field_names.get(ci).map(|v| v.len()).unwrap_or(0);
+        nn_map.insert(ci, vec![0u64; n_fields]);
+        ret_map.insert(ci, vec![0u64; n_fields]);
+    }
+
+    for (obj, &ci_u32) in g.class_idx.iter().enumerate() {
+        let ci = ci_u32 as usize;
+        if !target_rows.contains(&ci) {
+            continue;
+        }
+        let nn = match nn_map.get_mut(&ci) {
+            Some(v) => v,
+            None => continue,
+        };
+        let rt = ret_map.get_mut(&ci).unwrap();
         if obj + 1 >= g.fwd_offsets.len() {
             continue;
         }
         let start = g.fwd_offsets[obj] as usize;
         let end = g.fwd_offsets[obj + 1] as usize;
-        for pos in start..end {
+        // Skip pos start+0 (class-object edge); field slots start at start+1
+        for pos in (start + 1)..end {
+            let slot = pos - (start + 1);
+            if slot >= nn.len() {
+                break;
+            }
+            // g.fwd_targets is ChunkU32; use .get(pos) to index
             let tgt = g.fwd_targets.get(pos) as usize;
             if tgt < retained_len {
-                non_null_per_row[ci] += 1;
-                retained_per_row[ci] += g.retained[tgt];
+                nn[slot] += 1;
+                rt[slot] += g.retained[tgt];
             }
         }
     }
 
-    // Assemble the output.
     let classes = ranked
         .into_iter()
         .map(|(ci, instance_count)| {
             let class_name = g.class_names[ci].clone();
-            let non_null = non_null_per_row[ci];
-            let total_ret = retained_per_row[ci];
-            let ref_fields = vec![FieldRefStat {
-                field_name: String::new(),
-                null_count: 0,
-                non_null_count: non_null,
-                total_retained: total_ret,
-            }];
+            let names = g
+                .class_ref_field_names
+                .get(ci)
+                .cloned()
+                .unwrap_or_default();
+            let nn = nn_map.remove(&ci).unwrap_or_default();
+            let rt = ret_map.remove(&ci).unwrap_or_default();
+
+            let ref_fields = if names.is_empty() {
+                vec![FieldRefStat {
+                    field_name: String::new(),
+                    null_count: 0,
+                    non_null_count: nn.iter().sum(),
+                    total_retained: rt.iter().sum(),
+                }]
+            } else {
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, name)| {
+                        let nonnull = nn.get(slot).copied().unwrap_or(0);
+                        FieldRefStat {
+                            field_name: name.clone(),
+                            null_count: instance_count.saturating_sub(nonnull),
+                            non_null_count: nonnull,
+                            total_retained: rt.get(slot).copied().unwrap_or(0),
+                        }
+                    })
+                    .collect()
+            };
             ClassFieldStats {
                 class_name,
                 instance_count,
