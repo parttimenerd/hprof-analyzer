@@ -1043,8 +1043,12 @@ fn analyze_to_report_inner(
 
     // Capture type-reference graph (class-pair counts) inline, then per-object
     // edges for the top-500K objects by shallow size (feeds click-through view).
+    // g.class_idx is compressed into class_idx_c at this point; restore it
+    // transiently for the scan (matching the run() path).
     if opts.obj_graph {
+        g.class_idx = class_idx_c.restore()?;
         let (pairs, pair_fields) = crate::pass2::capture_type_ref_graph(&g);
+        crate::trace::drop_vec(std::mem::take(&mut g.class_idx));
         g.type_ref_pairs = Some(pairs);
         g.type_ref_pair_fields = Some(pair_fields);
         crate::trace::probe("main: after capture_type_ref_graph");

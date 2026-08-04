@@ -591,6 +591,10 @@ pub struct TypeEdge {
     pub edge_count: u64,
     /// Sum of src-object retained / out_degree for all instances of this edge type.
     pub retained_weight: u64,
+    /// Top field names (up to 3) through which src references dst, sorted by occurrence.
+    /// Empty when field-name data was not captured (older dumps or non-instance edges).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_field_names: Vec<String>,
 }
 
 /// Flat lookup table powering V3 + V4 navigation (object graph + dominator explorer).

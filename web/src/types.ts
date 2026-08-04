@@ -945,6 +945,8 @@ export interface TypeEdge {
   dst_class: string;
   edge_count: number;
   retained_weight: number;
+  /** Top field names (up to 3) via which src references dst, sorted by occurrence. Absent in older reports. */
+  top_field_names?: string[];
 }
 
 // One directed type-level reference edge's growth between two dumps.

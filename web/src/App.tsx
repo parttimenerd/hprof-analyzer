@@ -5709,7 +5709,7 @@ function fireInspect(page: InspectPage) {
   window.dispatchEvent(new CustomEvent("inspect", { detail: page }));
 }
 
-function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: HistRow[] }) {
+function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histogram: HistRow[]; objGraph?: ObjGraphFlat | null }) {
   const [fmtB] = useFmtBytes();
   const [view, setView] = React.useState<"graph" | "table">("graph");
   const [filter, setFilter] = React.useState("");
@@ -5949,8 +5949,54 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
 
   // Popover data for selected node
   const selInfo = selected ? nodeInfos.find(n => n.cls === selected) : null;
-  const selOutEdges = selected ? graphEdges.filter(e => e.src_class === selected).sort((a, b) => b.retained_weight - a.retained_weight).slice(0, 6) : [];
-  const selInEdges = selected ? graphEdges.filter(e => e.dst_class === selected).sort((a, b) => b.retained_weight - a.retained_weight).slice(0, 6) : [];
+  // Use full edges (all 500 TypeEdge entries) so we don't miss edges to nodes outside the visible graph
+  const EDGE_SHOW = 10;
+  const selAllOutEdges = React.useMemo(
+    () => selected ? edges.filter(e => e.src_class === selected).sort((a, b) => b.retained_weight - a.retained_weight) : [],
+    [selected, edges],
+  );
+  const selAllInEdges = React.useMemo(
+    () => selected ? edges.filter(e => e.dst_class === selected).sort((a, b) => b.retained_weight - a.retained_weight) : [],
+    [selected, edges],
+  );
+  const selOutEdges = selAllOutEdges.slice(0, EDGE_SHOW);
+  const selInEdges = selAllInEdges.slice(0, EDGE_SHOW);
+
+  // Phase 2: build class → most-common idom class mapping from obj_graph_flat
+  // We walk the flat node list once and, for each class, tally its idom classes.
+  const classIdomMap = React.useMemo(() => {
+    if (!objGraph) return null;
+    // Map: class_name → Map<idom_class, count>
+    const tally = new Map<string, Map<string, number>>();
+    for (const [, node] of Object.entries(objGraph.nodes)) {
+      if (node.idom == null) continue;
+      const idomNode = objGraph.nodes[String(node.idom)];
+      if (!idomNode) continue;
+      const cls = node.display_class;
+      const idomCls = idomNode.display_class;
+      if (!tally.has(cls)) tally.set(cls, new Map());
+      const m = tally.get(cls)!;
+      m.set(idomCls, (m.get(idomCls) ?? 0) + 1);
+    }
+    // Reduce to best idom per class
+    const best = new Map<string, string>();
+    for (const [cls, m] of tally) {
+      let bestCls = "";
+      let bestCount = 0;
+      for (const [iCls, cnt] of m) {
+        if (cnt > bestCount) { bestCount = cnt; bestCls = iCls; }
+      }
+      if (bestCls) best.set(cls, bestCls);
+    }
+    return best;
+  }, [objGraph]);
+
+  // Sibling edges: edges from parent dominator class
+  const parentClass = selected && classIdomMap ? (classIdomMap.get(selected) ?? null) : null;
+  const siblingEdges = React.useMemo(() => {
+    if (!parentClass) return [];
+    return edges.filter(e => e.src_class === parentClass).sort((a, b) => b.retained_weight - a.retained_weight);
+  }, [parentClass, edges]);
 
   const wrapStyle: React.CSSProperties = fullscreen
     ? { position: "fixed", inset: 0, background: "var(--bg)", zIndex: 9999, overflow: "auto", padding: "1rem" }
@@ -6131,25 +6177,29 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
               <p>Click a class node to preview its stats and connections here.</p>
               <p className="trg-sidebar-hint">Double-click or use "Full details →" to open the in-depth view in the Inspector panel.</p>
             </div>
-          ) : selInfo ? (
+          ) : (
             <div className="trg-sidebar-content">
               <div className="trg-sidebar-header">
                 <div className="trg-sidebar-dot" style={{ background: tpfgColor(selected) }} />
                 <code className="trg-sidebar-cls" title={selected}>{selected}</code>
                 <button className="trg-close-btn" onClick={() => setSelected(null)} title="Close">✕</button>
               </div>
-              {selInfo.hist && (
+              {selInfo?.hist && (
                 <table className="trg-stat-table trg-sidebar-stats">
                   <tbody>
                     <tr><th>Instances</th><td>{fmtCount(selInfo.hist.instances)}</td></tr>
                     <tr><th>Shallow</th><td>{fmtB(selInfo.hist.shallow)}</td></tr>
                     <tr><th>Retained</th><td><strong>{fmtB(selInfo.hist.retained)}</strong></td></tr>
+                    <tr><th>Max instance</th><td>{fmtB(selInfo.hist.max_instance_shallow)}</td></tr>
+                    {selInfo.hist.incoming_ref_count != null && (
+                      <tr><th>Incoming refs</th><td>{fmtCount(selInfo.hist.incoming_ref_count)}</td></tr>
+                    )}
                   </tbody>
                 </table>
               )}
-              {selOutEdges.length > 0 && (
+              {selAllOutEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">→ References ({selOutEdges.length}{graphEdges.filter(e => e.src_class === selected).length > selOutEdges.length ? "+" : ""})</p>
+                  <p className="trg-sidebar-section-label">→ References ({selAllOutEdges.length} total)</p>
                   <ul className="trg-edge-list">
                     {selOutEdges.map((e, i) => (
                       <li key={i}>
@@ -6157,14 +6207,20 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                           {tpfgShortName(e.dst_class)}
                         </button>
                         <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
+                        {e.top_field_names && e.top_field_names.length > 0 && (
+                          <span className="trg-field-names">via {e.top_field_names.join(", ")}</span>
+                        )}
                       </li>
                     ))}
                   </ul>
+                  {selAllOutEdges.length > EDGE_SHOW && (
+                    <p className="trg-sidebar-more">{selAllOutEdges.length - EDGE_SHOW} more not shown</p>
+                  )}
                 </>
               )}
-              {selInEdges.length > 0 && (
+              {selAllInEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">← Referenced by ({selInEdges.length}{graphEdges.filter(e => e.dst_class === selected).length > selInEdges.length ? "+" : ""})</p>
+                  <p className="trg-sidebar-section-label">← Referenced by ({selAllInEdges.length} total)</p>
                   <ul className="trg-edge-list">
                     {selInEdges.map((e, i) => (
                       <li key={i}>
@@ -6175,6 +6231,29 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                       </li>
                     ))}
                   </ul>
+                  {selAllInEdges.length > EDGE_SHOW && (
+                    <p className="trg-sidebar-more">{selAllInEdges.length - EDGE_SHOW} more not shown</p>
+                  )}
+                </>
+              )}
+              {parentClass && siblingEdges.length > 0 && (
+                <>
+                  <p className="trg-sidebar-section-label" title={`Edges from parent dominator: ${parentClass}`}>
+                    Siblings (from <button className="trg-link-btn" onClick={() => setSelected(parentClass)} title={parentClass}>{tpfgShortName(parentClass)}</button>)
+                  </p>
+                  <ul className="trg-edge-list">
+                    {siblingEdges.slice(0, 6).map((e, i) => (
+                      <li key={i} style={e.dst_class === selected ? { fontWeight: 600 } : undefined}>
+                        <button className="trg-link-btn" onClick={() => setSelected(e.dst_class)} style={e.dst_class === selected ? { fontWeight: 600 } : undefined}>
+                          {tpfgShortName(e.dst_class)}{e.dst_class === selected ? " → this" : ""}
+                        </button>
+                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {siblingEdges.length > 6 && (
+                    <p className="trg-sidebar-more">{siblingEdges.length - 6} more not shown</p>
+                  )}
                 </>
               )}
               <div className="trg-sidebar-actions">
@@ -6192,7 +6271,7 @@ function TypeRefGraph({ edges, histogram }: { edges: TypeEdge[]; histogram: Hist
                 <ListObjectsBtn cls={selected} />
               </div>
             </div>
-          ) : null}
+          )}
         </div>
         </div>
       )}
@@ -10731,7 +10810,7 @@ export default function App({ report }: { report: Report }) {
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
           <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow. <em>Note: Retained Flow sums the retained size of referenced objects across all instances — values may exceed total heap size when objects are shared (referenced by multiple sources).</em></p>
-          <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} />
+          <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}
       <RetentionConcentrationSection report={report} />

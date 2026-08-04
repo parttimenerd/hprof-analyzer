@@ -607,9 +607,10 @@ kbd {
 .trg-stat-table th { font-weight: 500; color: var(--muted); }
 .trg-edge-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .trg-edge-list { margin: 4px 0; padding-left: 0; list-style: none; }
-.trg-edge-list li { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border); }
+.trg-edge-list li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border); }
 .trg-link-btn { background: none; border: none; cursor: pointer; color: var(--accent); text-align: left; }
 .trg-edge-stat { font-size: 0.8rem; color: var(--muted); }
+.trg-field-names { font-size: 0.72rem; color: var(--muted); font-style: italic; flex-basis: 100%; padding-left: 2px; margin-top: -2px; }
 .trg-page-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .trg-dom-ctx { font-size: 0.85rem; color: var(--muted); background: var(--card); padding: 6px 10px; border-radius: 4px; }
 .trg-no-data { font-size: 0.85rem; color: var(--muted); font-style: italic; }
@@ -718,6 +719,12 @@ kbd {
   font-size: 0.76rem;
   font-weight: 600;
   color: var(--muted);
+}
+.trg-sidebar-more {
+  margin: 2px 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-style: italic;
 }
 .trg-sidebar-actions {
   display: flex;

@@ -499,7 +499,7 @@ impl Pass2 {
         // For --ref-paths: used during the forward-CSR fill to annotate each edge with its field name.
         // For --field-stats: used to populate class_ref_field_names on the Graph.
         // Gated: the extra allocations are acceptable only under these explicit flags.
-        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths || opts.field_stats {
+        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths || opts.field_stats || opts.obj_graph {
             let named = build_field_plans_named(&p1.class_map, &p1.strings, id_size as usize);
             let mut dense: Vec<FieldPlanNamed> = vec![Vec::new(); n_dense_classes];
             for (&class_addr, &hidx) in &class_addr_to_hist {
@@ -1100,13 +1100,18 @@ impl Pass2 {
         let mut fwd_targets = crate::chunkvec::ChunkU32::zeroed(total_edges);
         // Optional per-edge field-name index, populated only under --ref-paths.
         // Parallel to fwd_targets (same indexing). 0 = "no name".
-        let mut fwd_field_name_idx_opt: Option<Vec<u16>> = if opts.ref_paths {
+        // For --obj-graph: skip on large dumps (>100M edges) since Vec<u16> at that
+        // scale costs ~15 GB on a 34G dump, negating the RSS savings.
+        const FIELD_NAME_EDGE_CAP: usize = 100_000_000;
+        let want_field_names = opts.ref_paths
+            || (opts.obj_graph && total_edges <= FIELD_NAME_EDGE_CAP);
+        let mut fwd_field_name_idx_opt: Option<Vec<u16>> = if want_field_names {
             Some(vec![0u16; total_edges])
         } else {
             None
         };
-        // Interned field-name pool (pool[0] = ""). Built only under --ref-paths.
-        let mut field_name_pool: Vec<String> = if opts.ref_paths {
+        // Interned field-name pool (pool[0] = ""). Built under --ref-paths or --obj-graph.
+        let mut field_name_pool: Vec<String> = if want_field_names {
             let pool = vec![String::new()]; // index 0 = no name
             pool
         } else {
@@ -1276,7 +1281,7 @@ impl Pass2 {
             thread_local_null_key_count: fd_tl_null_key_count,
             tl_entry_records: fd_tl_entry_records,
             fwd_field_name_idx: fwd_field_name_idx_opt,
-            field_name_pool: if opts.ref_paths {
+            field_name_pool: if opts.ref_paths || opts.obj_graph {
                 Some(field_name_pool)
             } else {
                 None
