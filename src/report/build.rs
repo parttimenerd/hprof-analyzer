@@ -544,12 +544,16 @@ pub fn build_model(
     drop(dc_offsets);
     drop(dc_targets);
     crate::trace::trim();
-    crate::trace::probe("build_model: after drop(dc) — before type_ref/references/collections");
+    crate::trace::probe("build_model: after drop(dc+cap) — before type_ref/references/collections");
     let type_ref_graph = if opts.obj_graph {
         build_type_ref_graph(g)
     } else {
         vec![]
     };
+    // obj_graph_edges (CSR capture) is not used after type_ref_graph. Free it now
+    // (~800 MB for large dumps) before references/collections run.
+    drop(g.obj_graph_edges.take());
+    crate::trace::trim();
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
     // g.idom is not used after build_references. Free it now (~2 GB on large dumps)
