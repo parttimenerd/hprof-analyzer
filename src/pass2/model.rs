@@ -670,6 +670,7 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         }
     }
     drop(captured_subset); // free subset array before inbound (2 GB in top_n<n case)
+    crate::trace::probe("capture_obj_graph: after outbound CSR built");
 
     // ── Inbound CSR ──────────────────────────────────────────────────────────
     // Pass 1: count inbound edges per captured dst, clamped to edge_cap.
@@ -694,6 +695,7 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         cap.inbound_off[i + 1] += cap.inbound_off[i];
     }
     let total_inbound = cap.inbound_off[n] as usize;
+    crate::trace::probe("capture_obj_graph: before inbound_data alloc");
     cap.inbound_data = vec![(0u32, 0u16); total_inbound];
 
     // Pass 2: fill inbound_data using a u16 delta cursor per node.
@@ -720,6 +722,7 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         }
     }
     drop(cursor_delta);
+    crate::trace::probe("capture_obj_graph: after inbound CSR built (cursor dropped)");
 
     cap
 }

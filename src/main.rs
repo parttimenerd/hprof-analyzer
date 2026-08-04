@@ -1049,6 +1049,7 @@ fn analyze_to_report_inner(
             usize::MAX,
             opts.report_size.edge_cap(),
         ));
+        crate::trace::probe("main: after capture_obj_graph_edges");
     }
 
     // When --field-stats is requested, save the fwd CSR before inbound consumes it.
@@ -2426,6 +2427,7 @@ fn run(
             usize::MAX,
             opts.report_size.edge_cap(),
         ));
+        crate::trace::probe("main: after capture_obj_graph_edges");
     }
 
     // When --field-stats is requested, save the fwd CSR before inbound consumes it.
