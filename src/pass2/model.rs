@@ -720,6 +720,7 @@ impl InboundBuilder {
         // Return freed heap pages to OS before the large inb_flat alloc, so
         // RSS reflects actual live data rather than glibc's dirty brk heap.
         crate::trace::trim();
+        crate::trace::probe("inbound fwd-transpose: after trim (before inb_flat alloc)");
 
         let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
         if crate::trace::enabled() {
