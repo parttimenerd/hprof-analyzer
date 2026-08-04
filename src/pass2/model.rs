@@ -596,27 +596,46 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
     let name_pool = g.field_name_pool.as_ref();
 
     // Build list of captured source indices.
-    // For top_n >= n we capture all; skip the sort+truncate.
-    let captured_srcs: Vec<u32> = if top_n >= n {
-        (0..n as u32).collect()
+    // For top_n >= n (capture all) avoid materializing a 2GB Vec<u32> by using
+    // the fast path below that iterates 0..n directly.
+    let all_captured = top_n >= n;
+    let captured_subset: Vec<u32> = if all_captured {
+        Vec::new() // unused in all_captured path
     } else {
         let mut indices: Vec<u32> = (0..n as u32).collect();
         indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
         indices.truncate(top_n);
         indices
     };
-    for &src in &captured_srcs {
-        cap.captured.set(src as usize);
+
+    // Mark captured set in the bitset. When capturing all objects, set every bit
+    // in one pass without iterating through a Vec.
+    if all_captured {
+        for i in 0..n {
+            cap.captured.set(i);
+        }
+    } else {
+        for &src in &captured_subset {
+            cap.captured.set(src as usize);
+        }
     }
 
     // ── Outbound CSR ─────────────────────────────────────────────────────────
     // Pass 1: count edges per node, clamped to edge_cap.
     cap.edges_off = vec![0u32; n + 1];
-    for &src in &captured_srcs {
-        let s = src as usize;
-        let start = g.fwd_offsets[s] as usize;
-        let end = g.fwd_offsets[s + 1] as usize;
-        cap.edges_off[s + 1] = (end - start).min(edge_cap) as u32;
+    if all_captured {
+        for s in 0..n {
+            let start = g.fwd_offsets[s] as usize;
+            let end = g.fwd_offsets[s + 1] as usize;
+            cap.edges_off[s + 1] = (end - start).min(edge_cap) as u32;
+        }
+    } else {
+        for &src in &captured_subset {
+            let s = src as usize;
+            let start = g.fwd_offsets[s] as usize;
+            let end = g.fwd_offsets[s + 1] as usize;
+            cap.edges_off[s + 1] = (end - start).min(edge_cap) as u32;
+        }
     }
     // Prefix sum.
     for i in 0..n {
@@ -626,17 +645,31 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
     cap.edges_data = Vec::with_capacity(total_edges);
 
     // Pass 2: fill edges_data.
-    for &src in &captured_srcs {
-        let s = src as usize;
-        let fwd_start = g.fwd_offsets[s] as usize;
-        let fwd_end = g.fwd_offsets[s + 1] as usize;
-        let take = (fwd_end - fwd_start).min(edge_cap);
-        for pos in fwd_start..fwd_start + take {
-            let dst = g.fwd_targets.get(pos);
-            let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
-            cap.edges_data.push((dst, name_idx));
+    if all_captured {
+        for s in 0..n {
+            let fwd_start = g.fwd_offsets[s] as usize;
+            let fwd_end = g.fwd_offsets[s + 1] as usize;
+            let take = (fwd_end - fwd_start).min(edge_cap);
+            for pos in fwd_start..fwd_start + take {
+                let dst = g.fwd_targets.get(pos);
+                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+                cap.edges_data.push((dst, name_idx));
+            }
+        }
+    } else {
+        for &src in &captured_subset {
+            let s = src as usize;
+            let fwd_start = g.fwd_offsets[s] as usize;
+            let fwd_end = g.fwd_offsets[s + 1] as usize;
+            let take = (fwd_end - fwd_start).min(edge_cap);
+            for pos in fwd_start..fwd_start + take {
+                let dst = g.fwd_targets.get(pos);
+                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+                cap.edges_data.push((dst, name_idx));
+            }
         }
     }
+    drop(captured_subset); // free subset array before inbound (2 GB in top_n<n case)
 
     // ── Inbound CSR ──────────────────────────────────────────────────────────
     // Pass 1: count inbound edges per captured dst, clamped to edge_cap.
@@ -681,6 +714,7 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
             }
         }
     }
+    drop(cursor);
 
     cap
 }
