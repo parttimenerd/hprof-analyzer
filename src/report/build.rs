@@ -276,12 +276,13 @@ fn build_obj_graph_flat(
     // Populate edges from ObjGraphCapture
     let mut edges_map: HashMap<u32, Vec<ObjGraphEdge>> = HashMap::new();
     if let Some(cap) = g.obj_graph_edges.as_ref() {
-        for (&src, raw_edges) in &cap.edges {
-            if !nodes.contains_key(&src) {
+        for &src in nodes.keys().copied().collect::<Vec<_>>().iter() {
+            let raw_edges = cap.edges_of(src as usize);
+            if raw_edges.is_empty() {
                 continue;
             }
-            let mut out: Vec<ObjGraphEdge> = Vec::with_capacity(raw_edges.len().min(100));
             let truncated = raw_edges.len() > 100;
+            let mut out: Vec<ObjGraphEdge> = Vec::with_capacity(raw_edges.len().min(100));
             for &(dst, name_idx) in raw_edges.iter().take(100) {
                 let field_name = if name_idx == 0 {
                     String::new()
@@ -314,7 +315,7 @@ fn build_obj_graph_flat(
         }
         // Mark nodes not in capture set as edges_unknown
         for (&idx, node) in nodes.iter_mut() {
-            if !cap.captured.contains(&idx) {
+            if !cap.captured.get(idx as usize) {
                 node.edges_unknown = true;
             }
         }
@@ -331,8 +332,9 @@ fn build_obj_graph_flat(
     let mut inbound_truncated_set: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     if let Some(cap) = g.obj_graph_edges.as_ref() {
-        for (&dst, raw_inbound) in &cap.inbound {
-            if !nodes.contains_key(&dst) {
+        for &dst in nodes.keys().copied().collect::<Vec<_>>().iter() {
+            let raw_inbound = cap.inbound_of(dst as usize);
+            if raw_inbound.is_empty() {
                 continue;
             }
             let inbound_edges: Vec<InboundEdge> = raw_inbound
@@ -367,9 +369,7 @@ fn build_obj_graph_flat(
             if !inbound_edges.is_empty() {
                 inbound_map.insert(dst, inbound_edges);
             }
-        }
-        for &dst in &cap.inbound_truncated {
-            if nodes.contains_key(&dst) {
+            if cap.inbound_truncated.get(dst as usize) {
                 inbound_truncated_set.insert(dst);
             }
         }
@@ -430,13 +430,13 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
     // (src_ci, dst_ci) -> (edge_count, retained_weight_sum)
     let mut pair_map: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
 
-    for (&src_idx, edges) in &cap.edges {
-        let src_idx_usize = src_idx as usize;
-        if src_idx_usize >= g.class_idx.len() {
+    for src_idx in 0..cap.n {
+        let edges = cap.edges_of(src_idx);
+        if src_idx >= g.class_idx.len() {
             continue;
         }
-        let src_ci = g.class_idx[src_idx_usize];
-        let src_retained = g.retained.get(src_idx_usize).copied().unwrap_or(0);
+        let src_ci = g.class_idx[src_idx];
+        let src_retained = g.retained.get(src_idx).copied().unwrap_or(0);
         let out_degree = edges.len() as u64;
         if out_degree == 0 {
             continue;

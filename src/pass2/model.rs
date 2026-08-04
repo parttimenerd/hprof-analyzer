@@ -482,30 +482,87 @@ pub struct Graph {
 
 /// Bounded snapshot of outbound edges for the top-N objects by shallow heap,
 /// captured before the forward-edge CSR is consumed during inbound construction.
+///
+/// Edges and inbound are stored as CSR arrays (offsets + packed data) to avoid
+/// the per-entry HashMap overhead that would cost ~1.6 GB for 40M objects.
 pub struct ObjGraphCapture {
-    /// src dense-idx → [(dst dense-idx, field_name_pool_idx)].
-    /// field_name_pool_idx 0 means unnamed (array element, class edge, synthetic).
-    pub edges: std::collections::HashMap<u32, Vec<(u32, u16)>>,
-    /// dst dense-idx → [(src dense-idx, field_name_pool_idx)].
-    /// Populated for nodes in `captured`; bounded by edge_cap per dst.
-    pub inbound: std::collections::HashMap<u32, Vec<(u32, u16)>>,
-    /// Nodes whose inbound edge list was cut at edge_cap.
-    pub inbound_truncated: std::collections::HashSet<u32>,
+    /// Universe size (number of objects).
+    pub n: usize,
+    /// CSR offsets for outbound edges, length n+1. `edges_off[i]..edges_off[i+1]`
+    /// indexes `edges_data` for object i. A zero-length slice means no edges captured.
+    pub edges_off: Vec<u32>,
+    /// Packed outbound edge data: (dst_dense_idx, field_name_pool_idx) per edge.
+    pub edges_data: Vec<(u32, u16)>,
+    /// CSR offsets for inbound edges, length n+1.
+    pub inbound_off: Vec<u32>,
+    /// Packed inbound edge data: (src_dense_idx, field_name_pool_idx) per edge.
+    pub inbound_data: Vec<(u32, u16)>,
+    /// Nodes whose inbound edge list was cut at edge_cap (1 bit per object).
+    pub inbound_truncated: crate::bitset::Bitset,
     /// Deduped field-name strings; index 0 is always "" (unnamed).
     pub field_name_pool: Vec<String>,
-    /// Dense indices that were captured as sources.
-    pub captured: std::collections::HashSet<u32>,
+    /// Dense indices that were captured as sources (1 bit per object).
+    pub captured: crate::bitset::Bitset,
 }
 
 impl ObjGraphCapture {
     pub fn empty() -> Self {
         Self {
-            edges: Default::default(),
-            inbound: Default::default(),
+            n: 0,
+            edges_off: Vec::new(),
+            edges_data: Vec::new(),
+            inbound_off: Vec::new(),
+            inbound_data: Vec::new(),
             inbound_truncated: Default::default(),
             field_name_pool: vec![String::new()],
             captured: Default::default(),
         }
+    }
+
+    /// Outbound edge slice for object `i`.
+    #[inline]
+    pub fn edges_of(&self, i: usize) -> &[(u32, u16)] {
+        if i + 1 < self.edges_off.len() {
+            &self.edges_data[self.edges_off[i] as usize..self.edges_off[i + 1] as usize]
+        } else {
+            &[]
+        }
+    }
+
+    /// Inbound edge slice for object `i`.
+    #[inline]
+    pub fn inbound_of(&self, i: usize) -> &[(u32, u16)] {
+        if i + 1 < self.inbound_off.len() {
+            &self.inbound_data[self.inbound_off[i] as usize..self.inbound_off[i + 1] as usize]
+        } else {
+            &[]
+        }
+    }
+}
+
+fn name_idx_for(
+    fwd_names: Option<&Vec<u16>>,
+    name_pool: Option<&Vec<String>>,
+    pos: usize,
+    name_map: &mut std::collections::HashMap<String, u16>,
+    field_name_pool: &mut Vec<String>,
+) -> u16 {
+    match (fwd_names, name_pool) {
+        (Some(idx_vec), Some(pool)) => {
+            let ni = idx_vec[pos] as usize;
+            let name: &str = if ni < pool.len() { &pool[ni] } else { "" };
+            if name.is_empty() {
+                0u16
+            } else {
+                let next = name_map.len() as u16;
+                let idx = *name_map.entry(name.to_owned()).or_insert(next);
+                if idx as usize >= field_name_pool.len() {
+                    field_name_pool.push(name.to_owned());
+                }
+                idx
+            }
+        }
+        _ => 0u16,
     }
 }
 
@@ -514,8 +571,10 @@ impl ObjGraphCapture {
 /// and `g.fwd_targets` are still alive (before inbound CSR construction consumes
 /// them). Field names are included when `g.fwd_field_name_idx` is populated
 /// (`--ref-paths`); otherwise all edges are stored as unnamed (index 0).
+///
+/// Edges and inbound are built as CSR arrays, avoiding HashMap per-entry overhead
+/// (~1.6 GB for 40M objects). Two-pass build: count then fill.
 pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjGraphCapture {
-    // Use g.n (object count) — g.shallow may be compressed/empty at call time.
     let n = if g.shallow.is_empty() {
         g.n
     } else {
@@ -525,94 +584,104 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         return ObjGraphCapture::empty();
     }
 
-    // When top_n covers all objects, skip the expensive sort.
-    let mut indices: Vec<u32> = (0..n as u32).collect();
-    if top_n < n {
-        indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
-        indices.truncate(top_n);
-    }
-
     let mut cap = ObjGraphCapture::empty();
-    // name_str → pool index (0 reserved for "").
+    cap.n = n;
+    cap.captured = crate::bitset::Bitset::with_len(n);
+    cap.inbound_truncated = crate::bitset::Bitset::with_len(n);
+
     let mut name_map: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
     name_map.insert(String::new(), 0u16);
 
     let fwd_names = g.fwd_field_name_idx.as_ref();
     let name_pool = g.field_name_pool.as_ref();
 
-    for src in &indices {
-        let src = *src;
+    // Build list of captured source indices.
+    // For top_n >= n we capture all; skip the sort+truncate.
+    let captured_srcs: Vec<u32> = if top_n >= n {
+        (0..n as u32).collect()
+    } else {
+        let mut indices: Vec<u32> = (0..n as u32).collect();
+        indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
+        indices.truncate(top_n);
+        indices
+    };
+    for &src in &captured_srcs {
+        cap.captured.set(src as usize);
+    }
+
+    // ── Outbound CSR ─────────────────────────────────────────────────────────
+    // Pass 1: count edges per node, clamped to edge_cap.
+    cap.edges_off = vec![0u32; n + 1];
+    for &src in &captured_srcs {
         let s = src as usize;
         let start = g.fwd_offsets[s] as usize;
         let end = g.fwd_offsets[s + 1] as usize;
-        cap.captured.insert(src);
-        let mut row: Vec<(u32, u16)> = Vec::with_capacity((end - start).min(edge_cap));
-        for pos in start..end {
-            if row.len() >= edge_cap {
-                break;
-            }
+        cap.edges_off[s + 1] = (end - start).min(edge_cap) as u32;
+    }
+    // Prefix sum.
+    for i in 0..n {
+        cap.edges_off[i + 1] += cap.edges_off[i];
+    }
+    let total_edges = cap.edges_off[n] as usize;
+    cap.edges_data = Vec::with_capacity(total_edges);
+
+    // Pass 2: fill edges_data.
+    for &src in &captured_srcs {
+        let s = src as usize;
+        let fwd_start = g.fwd_offsets[s] as usize;
+        let fwd_end = g.fwd_offsets[s + 1] as usize;
+        let take = (fwd_end - fwd_start).min(edge_cap);
+        for pos in fwd_start..fwd_start + take {
             let dst = g.fwd_targets.get(pos);
-            let name_idx: u16 = match (fwd_names, name_pool) {
-                (Some(idx_vec), Some(pool)) => {
-                    let ni = idx_vec[pos] as usize;
-                    let name: &str = if ni < pool.len() { &pool[ni] } else { "" };
-                    if name.is_empty() {
-                        0u16
-                    } else {
-                        let next = name_map.len() as u16;
-                        let idx = *name_map.entry(name.to_owned()).or_insert(next);
-                        if idx as usize >= cap.field_name_pool.len() {
-                            cap.field_name_pool.push(name.to_owned());
-                        }
-                        idx
-                    }
-                }
-                _ => 0u16,
-            };
-            row.push((dst, name_idx));
-        }
-        if !row.is_empty() {
-            cap.edges.insert(src, row);
+            let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+            cap.edges_data.push((dst, name_idx));
         }
     }
 
-    // Second pass: record inbound edges for captured destinations.
-    // Iterate all objects' outbound edges; for each src→dst where dst is captured,
-    // push (src, name_idx) to cap.inbound[dst], bounded by edge_cap.
-    for src in 0..n as u32 {
-        let s = src as usize;
-        let start = g.fwd_offsets[s] as usize;
-        let end = g.fwd_offsets[s + 1] as usize;
+    // ── Inbound CSR ──────────────────────────────────────────────────────────
+    // Pass 1: count inbound edges per captured dst, clamped to edge_cap.
+    cap.inbound_off = vec![0u32; n + 1];
+    for src in 0..n {
+        let start = g.fwd_offsets[src] as usize;
+        let end = g.fwd_offsets[src + 1] as usize;
         for pos in start..end {
-            let dst = g.fwd_targets.get(pos);
-            if !cap.captured.contains(&dst) {
+            let dst = g.fwd_targets.get(pos) as usize;
+            if !cap.captured.get(dst) {
                 continue;
             }
-            let entry = cap.inbound.entry(dst).or_default();
-            if entry.len() >= edge_cap {
-                cap.inbound_truncated.insert(dst);
-                continue;
+            if (cap.inbound_off[dst + 1] as usize) < edge_cap {
+                cap.inbound_off[dst + 1] += 1;
+            } else {
+                cap.inbound_truncated.set(dst);
             }
-            let name_idx: u16 = match (fwd_names, name_pool) {
-                (Some(idx_vec), Some(pool)) => {
-                    let ni = idx_vec[pos] as usize;
-                    let name: &str = if ni < pool.len() { &pool[ni] } else { "" };
-                    if name.is_empty() {
-                        0u16
-                    } else {
-                        let next = name_map.len() as u16;
-                        let idx = *name_map.entry(name.to_owned()).or_insert(next);
-                        if idx as usize >= cap.field_name_pool.len() {
-                            cap.field_name_pool.push(name.to_owned());
-                        }
-                        idx
-                    }
-                }
-                _ => 0u16,
-            };
-            entry.push((src, name_idx));
         }
     }
+    // Prefix sum.
+    for i in 0..n {
+        cap.inbound_off[i + 1] += cap.inbound_off[i];
+    }
+    let total_inbound = cap.inbound_off[n] as usize;
+    cap.inbound_data = vec![(0u32, 0u16); total_inbound];
+
+    // Pass 2: fill inbound_data using a cursor array (copy of inbound_off[0..n]).
+    let mut cursor: Vec<u32> = cap.inbound_off[..n].to_vec();
+    for src in 0..n as u32 {
+        let start = g.fwd_offsets[src as usize] as usize;
+        let end = g.fwd_offsets[src as usize + 1] as usize;
+        for pos in start..end {
+            let dst = g.fwd_targets.get(pos) as usize;
+            if !cap.captured.get(dst) {
+                continue;
+            }
+            let slot = cursor[dst] as usize;
+            if slot < cap.inbound_off[dst + 1] as usize {
+                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+                cap.inbound_data[slot] = (src, name_idx);
+                cursor[dst] += 1;
+            }
+        }
+    }
+
     cap
 }
 
@@ -710,13 +779,17 @@ impl InboundBuilder {
             field_plans_dense,
             ..
         } = self;
+        crate::trace::probe("inbound fwd-transpose: after struct destructure (before any drop)");
 
         drop(id_map);
+        crate::trace::probe("inbound fwd-transpose: after drop(id_map)");
         if let Some((blob, _)) = id_map_c {
             crate::trace::drop_vec(blob);
         }
+        crate::trace::probe("inbound fwd-transpose: after drop(id_map_c blob)");
         drop(class_addr_to_hist);
         drop(field_plans_dense);
+        crate::trace::probe("inbound fwd-transpose: after drop(class_addr_to_hist+field_plans_dense)");
         // Return freed heap pages to OS before the large inb_flat alloc, so
         // RSS reflects actual live data rather than glibc's dirty brk heap.
         crate::trace::trim();
@@ -1670,12 +1743,12 @@ mod obj_graph_tests {
         let g = make_graph(vec![0, 2, 3, 3], vec![1, 2, 2]);
         let cap = capture_obj_graph_edges(&g, usize::MAX, 100);
         // Object 2 has two inbound: from 0 and from 1.
-        let inb2 = cap.inbound.get(&2).expect("inbound for 2");
+        let inb2 = cap.inbound_of(2);
         let srcs: Vec<u32> = inb2.iter().map(|&(s, _)| s).collect();
         assert!(srcs.contains(&0), "0→2 should be captured as inbound");
         assert!(srcs.contains(&1), "1→2 should be captured as inbound");
         // Object 1 has one inbound: from 0.
-        let inb1 = cap.inbound.get(&1).expect("inbound for 1");
+        let inb1 = cap.inbound_of(1);
         assert_eq!(inb1.len(), 1);
         assert_eq!(inb1[0].0, 0);
     }
@@ -1686,10 +1759,10 @@ mod obj_graph_tests {
         let g = make_graph(vec![0, 3, 3], vec![1, 1, 1]);
         let cap = capture_obj_graph_edges(&g, usize::MAX, 2);
         assert!(
-            cap.inbound_truncated.contains(&1),
+            cap.inbound_truncated.get(1),
             "inbound for 1 should be truncated"
         );
-        assert_eq!(cap.inbound.get(&1).map(|v| v.len()), Some(2));
+        assert_eq!(cap.inbound_of(1).len(), 2);
     }
 
     #[test]
@@ -1700,6 +1773,6 @@ mod obj_graph_tests {
         let cap = capture_obj_graph_edges(&g, 1, 100);
         // Object 0 is captured (only one), object 1 is not.
         // Since 1 is not captured, no inbound entry for 1.
-        assert!(!cap.inbound.contains_key(&1));
+        assert_eq!(cap.inbound_of(1).len(), 0);
     }
 }

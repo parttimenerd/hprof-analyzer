@@ -2464,6 +2464,7 @@ fn run(
         crate::trace::probe("main: fwd dropped (rescan-inbound path, before inb_flat alloc)");
         inbound.build_mat_scan(&rpo.dfn, |_src, _fwd| Ok(()))?
     } else {
+        crate::trace::probe("main: before build_from_fwd call");
         inbound.build_from_fwd(
             std::mem::take(&mut g.fwd_offsets),
             std::mem::take(&mut g.fwd_targets),
