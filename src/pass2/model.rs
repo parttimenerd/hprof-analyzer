@@ -472,6 +472,15 @@ pub struct Graph {
     /// Captured before `fwd_offsets`/`fwd_targets` are consumed during inbound
     /// CSR construction. `None` until `capture_obj_graph_edges` is called.
     pub obj_graph_edges: Option<ObjGraphCapture>,
+    /// Class-pair edge-count map built by `capture_type_ref_graph` before the
+    /// fwd-CSR is consumed. `(src_class_idx, dst_class_idx) → edge_count`.
+    /// Carried on Graph so `build_type_ref_graph` can consume it without
+    /// iterating the per-object capture (which is now sparse / bounded).
+    pub type_ref_pairs: Option<std::collections::HashMap<(u32, u32), u64>>,
+    /// Top field names per class-pair edge, parallel to `type_ref_pairs`.
+    /// `(src_ci, dst_ci) → [(field_name, count)]` sorted by count desc (up to 3).
+    /// Optional: only populated when `fwd_field_name_idx` is present.
+    pub type_ref_pair_fields: Option<std::collections::HashMap<(u32, u32), Vec<(String, u32)>>>,
     /// Per-class ordered reference-field names, indexed by class histogram row index.
     /// `class_ref_field_names[ci][k]` = name of the k-th reference field of class ci.
     /// Empty when `opts.field_stats` is false.
@@ -480,23 +489,25 @@ pub struct Graph {
 
 // ── Object-graph click-through capture ──────────────────────────────────────
 
-/// Bounded snapshot of outbound edges for the top-N objects by shallow heap,
-/// captured before the forward-edge CSR is consumed during inbound construction.
+/// Sparse per-object edge snapshot used by `build_obj_graph_flat` to populate
+/// the interactive click-through view.
 ///
-/// Edges and inbound are stored as CSR arrays (offsets + packed data) to avoid
-/// the per-entry HashMap overhead that would cost ~1.6 GB for 40M objects.
+/// Only edges for captured nodes (those with shallow ≥ capture_threshold) are
+/// stored.  A `HashMap<u32, Box<[...]>>` is used instead of a full-universe CSR
+/// because captured nodes are a small fraction of the total: the n+1 CSR offset
+/// arrays cost 2 × 2 GB on the 34 GB dump for ~514 M objects, while a sparse map
+/// for the top-200 K nodes by shallow costs ~a few MB of index overhead.
+///
+/// `build_type_ref_graph` no longer reads this structure; it uses the inline scan
+/// `capture_type_ref_graph` instead, which aggregates class-pair counts directly
+/// from the live fwd-CSR without storing per-object edges.
 pub struct ObjGraphCapture {
-    /// Universe size (number of objects).
+    /// Total universe size (used for `captured.get()` bounds check).
     pub n: usize,
-    /// CSR offsets for outbound edges, length n+1. `edges_off[i]..edges_off[i+1]`
-    /// indexes `edges_data` for object i. A zero-length slice means no edges captured.
-    pub edges_off: Vec<u32>,
-    /// Packed outbound edge data: (dst_dense_idx, field_name_pool_idx) per edge.
-    pub edges_data: Vec<(u32, u16)>,
-    /// CSR offsets for inbound edges, length n+1.
-    pub inbound_off: Vec<u32>,
-    /// Packed inbound edge data: (src_dense_idx, field_name_pool_idx) per edge.
-    pub inbound_data: Vec<(u32, u16)>,
+    /// Outbound edges for captured nodes only.
+    pub edges: std::collections::HashMap<u32, Box<[(u32, u16)]>>,
+    /// Inbound edges for captured nodes only.
+    pub inbound: std::collections::HashMap<u32, Box<[(u32, u16)]>>,
     /// Nodes whose inbound edge list was cut at edge_cap (1 bit per object).
     pub inbound_truncated: crate::bitset::Bitset,
     /// Deduped field-name strings; index 0 is always "" (unnamed).
@@ -509,10 +520,8 @@ impl ObjGraphCapture {
     pub fn empty() -> Self {
         Self {
             n: 0,
-            edges_off: Vec::new(),
-            edges_data: Vec::new(),
-            inbound_off: Vec::new(),
-            inbound_data: Vec::new(),
+            edges: std::collections::HashMap::new(),
+            inbound: std::collections::HashMap::new(),
             inbound_truncated: Default::default(),
             field_name_pool: vec![String::new()],
             captured: Default::default(),
@@ -522,21 +531,13 @@ impl ObjGraphCapture {
     /// Outbound edge slice for object `i`.
     #[inline]
     pub fn edges_of(&self, i: usize) -> &[(u32, u16)] {
-        if i + 1 < self.edges_off.len() {
-            &self.edges_data[self.edges_off[i] as usize..self.edges_off[i + 1] as usize]
-        } else {
-            &[]
-        }
+        self.edges.get(&(i as u32)).map(|b| b.as_ref()).unwrap_or(&[])
     }
 
     /// Inbound edge slice for object `i`.
     #[inline]
     pub fn inbound_of(&self, i: usize) -> &[(u32, u16)] {
-        if i + 1 < self.inbound_off.len() {
-            &self.inbound_data[self.inbound_off[i] as usize..self.inbound_off[i + 1] as usize]
-        } else {
-            &[]
-        }
+        self.inbound.get(&(i as u32)).map(|b| b.as_ref()).unwrap_or(&[])
     }
 }
 
@@ -566,14 +567,97 @@ fn name_idx_for(
     }
 }
 
-/// Capture outbound edges for the top-`top_n` objects by shallow heap, storing
-/// at most `edge_cap` edges per source node. Must be called while `g.fwd_offsets`
-/// and `g.fwd_targets` are still alive (before inbound CSR construction consumes
-/// them). Field names are included when `g.fwd_field_name_idx` is populated
-/// (`--ref-paths`); otherwise all edges are stored as unnamed (index 0).
+/// Build the type-level reference graph by aggregating class-pair edge counts
+/// directly from the live fwd-CSR. Called before the fwd-CSR is consumed by
+/// inbound construction. Returns `(src_ci, dst_ci) → (edge_count, retained_weight)`
+/// where retained_weight uses the source object's retained size divided by its
+/// out-degree. `g.retained` is not available yet (computed after dominators), so
+/// `retained_weight` is 0 here; callers that have `g.retained` should call the
+/// full version in `build.rs` instead. This version stores only class-pair totals,
+/// avoiding the 20+ GB per-object edge arrays.
 ///
-/// Edges and inbound are built as CSR arrays, avoiding HashMap per-entry overhead
-/// (~1.6 GB for 40M objects). Two-pass build: count then fill.
+/// Also returns a per-pair field-name tally (top-3 field names by occurrence)
+/// when `fwd_field_name_idx` is present.
+pub fn capture_type_ref_graph(
+    g: &Graph,
+) -> (
+    std::collections::HashMap<(u32, u32), u64>,
+    std::collections::HashMap<(u32, u32), Vec<(String, u32)>>,
+) {
+    let n = if g.shallow.is_empty() { g.n } else { g.shallow.len() };
+    if n == 0 || g.fwd_offsets.is_empty() || g.class_idx.is_empty() {
+        return (std::collections::HashMap::new(), std::collections::HashMap::new());
+    }
+    let has_names = g.fwd_field_name_idx.is_some() && g.field_name_pool.is_some();
+    let mut pair_map: std::collections::HashMap<(u32, u32), u64> =
+        std::collections::HashMap::new();
+    // Per-pair field-name tally: (src_ci, dst_ci) → HashMap<name_idx, count>
+    let mut field_tally: std::collections::HashMap<(u32, u32), std::collections::HashMap<u16, u32>> =
+        std::collections::HashMap::new();
+
+    for src_idx in 0..n {
+        let start = g.fwd_offsets[src_idx] as usize;
+        let end = g.fwd_offsets[src_idx + 1] as usize;
+        if start == end {
+            continue;
+        }
+        if src_idx >= g.class_idx.len() {
+            continue;
+        }
+        let src_ci = g.class_idx[src_idx];
+        for pos in start..end {
+            let dst_idx = g.fwd_targets.get(pos) as usize;
+            if dst_idx >= g.class_idx.len() {
+                continue;
+            }
+            let dst_ci = g.class_idx[dst_idx];
+            *pair_map.entry((src_ci, dst_ci)).or_insert(0) += 1;
+            if has_names {
+                if let Some(name_idx) = g.fwd_field_name_idx.as_ref().and_then(|v| v.get(pos)).copied() {
+                    if name_idx != 0 {
+                        *field_tally
+                            .entry((src_ci, dst_ci))
+                            .or_insert_with(std::collections::HashMap::new)
+                            .entry(name_idx)
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Convert field tally to sorted top-3 names
+    let name_pool = g.field_name_pool.as_deref().unwrap_or(&[]);
+    let pair_fields: std::collections::HashMap<(u32, u32), Vec<(String, u32)>> = field_tally
+        .into_iter()
+        .map(|(key, counts)| {
+            let mut sorted: Vec<(String, u32)> = counts
+                .into_iter()
+                .filter_map(|(idx, cnt)| {
+                    let name = name_pool.get(idx as usize)?;
+                    if name.is_empty() { return None; }
+                    Some((name.clone(), cnt))
+                })
+                .collect();
+            sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            sorted.truncate(3);
+            (key, sorted)
+        })
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+
+    (pair_map, pair_fields)
+}
+
+/// Sparse per-object edge snapshot for the click-through view.
+///
+/// Captures edges only for the top-`top_n` objects by shallow heap size
+/// (the `build_obj_graph_flat` consumer only needs edges for significant
+/// nodes that it BFS-expands from the dominator tree). Using a sparse
+/// `HashMap<u32, Box<[...]>>` avoids the 2 × (n+1) × 4B = ~4 GB CSR offset
+/// arrays that the old full-universe CSR required on the 34 GB dump.
+///
+/// Must be called while `g.fwd_offsets` and `g.fwd_targets` are still alive.
 pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjGraphCapture {
     let n = if g.shallow.is_empty() {
         g.n
@@ -595,114 +679,85 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
     let fwd_names = g.fwd_field_name_idx.as_ref();
     let name_pool = g.field_name_pool.as_ref();
 
-    // Build list of captured source indices.
-    // For top_n >= n (capture all) avoid materializing a 2GB Vec<u32> by using
-    // the fast path below that iterates 0..n directly.
-    let all_captured = top_n >= n;
-    let captured_subset: Vec<u32> = if all_captured {
-        Vec::new() // unused in all_captured path
+    // Select captured source set: top-top_n by shallow size.
+    // We can't know retained size yet (dominators not computed), so shallow is
+    // the best available proxy. Objects with high retained but tiny shallow
+    // get edges_unknown = true in the UI; this is acceptable because the
+    // tradeoff vs. the previous 24 GB full-universe capture is stark.
+    //
+    // To avoid sorting all n elements (would require 2 GB Vec<u32> on the 34 GB
+    // dump), we use a threshold approach:
+    // 1. Sample shallow values to estimate the top-top_n threshold.
+    // 2. Collect all objects with shallow >= threshold (may overshoot slightly).
+    let captured_nodes: Vec<u32> = if top_n >= n {
+        // Capture all — avoid materializing a Vec by using 0..n directly below.
+        Vec::new()
     } else {
-        let mut indices: Vec<u32> = (0..n as u32).collect();
-        indices.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
-        indices.truncate(top_n);
-        indices
+        // Step 1: find threshold via partial sort of a sample.
+        let sample_step = (n / top_n.min(n)).max(1);
+        let mut sample: Vec<u32> = g.shallow.iter().step_by(sample_step).copied().collect();
+        // Sort descending, pick the top_n-th value as the threshold.
+        sample.sort_unstable_by(|a, b| b.cmp(a));
+        let threshold = sample.get(top_n.min(sample.len()).saturating_sub(1)).copied().unwrap_or(0);
+        drop(sample);
+        // Step 2: collect objects above threshold (may include more than top_n).
+        let mut nodes: Vec<u32> = g.shallow
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &s)| if s >= threshold { Some(i as u32) } else { None })
+            .collect();
+        // If we overshot, sort and truncate.
+        if nodes.len() > top_n {
+            nodes.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
+            nodes.truncate(top_n);
+        }
+        nodes
     };
+    let all_captured = top_n >= n;
 
-    // Mark captured set in the bitset. When capturing all objects, set every bit
-    // in one pass without iterating through a Vec.
+    // Mark captured bitset.
     if all_captured {
         for i in 0..n {
             cap.captured.set(i);
         }
     } else {
-        for &src in &captured_subset {
-            cap.captured.set(src as usize);
+        for &s in &captured_nodes {
+            cap.captured.set(s as usize);
         }
     }
 
-    // ── Outbound CSR ─────────────────────────────────────────────────────────
-    // Pass 1: count edges per node, clamped to edge_cap.
-    cap.edges_off = vec![0u32; n + 1];
-    if all_captured {
-        for s in 0..n {
-            let start = g.fwd_offsets[s] as usize;
-            let end = g.fwd_offsets[s + 1] as usize;
-            cap.edges_off[s + 1] = (end - start).min(edge_cap) as u32;
-        }
-    } else {
-        for &src in &captured_subset {
-            let s = src as usize;
-            let start = g.fwd_offsets[s] as usize;
-            let end = g.fwd_offsets[s + 1] as usize;
-            cap.edges_off[s + 1] = (end - start).min(edge_cap) as u32;
-        }
-    }
-    // Prefix sum.
-    for i in 0..n {
-        cap.edges_off[i + 1] += cap.edges_off[i];
-    }
-    let total_edges = cap.edges_off[n] as usize;
-    cap.edges_data = Vec::with_capacity(total_edges);
-
-    // Pass 2: fill edges_data.
-    if all_captured {
-        for s in 0..n {
-            let fwd_start = g.fwd_offsets[s] as usize;
-            let fwd_end = g.fwd_offsets[s + 1] as usize;
-            let take = (fwd_end - fwd_start).min(edge_cap);
-            for pos in fwd_start..fwd_start + take {
-                let dst = g.fwd_targets.get(pos);
-                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
-                cap.edges_data.push((dst, name_idx));
-            }
-        }
-    } else {
-        for &src in &captured_subset {
+    // ── Outbound edges (sparse) ───────────────────────────────────────────────
+    {
+        let iter: Box<dyn Iterator<Item = u32>> = if all_captured {
+            Box::new(0u32..n as u32)
+        } else {
+            Box::new(captured_nodes.iter().copied())
+        };
+        for src in iter {
             let s = src as usize;
             let fwd_start = g.fwd_offsets[s] as usize;
             let fwd_end = g.fwd_offsets[s + 1] as usize;
             let take = (fwd_end - fwd_start).min(edge_cap);
-            for pos in fwd_start..fwd_start + take {
-                let dst = g.fwd_targets.get(pos);
-                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
-                cap.edges_data.push((dst, name_idx));
-            }
-        }
-    }
-    drop(captured_subset); // free subset array before inbound (2 GB in top_n<n case)
-    crate::trace::probe("capture_obj_graph: after outbound CSR built");
-
-    // ── Inbound CSR ──────────────────────────────────────────────────────────
-    // Pass 1: count inbound edges per captured dst, clamped to edge_cap.
-    cap.inbound_off = vec![0u32; n + 1];
-    for src in 0..n {
-        let start = g.fwd_offsets[src] as usize;
-        let end = g.fwd_offsets[src + 1] as usize;
-        for pos in start..end {
-            let dst = g.fwd_targets.get(pos) as usize;
-            if !cap.captured.get(dst) {
+            if take == 0 {
                 continue;
             }
-            if (cap.inbound_off[dst + 1] as usize) < edge_cap {
-                cap.inbound_off[dst + 1] += 1;
-            } else {
-                cap.inbound_truncated.set(dst);
+            let mut edges: Vec<(u32, u16)> = Vec::with_capacity(take);
+            for pos in fwd_start..fwd_start + take {
+                let dst = g.fwd_targets.get(pos);
+                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+                edges.push((dst, name_idx));
             }
+            cap.edges.insert(src, edges.into_boxed_slice());
         }
     }
-    // Prefix sum.
-    for i in 0..n {
-        cap.inbound_off[i + 1] += cap.inbound_off[i];
-    }
-    let total_inbound = cap.inbound_off[n] as usize;
-    crate::trace::probe("capture_obj_graph: before inbound_data alloc");
-    cap.inbound_data = vec![(0u32, 0u16); total_inbound];
+    drop(captured_nodes);
+    crate::trace::probe("capture_obj_graph: after outbound sparse built");
 
-    // Pass 2: fill inbound_data using a u16 delta cursor per node.
-    // Each node accumulates at most edge_cap (≤ 500) inbound edges, so the
-    // delta from inbound_off[dst] fits in u16. This halves the cursor Vec from
-    // 4 bytes/node (Vec<u32>) to 2 bytes/node, saving ~1 GB on the 34 GB dump.
-    let mut cursor_delta: Vec<u16> = vec![0u16; n];
+    // ── Inbound edges (sparse) ────────────────────────────────────────────────
+    // For each captured dst, count how many inbound edges arrive, then fill.
+    // We use a HashMap<u32, Vec<(u32,u16)>> accumulator to avoid large offset arrays.
+    let mut inbound_acc: std::collections::HashMap<u32, Vec<(u32, u16)>> =
+        std::collections::HashMap::new();
     for src in 0..n as u32 {
         let start = g.fwd_offsets[src as usize] as usize;
         let end = g.fwd_offsets[src as usize + 1] as usize;
@@ -711,18 +766,19 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
             if !cap.captured.get(dst) {
                 continue;
             }
-            let delta = cursor_delta[dst] as usize;
-            let capacity = (cap.inbound_off[dst + 1] - cap.inbound_off[dst]) as usize;
-            if delta < capacity {
-                let slot = cap.inbound_off[dst] as usize + delta;
+            let bucket = inbound_acc.entry(dst as u32).or_default();
+            if bucket.len() < edge_cap {
                 let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
-                cap.inbound_data[slot] = (src, name_idx);
-                cursor_delta[dst] += 1;
+                bucket.push((src, name_idx));
+            } else {
+                cap.inbound_truncated.set(dst);
             }
         }
     }
-    drop(cursor_delta);
-    crate::trace::probe("capture_obj_graph: after inbound CSR built (cursor dropped)");
+    for (dst, vec) in inbound_acc {
+        cap.inbound.insert(dst, vec.into_boxed_slice());
+    }
+    crate::trace::probe("capture_obj_graph: after inbound sparse built");
 
     cap
 }
@@ -1774,6 +1830,8 @@ mod obj_graph_tests {
             tl_entry_records: vec![],
             unreachable_retained: None,
             obj_graph_edges: None,
+            type_ref_pairs: None,
+            type_ref_pair_fields: None,
             class_ref_field_names: vec![],
         }
     }

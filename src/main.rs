@@ -1041,12 +1041,16 @@ fn analyze_to_report_inner(
         None
     };
 
-    // Capture outbound edges for ALL objects before fwd CSR is consumed.
-    // Must capture all (not just top-N by shallow) because dominator roots have tiny shallow.
+    // Capture type-reference graph (class-pair counts) inline, then per-object
+    // edges for the top-500K objects by shallow size (feeds click-through view).
     if opts.obj_graph {
+        let (pairs, pair_fields) = crate::pass2::capture_type_ref_graph(&g);
+        g.type_ref_pairs = Some(pairs);
+        g.type_ref_pair_fields = Some(pair_fields);
+        crate::trace::probe("main: after capture_type_ref_graph");
         g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
             &g,
-            usize::MAX,
+            500_000,
             opts.report_size.edge_cap(),
         ));
         crate::trace::probe("main: after capture_obj_graph_edges");
@@ -2417,14 +2421,33 @@ fn run(
         None
     };
 
-    // Capture outbound edges for ALL objects before fwd CSR is consumed.
-    // Must capture all, not just top-N by shallow, because objects with high retained
-    // heap (dominator roots) often have tiny shallow size and would be missed by a
-    // shallow-sorted top-N filter. Memory is bounded by edge_cap per node.
+    // Capture the type-reference graph (class-pair edge counts) inline from the
+    // live fwd-CSR before it is consumed by inbound construction. This replaces
+    // the old approach of iterating all per-object edges in build_type_ref_graph
+    // (which required keeping the full 20 GB ObjGraphCapture alive). The inline
+    // scan builds only a HashMap of class-pair counts, costing ~200-500 MB peak.
+    // NOTE: g.class_idx was compressed inside Pass2 (to cut the binding peak);
+    // restore it transiently here for the scan, then drop it again immediately.
+    if opts.obj_graph {
+        g.class_idx = class_idx_c.restore()?;
+        let (pairs, pair_fields) = crate::pass2::capture_type_ref_graph(&g);
+        crate::trace::drop_vec(std::mem::take(&mut g.class_idx));
+        g.type_ref_pairs = Some(pairs);
+        g.type_ref_pair_fields = Some(pair_fields);
+        crate::trace::probe("main: after capture_type_ref_graph");
+    }
+
+    // Capture per-object edges for top-500K objects by shallow size only.
+    // This feeds build_obj_graph_flat (the click-through view), which only
+    // displays nodes with high retained size. Objects not captured get
+    // edges_unknown=true. The sparse HashMap<u32,Box<[...]>> avoids the 4 GB
+    // of CSR offset arrays the old full-universe capture required.
+    // 500K × 150 edges × 6 B ≈ 450 MB, vs. the old 24 GB full capture.
+    const OBJ_GRAPH_TOP_N: usize = 500_000;
     if opts.obj_graph {
         g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
             &g,
-            usize::MAX,
+            OBJ_GRAPH_TOP_N,
             opts.report_size.edge_cap(),
         ));
         crate::trace::probe("main: after capture_obj_graph_edges");

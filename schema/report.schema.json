@@ -4344,6 +4344,13 @@
         },
         "src_class": {
           "type": "string"
+        },
+        "top_field_names": {
+          "description": "Top field names (up to 3) through which src references dst, sorted by occurrence.\nEmpty when field-name data was not captured (older dumps or non-instance edges).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

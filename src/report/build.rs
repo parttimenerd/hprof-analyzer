@@ -419,46 +419,32 @@ fn build_obj_graph_flat(
 }
 
 /// Build the Type-Level Reference Graph (TPFG, V13).
-/// Aggregates object-level edges into (src_class, dst_class) pairs.
-/// Returns top-500 pairs by retained_weight.
+/// Uses the pre-aggregated class-pair count map (`g.type_ref_pairs`) that was
+/// built from the live fwd-CSR before inbound construction consumed it.
+/// Retained weight is estimated as: edge_count × avg_retained_per_src_class.
 fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
-    use std::collections::HashMap;
-    let cap = match g.obj_graph_edges.as_ref() {
-        Some(c) => c,
+    let pairs = match g.type_ref_pairs.as_ref() {
+        Some(p) => p,
         None => return vec![],
     };
 
-    // (src_ci, dst_ci) -> (edge_count, retained_weight_sum)
-    let mut pair_map: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
-
-    for src_idx in 0..cap.n {
-        let edges = cap.edges_of(src_idx);
-        if src_idx >= g.class_idx.len() {
-            continue;
-        }
-        let src_ci = g.class_idx[src_idx];
-        let src_retained = g.retained.get(src_idx).copied().unwrap_or(0);
-        let out_degree = edges.len() as u64;
-        if out_degree == 0 {
-            continue;
-        }
-        let weight_per_edge = src_retained / out_degree;
-
-        for &(dst_idx, _name_idx) in edges {
-            let dst_idx_usize = dst_idx as usize;
-            if dst_idx_usize >= g.class_idx.len() {
-                continue;
-            }
-            let dst_ci = g.class_idx[dst_idx_usize];
-            let entry = pair_map.entry((src_ci, dst_ci)).or_insert((0, 0));
-            entry.0 += 1;
-            entry.1 += weight_per_edge;
+    // Build per-class total retained and count so we can estimate retained weight.
+    // Only classes that appear as sources in the pair map need this.
+    let mut class_total_retained: Vec<u64> = vec![0u64; g.class_names.len()];
+    let mut class_instance_count: Vec<u64> = vec![0u64; g.class_names.len()];
+    for (i, &ci) in g.class_idx.iter().enumerate() {
+        let ci = ci as usize;
+        if ci < class_total_retained.len() {
+            class_total_retained[ci] += g.retained.get(i).copied().unwrap_or(0);
+            class_instance_count[ci] += 1;
         }
     }
 
-    let mut edges: Vec<TypeEdge> = pair_map
-        .into_iter()
-        .map(|((sci, dci), (ec, rw))| {
+    let pair_fields = g.type_ref_pair_fields.as_ref();
+
+    let mut edges: Vec<TypeEdge> = pairs
+        .iter()
+        .map(|(&(sci, dci), &edge_count)| {
             let src_class = if (sci as usize) < g.class_names.len() {
                 crate::report::pretty_class_name(&g.class_names[sci as usize])
             } else {
@@ -469,11 +455,25 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
             } else {
                 format!("cls#{}", dci)
             };
+            let sci_usize = sci as usize;
+            let avg_retained = if sci_usize < class_instance_count.len()
+                && class_instance_count[sci_usize] > 0
+            {
+                class_total_retained[sci_usize] / class_instance_count[sci_usize]
+            } else {
+                0
+            };
+            let retained_weight = edge_count.saturating_mul(avg_retained);
+            let top_field_names = pair_fields
+                .and_then(|m| m.get(&(sci, dci)))
+                .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
+                .unwrap_or_default();
             TypeEdge {
                 src_class,
                 dst_class,
-                edge_count: ec,
-                retained_weight: rw,
+                edge_count,
+                retained_weight,
+                top_field_names,
             }
         })
         .collect();
@@ -551,9 +551,12 @@ pub fn build_model(
     } else {
         vec![]
     };
-    // obj_graph_edges (CSR capture) is not used after type_ref_graph. Free it now
-    // (~800 MB for large dumps) before references/collections run.
+    // obj_graph_edges (sparse capture) is not used after type_ref_graph. Free it now.
     drop(g.obj_graph_edges.take());
+    // type_ref_pairs (pre-aggregated class-pair counts) is consumed by build_type_ref_graph.
+    drop(g.type_ref_pairs.take());
+    // type_ref_pair_fields (field-name tallies for type edges) is consumed by build_type_ref_graph.
+    drop(g.type_ref_pair_fields.take());
     crate::trace::trim();
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");

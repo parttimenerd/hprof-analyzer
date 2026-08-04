@@ -1283,6 +1283,8 @@ impl Pass2 {
             },
             unreachable_retained: None,
             obj_graph_edges: None,
+            type_ref_pairs: None,
+            type_ref_pair_fields: None,
             class_ref_field_names: vec![],
         };
 
