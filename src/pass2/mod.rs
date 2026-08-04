@@ -1452,6 +1452,12 @@ impl Pass2 {
                         captured_inst.insert(addr, (class_id, scratch.clone()));
                     }
 
+                    // Field-decode hook must run on ALL instances (including
+                    // those not in id_map), so it mirrors scan_all_records.
+                    if let Some(ref mut fds) = fd {
+                        fds.on_instance(addr, class_id, scratch, fd_p1, fd_shallow, fd_descs);
+                    }
+
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
                         None => continue,
@@ -1480,9 +1486,6 @@ impl Pass2 {
                             }
                         }
                     }
-                    if let Some(ref mut fds) = fd {
-                        fds.on_instance(addr, class_id, scratch, fd_p1, fd_shallow, fd_descs);
-                    }
                 }
                 heap::OBJ_ARRAY_DUMP => {
                     let addr = r.id()?;
@@ -1502,6 +1505,12 @@ impl Pass2 {
                     // Capture obj-array blob for wanted addresses (e.g. Hashtable table).
                     if !capture_obj.is_empty() && capture_obj.contains(&addr) {
                         captured_obj.insert(addr, scratch.clone());
+                    }
+
+                    // Field-decode hook must run on ALL arrays (including those not
+                    // in id_map), so it mirrors scan_all_records.
+                    if let Some(ref mut fds) = fd {
+                        fds.on_obj_array(addr, elem_class_id, count, scratch, fd_p1, fd_shallow);
                     }
 
                     let src_idx = match id_map.index_of(addr) {
@@ -1538,9 +1547,6 @@ impl Pass2 {
                                 in_degree[dst] += 1;
                             }
                         }
-                    }
-                    if let Some(ref mut fds) = fd {
-                        fds.on_obj_array(addr, elem_class_id, count, scratch, fd_p1, fd_shallow);
                     }
                 }
                 heap::PRIM_ARRAY_DUMP => {

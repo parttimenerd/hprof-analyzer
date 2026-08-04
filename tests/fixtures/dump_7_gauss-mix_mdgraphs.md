@@ -12947,7 +12947,7 @@ _6,039 reference instances._
 | `java.util.logging.Level`                                              |       9 |    288 B |    288 B | ▏                |
 | `sun.management.MemoryPoolImpl`                                        |       9 |    456 B |   3.0 KB | ▏                |
 | `sun.net.www.protocol.jar.URLJarFile`                                  |       8 |    640 B |   2.6 KB | ▏                |
-_… 167 more classes (314 objects, 32.6 KB shallow, 5.6 MB retained)._
+_… 166 more classes (314 objects, 32.6 KB shallow, 5.6 MB retained)._
 
 #### Only-weakly retained _(approximate)_
 
