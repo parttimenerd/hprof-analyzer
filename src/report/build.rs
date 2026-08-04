@@ -181,94 +181,95 @@ fn build_obj_graph_flat(
         }
     }
 
-    // Subtree class histogram: single bottom-up pass over the FULL dominator tree.
-    // For each significant node, store the top-10 classes by shallow heap.
-    // Uses small-to-large HashMap merging: O(n log n) total.
+    // Subtree class histogram: for each significant node, store the top-10 classes
+    // by shallow heap in its dominated subtree.
+    //
+    // Algorithm: forward BFS from vroot to build nearest_sig[i] = the nearest
+    // significant ancestor of i (or u32::MAX). Then single scan over all objects:
+    // add each object's (class, shallow) to its nearest significant ancestor's
+    // histogram. O(n) time, one u32 per object (160 MB at n=40M).
     {
         const TOP_K: usize = 10;
-        // class_idx → (instance_count, total_shallow)
-        type ClassMap = std::collections::HashMap<u32, (u32, u64)>;
+        const NO_SIG: u32 = u32::MAX;
 
-        // node_agg[i] = Some(owned ClassMap) while the node's subtree is being merged.
-        let n = g.n;
-        let mut node_agg: Vec<Option<Box<ClassMap>>> = vec![None; n + 1]; // +1 for vroot
+        // BFS from vroot level-by-level to assign nearest_sig.
+        let mut nearest_sig = vec![NO_SIG; n + 1]; // +1 for vroot slot
+        // vroot itself has no significant parent.
+        nearest_sig[n] = NO_SIG;
 
-        // Iterative postorder DFS from vroot using dc_offsets/dc_targets.
-        let mut stack: Vec<(u32, usize)> = vec![(vroot, 0)];
-        while let Some((node, child_idx)) = stack.last_mut() {
-            let node = *node;
+        // BFS queue: process nodes in BFS order so parent nearest_sig is set
+        // before children.
+        let mut bfs: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+        // Start from vroot's children.
+        let vroot_usize = vroot as usize;
+        if vroot_usize + 1 < dc_offsets.len() {
+            for &child in &dc_targets[dc_offsets[vroot_usize] as usize..dc_offsets[vroot_usize + 1] as usize] {
+                bfs.push_back(child);
+            }
+        }
+        while let Some(node) = bfs.pop_front() {
             let node_usize = node as usize;
-            let children: &[u32] = if node_usize + 1 < dc_offsets.len() {
-                &dc_targets[dc_offsets[node_usize] as usize..dc_offsets[node_usize + 1] as usize]
+            // Determine nearest_sig for this node.
+            let parent_sig = if node_usize + 1 < dc_offsets.len() {
+                // Find parent via idom (g.idom[node] is the immediate dominator).
+                let par = if node_usize < g.idom.len() { g.idom[node_usize] } else { vroot };
+                if par as usize <= n { nearest_sig[par as usize] } else { NO_SIG }
             } else {
-                &[]
+                NO_SIG
             };
-            if *child_idx < children.len() {
-                let child = children[*child_idx];
-                *child_idx += 1;
-                stack.push((child, 0));
+            nearest_sig[node_usize] = if nodes.contains_key(&node) {
+                node
             } else {
-                stack.pop();
-                // Initialize with own entry (skip vroot which has no shallow/class).
-                let mut agg: Box<ClassMap> = if node_usize < n {
-                    let ci = g.class_idx.get(node_usize).copied().unwrap_or(0);
-                    let sh = g.shallow.get(node_usize).copied().unwrap_or(0) as u64;
-                    let mut m = Box::new(ClassMap::with_capacity(1));
-                    m.insert(ci, (1, sh));
-                    m
-                } else {
-                    Box::new(ClassMap::new())
-                };
-                // Merge children: take each child's map, merge into agg (small-to-large).
-                for &child in children {
-                    if let Some(child_map) = node_agg[child as usize].take() {
-                        if child_map.len() > agg.len() {
-                            // Swap: merge the smaller agg into the larger child_map.
-                            let mut big = child_map;
-                            for (ci, (cnt, sh)) in agg.drain() {
-                                let e = big.entry(ci).or_insert((0, 0));
-                                e.0 += cnt;
-                                e.1 += sh;
-                            }
-                            agg = big;
+                parent_sig
+            };
+            // Enqueue children.
+            if node_usize + 1 < dc_offsets.len() {
+                for &child in &dc_targets[dc_offsets[node_usize] as usize..dc_offsets[node_usize + 1] as usize] {
+                    bfs.push_back(child);
+                }
+            }
+        }
+
+        // Single pass: accumulate (class, shallow) for each object into its
+        // nearest significant ancestor's histogram.
+        type ClassMap = std::collections::HashMap<u32, (u32, u64)>;
+        let mut histograms: HashMap<u32, ClassMap> = HashMap::with_capacity(nodes.len());
+        for i in 0..n {
+            let sig = nearest_sig[i];
+            if sig == NO_SIG {
+                continue;
+            }
+            let ci = g.class_idx.get(i).copied().unwrap_or(0);
+            let sh = g.shallow.get(i).copied().unwrap_or(0) as u64;
+            let hm = histograms.entry(sig).or_default();
+            let e = hm.entry(ci).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += sh;
+        }
+        drop(nearest_sig);
+
+        // Extract top-K for each significant node.
+        for (&node, node_entry) in nodes.iter_mut() {
+            if let Some(hm) = histograms.remove(&node) {
+                let mut rows: Vec<(u32, u32, u64)> =
+                    hm.iter().map(|(&ci, &(cnt, sh))| (ci, cnt, sh)).collect();
+                rows.sort_unstable_by_key(|r| std::cmp::Reverse(r.2));
+                rows.truncate(TOP_K);
+                node_entry.subtree_classes = rows
+                    .into_iter()
+                    .map(|(ci, cnt, sh)| {
+                        let name = if (ci as usize) < g.class_names.len() {
+                            pretty_class_name(&g.class_names[ci as usize])
                         } else {
-                            for (ci, (cnt, sh)) in child_map.iter() {
-                                let e = agg.entry(*ci).or_insert((0, 0));
-                                e.0 += cnt;
-                                e.1 += sh;
-                            }
+                            format!("obj#{}", ci)
+                        };
+                        SubtreeClassRow {
+                            class: name,
+                            instance_count: cnt,
+                            total_shallow: sh,
                         }
-                    }
-                }
-                // If this is a significant node, extract top-K and store.
-                if nodes.contains_key(&node) {
-                    let mut rows: Vec<(u32, u32, u64)> =
-                        agg.iter().map(|(&ci, &(cnt, sh))| (ci, cnt, sh)).collect();
-                    rows.sort_unstable_by_key(|r| std::cmp::Reverse(r.2));
-                    rows.truncate(TOP_K);
-                    let histogram: Vec<SubtreeClassRow> = rows
-                        .into_iter()
-                        .map(|(ci, cnt, sh)| {
-                            let name = if (ci as usize) < g.class_names.len() {
-                                pretty_class_name(&g.class_names[ci as usize])
-                            } else {
-                                format!("obj#{}", ci)
-                            };
-                            SubtreeClassRow {
-                                class: name,
-                                instance_count: cnt,
-                                total_shallow: sh,
-                            }
-                        })
-                        .collect();
-                    if let Some(node_entry) = nodes.get_mut(&node) {
-                        node_entry.subtree_classes = histogram;
-                    }
-                }
-                // Stash the map for the parent to consume (skip vroot — no parent).
-                if node_usize < n {
-                    node_agg[node_usize] = Some(agg);
-                }
+                    })
+                    .collect();
             }
         }
     }
