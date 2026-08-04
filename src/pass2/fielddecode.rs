@@ -915,6 +915,857 @@ fn class_name_of_index(i: usize, p1: &Pass1) -> String {
     }
 }
 
+// ── FieldDecodeState: fusable scan state ─────────────────────────────────────
+
+const ARRAY_OWNER_CAP: usize = 500_000;
+
+/// All mutable scan state for the field-decode deep scan. Callers can either
+/// drive it via [`build_field_decode_views`] (standalone HPROF rescan) or fuse
+/// it into an existing HPROF walk by calling `on_instance`, `on_prim_array`,
+/// `on_obj_array` per record, then `finish()`.
+pub(crate) struct FieldDecodeState {
+    collect_attribution: bool,
+    obj_ref_width: usize,
+
+    // caches
+    role_cache: HashMap<u64, ClassRole>,
+    pretty_name_cache: HashMap<u64, String>,
+    ic: IndexCache,
+
+    // collection views
+    coll_size_acc: SizeHistAcc,
+    coll_fill: FillAcc,
+    map_collision: FillAcc,
+    coll_total: u64,
+    map_total: u64,
+    kind_stats: [(u64, u64, u64, u64); 6],
+    wanted_arrays: HashMap<u64, ArrayWant>,
+
+    // reference views
+    ref_instances: [u64; 3],
+    ref_hist: [HashMap<String, (u64, u64)>; 3],
+    ref_hist_other: [(u64, u64); 3],
+    referent_idx: [Vec<u32>; 3],
+    null_referent_count: [u64; 3],
+    tl_null_key_count: u64,
+    tl_entry_records: Vec<(bool, u32)>,
+
+    // array views
+    top_prim: TopArrayAcc,
+    top_obj: TopArrayAcc,
+
+    // attribution state (--collections only)
+    edges: Vec<HolderEdge>,
+    edges_truncated: bool,
+    holder_class_names: Vec<String>,
+    holder_class_map: HashMap<u64, u32>,
+    field_names: Vec<String>,
+    field_name_map: HashMap<u64, u32>,
+    obj_field_layout: HashMap<u64, Vec<(u32, u32)>>,
+    container_records: HashMap<u64, ContainerRecord>,
+    containers_truncated: bool,
+
+    // array owner map (unconditional)
+    array_owner_by_addr: HashMap<u64, String>,
+    light_field_layout: HashMap<u64, Vec<(u64, u32)>>,
+
+    // node-KV (--collections only)
+    node_kv_layout: HashMap<u64, Option<(u32, u32)>>,
+    node_kv_raw: HashMap<u32, (u32, u32)>,
+
+    // DirectByteBuffer capacity (lazily resolved on first on_instance call)
+    dbb_resolved: bool,
+    dbb_class_addr_opt: Option<u64>,
+    dbb_cap_off_opt: Option<u32>,
+    dbb_capacity_sum: u64,
+
+    // prim/obj array accumulators
+    const_groups: HashMap<(u8, u64, i64), (u64, u64)>,
+    const_other: (u64, u64),
+    const_truncated: bool,
+    const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>>,
+    array_fill: FillAcc,
+    obj_array_raw: Vec<(u64, u64, u64, Vec<u32>)>,
+    obj_array_raw_compact: Vec<(u64, u32, u32)>,
+}
+
+impl FieldDecodeState {
+    pub(crate) fn new(
+        id_size: u8,
+        collect_attribution: bool,
+    ) -> Self {
+        let obj_ref_width = id_size as usize;
+
+        Self {
+            collect_attribution,
+            obj_ref_width,
+            dbb_resolved: false,
+            role_cache: HashMap::new(),
+            pretty_name_cache: HashMap::new(),
+            ic: IndexCache::new(),
+            coll_size_acc: SizeHistAcc::default(),
+            coll_fill: FillAcc::default(),
+            map_collision: FillAcc::default(),
+            coll_total: 0,
+            map_total: 0,
+            kind_stats: [(0, 0, 0, 0); 6],
+            wanted_arrays: HashMap::new(),
+            ref_instances: [0u64; 3],
+            ref_hist: [HashMap::new(), HashMap::new(), HashMap::new()],
+            ref_hist_other: [(0u64, 0u64); 3],
+            referent_idx: [Vec::new(), Vec::new(), Vec::new()],
+            null_referent_count: [0u64; 3],
+            tl_null_key_count: 0,
+            tl_entry_records: Vec::new(),
+            top_prim: TopArrayAcc::default(),
+            top_obj: TopArrayAcc::default(),
+            edges: Vec::new(),
+            edges_truncated: false,
+            holder_class_names: Vec::new(),
+            holder_class_map: HashMap::new(),
+            field_names: Vec::new(),
+            field_name_map: HashMap::new(),
+            obj_field_layout: HashMap::new(),
+            container_records: HashMap::new(),
+            containers_truncated: false,
+            array_owner_by_addr: HashMap::new(),
+            light_field_layout: HashMap::new(),
+            node_kv_layout: HashMap::new(),
+            node_kv_raw: HashMap::new(),
+            dbb_class_addr_opt: None,
+            dbb_cap_off_opt: None,
+            dbb_capacity_sum: 0,
+            const_groups: HashMap::new(),
+            const_other: (0, 0),
+            const_truncated: false,
+            const_owner_samples: HashMap::new(),
+            array_fill: FillAcc::default(),
+            obj_array_raw: Vec::new(),
+            obj_array_raw_compact: Vec::new(),
+        }
+    }
+
+    pub(crate) fn on_instance(
+        &mut self,
+        addr: u64,
+        class_id: u64,
+        blob: &[u8],
+        p1: &Pass1,
+        shallow: &[u32],
+        descs: &[CollDesc],
+    ) {
+        let collect_attribution = self.collect_attribution;
+        let obj_ref_width = self.obj_ref_width;
+        let class_map = &p1.class_map;
+        let strings = &p1.strings;
+
+        // Lazily resolve DirctByteBuffer class address and capacity offset once.
+        if !self.dbb_resolved {
+            self.dbb_resolved = true;
+            let target_dbb_class = "java/nio/DirectByteBuffer";
+            self.dbb_class_addr_opt = p1
+                .class_map
+                .iter()
+                .find(|(_, ci)| {
+                    p1.strings
+                        .get(&ci.name_id)
+                        .map(|s| s.as_str())
+                        .unwrap_or("")
+                        == target_dbb_class
+                })
+                .map(|(addr, _)| *addr);
+            self.dbb_cap_off_opt = self.dbb_class_addr_opt.and_then(|class_addr| {
+                field_offset(
+                    class_addr,
+                    "capacity",
+                    "java/nio/Buffer",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _ty)| off)
+            });
+        }
+        if let (Some(dbb_addr), Some(cap_off)) = (self.dbb_class_addr_opt, self.dbb_cap_off_opt) {
+            if class_id == dbb_addr {
+                let o = cap_off as usize;
+                if o + 4 <= blob.len() {
+                    let v = i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
+                    self.dbb_capacity_sum += v.max(0) as u64;
+                }
+            }
+        }
+        let role = *self
+            .role_cache
+            .entry(class_id)
+            .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width, descs));
+        match role {
+            ClassRole::Plain => {}
+            ClassRole::Collection {
+                desc_idx,
+                size_off,
+                array_off,
+            } => {
+                let is_map = descs[desc_idx].kind == CollKind::Map;
+                let coll_shallow = self
+                    .ic
+                    .index_of(&p1.id_map, addr)
+                    .map(|i| shallow[i] as u64)
+                    .unwrap_or(0);
+                let size = size_off.and_then(|(off, ty)| read_int_field(blob, off, ty));
+                if let Some(size) = size {
+                    self.coll_size_acc.add(size, coll_shallow);
+                    self.coll_total += 1;
+                    if is_map {
+                        self.map_total += 1;
+                    }
+                    let ks = &mut self.kind_stats[descs[desc_idx].kind.discriminant() as usize];
+                    ks.0 += 1;
+                    ks.1 += size;
+                    ks.2 += coll_shallow;
+                    ks.3 = ks.3.max(size);
+                }
+                if collect_attribution {
+                    if let Some(cidx) = self.ic.index_of(&p1.id_map, addr) {
+                        if self.container_records.len() < CONTAINER_CAP {
+                            self.container_records.insert(
+                                addr,
+                                ContainerRecord {
+                                    container_idx: cidx as u32,
+                                    elements: size.unwrap_or(0),
+                                    kind: descs[desc_idx].kind.discriminant(),
+                                    container_class: pretty_name(class_id, p1),
+                                    capacity: size.unwrap_or(0),
+                                },
+                            );
+                        } else {
+                            self.containers_truncated = true;
+                        }
+                    }
+                }
+                if let Some((aoff, _)) = array_off {
+                    let ao = aoff as usize;
+                    if ao + obj_ref_width <= blob.len() {
+                        let arr_addr = read_ref(&blob[ao..], obj_ref_width);
+                        if arr_addr != 0 && self.wanted_arrays.len() < WANTED_CAP {
+                            self.wanted_arrays.insert(
+                                arr_addr,
+                                ArrayWant {
+                                    size: size.unwrap_or(0),
+                                    is_map,
+                                    coll_shallow,
+                                    coll_idx: self
+                                        .ic
+                                        .index_of(&p1.id_map, addr)
+                                        .map(|i| i as u32)
+                                        .unwrap_or(u32::MAX),
+                                    coll_kind: descs[desc_idx].kind.discriminant(),
+                                    coll_class: pretty_name(class_id, p1),
+                                    coll_addr: addr,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            ClassRole::Reference {
+                kind_idx,
+                referent_off,
+                is_tl_entry,
+                tl_value_off,
+            } => {
+                self.ref_instances[kind_idx] += 1;
+                let (off, _ty) = referent_off;
+                let o = off as usize;
+                if o + obj_ref_width <= blob.len() {
+                    let referent = read_ref(&blob[o..], obj_ref_width);
+                    if referent == 0 {
+                        self.null_referent_count[kind_idx] += 1;
+                        if is_tl_entry {
+                            self.tl_null_key_count += 1;
+                            if self.tl_entry_records.len() < TL_ENTRY_CAP {
+                                let val_idx = tl_value_off
+                                    .and_then(|(voff, _)| {
+                                        let vo = voff as usize;
+                                        if vo + obj_ref_width <= blob.len() {
+                                            let val_addr = read_ref(&blob[vo..], obj_ref_width);
+                                            if val_addr != 0 {
+                                                self.ic
+                                                    .index_of(&p1.id_map, val_addr)
+                                                    .map(|i| i as u32)
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(u32::MAX);
+                                self.tl_entry_records.push((true, val_idx));
+                            }
+                        }
+                    } else if let Some(ridx) = self.ic.index_of(&p1.id_map, referent) {
+                        let name = class_name_of_index(ridx, p1);
+                        let sh = shallow[ridx] as u64;
+                        let hist = &mut self.ref_hist[kind_idx];
+                        if hist.contains_key(&name) || hist.len() < REFERENT_HIST_CAP {
+                            let e = hist.entry(name).or_insert((0, 0));
+                            e.0 += 1;
+                            e.1 += sh;
+                        } else {
+                            self.ref_hist_other[kind_idx].0 += 1;
+                            self.ref_hist_other[kind_idx].1 += sh;
+                        }
+                        if self.referent_idx[kind_idx].len() < REFERENT_CAP {
+                            self.referent_idx[kind_idx].push(ridx as u32);
+                        }
+                        if is_tl_entry && self.tl_entry_records.len() < TL_ENTRY_CAP {
+                            let val_idx = tl_value_off
+                                .and_then(|(voff, _)| {
+                                    let vo = voff as usize;
+                                    if vo + obj_ref_width <= blob.len() {
+                                        let val_addr = read_ref(&blob[vo..], obj_ref_width);
+                                        if val_addr != 0 {
+                                            self.ic
+                                                .index_of(&p1.id_map, val_addr)
+                                                .map(|i| i as u32)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(u32::MAX);
+                            self.tl_entry_records.push((false, val_idx));
+                        }
+                    }
+                }
+            }
+        }
+
+        if collect_attribution && self.edges.len() < FIELD_REF_CAP {
+            // Borrow check: we need to call or_insert_with but the closure
+            // references self.field_name_map and self.field_names which are
+            // disjoint from self.obj_field_layout. Use a local flag to detect
+            // whether we need to insert a new layout entry.
+            if !self.obj_field_layout.contains_key(&class_id) {
+                let raw = enumerate_object_fields(class_id, class_map, obj_ref_width);
+                let mut layout: Vec<(u32, u32)> = Vec::with_capacity(raw.len());
+                for (fname_id, off) in raw {
+                    let field_key = if let Some(&k) = self.field_name_map.get(&fname_id) {
+                        k
+                    } else {
+                        let key = self.field_names.len() as u32;
+                        let fname = strings
+                            .get(&fname_id)
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        self.field_names.push(fname);
+                        self.field_name_map.insert(fname_id, key);
+                        key
+                    };
+                    layout.push((field_key, off));
+                }
+                self.obj_field_layout.insert(class_id, layout);
+            }
+            let holder_class_key = if let Some(&k) = self.holder_class_map.get(&class_id) {
+                k
+            } else {
+                let key = self.holder_class_names.len() as u32;
+                self.holder_class_names.push(pretty_name(class_id, p1));
+                self.holder_class_map.insert(class_id, key);
+                key
+            };
+            // Need to clone the layout to avoid holding a reference into self
+            // while also mutating self.edges.
+            let layout: Vec<(u32, u32)> = self.obj_field_layout[&class_id].clone();
+            for (field_key, offset) in layout {
+                if self.edges.len() >= FIELD_REF_CAP {
+                    self.edges_truncated = true;
+                    break;
+                }
+                let o = offset as usize;
+                if o + obj_ref_width <= blob.len() {
+                    let pointee = read_ref(&blob[o..], obj_ref_width);
+                    if pointee != 0 {
+                        self.edges.push(HolderEdge {
+                            pointee,
+                            holder_class_key,
+                            field_key,
+                        });
+                    }
+                }
+            }
+        }
+
+        if self.array_owner_by_addr.len() < ARRAY_OWNER_CAP {
+            if !self.light_field_layout.contains_key(&class_id) {
+                let layout = enumerate_object_fields(class_id, class_map, obj_ref_width);
+                self.light_field_layout.insert(class_id, layout);
+            }
+            let layout: Vec<(u64, u32)> = self.light_field_layout[&class_id].clone();
+            let holder_name = if let Some(n) = self.pretty_name_cache.get(&class_id) {
+                n.clone()
+            } else {
+                let n = pretty_name(class_id, p1);
+                self.pretty_name_cache.insert(class_id, n.clone());
+                n
+            };
+            for (fname_id, offset) in layout {
+                let o = offset as usize;
+                if o + obj_ref_width <= blob.len() {
+                    let pointee = read_ref(&blob[o..], obj_ref_width);
+                    if pointee != 0 && !self.array_owner_by_addr.contains_key(&pointee) {
+                        let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+                        self.array_owner_by_addr
+                            .insert(pointee, format!("{}#{}", holder_name, fname));
+                    }
+                }
+                if self.array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
+                    break;
+                }
+            }
+        }
+
+        if collect_attribution && self.node_kv_raw.len() < NODE_KV_CAP {
+            if !self.node_kv_layout.contains_key(&class_id) {
+                let raw_name = class_map
+                    .get(&class_id)
+                    .and_then(|ci| strings.get(&ci.name_id))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let is_wrapper = raw_name.ends_with("$Node")
+                    || raw_name.ends_with("$Entry")
+                    || raw_name.ends_with("$MapEntry")
+                    || raw_name.ends_with("$HashEntry")
+                    || raw_name.ends_with("$KeyValueHolder");
+                let kv = if !is_wrapper {
+                    None
+                } else {
+                    let mut key_off: Option<u32> = None;
+                    let mut val_off: Option<u32> = None;
+                    let mut byte_offset: u32 = 0;
+                    let mut cur = class_id;
+                    'outer: while let Some(ci) = class_map.get(&cur) {
+                        for &(fname_id, ftype) in &ci.fields {
+                            let fsize = if ftype == crate::types::HprofType::Object {
+                                obj_ref_width as u32
+                            } else {
+                                ftype.byte_size() as u32
+                            };
+                            if ftype == crate::types::HprofType::Object {
+                                let fname =
+                                    strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+                                if fname == "key" {
+                                    key_off = Some(byte_offset);
+                                } else if fname == "value" || fname == "val" {
+                                    val_off = Some(byte_offset);
+                                }
+                            }
+                            byte_offset += fsize;
+                            if key_off.is_some() && val_off.is_some() {
+                                break 'outer;
+                            }
+                        }
+                        if ci.super_id == 0 {
+                            break;
+                        }
+                        cur = ci.super_id;
+                    }
+                    match (key_off, val_off) {
+                        (Some(k), Some(v)) => Some((k, v)),
+                        _ => None,
+                    }
+                };
+                self.node_kv_layout.insert(class_id, kv);
+            }
+            if let Some((key_off, val_off)) = self.node_kv_layout[&class_id] {
+                if let Some(self_idx) = self.ic.index_of(&p1.id_map, addr) {
+                    let ko = key_off as usize;
+                    let vo = val_off as usize;
+                    let key_dense = if ko + obj_ref_width <= blob.len() {
+                        let r = read_ref(&blob[ko..], obj_ref_width);
+                        if r != 0 {
+                            self.ic
+                                .index_of(&p1.id_map, r)
+                                .map(|i| i as u32)
+                                .unwrap_or(u32::MAX)
+                        } else {
+                            u32::MAX
+                        }
+                    } else {
+                        u32::MAX
+                    };
+                    let val_dense = if vo + obj_ref_width <= blob.len() {
+                        let r = read_ref(&blob[vo..], obj_ref_width);
+                        if r != 0 {
+                            self.ic
+                                .index_of(&p1.id_map, r)
+                                .map(|i| i as u32)
+                                .unwrap_or(u32::MAX)
+                        } else {
+                            u32::MAX
+                        }
+                    } else {
+                        u32::MAX
+                    };
+                    self.node_kv_raw.insert(self_idx as u32, (key_dense, val_dense));
+                }
+            }
+        }
+    }
+
+    pub(crate) fn on_prim_array(
+        &mut self,
+        addr: u64,
+        elem_type: u8,
+        count: u64,
+        bytes: &[u8],
+        p1: &Pass1,
+        shallow: &[u32],
+    ) {
+        let collect_attribution = self.collect_attribution;
+        let (idx, sh) = match self.ic.index_of(&p1.id_map, addr) {
+            Some(i) => (i as u32, shallow[i] as u64),
+            None => (u32::MAX, 0),
+        };
+        if idx != u32::MAX {
+            self.top_prim.add(idx, elem_type as u64, count, sh, u64::MAX);
+        }
+        if collect_attribution && idx != u32::MAX {
+            if self.container_records.len() < CONTAINER_CAP {
+                self.container_records.insert(
+                    addr,
+                    ContainerRecord {
+                        container_idx: idx,
+                        elements: count,
+                        kind: 7,
+                        container_class: prim_array_class_name(elem_type).to_string(),
+                        capacity: count,
+                    },
+                );
+            } else {
+                self.containers_truncated = true;
+            }
+        }
+        if count < 2 {
+            return;
+        }
+        let esz = match HprofType::from_code(elem_type) {
+            Some(t) => t.byte_size(),
+            None => return,
+        };
+        if esz == 0 || bytes.len() < esz * 2 {
+            return;
+        }
+        let first = &bytes[0..esz];
+        let all_equal = bytes
+            .chunks_exact(esz)
+            .take(count as usize)
+            .all(|c| c == first);
+        if !all_equal {
+            return;
+        }
+        let value = decode_prim_value(elem_type, first);
+        let key = (elem_type, count, value);
+        if self.const_groups.contains_key(&key) || self.const_groups.len() < CONST_ARRAY_CAP {
+            let e = self.const_groups.entry(key).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += sh;
+            if collect_attribution {
+                let s = self.const_owner_samples.entry(key).or_default();
+                if s.len() < CONST_ARRAY_OWNER_SAMPLE {
+                    s.push(addr);
+                }
+            }
+        } else {
+            self.const_truncated = true;
+            self.const_other.0 += 1;
+            self.const_other.1 += sh;
+        }
+    }
+
+    pub(crate) fn on_obj_array(
+        &mut self,
+        addr: u64,
+        array_class_id: u64,
+        count: u64,
+        elem_ref_bytes: &[u8],
+        p1: &Pass1,
+        shallow: &[u32],
+    ) {
+        if count == 0 {
+            return;
+        }
+        let collect_attribution = self.collect_attribution;
+        let obj_ref_width = self.obj_ref_width;
+        let mut non_null: u64 = 0;
+        let mut slot_targets: Vec<u32> = Vec::new();
+        for slot in 0..count as usize {
+            let off = slot * obj_ref_width;
+            if off + obj_ref_width > elem_ref_bytes.len() {
+                break;
+            }
+            let r = read_ref(&elem_ref_bytes[off..], obj_ref_width);
+            if r != 0 {
+                non_null += 1;
+                if collect_attribution && slot_targets.len() < COLL_VALUES_PER_COLLECTION {
+                    if let Some(ti) = self.ic.index_of(&p1.id_map, r) {
+                        slot_targets.push(ti as u32);
+                    }
+                }
+            }
+        }
+        let (arr_idx, arr_shallow) = match self.ic.index_of(&p1.id_map, addr) {
+            Some(i) => (i as u32, shallow[i] as u64),
+            None => (u32::MAX, 0),
+        };
+        let arr_wasted = count
+            .saturating_sub(non_null)
+            .saturating_mul(obj_ref_width as u64);
+        self.array_fill.add(non_null, count, arr_shallow, arr_wasted);
+        if arr_idx != u32::MAX {
+            self.top_obj
+                .add(arr_idx, array_class_id, count, arr_shallow, non_null);
+        }
+        if collect_attribution && arr_idx != u32::MAX {
+            if self.container_records.len() < CONTAINER_CAP {
+                self.container_records.insert(
+                    addr,
+                    ContainerRecord {
+                        container_idx: arr_idx,
+                        elements: non_null,
+                        kind: 6,
+                        container_class: pretty_name(array_class_id, p1),
+                        capacity: count,
+                    },
+                );
+            } else {
+                self.containers_truncated = true;
+            }
+        }
+        if collect_attribution {
+            self.obj_array_raw
+                .push((addr, non_null, count, slot_targets));
+        } else {
+            self.obj_array_raw_compact
+                .push((addr, non_null as u32, count as u32));
+        }
+    }
+
+    pub(crate) fn finish(mut self, p1: &Pass1) -> std::io::Result<FieldDecodeViews> {
+        let obj_ref_width = self.obj_ref_width;
+        let collect_attribution = self.collect_attribution;
+
+        let mut coll_fill_tracked: u64 = 0;
+        let mut map_collision_tracked: u64 = 0;
+        let mut coll_values: Vec<CollValuesRaw> = Vec::new();
+        let mut coll_values_truncated = false;
+
+        for (addr, non_null_u32, count_u32) in self.obj_array_raw_compact.drain(..) {
+            let non_null = non_null_u32 as u64;
+            let count = count_u32 as u64;
+            if let Some(want) = self.wanted_arrays.get(&addr) {
+                let used = if want.size > 0 { want.size } else { non_null };
+                let wasted = count
+                    .saturating_sub(used.min(count))
+                    .saturating_mul(obj_ref_width as u64);
+                self.coll_fill.add(used, count, want.coll_shallow, wasted);
+                coll_fill_tracked += 1;
+                if want.is_map {
+                    self.map_collision
+                        .add(non_null, count, want.coll_shallow, 0);
+                    map_collision_tracked += 1;
+                }
+            }
+        }
+        for (addr, non_null, count, slot_targets) in self.obj_array_raw.drain(..) {
+            if let Some(want) = self.wanted_arrays.get(&addr) {
+                let used = if want.size > 0 { want.size } else { non_null };
+                let wasted = count
+                    .saturating_sub(used.min(count))
+                    .saturating_mul(obj_ref_width as u64);
+                self.coll_fill.add(used, count, want.coll_shallow, wasted);
+                coll_fill_tracked += 1;
+                if let Some(rec) = self.container_records.get_mut(&want.coll_addr) {
+                    rec.elements = used;
+                    rec.capacity = count;
+                }
+                if want.is_map {
+                    self.map_collision
+                        .add(non_null, count, want.coll_shallow, 0);
+                    map_collision_tracked += 1;
+                }
+                if !slot_targets.is_empty() {
+                    if coll_values.len() < COLL_VALUES_GROUP_CAP {
+                        coll_values.push(CollValuesRaw {
+                            container_idx: want.coll_idx,
+                            kind: want.coll_kind,
+                            container_class: want.coll_class.clone(),
+                            owner: None,
+                            value_indices: slot_targets,
+                        });
+                    } else {
+                        coll_values_truncated = true;
+                    }
+                }
+            }
+        }
+
+        let attribution_raw = if collect_attribution {
+            Some(join_attribution(
+                &self.edges,
+                &self.container_records,
+                &self.holder_class_names,
+                &self.field_names,
+            ))
+        } else {
+            None
+        };
+        let attribution_truncated =
+            self.edges_truncated || self.containers_truncated || coll_values_truncated;
+
+        let owner_by_addr: HashMap<u64, String> = if collect_attribution {
+            let mut m = self.array_owner_by_addr;
+            for e in &self.edges {
+                m.entry(e.pointee).or_insert_with(|| {
+                    format!(
+                        "{}#{}",
+                        self.holder_class_names[e.holder_class_key as usize],
+                        self.field_names[e.field_key as usize]
+                    )
+                });
+            }
+            m
+        } else {
+            self.array_owner_by_addr
+        };
+
+        let fields_by_size_raw: Option<Vec<FieldSizeRaw>> = if collect_attribution {
+            Some(assemble_field_size_raw(
+                &self.edges,
+                &self.holder_class_names,
+                &self.field_names,
+                p1,
+            ))
+        } else {
+            None
+        };
+
+        let coll_values_raw: Option<Vec<CollValuesRaw>> = if collect_attribution {
+            for c in &mut coll_values {
+                let addr = p1.id_map.addr_at(c.container_idx as usize);
+                c.owner = owner_by_addr.get(&addr).cloned();
+            }
+            Some(coll_values)
+        } else {
+            None
+        };
+
+        const KIND_ORDER: [CollKind; 6] = [
+            CollKind::List,
+            CollKind::Map,
+            CollKind::Set,
+            CollKind::Deque,
+            CollKind::Queue,
+            CollKind::Tree,
+        ];
+        let kind_summary = CollectionKindSummary {
+            kinds: KIND_ORDER
+                .iter()
+                .filter_map(|&k| {
+                    let (count, total_elements, total_shallow, max_elements) =
+                        self.kind_stats[k.discriminant() as usize];
+                    (count > 0).then(|| CollectionKindStat {
+                        kind: k.label().to_string(),
+                        count,
+                        total_elements,
+                        total_shallow,
+                        max_elements,
+                    })
+                })
+                .collect(),
+        };
+        let collections = CollectionsAnalysis {
+            collection_fill_ratio: CollectionFillRatio {
+                tracked: coll_fill_tracked,
+                total: self.coll_total,
+                buckets: self.coll_fill.into_buckets(),
+            },
+            collections_by_size: self.coll_size_acc.into_by_size(),
+            array_fill_ratio: ArrayFillRatio {
+                tracked: self.array_fill.total_objects(),
+                buckets: self.array_fill.into_buckets(),
+            },
+            map_collision_ratio: MapCollisionRatio {
+                tracked: map_collision_tracked,
+                total: self.map_total,
+                buckets: self.map_collision.into_buckets(),
+            },
+            constant_primitive_arrays: assemble_const_arrays(
+                self.const_groups,
+                self.const_owner_samples,
+                Some(&owner_by_addr),
+                self.const_other,
+                self.const_truncated,
+            ),
+            top_prim_arrays: self.top_prim.into_top_arrays(
+                p1,
+                prim_array_name_of_key,
+                Some(&owner_by_addr),
+            ),
+            top_obj_arrays: self.top_obj.into_top_arrays(
+                p1,
+                obj_array_name_of_key,
+                Some(&owner_by_addr),
+            ),
+            kind_summary,
+        };
+
+        let references = ReferencesAnalysis {
+            soft: assemble_ref_stats(
+                "Soft",
+                self.ref_instances[0],
+                &self.ref_hist[0],
+                self.ref_hist_other[0],
+            ),
+            weak: assemble_ref_stats(
+                "Weak",
+                self.ref_instances[1],
+                &self.ref_hist[1],
+                self.ref_hist_other[1],
+            ),
+            phantom: assemble_ref_stats(
+                "Phantom",
+                self.ref_instances[2],
+                &self.ref_hist[2],
+                self.ref_hist_other[2],
+            ),
+        };
+
+        Ok((
+            collections,
+            references,
+            self.referent_idx,
+            self.null_referent_count,
+            attribution_raw,
+            fields_by_size_raw,
+            coll_values_raw,
+            if collect_attribution {
+                Some(self.node_kv_raw)
+            } else {
+                None
+            },
+            attribution_truncated,
+            self.dbb_capacity_sum,
+            self.tl_null_key_count,
+            self.tl_entry_records,
+        ))
+    }
+}
+
+
 // ── Main entry point ─────────────────────────────────────────────────────────
 
 /// Return type of [`build_field_decode_views`]: the collection & reference
@@ -951,850 +1802,19 @@ pub(crate) fn build_field_decode_views<O>(
 where
     O: Fn() -> std::io::Result<crate::reader::HprofReader>,
 {
-    let id_size = p1.id_size;
-    // Instance-blob object references are id_size wide (compressed OOPs only
-    // narrows object-ARRAY elements). Both instance fields and obj-array
-    // elements here are id_size wide per the scanners.
-    let obj_ref_width = id_size as usize;
-    let class_map = &p1.class_map;
-    let strings = &p1.strings;
-
-    // Memoized per-class classification (bounded by #classes).
-    let mut role_cache: HashMap<u64, ClassRole> = HashMap::new();
-    // Memoized per-class pretty name (bounded by #classes, avoids per-instance allocation).
-    let mut pretty_name_cache: HashMap<u64, String> = HashMap::new();
-
-    // Collection views.
-    let mut coll_size_acc = SizeHistAcc::default();
-    let mut coll_fill = FillAcc::default();
-    let mut map_collision = FillAcc::default();
-    let mut coll_total: u64 = 0; // every collection with a size read
-    let mut map_total: u64 = 0; // every map collection seen
-    // Per-kind collection summary (always-on): indexed by CollKind discriminant
-    // 0=List..5=Tree. Each entry = (count, total_elements, total_shallow,
-    // max_elements). Folded only when a size was read (mirrors coll_total).
-    let mut kind_stats: [(u64, u64, u64, u64); 6] = [(0, 0, 0, 0); 6];
-    // Wanted backing arrays (array addr → its collection's size/is_map).
-    let mut wanted_arrays: HashMap<u64, ArrayWant> = HashMap::new();
-
-    // Reference views.
-    let mut ref_instances = [0u64; 3];
-    // kind → (class name → (objects, shallow)). Capped at REFERENT_HIST_CAP
-    // distinct classes.
-    let mut ref_hist: [HashMap<String, (u64, u64)>; 3] =
-        [HashMap::new(), HashMap::new(), HashMap::new()];
-    // kind → (objects, shallow) folded into the "<other>" row past the cap.
-    let mut ref_hist_other = [(0u64, 0u64); 3];
-    let mut referent_idx: [Vec<u32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    // Count of null referents per reference kind (referent == 0 at scan time).
-    let mut null_referent_count: [u64; 3] = [0u64; 3];
-    // ThreadLocal$ThreadLocalMap$Entry instances whose weak referent (the key)
-    // is null — the classic thread-local leak signal.
-    let mut tl_null_key_count: u64 = 0;
-    // Per-entry records: (is_stale, value_dense_idx) for ThreadLocalMap$Entry
-    // objects. Bounded by TL_ENTRY_CAP. Used to build the per-value-class
-    // breakdown in build_threadlocal_analysis.
-    let mut tl_entry_records: Vec<(bool, u32)> = Vec::new();
-
-    // Top arrays (individual + per-class), one per array category.
-    let mut top_prim = TopArrayAcc::default();
-    let mut top_obj = TopArrayAcc::default();
-
-    // ── Attribution state (only allocated / touched under --collections) ──────
-    let mut edges: Vec<HolderEdge> = Vec::new();
-    let mut edges_truncated = false;
-    // Interning: class_id → key (holder class names) and field name_id → key.
-    let mut holder_class_names: Vec<String> = Vec::new();
-    let mut holder_class_map: HashMap<u64, u32> = HashMap::new();
-    let mut field_names: Vec<String> = Vec::new();
-    let mut field_name_map: HashMap<u64, u32> = HashMap::new();
-    // Memoized per-class object-field layout: class_id → [(field_name_key, off)].
-    let mut obj_field_layout: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
-    let mut container_records: HashMap<u64, ContainerRecord> = HashMap::new();
-    let mut containers_truncated = false;
-
-    // ── Unconditional lightweight array owner map ─────────────────────────────
-    // First-wins `Class#field` label for every array address, built from the
-    // instance-dump field scan regardless of --collections. Bounded at 500K
-    // entries to avoid unbounded growth on huge heaps (the top-10 arrays are
-    // what this exists for; the cap is 50000× that).
-    const ARRAY_OWNER_CAP: usize = 500_000;
-    let mut array_owner_by_addr: HashMap<u64, String> = HashMap::new();
-    // Memoized per-class field layout for the lightweight scan: class_id →
-    // [(field_name_id, byte_offset)].  Populated unconditionally, separate from
-    // `obj_field_layout` (which uses interned u32 keys, only under --collections).
-    let mut light_field_layout: HashMap<u64, Vec<(u64, u32)>> = HashMap::new();
-
-    // ── Node/Entry KV unwrapping (only under --collections) ──────────────────
-    // Maps each Node/Entry wrapper's dense index to the dense indices of its
-    // `key` and `value` fields. Used in build_model to show real K/V types in
-    // Biggest Collections instead of the tautological wrapper class name.
-    // class_id → Option<(key_byte_offset, val_byte_offset)>: None = not a wrapper
-    let mut node_kv_layout: HashMap<u64, Option<(u32, u32)>> = HashMap::new();
-    // dense_idx → (key_dense_idx, val_dense_idx); u32::MAX = null/missing
-    let mut node_kv_raw: HashMap<u32, (u32, u32)> = HashMap::new();
-
-    // ── DirectByteBuffer capacity sum ────────────────────────────────────────
-    // Resolve once before scan 1: find the class-object address for
-    // java/nio/DirectByteBuffer and the byte-offset of the `capacity` field
-    // declared on java/nio/Buffer. Both lookups use class_map/strings, which
-    // are alive through the end of build_field_decode_views.
-    let target_dbb_class = "java/nio/DirectByteBuffer";
-    let dbb_class_addr_opt: Option<u64> = p1
-        .class_map
-        .iter()
-        .find(|(_, ci)| {
-            p1.strings
-                .get(&ci.name_id)
-                .map(|s| s.as_str())
-                .unwrap_or("")
-                == target_dbb_class
-        })
-        .map(|(addr, _)| *addr);
-    let dbb_cap_off_opt: Option<u32> = dbb_class_addr_opt.and_then(|class_addr| {
-        field_offset(
-            class_addr,
-            "capacity",
-            "java/nio/Buffer",
-            class_map,
-            strings,
-            obj_ref_width,
-        )
-        .map(|(off, _ty)| off)
-    });
-    let mut dbb_capacity_sum: u64 = 0;
-
-    // Scan-2 (prim-array) + scan-3 (obj-array) accumulators, declared up here so
-    // the fused single-pass scan below can populate them from three disjoint
-    // closures. group (type_code, len, value) → (objects, shallow). Capped;
-    // overflow folds to "other".
-    let mut const_groups: HashMap<(u8, u64, i64), (u64, u64)> = HashMap::new();
-    let mut const_other: (u64, u64) = (0, 0);
-    let mut const_truncated = false;
-    // Per-group sample of member array addresses, used post-scan to resolve the
-    // dominant `Class#field` owner via `owner_by_addr`. Each group samples at
-    // most `CONST_ARRAY_OWNER_SAMPLE` addresses so memory stays bounded on
-    // heaps with huge constant-array groups.
-    let mut const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>> = HashMap::new();
-    let mut array_fill = FillAcc::default();
-    // Raw per-obj-array data collected during the pass; the
-    // `wanted_arrays` collection-fill/map-collision fold runs AFTER the pass, in
-    // memory, because an OBJ_ARRAY_DUMP may precede its owning collection's
-    // INSTANCE_DUMP (HPROF has no record-ordering guarantee), so `wanted_arrays`
-    // is not fully populated until the single scan completes.
-    // When collect_attribution is off, slot_targets are never populated so we
-    // use a compact (addr, non_null, count) triple to halve per-entry cost and
-    // eliminate all Vec heap allocations for the entries.
-    let mut obj_array_raw: Vec<(u64, u64, u64, Vec<u32>)> = Vec::new();
-    let mut obj_array_raw_compact: Vec<(u64, u32, u32)> = Vec::new();
-
-    // ── Single fused full-file scan (instances + prim arrays + obj arrays) ─────
-    // Replaces three separate full-file scans with ONE pass. Each record kind
-    // dispatches to its own closure; the closures capture disjoint mutable
-    // state (the only cross-record dependency, `wanted_arrays`, is resolved in a
-    // post-pass loop). Only one record's bytes are resident at a time, so peak
-    // RSS is unchanged.
-    let mut ic = IndexCache::new();
-    scan_all_records(&open, id_size, |rec| match rec {
-        // ── on_instance: every INSTANCE_DUMP ──────────────────────────────────
+    let mut state = FieldDecodeState::new(p1.id_size, collect_attribution);
+    scan_all_records(&open, p1.id_size, |rec| match rec {
         Record::Instance(addr, class_id, blob) => {
-            // ── DirectByteBuffer capacity accumulation ────────────────────────
-            // Check before the role dispatch so it runs even when the class is
-            // otherwise Plain. Uses the pre-resolved class address and field offset.
-            if let (Some(dbb_addr), Some(cap_off)) = (dbb_class_addr_opt, dbb_cap_off_opt) {
-                if class_id == dbb_addr {
-                    let o = cap_off as usize;
-                    // `capacity` is declared as `int` on java/nio/Buffer.
-                    if o + 4 <= blob.len() {
-                        let v =
-                            i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
-                        dbb_capacity_sum += v.max(0) as u64;
-                    }
-                }
-            }
-            let _ = addr; // addr used above only; suppress unused warning if roles don't use it
-            let role = *role_cache
-                .entry(class_id)
-                .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width, descs));
-            match role {
-                ClassRole::Plain => {}
-                ClassRole::Collection {
-                    desc_idx,
-                    size_off,
-                    array_off,
-                } => {
-                    let is_map = descs[desc_idx].kind == CollKind::Map;
-                    // Shallow size of THIS collection instance (precomputed vec).
-                    let coll_shallow = ic
-                        .index_of(&p1.id_map, addr)
-                        .map(|i| shallow[i] as u64)
-                        .unwrap_or(0);
-                    // Read size (if this collection exposes a plain size field).
-                    let size = size_off.and_then(|(off, ty)| read_int_field(blob, off, ty));
-                    if let Some(size) = size {
-                        coll_size_acc.add(size, coll_shallow);
-                        coll_total += 1;
-                        if is_map {
-                            map_total += 1;
-                        }
-                        // Per-kind summary fold (same guard as coll_total so
-                        // counts stay consistent).
-                        let ks = &mut kind_stats[descs[desc_idx].kind.discriminant() as usize];
-                        ks.0 += 1;
-                        ks.1 += size;
-                        ks.2 += coll_shallow;
-                        ks.3 = ks.3.max(size);
-                    }
-                    // Attribution: record this collection as a container (kind
-                    // = its CollKind discriminant, 0=List..5=Tree). elements =
-                    // the read size (0 when the collection has no plain
-                    // size field, e.g. ConcurrentHashMap — documented limitation).
-                    if collect_attribution {
-                        if let Some(cidx) = ic.index_of(&p1.id_map, addr) {
-                            if container_records.len() < CONTAINER_CAP {
-                                container_records.insert(
-                                    addr,
-                                    ContainerRecord {
-                                        container_idx: cidx as u32,
-                                        elements: size.unwrap_or(0),
-                                        kind: descs[desc_idx].kind.discriminant(),
-                                        container_class: pretty_name(class_id, p1),
-                                        // Degenerate: a collection's TRUE capacity
-                                        // is its backing array's length, but that
-                                        // array's ContainerRecord is keyed by the
-                                        // ARRAY address (ArrayWant carries no
-                                        // reverse array→collection link), so real
-                                        // capacity is not cheaply joinable here.
-                                        // Arrays (kind 6/7 below) carry real
-                                        // capacity; collections ship capacity ==
-                                        // elements for now.
-                                        capacity: size.unwrap_or(0),
-                                    },
-                                );
-                            } else {
-                                containers_truncated = true;
-                            }
-                        }
-                    }
-                    // Read backing-array address, defer fill ratio to scan 3.
-                    if let Some((aoff, _)) = array_off {
-                        let ao = aoff as usize;
-                        if ao + obj_ref_width <= blob.len() {
-                            let arr_addr = read_ref(&blob[ao..], obj_ref_width);
-                            if arr_addr != 0 && wanted_arrays.len() < WANTED_CAP {
-                                wanted_arrays.insert(
-                                    arr_addr,
-                                    ArrayWant {
-                                        size: size.unwrap_or(0),
-                                        is_map,
-                                        coll_shallow,
-                                        coll_idx: ic
-                                            .index_of(&p1.id_map, addr)
-                                            .map(|i| i as u32)
-                                            .unwrap_or(u32::MAX),
-                                        coll_kind: descs[desc_idx].kind.discriminant(),
-                                        coll_class: pretty_name(class_id, p1),
-                                        coll_addr: addr,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-                ClassRole::Reference {
-                    kind_idx,
-                    referent_off,
-                    is_tl_entry,
-                    tl_value_off,
-                } => {
-                    ref_instances[kind_idx] += 1;
-                    let (off, _ty) = referent_off;
-                    let o = off as usize;
-                    if o + obj_ref_width <= blob.len() {
-                        let referent = read_ref(&blob[o..], obj_ref_width);
-                        if referent == 0 {
-                            null_referent_count[kind_idx] += 1;
-                            if is_tl_entry {
-                                tl_null_key_count += 1;
-                                // Record stale entry with value index if available.
-                                if tl_entry_records.len() < TL_ENTRY_CAP {
-                                    let val_idx = tl_value_off
-                                        .and_then(|(voff, _)| {
-                                            let vo = voff as usize;
-                                            if vo + obj_ref_width <= blob.len() {
-                                                let val_addr = read_ref(&blob[vo..], obj_ref_width);
-                                                if val_addr != 0 {
-                                                    ic.index_of(&p1.id_map, val_addr)
-                                                        .map(|i| i as u32)
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .unwrap_or(u32::MAX);
-                                    tl_entry_records.push((true, val_idx));
-                                }
-                            }
-                        } else if let Some(ridx) = ic.index_of(&p1.id_map, referent) {
-                            let name = class_name_of_index(ridx, p1);
-                            let sh = shallow[ridx] as u64;
-                            let hist = &mut ref_hist[kind_idx];
-                            if hist.contains_key(&name) || hist.len() < REFERENT_HIST_CAP {
-                                let e = hist.entry(name).or_insert((0, 0));
-                                e.0 += 1;
-                                e.1 += sh;
-                            } else {
-                                ref_hist_other[kind_idx].0 += 1;
-                                ref_hist_other[kind_idx].1 += sh;
-                            }
-                            if referent_idx[kind_idx].len() < REFERENT_CAP {
-                                referent_idx[kind_idx].push(ridx as u32);
-                            }
-                            // Record live (non-stale) TL entry with value index.
-                            if is_tl_entry && tl_entry_records.len() < TL_ENTRY_CAP {
-                                let val_idx = tl_value_off
-                                    .and_then(|(voff, _)| {
-                                        let vo = voff as usize;
-                                        if vo + obj_ref_width <= blob.len() {
-                                            let val_addr = read_ref(&blob[vo..], obj_ref_width);
-                                            if val_addr != 0 {
-                                                ic.index_of(&p1.id_map, val_addr).map(|i| i as u32)
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .unwrap_or(u32::MAX);
-                                tl_entry_records.push((false, val_idx));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Attribution: record a holder edge for every non-null object field of
-            // this instance. Kept in its OWN block (role match already released) so
-            // the interner/layout borrows don't fight the existing borrows.
-            if collect_attribution && edges.len() < FIELD_REF_CAP {
-                // Build the class's object-field layout once (memoized). The
-                // or_insert_with closure interns field names into
-                // field_names/field_name_map — distinct maps from obj_field_layout,
-                // so the borrows don't conflict.
-                obj_field_layout.entry(class_id).or_insert_with(|| {
-                    let raw = enumerate_object_fields(class_id, class_map, obj_ref_width);
-                    let mut layout: Vec<(u32, u32)> = Vec::with_capacity(raw.len());
-                    for (fname_id, off) in raw {
-                        let field_key = *field_name_map.entry(fname_id).or_insert_with(|| {
-                            let key = field_names.len() as u32;
-                            let fname = strings
-                                .get(&fname_id)
-                                .map(|s| s.to_string())
-                                .unwrap_or_default();
-                            field_names.push(fname);
-                            key
-                        });
-                        layout.push((field_key, off));
-                    }
-                    layout
-                });
-                // Intern the holder-class key once per instance (not per field).
-                let holder_class_key = *holder_class_map.entry(class_id).or_insert_with(|| {
-                    let key = holder_class_names.len() as u32;
-                    holder_class_names.push(pretty_name(class_id, p1));
-                    key
-                });
-                let layout = &obj_field_layout[&class_id];
-                for &(field_key, offset) in layout {
-                    if edges.len() >= FIELD_REF_CAP {
-                        edges_truncated = true;
-                        break;
-                    }
-                    let o = offset as usize;
-                    if o + obj_ref_width <= blob.len() {
-                        let pointee = read_ref(&blob[o..], obj_ref_width);
-                        if pointee != 0 {
-                            edges.push(HolderEdge {
-                                pointee,
-                                holder_class_key,
-                                field_key,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Unconditional lightweight array-owner fill: always record the
-            // first inbound `Class#field` edge for each pointee. Bounded by
-            // ARRAY_OWNER_CAP. Uses a separate layout cache (light_field_layout)
-            // keyed by (name_id, byte_offset) to avoid touching the interning
-            // maps above.
-            if array_owner_by_addr.len() < ARRAY_OWNER_CAP {
-                light_field_layout
-                    .entry(class_id)
-                    .or_insert_with(|| enumerate_object_fields(class_id, class_map, obj_ref_width));
-                let layout = &light_field_layout[&class_id];
-                // Re-read class name inline (cheap; memoized per class).
-                let holder_name = pretty_name_cache
-                    .entry(class_id)
-                    .or_insert_with(|| pretty_name(class_id, p1));
-                for &(fname_id, offset) in layout {
-                    let o = offset as usize;
-                    if o + obj_ref_width <= blob.len() {
-                        let pointee = read_ref(&blob[o..], obj_ref_width);
-                        if pointee != 0 && !array_owner_by_addr.contains_key(&pointee) {
-                            let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
-                            array_owner_by_addr
-                                .insert(pointee, format!("{}#{}", holder_name, fname));
-                        }
-                    }
-                    if array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
-                        break;
-                    }
-                }
-            }
-
-            // ── Node/Entry KV unwrapping (under --collections) ────────────────
-            // Detect Node/Entry wrapper objects and record their key/value refs
-            // so build_model can show real K/V classes instead of the wrapper.
-            if collect_attribution && node_kv_raw.len() < NODE_KV_CAP {
-                // Resolve and memoize whether this class is a wrapper + offsets.
-                let kv_offsets = node_kv_layout.entry(class_id).or_insert_with(|| {
-                    // Check class name for wrapper suffixes ($Node, $Entry,
-                    // $MapEntry).  The raw name uses '/' separators (HPROF format).
-                    let raw_name = class_map
-                        .get(&class_id)
-                        .and_then(|ci| strings.get(&ci.name_id))
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    let is_wrapper = raw_name.ends_with("$Node")
-                        || raw_name.ends_with("$Entry")
-                        || raw_name.ends_with("$MapEntry")
-                        || raw_name.ends_with("$HashEntry")
-                        || raw_name.ends_with("$KeyValueHolder");
-                    if !is_wrapper {
-                        return None;
-                    }
-                    // Walk the class's fields to find `key` and `value` offsets.
-                    let mut key_off: Option<u32> = None;
-                    let mut val_off: Option<u32> = None;
-                    let mut byte_offset: u32 = 0;
-                    let mut cur = class_id;
-                    'outer: while let Some(ci) = class_map.get(&cur) {
-                        for &(fname_id, ftype) in &ci.fields {
-                            let fsize = if ftype == crate::types::HprofType::Object {
-                                obj_ref_width as u32
-                            } else {
-                                ftype.byte_size() as u32
-                            };
-                            if ftype == crate::types::HprofType::Object {
-                                let fname =
-                                    strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
-                                if fname == "key" {
-                                    key_off = Some(byte_offset);
-                                } else if fname == "value" || fname == "val" {
-                                    val_off = Some(byte_offset);
-                                }
-                            }
-                            byte_offset += fsize;
-                            if key_off.is_some() && val_off.is_some() {
-                                break 'outer;
-                            }
-                        }
-                        if ci.super_id == 0 {
-                            break;
-                        }
-                        cur = ci.super_id;
-                    }
-                    match (key_off, val_off) {
-                        (Some(k), Some(v)) => Some((k, v)),
-                        _ => None,
-                    }
-                });
-                if let Some((key_off, val_off)) = *kv_offsets {
-                    if let Some(self_idx) = ic.index_of(&p1.id_map, addr) {
-                        let ko = key_off as usize;
-                        let vo = val_off as usize;
-                        let key_dense = if ko + obj_ref_width <= blob.len() {
-                            let r = read_ref(&blob[ko..], obj_ref_width);
-                            if r != 0 {
-                                ic.index_of(&p1.id_map, r)
-                                    .map(|i| i as u32)
-                                    .unwrap_or(u32::MAX)
-                            } else {
-                                u32::MAX
-                            }
-                        } else {
-                            u32::MAX
-                        };
-                        let val_dense = if vo + obj_ref_width <= blob.len() {
-                            let r = read_ref(&blob[vo..], obj_ref_width);
-                            if r != 0 {
-                                ic.index_of(&p1.id_map, r)
-                                    .map(|i| i as u32)
-                                    .unwrap_or(u32::MAX)
-                            } else {
-                                u32::MAX
-                            }
-                        } else {
-                            u32::MAX
-                        };
-                        node_kv_raw.insert(self_idx as u32, (key_dense, val_dense));
-                    }
-                }
-            }
+            state.on_instance(addr, class_id, blob, p1, shallow, descs)
         }
-        // ── on_prim_array: every PRIM_ARRAY_DUMP ──────────────────────────────
         Record::PrimArray(addr, elem_type, count, bytes) => {
-            // Top prim arrays: fold EVERY primitive array (not just constant ones).
-            // Key on the element type code; the name resolves without `class_ids`.
-            let (idx, sh) = match ic.index_of(&p1.id_map, addr) {
-                Some(i) => (i as u32, shallow[i] as u64),
-                None => (u32::MAX, 0),
-            };
-            if idx != u32::MAX {
-                top_prim.add(idx, elem_type as u64, count, sh, u64::MAX);
-            }
-            // Attribution: record this primitive array as a container (kind 7).
-            if collect_attribution && idx != u32::MAX {
-                if container_records.len() < CONTAINER_CAP {
-                    container_records.insert(
-                        addr,
-                        ContainerRecord {
-                            container_idx: idx,
-                            elements: count,
-                            kind: 7,
-                            container_class: prim_array_class_name(elem_type).to_string(),
-                            // Primitive array: length == capacity == elements.
-                            capacity: count,
-                        },
-                    );
-                } else {
-                    containers_truncated = true;
-                }
-            }
-            if count < 2 {
-                return;
-            }
-            let esz = match HprofType::from_code(elem_type) {
-                Some(t) => t.byte_size(),
-                None => return,
-            };
-            if esz == 0 || bytes.len() < esz * 2 {
-                return;
-            }
-            let first = &bytes[0..esz];
-            // All elements equal?
-            let all_equal = bytes
-                .chunks_exact(esz)
-                .take(count as usize)
-                .all(|c| c == first);
-            if !all_equal {
-                return;
-            }
-            let value = decode_prim_value(elem_type, first);
-            let key = (elem_type, count, value);
-            if const_groups.contains_key(&key) || const_groups.len() < CONST_ARRAY_CAP {
-                let e = const_groups.entry(key).or_insert((0, 0));
-                e.0 += 1;
-                e.1 += sh;
-                // Sample this array's address for post-scan owner attribution.
-                if collect_attribution {
-                    let s = const_owner_samples.entry(key).or_default();
-                    if s.len() < CONST_ARRAY_OWNER_SAMPLE {
-                        s.push(addr);
-                    }
-                }
-            } else {
-                const_truncated = true;
-                const_other.0 += 1;
-                const_other.1 += sh;
-            }
+            state.on_prim_array(addr, elem_type, count, bytes, p1, shallow)
         }
-        // ── on_obj_array: every OBJ_ARRAY_DUMP ────────────────────────────────
-        Record::ObjArray(addr, array_class_id, count, elem_ref_bytes) => {
-            if count == 0 {
-                return;
-            }
-            // Non-null slots: count nonzero id_size-wide refs.
-            let mut non_null: u64 = 0;
-            let mut slot_targets: Vec<u32> = Vec::new();
-            for slot in 0..count as usize {
-                let off = slot * obj_ref_width;
-                if off + obj_ref_width > elem_ref_bytes.len() {
-                    break;
-                }
-                let r = read_ref(&elem_ref_bytes[off..], obj_ref_width);
-                if r != 0 {
-                    non_null += 1;
-                    if collect_attribution && slot_targets.len() < COLL_VALUES_PER_COLLECTION {
-                        if let Some(ti) = ic.index_of(&p1.id_map, r) {
-                            slot_targets.push(ti as u32);
-                        }
-                    }
-                }
-            }
-            // #11 array fill ratio over ALL object arrays. Attribute THIS array's
-            // own shallow size.
-            let (arr_idx, arr_shallow) = match ic.index_of(&p1.id_map, addr) {
-                Some(i) => (i as u32, shallow[i] as u64),
-                None => (u32::MAX, 0),
-            };
-            // Wasted bytes: unused (null) slots × the reference slot width — the
-            // reclaimable backing-store bytes if the array were sized to fit.
-            let arr_wasted = count
-                .saturating_sub(non_null)
-                .saturating_mul(obj_ref_width as u64);
-            array_fill.add(non_null, count, arr_shallow, arr_wasted);
-
-            // Top object arrays: fold EVERY object array. The per-class key is the
-            // array class id read from the record; names resolved later via
-            // obj_array_name_of_key (no class_ids needed at assembly time).
-            if arr_idx != u32::MAX {
-                top_obj.add(arr_idx, array_class_id, count, arr_shallow, non_null);
-            }
-
-            // Attribution: record this object array as a container (kind 6).
-            if collect_attribution && arr_idx != u32::MAX {
-                if container_records.len() < CONTAINER_CAP {
-                    container_records.insert(
-                        addr,
-                        ContainerRecord {
-                            container_idx: arr_idx,
-                            elements: non_null, // used slots (non-null)
-                            kind: 6,
-                            container_class: pretty_name(array_class_id, p1),
-                            // Capacity = total slot count; elements = non-null slots.
-                            capacity: count,
-                        },
-                    );
-                } else {
-                    containers_truncated = true;
-                }
-            }
-
-            // Defer the tracked-collection fold (#9 / #13) to a post-pass loop:
-            // `wanted_arrays` may not yet contain this array's owning collection
-            // (its INSTANCE_DUMP can appear later in the file). Collect the raw
-            // per-array data now; fold after the single scan completes.
-            if collect_attribution {
-                obj_array_raw.push((addr, non_null, count, slot_targets));
-            } else {
-                // Compact path: slot_targets is always empty, avoid Vec overhead.
-                obj_array_raw_compact.push((addr, non_null as u32, count as u32));
-            }
+        Record::ObjArray(addr, class_id, count, refs) => {
+            state.on_obj_array(addr, class_id, count, refs, p1, shallow)
         }
     })?;
-
-    // ── Post-pass fold: tracked-collection fill (#9) + map-collision (#13) ─────
-    // `wanted_arrays` is now fully populated (the single scan is done), so this
-    // in-memory loop reproduces the old scan-3 `wanted_arrays.get(&addr)` fold
-    // exactly. The accumulators are order-independent sums, so the result is
-    // byte-identical to folding inline during a dedicated obj-array scan.
-    let mut coll_fill_tracked: u64 = 0;
-    let mut map_collision_tracked: u64 = 0;
-    let mut coll_values: Vec<CollValuesRaw> = Vec::new();
-    let mut coll_values_truncated = false;
-
-    // Compact path (default): drain the compact vec without slot_targets.
-    for (addr, non_null_u32, count_u32) in obj_array_raw_compact.drain(..) {
-        let non_null = non_null_u32 as u64;
-        let count = count_u32 as u64;
-        if let Some(want) = wanted_arrays.get(&addr) {
-            let used = if want.size > 0 { want.size } else { non_null };
-            let wasted = count
-                .saturating_sub(used.min(count))
-                .saturating_mul(obj_ref_width as u64);
-            coll_fill.add(used, count, want.coll_shallow, wasted);
-            coll_fill_tracked += 1;
-            if want.is_map {
-                map_collision.add(non_null, count, want.coll_shallow, 0);
-                map_collision_tracked += 1;
-            }
-        }
-    }
-
-    // Attribution path (--collections): drain the full vec with slot_targets.
-    for (addr, non_null, count, slot_targets) in obj_array_raw.drain(..) {
-        if let Some(want) = wanted_arrays.get(&addr) {
-            let used = if want.size > 0 { want.size } else { non_null };
-            let wasted = count
-                .saturating_sub(used.min(count))
-                .saturating_mul(obj_ref_width as u64);
-            coll_fill.add(used, count, want.coll_shallow, wasted);
-            coll_fill_tracked += 1;
-            if let Some(rec) = container_records.get_mut(&want.coll_addr) {
-                rec.elements = used;
-                rec.capacity = count;
-            }
-            if want.is_map {
-                map_collision.add(non_null, count, want.coll_shallow, 0);
-                map_collision_tracked += 1;
-            }
-            if !slot_targets.is_empty() {
-                if coll_values.len() < COLL_VALUES_GROUP_CAP {
-                    coll_values.push(CollValuesRaw {
-                        container_idx: want.coll_idx,
-                        kind: want.coll_kind,
-                        container_class: want.coll_class.clone(),
-                        owner: None,
-                        value_indices: slot_targets,
-                    });
-                } else {
-                    coll_values_truncated = true;
-                }
-            }
-        }
-    }
-
-    // ── Attribution join: match each holder edge's pointee against a container
-    // record, emitting one AttributionRaw per hit (resolving interned names to
-    // owned Strings while class_map/strings are still alive). ─────────────────
-    let attribution_raw = if collect_attribution {
-        Some(join_attribution(
-            &edges,
-            &container_records,
-            &holder_class_names,
-            &field_names,
-        ))
-    } else {
-        None
-    };
-    let attribution_truncated = edges_truncated || containers_truncated || coll_values_truncated;
-
-    // ── Array-owner map: pointee address → primary `Class#field` (first-wins).
-    // Built unconditionally from array_owner_by_addr (the lightweight scan).
-    // Under --collections, also merge edges-derived labels for collection
-    // backing arrays (these may override the light-scan label, giving the
-    // collection-aware attribution priority for tracked collections).
-    let owner_by_addr: HashMap<u64, String> = if collect_attribution {
-        let mut m = array_owner_by_addr;
-        for e in &edges {
-            m.entry(e.pointee).or_insert_with(|| {
-                format!(
-                    "{}#{}",
-                    holder_class_names[e.holder_class_key as usize],
-                    field_names[e.field_key as usize]
-                )
-            });
-        }
-        m
-    } else {
-        array_owner_by_addr
-    };
-
-    // ── Fields-by-size raw groups: (holder_class, field) → distinct pointee
-    // dense indices. Retained/pointee-type are computed later in build_model
-    // where idom/class_idx are known. Bounded by group + per-group caps. ──────
-    let fields_by_size_raw: Option<Vec<FieldSizeRaw>> = if collect_attribution {
-        Some(assemble_field_size_raw(
-            &edges,
-            &holder_class_names,
-            &field_names,
-            p1,
-        ))
-    } else {
-        None
-    };
-
-    // ── Collection value tallies: per-collection non-null element dense indices,
-    // folded from the backing-array walk. Owner is joined here (owner_by_addr is
-    // now built) by resolving each collection's address from its dense index.
-    // Runtime element types resolved later in build_model. Only present under
-    // `--collections`. ─────────────────────────────────────────────────────────
-    let coll_values_raw: Option<Vec<CollValuesRaw>> = if collect_attribution {
-        for c in &mut coll_values {
-            let addr = p1.id_map.addr_at(c.container_idx as usize);
-            c.owner = owner_by_addr.get(&addr).cloned();
-        }
-        Some(coll_values)
-    } else {
-        None
-    };
-
-    // ── Assemble collection views ─────────────────────────────────────────────
-    // Per-kind summary in fixed enum order (List,Map,Set,Deque,Queue,Tree),
-    // skipping kinds with zero count for cleaner output — deterministic.
-    const KIND_ORDER: [CollKind; 6] = [
-        CollKind::List,
-        CollKind::Map,
-        CollKind::Set,
-        CollKind::Deque,
-        CollKind::Queue,
-        CollKind::Tree,
-    ];
-    let kind_summary = CollectionKindSummary {
-        kinds: KIND_ORDER
-            .iter()
-            .filter_map(|&k| {
-                let (count, total_elements, total_shallow, max_elements) =
-                    kind_stats[k.discriminant() as usize];
-                (count > 0).then(|| CollectionKindStat {
-                    kind: k.label().to_string(),
-                    count,
-                    total_elements,
-                    total_shallow,
-                    max_elements,
-                })
-            })
-            .collect(),
-    };
-    let collections = CollectionsAnalysis {
-        collection_fill_ratio: CollectionFillRatio {
-            tracked: coll_fill_tracked,
-            total: coll_total,
-            buckets: coll_fill.into_buckets(),
-        },
-        collections_by_size: coll_size_acc.into_by_size(),
-        array_fill_ratio: ArrayFillRatio {
-            tracked: array_fill.total_objects(),
-            buckets: array_fill.into_buckets(),
-        },
-        map_collision_ratio: MapCollisionRatio {
-            tracked: map_collision_tracked,
-            total: map_total,
-            buckets: map_collision.into_buckets(),
-        },
-        constant_primitive_arrays: assemble_const_arrays(
-            const_groups,
-            const_owner_samples,
-            Some(&owner_by_addr),
-            const_other,
-            const_truncated,
-        ),
-        top_prim_arrays: top_prim.into_top_arrays(p1, prim_array_name_of_key, Some(&owner_by_addr)),
-        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, Some(&owner_by_addr)),
-        kind_summary,
-    };
-
-    // ── Assemble reference views ──────────────────────────────────────────────
-    let references = ReferencesAnalysis {
-        soft: assemble_ref_stats("Soft", ref_instances[0], &ref_hist[0], ref_hist_other[0]),
-        weak: assemble_ref_stats("Weak", ref_instances[1], &ref_hist[1], ref_hist_other[1]),
-        phantom: assemble_ref_stats("Phantom", ref_instances[2], &ref_hist[2], ref_hist_other[2]),
-    };
-
-    Ok((
-        collections,
-        references,
-        referent_idx,
-        null_referent_count,
-        attribution_raw,
-        fields_by_size_raw,
-        coll_values_raw,
-        if collect_attribution {
-            Some(node_kv_raw)
-        } else {
-            None
-        },
-        attribution_truncated,
-        dbb_capacity_sum,
-        tl_null_key_count,
-        tl_entry_records,
-    ))
+    state.finish(p1)
 }
 
 /// Size-histogram accumulator (power-of-two upper bounds + empty count).

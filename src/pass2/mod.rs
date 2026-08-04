@@ -544,6 +544,14 @@ impl Pass2 {
         let mut captured_props_addr: u64 = 0;
 
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
+        // Create field-decode state before the scan so it can be fused into
+        // the single 2a pass, eliminating the separate build_field_decode_views
+        // rescan.  shallow is fully populated before this point (sized in
+        // Phase 0b), and p1/opts live through the end of this block.
+        let mut fd_state = fielddecode::FieldDecodeState::new(
+            id_size,
+            opts.collections,
+        );
         {
             let mut r = source.open()?;
             // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
@@ -584,6 +592,10 @@ impl Pass2 {
                             system_class_addr,
                             props_name_id,
                             &mut captured_props_addr,
+                            Some(&mut fd_state),
+                            &p1,
+                            &shallow,
+                            &opts.coll_descs,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -595,6 +607,28 @@ impl Pass2 {
         }
         crate::trace::probe("pass2: after 2a scan (out+in_degree filled)");
         t_phase!("2a scan done");
+
+        // Always-on field-decode views (collections, arrays, references). The
+        // state was populated inline during the 2a scan above (fused pass),
+        // so this just runs the post-scan fold without any additional I/O.
+        // Must be called here — fd_state borrows &p1 and &shallow which are
+        // mutated below (kind/class_ids freed, shallow zero-size patched).
+        let (
+            fd_collections,
+            fd_references,
+            fd_referent_idx,
+            fd_null_referent_count,
+            fd_attribution_raw,
+            fd_fields_by_size_raw,
+            fd_coll_values_raw,
+            fd_node_kv,
+            fd_attribution_trunc,
+            fd_dbb_capacity_sum,
+            fd_tl_null_key_count,
+            fd_tl_entry_records,
+        ) = fd_state.finish(&p1)?;
+        crate::trace::probe("pass2: after field_decode_views (fused into 2a, no extra scan)");
+        t_phase!("fielddecode done");
 
         // Finalize SingleScan query results while class metadata is still live.
         // (No name/OQL source yet — the CLI wiring task fills these; empty slices
@@ -911,32 +945,6 @@ impl Pass2 {
         let (system_properties, jvm_version) =
             resolve_system_properties(&open, &p1, captured_props_addr)?;
         t_phase!("system_props done");
-
-        // Always-on field-decode views (collections, arrays, references). One
-        // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so
-        // RSS stays within the grant. Must run while class_map/strings are alive.
-        let (
-            fd_collections,
-            fd_references,
-            fd_referent_idx,
-            fd_null_referent_count,
-            fd_attribution_raw,
-            fd_fields_by_size_raw,
-            fd_coll_values_raw,
-            fd_node_kv,
-            fd_attribution_trunc,
-            fd_dbb_capacity_sum,
-            fd_tl_null_key_count,
-            fd_tl_entry_records,
-        ) = fielddecode::build_field_decode_views(
-            &open,
-            &p1,
-            &shallow,
-            opts.collections,
-            &opts.coll_descs,
-        )?;
-        crate::trace::probe("pass2: after field_decode_views (3 extra scans done)");
-        t_phase!("fielddecode done");
 
         // Free class_ids now: build_field_decode_views was its last reader
         // (class_name_of_index uses it for referent class lookups). Releasing
@@ -1355,6 +1363,10 @@ impl Pass2 {
         system_class_addr: u64,
         props_name_id: u64,
         captured_props_addr: &mut u64,
+        mut fd: Option<&mut fielddecode::FieldDecodeState>,
+        fd_p1: &Pass1,
+        fd_shallow: &[u32],
+        fd_descs: &[CollDesc],
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1468,6 +1480,9 @@ impl Pass2 {
                             }
                         }
                     }
+                    if let Some(ref mut fds) = fd {
+                        fds.on_instance(addr, class_id, scratch, fd_p1, fd_shallow, fd_descs);
+                    }
                 }
                 heap::OBJ_ARRAY_DUMP => {
                     let addr = r.id()?;
@@ -1524,6 +1539,9 @@ impl Pass2 {
                             }
                         }
                     }
+                    if let Some(ref mut fds) = fd {
+                        fds.on_obj_array(addr, elem_class_id, count, scratch, fd_p1, fd_shallow);
+                    }
                 }
                 heap::PRIM_ARRAY_DUMP => {
                     let addr = r.id()?;
@@ -1533,9 +1551,18 @@ impl Pass2 {
                     let esz = HprofType::from_code(elem_type)
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
-                    r.skip(count * esz)?;
-                    checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
+                    let byte_len = count * esz;
+                    if fd.is_some() {
+                        r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    } else {
+                        r.skip(byte_len)?;
+                    }
+                    checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
                     // No object edges; shallow already set by Phase 0b.
+
+                    if let Some(ref mut fds) = fd {
+                        fds.on_prim_array(addr, elem_type, count, scratch, fd_p1, fd_shallow);
+                    }
 
                     // OQL: deliver the primitive array to any active query executor.
                     // Primitive arrays carry no class-object address; synthesize the
