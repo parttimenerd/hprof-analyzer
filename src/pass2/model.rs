@@ -995,17 +995,16 @@ impl InboundBuilder {
         // Each node's slice = vbyte(count) then `count` vbyte pre-order deltas.
         let mut inb_block_off: Vec<u64> = Vec::with_capacity(n / INB_BLOCK + 2);
         let mut inb_data: Vec<u8> = Vec::new();
-        // Pre-allocate inb_data to ~2.5 bytes/edge (observed: 4173 MB / 1653 M
-        // edges ≈ 2.53 B/edge on the 34 GB benchmark dump) to avoid doubling
-        // past 2× the true size. Without this the Vec doubles from ~4 GB to an
-        // 8 GB capacity, wasting ~4 GB of RSS through Phase 4.
-        // Cap at 6 GB so we don't over-commit on small dumps.
+        // Pre-allocate inb_data to 2.0 bytes/edge. Measured on the 34 GB dump:
+        // final len=2134 MB at 1653 M edges = 1.29 B/edge, so 2.0× gives safe
+        // headroom with no realloc, saving ~800 MB vs the old 2.5× reserve.
+        // Cap at 6 GB so we don't over-commit on unusually dense small dumps.
         // On 32-bit targets (wasm32) usize::MAX is the upper bound instead.
         #[cfg(target_pointer_width = "64")]
         let six_gb: usize = 6 * 1024 * 1024 * 1024;
         #[cfg(not(target_pointer_width = "64"))]
         let six_gb: usize = usize::MAX;
-        let inb_data_cap = ((total_inb as usize).saturating_mul(5) / 2).min(six_gb);
+        let inb_data_cap = ((total_inb as usize).saturating_mul(2)).min(six_gb);
         inb_data.reserve(inb_data_cap);
 
         // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.
