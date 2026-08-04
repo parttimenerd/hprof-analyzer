@@ -551,6 +551,7 @@ impl Pass2 {
         let mut fd_state = fielddecode::FieldDecodeState::new(
             id_size,
             opts.collections,
+            fielddecode::CollCaps::from_size(opts.report_size),
         );
         {
             let mut r = source.open()?;

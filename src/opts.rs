@@ -1,29 +1,84 @@
 //! Analysis options and detail-level presets, shared between the CLI binary
 //! and the WASM library crate.
 
-/// Controls the capture tier for --obj-graph: how many edges per object are included.
-/// Larger tiers produce bigger HTML reports but cover more of the heap.
+/// Controls the capture tier for --obj-graph and the collection-detail caps
+/// for --collections / --full-analysis. Larger tiers produce richer reports
+/// (more element-type samples, more collections tracked, more holder edges)
+/// at the cost of more RSS and wall time during the analysis.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum ReportSize {
+    Small,   // obj-graph: edge_cap=100; collections: minimum-RSS caps
     #[default]
-    Small, // edge_cap=100  (default, current behaviour)
-    Medium, // edge_cap=150
-    Large,  // edge_cap=300
+    Default, // obj-graph: edge_cap=150; collections: balanced caps (default)
+    Large,   // obj-graph: edge_cap=300; collections: 2× balanced caps
+    Max,     // obj-graph: edge_cap=500; collections: original caps (most detail)
 }
 
 impl ReportSize {
     pub fn edge_cap(self) -> usize {
         match self {
-            ReportSize::Small => 100,
-            ReportSize::Medium => 150,
-            ReportSize::Large => 300,
+            ReportSize::Small   => 100,
+            ReportSize::Default => 150,
+            ReportSize::Large   => 300,
+            ReportSize::Max     => 500,
         }
     }
     pub fn tier_name(self) -> &'static str {
         match self {
-            ReportSize::Small => "small",
-            ReportSize::Medium => "medium",
-            ReportSize::Large => "large",
+            ReportSize::Small   => "small",
+            ReportSize::Default => "default",
+            ReportSize::Large   => "large",
+            ReportSize::Max     => "max",
+        }
+    }
+
+    /// Max holder→pointee edges collected under --collections (16 B each).
+    pub fn field_ref_cap(self) -> usize {
+        match self {
+            ReportSize::Small   =>  1_000_000, //  16 MB
+            ReportSize::Default =>  2_500_000, //  40 MB
+            ReportSize::Large   =>  5_000_000, //  80 MB
+            ReportSize::Max     => 10_000_000, // 160 MB (original)
+        }
+    }
+
+    /// Max container records collected under --collections.
+    pub fn container_cap(self) -> usize {
+        match self {
+            ReportSize::Small   =>   150_000,
+            ReportSize::Default =>   375_000,
+            ReportSize::Large   =>   750_000,
+            ReportSize::Max     => 1_500_000, // original
+        }
+    }
+
+    /// Max node/entry wrapper objects stored in the node-KV map.
+    pub fn node_kv_cap(self) -> usize {
+        match self {
+            ReportSize::Small   =>   500_000,
+            ReportSize::Default => 1_250_000,
+            ReportSize::Large   => 2_500_000,
+            ReportSize::Max     => 5_000_000, // original
+        }
+    }
+
+    /// Max element slots sampled per collection for the value-type breakdown.
+    pub fn coll_values_per_collection(self) -> usize {
+        match self {
+            ReportSize::Small   =>  64,
+            ReportSize::Default => 256,
+            ReportSize::Large   => 512,
+            ReportSize::Max     => 4_096, // original
+        }
+    }
+
+    /// Max distinct collections whose element types are tallied.
+    pub fn coll_values_group_cap(self) -> usize {
+        match self {
+            ReportSize::Small   =>  10_000,
+            ReportSize::Default =>  50_000,
+            ReportSize::Large   => 100_000,
+            ReportSize::Max     => 200_000, // original
         }
     }
 }
@@ -142,7 +197,7 @@ impl DetailLevel {
             reachable_only: false,
             ref_paths: false,
             obj_graph: false,
-            report_size: ReportSize::Small,
+            report_size: ReportSize::Default,
             dev_report: false,
             skip_report: false,
             field_stats: false,

@@ -64,14 +64,48 @@ const FIELD_SIZE_GROUP_CAP: usize = 200_000;
 /// Max distinct pointees retained per `Class#field` group (bounds the summed
 /// retained work + memory; groups beyond this are marked truncated).
 const FIELD_SIZE_POINTEES_PER_GROUP: usize = 100_000;
-/// Max element slots tallied per collection for the value-type breakdown.
-const COLL_VALUES_PER_COLLECTION: usize = 4_096;
+/// Max element slots sampled per collection for the value-type breakdown.
+/// 256 samples is enough to identify the dominant type; the report shows
+/// at most 4-5 type buckets per collection, so extra samples add no value.
+const COLL_VALUES_PER_COLLECTION: usize = 256;
 /// Max distinct collections whose element types are tallied.
-const COLL_VALUES_GROUP_CAP: usize = 200_000;
+/// Reduced from 200_000 — the report shows top-25 by retained size, so 50k
+/// collections provides ample coverage while capping the slot-target Vec pool.
+const COLL_VALUES_GROUP_CAP: usize = 50_000;
 /// Max node/entry wrapper objects stored in the node-KV map (dense idx →
 /// (key dense idx, value dense idx)). Entries beyond this cap are silently
 /// dropped; callers fall back to showing the wrapper class name.
 const NODE_KV_CAP: usize = 5_000_000;
+
+/// Runtime caps for collection-detail capture. Built from [`crate::opts::ReportSize`]
+/// and passed to [`FieldDecodeState::new`] so caps scale with `--size`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CollCaps {
+    pub(crate) field_ref_cap: usize,
+    pub(crate) container_cap: usize,
+    pub(crate) node_kv_cap: usize,
+    pub(crate) coll_values_per_collection: usize,
+    pub(crate) coll_values_group_cap: usize,
+}
+
+impl CollCaps {
+    /// Caps from `ReportSize`.
+    pub(crate) fn from_size(size: crate::opts::ReportSize) -> Self {
+        Self {
+            field_ref_cap: size.field_ref_cap(),
+            container_cap: size.container_cap(),
+            node_kv_cap: size.node_kv_cap(),
+            coll_values_per_collection: size.coll_values_per_collection(),
+            coll_values_group_cap: size.coll_values_group_cap(),
+        }
+    }
+}
+
+impl Default for CollCaps {
+    fn default() -> Self {
+        Self::from_size(crate::opts::ReportSize::Default)
+    }
+}
 
 // ── Collection descriptor table ──────────────────────────────────────────────
 
@@ -926,6 +960,7 @@ const ARRAY_OWNER_CAP: usize = 500_000;
 pub(crate) struct FieldDecodeState {
     collect_attribution: bool,
     obj_ref_width: usize,
+    caps: CollCaps,
 
     // caches
     role_cache: HashMap<u64, ClassRole>,
@@ -1001,12 +1036,14 @@ impl FieldDecodeState {
     pub(crate) fn new(
         id_size: u8,
         collect_attribution: bool,
+        caps: CollCaps,
     ) -> Self {
         let obj_ref_width = id_size as usize;
 
         Self {
             collect_attribution,
             obj_ref_width,
+            caps,
             dbb_resolved: false,
             role_cache: HashMap::new(),
             pretty_name_cache: HashMap::new(),
@@ -1136,7 +1173,7 @@ impl FieldDecodeState {
                 }
                 if collect_attribution {
                     if let Some(cidx) = self.ic.index_of(&p1.id_map, addr) {
-                        if self.container_records.len() < CONTAINER_CAP {
+                        if self.container_records.len() < self.caps.container_cap {
                             self.container_records.insert(
                                 addr,
                                 ContainerRecord {
@@ -1253,7 +1290,7 @@ impl FieldDecodeState {
             }
         }
 
-        if collect_attribution && self.edges.len() < FIELD_REF_CAP {
+        if collect_attribution && self.edges.len() < self.caps.field_ref_cap {
             // Borrow check: we need to call or_insert_with but the closure
             // references self.field_name_map and self.field_names which are
             // disjoint from self.obj_field_layout. Use a local flag to detect
@@ -1290,7 +1327,7 @@ impl FieldDecodeState {
             // while also mutating self.edges.
             let layout: Vec<(u32, u32)> = self.obj_field_layout[&class_id].clone();
             for (field_key, offset) in layout {
-                if self.edges.len() >= FIELD_REF_CAP {
+                if self.edges.len() >= self.caps.field_ref_cap {
                     self.edges_truncated = true;
                     break;
                 }
@@ -1337,7 +1374,7 @@ impl FieldDecodeState {
             }
         }
 
-        if collect_attribution && self.node_kv_raw.len() < NODE_KV_CAP {
+        if collect_attribution && self.node_kv_raw.len() < self.caps.node_kv_cap {
             if !self.node_kv_layout.contains_key(&class_id) {
                 let raw_name = class_map
                     .get(&class_id)
@@ -1519,7 +1556,7 @@ impl FieldDecodeState {
         let mut slot_targets: Option<Vec<u32>> = None;
         let in_wanted = collect_attribution && self.wanted_arrays.contains_key(&addr);
         let slots_cap = self.obj_array_wanted_slots.len() + self.obj_array_deferred_slots.len();
-        let capture_slots = collect_attribution && (in_wanted || slots_cap < COLL_VALUES_GROUP_CAP);
+        let capture_slots = collect_attribution && (in_wanted || slots_cap < self.caps.coll_values_group_cap);
         for slot in 0..count as usize {
             let off = slot * obj_ref_width;
             if off + obj_ref_width > elem_ref_bytes.len() {
@@ -1530,7 +1567,7 @@ impl FieldDecodeState {
                 non_null += 1;
                 if capture_slots {
                     let tgts = slot_targets.get_or_insert_with(Vec::new);
-                    if tgts.len() < COLL_VALUES_PER_COLLECTION {
+                    if tgts.len() < self.caps.coll_values_per_collection {
                         if let Some(ti) = self.ic.index_of(&p1.id_map, r) {
                             tgts.push(ti as u32);
                         }
@@ -1593,7 +1630,7 @@ impl FieldDecodeState {
         // appeared as a backing array are simply discarded (slot targets unused).
         for (addr, tgts) in self.obj_array_deferred_slots.drain() {
             if self.wanted_arrays.contains_key(&addr) {
-                if self.obj_array_wanted_slots.len() < COLL_VALUES_GROUP_CAP {
+                if self.obj_array_wanted_slots.len() < self.caps.coll_values_group_cap {
                     self.obj_array_wanted_slots.insert(addr, tgts);
                 }
             }
@@ -1624,7 +1661,7 @@ impl FieldDecodeState {
                 if collect_attribution {
                     if let Some(slot_targets) = self.obj_array_wanted_slots.remove(&addr) {
                         if !slot_targets.is_empty() {
-                            if coll_values.len() < COLL_VALUES_GROUP_CAP {
+                            if coll_values.len() < self.caps.coll_values_group_cap {
                                 coll_values.push(CollValuesRaw {
                                     container_idx: want.coll_idx,
                                     kind: want.coll_kind,
@@ -1825,12 +1862,13 @@ pub(crate) fn build_field_decode_views<O>(
     p1: &Pass1,
     shallow: &[u32],
     collect_attribution: bool,
+    caps: CollCaps,
     descs: &[CollDesc],
 ) -> std::io::Result<FieldDecodeViews>
 where
     O: Fn() -> std::io::Result<crate::reader::HprofReader>,
 {
-    let mut state = FieldDecodeState::new(p1.id_size, collect_attribution);
+    let mut state = FieldDecodeState::new(p1.id_size, collect_attribution, caps);
     scan_all_records(&open, p1.id_size, |rec| match rec {
         Record::Instance(addr, class_id, blob) => {
             state.on_instance(addr, class_id, blob, p1, shallow, descs)

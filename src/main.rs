@@ -228,6 +228,20 @@ struct Cli {
     #[arg(long, num_args = 0..=1, default_missing_value = "small", value_name = "TIER")]
     obj_graph: Option<String>,
 
+    /// Collection-detail size preset for --collections / --full-analysis.
+    /// Controls how many holder-edges, container records, node-KV entries, and
+    /// element-type samples are captured. Larger sizes give richer collection
+    /// breakdowns at the cost of higher peak RSS.
+    ///
+    ///   --size small   → lowest RSS (1M edges, 10k collections tracked)
+    ///   --size default → balanced (2.5M edges, 50k collections) [default]
+    ///   --size large   → 2× balanced caps (5M edges, 100k collections)
+    ///   --size max     → original uncapped limits (10M edges, 200k collections)
+    ///
+    /// Only affects --collections / --full-analysis; ignored for basic analysis.
+    #[arg(long, default_value = "default", value_name = "SIZE")]
+    size: String,
+
     /// Embed the React app bundle as plain readable JS in the HTML report
     /// (no deflate/base64). The report is ~750 KB larger but the JS is visible
     /// and editable in browser DevTools — useful for iterating on the UI.
@@ -841,12 +855,25 @@ fn run_default(cli: Cli) {
             .map(|s| s.to_ascii_lowercase())
             .as_deref()
         {
-            Some("medium") => crate::opts::ReportSize::Medium,
+            Some("medium") => crate::opts::ReportSize::Default,
             Some("large") => crate::opts::ReportSize::Large,
             None | Some("small") => crate::opts::ReportSize::Small,
             Some(other) => {
                 eprintln!(
                     "error: unknown --obj-graph tier '{other}' (expected: small, medium, large)"
+                );
+                std::process::exit(2);
+            }
+        };
+        // --size overrides the collection-detail caps (independent of --obj-graph tier).
+        opts.report_size = match cli.size.to_ascii_lowercase().as_str() {
+            "small"   => crate::opts::ReportSize::Small,
+            "default" => crate::opts::ReportSize::Default,
+            "large"   => crate::opts::ReportSize::Large,
+            "max"     => crate::opts::ReportSize::Max,
+            other => {
+                eprintln!(
+                    "error: unknown --size tier '{other}' (expected: small, default, large, max)"
                 );
                 std::process::exit(2);
             }
