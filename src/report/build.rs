@@ -3624,6 +3624,7 @@ pub(crate) fn build_leak_suspects(
 
 /// Bucket a DESC-sorted slice of retained sizes into a power-of-two size
 /// distribution plus basic stats. Additive; not parity-compared.
+#[allow(dead_code)]
 pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribution {
     if retained_desc.is_empty() {
         return TopSizeDistribution::default();
@@ -3802,102 +3803,7 @@ fn build_top_consumers(
         .map(|i| g.shallow[i] as u64)
         .sum();
 
-    // Sort by retained desc for biggest objects, with tie-breaker on ascending
-    // object index (top_level built in ascending order).
-    let mut sorted_top: Vec<u32> = top_level.clone();
-    sorted_top.sort_unstable_by(|&a, &b| {
-        g.retained[b as usize]
-            .cmp(&g.retained[a as usize])
-            .then(a.cmp(&b))
-    });
-
-    // Retained-size distribution over EVERY top-level dominator (independent of
-    // the top_n truncation used for `biggest_objects`).
-    let sorted_retained: Vec<u64> = sorted_top.iter().map(|&i| g.retained[i as usize]).collect();
-    let size_distribution = build_size_distribution(&sorted_retained);
-
-    // Biggest Objects
-    // Owner attribution (Class#field) for the biggest objects, resolved only
-    // under `--collections` (fields_by_size_raw is None otherwise). Build a
-    // reverse map pointee-dense-idx -> Class#field, restricted to the top-N
-    // object indices we're about to emit so it stays small. First writer wins
-    // (raw groups are already deterministically ordered).
-    let biggest_owner: std::collections::HashMap<u32, String> = {
-        use std::collections::{HashMap, HashSet};
-        match g.fields_by_size_raw.as_ref() {
-            Some(raw) => {
-                let targets: HashSet<u32> = sorted_top.iter().take(top_n).copied().collect();
-                let mut m: HashMap<u32, String> = HashMap::new();
-                for fs in raw {
-                    for &p in &fs.pointee_indices {
-                        if targets.contains(&p) {
-                            m.entry(p)
-                                .or_insert_with(|| format!("{}#{}", fs.holder_class, fs.field));
-                        }
-                    }
-                }
-                m
-            }
-            None => std::collections::HashMap::new(),
-        }
-    };
-    let biggest_objects: Vec<ObjRow> = sorted_top
-        .iter()
-        .take(top_n)
-        .map(|&i| {
-            let idx = i as usize;
-            let ci = g.class_idx[idx] as usize;
-            // For class objects, show the class they represent (MAT parity: no
-            // "class " prefix)
-            let display_class = if class_obj_repr(g, idx) != undef {
-                let repr = class_obj_repr(g, idx) as usize;
-                if repr < g.class_names.len() {
-                    pretty_class_name(&g.class_names[repr])
-                } else if ci < g.class_names.len() {
-                    pretty_class_name(&g.class_names[ci])
-                } else {
-                    String::from("?")
-                }
-            } else if ci < g.class_names.len() {
-                pretty_class_name(&g.class_names[ci])
-            } else {
-                String::from("?")
-            };
-
-            let pct = if total_shallow > 0 {
-                g.retained[idx] as f64 / total_shallow as f64 * 100.0
-            } else {
-                0.0
-            };
-            // Integer basis points of the retained share, for deterministic
-            // JSON output (round-half-to-even via f64::round on *10000).
-            let pct_bp = if total_shallow > 0 {
-                (g.retained[idx] as f64 / total_shallow as f64 * 10000.0).round() as u64
-            } else {
-                0
-            };
-
-            let owner = biggest_owner.get(&i).cloned();
-            // held_via: use stack frame annotation only when no field owner found.
-            let held_via = if owner.is_none() {
-                stack_held_via.get(&i).cloned()
-            } else {
-                None
-            };
-            ObjRow {
-                obj_index_1based: idx + 1,
-                display_class,
-                shallow: g.shallow[idx] as u64,
-                retained: g.retained[idx],
-                pct_bp,
-                pct,
-                owner,
-                held_via,
-            }
-        })
-        .collect();
-
-    // Biggest Classes by Retained Heap
+    // Biggest Classes by Retained Heap (aggregate before sorting top_level)
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut class_count_map: Vec<u64> = vec![0; class_count];
     // Fold duplicate `java/lang/Class` rows into the canonical row (see
@@ -3927,6 +3833,9 @@ fn build_top_consumers(
             retained: class_retained[ci],
         })
         .collect();
+    drop(class_retained);
+    drop(class_count_map);
+    drop(class_order);
 
     // Biggest Packages: build a pruned package TREE (MAT PackageTreeResult
     // parity). Accumulate cumulative retained/shallow/count into a BTreeMap-keyed
@@ -4020,6 +3929,129 @@ fn build_top_consumers(
         }
     }
     let biggest_packages = convert(String::new(), root, total, threshold_bp);
+
+    // Sort top_level in-place by retained desc (no clone). Compute size
+    // distribution directly from sorted indices to avoid a Vec<u64> copy.
+    top_level.sort_unstable_by(|&a, &b| {
+        g.retained[b as usize]
+            .cmp(&g.retained[a as usize])
+            .then(a.cmp(&b))
+    });
+    let size_distribution = {
+        let k = top_level.len();
+        if k == 0 {
+            TopSizeDistribution::default()
+        } else {
+            let max = g.retained[top_level[0] as usize];
+            let min = g.retained[top_level[k - 1] as usize];
+            let median = g.retained[top_level[k / 2] as usize];
+            let mut total_ret: u64 = 0;
+            let mut map: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+            for &i in &top_level {
+                let r = g.retained[i as usize];
+                total_ret = total_ret.saturating_add(r);
+                let upper = if r <= 1 {
+                    1
+                } else {
+                    r.checked_next_power_of_two().unwrap_or(u64::MAX)
+                };
+                *map.entry(upper).or_insert(0) += 1;
+            }
+            let buckets = map
+                .into_iter()
+                .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
+                .collect();
+            TopSizeDistribution {
+                buckets,
+                count: k as u64,
+                min,
+                max,
+                median,
+                total: total_ret,
+            }
+        }
+    };
+
+    // Biggest Objects
+    // Owner attribution (Class#field) for the biggest objects, resolved only
+    // under `--collections` (fields_by_size_raw is None otherwise). Build a
+    // reverse map pointee-dense-idx -> Class#field, restricted to the top-N
+    // object indices we're about to emit so it stays small. First writer wins
+    // (raw groups are already deterministically ordered).
+    let biggest_owner: std::collections::HashMap<u32, String> = {
+        use std::collections::{HashMap, HashSet};
+        match g.fields_by_size_raw.as_ref() {
+            Some(raw) => {
+                let targets: HashSet<u32> = top_level.iter().take(top_n).copied().collect();
+                let mut m: HashMap<u32, String> = HashMap::new();
+                for fs in raw {
+                    for &p in &fs.pointee_indices {
+                        if targets.contains(&p) {
+                            m.entry(p)
+                                .or_insert_with(|| format!("{}#{}", fs.holder_class, fs.field));
+                        }
+                    }
+                }
+                m
+            }
+            None => std::collections::HashMap::new(),
+        }
+    };
+    let biggest_objects: Vec<ObjRow> = top_level
+        .iter()
+        .take(top_n)
+        .map(|&i| {
+            let idx = i as usize;
+            let ci = g.class_idx[idx] as usize;
+            // For class objects, show the class they represent (MAT parity: no
+            // "class " prefix)
+            let display_class = if class_obj_repr(g, idx) != undef {
+                let repr = class_obj_repr(g, idx) as usize;
+                if repr < g.class_names.len() {
+                    pretty_class_name(&g.class_names[repr])
+                } else if ci < g.class_names.len() {
+                    pretty_class_name(&g.class_names[ci])
+                } else {
+                    String::from("?")
+                }
+            } else if ci < g.class_names.len() {
+                pretty_class_name(&g.class_names[ci])
+            } else {
+                String::from("?")
+            };
+
+            let pct = if total_shallow > 0 {
+                g.retained[idx] as f64 / total_shallow as f64 * 100.0
+            } else {
+                0.0
+            };
+            // Integer basis points of the retained share, for deterministic
+            // JSON output (round-half-to-even via f64::round on *10000).
+            let pct_bp = if total_shallow > 0 {
+                (g.retained[idx] as f64 / total_shallow as f64 * 10000.0).round() as u64
+            } else {
+                0
+            };
+
+            let owner = biggest_owner.get(&i).cloned();
+            // held_via: use stack frame annotation only when no field owner found.
+            let held_via = if owner.is_none() {
+                stack_held_via.get(&i).cloned()
+            } else {
+                None
+            };
+            ObjRow {
+                obj_index_1based: idx + 1,
+                display_class,
+                shallow: g.shallow[idx] as u64,
+                retained: g.retained[idx],
+                pct_bp,
+                pct,
+                owner,
+                held_via,
+            }
+        })
+        .collect();
 
     TopConsumers {
         biggest_objects,
