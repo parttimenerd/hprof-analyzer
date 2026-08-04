@@ -59,6 +59,9 @@ pub struct AnalyzeOptions {
     pub dominator_tree_max_depth: usize,
     pub leak_children_cap: usize,
     pub top_consumers: usize,
+    /// How many histogram rows (sorted by retained desc) get a root-path chain.
+    /// Capped to avoid O(k×n) scan regression on dumps with many unique classes.
+    pub hist_root_path_top: usize,
     pub find_duplicates: bool,
     pub collections: bool,
     pub collection_config: Option<std::path::PathBuf>,
@@ -114,11 +117,11 @@ pub enum DetailLevel {
 impl DetailLevel {
     pub fn options(self) -> AnalyzeOptions {
         // (root_depth, alloc_top, thread_locals, dom_nodes, dom_depth,
-        //  leak_children, top_consumers)
-        let (rd, at, tl, dn, dd, lc, tc) = match self {
-            DetailLevel::Minimal => (10, 15, 5, 500, 10, 15, 10),
-            DetailLevel::Default => (30, 50, 20, 5000, 20, 50, 20),
-            DetailLevel::Max => (200, 500, 100, 100_000, 50, 500, 100),
+        //  leak_children, top_consumers, hist_root_path_top)
+        let (rd, at, tl, dn, dd, lc, tc, hrpt) = match self {
+            DetailLevel::Minimal => (10, 15, 5, 500, 10, 15, 10, 10),
+            DetailLevel::Default => (30, 50, 20, 5000, 20, 50, 20, 20),
+            DetailLevel::Max => (200, 500, 100, 100_000, 50, 500, 100, 100),
         };
         AnalyzeOptions {
             root_path_max_depth: rd,
@@ -128,6 +131,7 @@ impl DetailLevel {
             dominator_tree_max_depth: dd,
             leak_children_cap: lc,
             top_consumers: tc,
+            hist_root_path_top: hrpt,
             find_duplicates: false,
             collections: false,
             collection_config: None,

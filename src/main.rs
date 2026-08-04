@@ -134,6 +134,13 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Print resident-set size (RSS) at each labeled pipeline stage to stderr,
+    /// as `[trace-rss] <stage> RSS=N MB (peak N MB)`. Linux reads VmHWM for the
+    /// peak; use it to pinpoint which stage drives the memory high-water mark.
+    /// Analyze-only.
+    #[arg(long)]
+    trace_rss: bool,
+
     /// Show a live progress line on stderr. `auto` (default) enables it only
     /// when stderr is a terminal and --verbose is not set.
     #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
@@ -192,6 +199,12 @@ struct Cli {
     /// sum of retained sizes for their pointees. Adds one O(n) pass.
     #[arg(long)]
     field_stats: bool,
+
+    /// How many histogram rows (sorted by retained desc) get an expandable
+    /// GC-root path in the report. Default 20; use 0 to disable. Overrides
+    /// the value set by --detail. Analyze-only.
+    #[arg(long, value_name = "N")]
+    hist_root_path_top: Option<usize>,
 
     /// Enable all heavy opt-in analyses: equivalent to passing
     /// --obj-graph --collections --find-duplicates together.
@@ -788,6 +801,7 @@ fn run_default(cli: Cli) {
             ProgressWhen::Auto => !cli.verbose && std::io::stderr().is_terminal(),
         };
         progress::set_enabled(show_progress);
+        trace::set_enabled(cli.trace_rss);
         let fmt = if cli.dev {
             // --dev implies HTML unless an explicit format or .html extension already means HTML.
             let base = resolve_format(cli.format, cli.output.as_deref());
@@ -818,6 +832,9 @@ fn run_default(cli: Cli) {
             dev_report: cli.dev,
             ..opts
         };
+        if let Some(n) = cli.hist_root_path_top {
+            opts.hist_root_path_top = n;
+        }
         opts.report_size = match cli
             .obj_graph
             .as_deref()

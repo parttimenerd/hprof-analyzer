@@ -505,7 +505,7 @@ pub fn build_model(
 ) -> Report {
     let generated = now_iso8601();
     crate::trace::probe("build_model: before system_overview aggregates");
-    let overview = build_system_overview(g, depth_counts, opts.top_consumers);
+    let overview = build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
     crate::trace::probe("build_model: after system_overview aggregates");
     let leaks = build_leak_suspects(
         g,
@@ -2153,7 +2153,7 @@ fn compute_top_class_concentration_bp(
 /// histogram, retention concentration, loader rollup, duplicate classes) in a
 /// bounded set of passes over the graph. Injects MAT's synthetic
 /// `<system class loader>` object where MAT counts it, so totals match bit-exactly.
-fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> SystemOverview {
+fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize, hist_root_path_top: usize) -> SystemOverview {
     let n = g.n;
 
     // Count reachable objects and total shallow; track unreachable in the same loop.
@@ -2477,12 +2477,41 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         .collect();
 
     // Populate root_path for all histogram rows by retained heap.
-    // The histogram is already sorted retained-desc.
-    // For each class, find the highest-retained instance, then walk the
-    // dominator chain up to the GC root (mirroring build_leak_suspects root_path).
+    // Populate root_path for the top-20 histogram rows by retained heap.
+    // Single O(n) scan to find the highest-retained object per class, then
+    // walk the dominator chain for the top-20 rows only.
     if !g.idom.is_empty() && !g.retained.is_empty() {
-        // Build a map: object index → GC root type (minimum sub-tag, deterministic).
-        let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+        const HIST_ROOT_PATH_DEPTH: usize = 30;
+
+        let top_count = histogram.len().min(hist_root_path_top);
+
+        // Collect the class indices we care about (top-20 by retained).
+        let top_class_indices: std::collections::HashSet<u32> =
+            order[..top_count].iter().map(|&ci| ci as u32).collect();
+
+        // Single O(n) scan: for each object, if its class is in top-20, update best.
+        // best_per_ci: class_index → (obj_index, retained)
+        let undef_idom = u32::MAX;
+        let mut best_per_ci: std::collections::HashMap<u32, (usize, u64)> =
+            std::collections::HashMap::new();
+        for i in 0..n {
+            let ci = g.class_idx.get(i).copied().unwrap_or(u32::MAX);
+            if !top_class_indices.contains(&ci) {
+                continue;
+            }
+            if g.idom.get(i).copied().unwrap_or(undef_idom) == undef_idom {
+                continue;
+            }
+            let ret = g.retained.get(i).copied().unwrap_or(0);
+            let entry = best_per_ci.entry(ci).or_insert((i, ret));
+            if ret > entry.1 {
+                *entry = (i, ret);
+            }
+        }
+
+        // Build GC-root type map.
+        let mut root_type_of: std::collections::HashMap<u32, u8> =
+            std::collections::HashMap::new();
         for (idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
             root_type_of
                 .entry(*idx)
@@ -2491,32 +2520,10 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         }
 
         let vroot = n as u32;
-        let undef_idom = u32::MAX;
-        const HIST_ROOT_PATH_DEPTH: usize = 30;
 
-        // For every histogram row (by retained, already sorted), find the
-        // object of that class with the highest retained heap, then walk the
-        // dominator chain toward the GC root.
-        for hist_pos in 0..histogram.len() {
-            let ci = order[hist_pos]; // class index for this histogram row
-
-            // Find the highest-retained object of class `ci`.
-            let best_obj: Option<usize> = {
-                let mut best: Option<(usize, u64)> = None;
-                for i in 0..n {
-                    if g.class_idx.get(i).copied().unwrap_or(u32::MAX) as usize == ci
-                        && g.idom.get(i).copied().unwrap_or(undef_idom) != undef_idom
-                    {
-                        let ret = g.retained.get(i).copied().unwrap_or(0);
-                        if best.is_none_or(|(_, br)| ret > br) {
-                            best = Some((i, ret));
-                        }
-                    }
-                }
-                best.map(|(i, _)| i)
-            };
-
-            let Some(start_obj) = best_obj else {
+        for hist_pos in 0..top_count {
+            let ci = order[hist_pos] as u32;
+            let Some(&(start_obj, _)) = best_per_ci.get(&ci) else {
                 continue;
             };
 

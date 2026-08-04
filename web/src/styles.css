@@ -480,6 +480,10 @@ dialog.text-modal::backdrop {
   --rdt-color-highlight-text: var(--fg);
   --rdt-color-btn: var(--muted);
   --rdt-color-btn-disabled: var(--border);
+  --rdt-color-bg: #16181c;
+  --rdt-color-highlight: #2a2d34;
+  --rdt-color-selected: #2a2d34;
+  --rdt-color-striped: #1e2026;
 }
 /* Direct override for code/span inside RDT rows — needs !important because RDT sets
    --rdt-color-text-primary as an inline style on .rdt_headSeparator, which wins over
@@ -496,30 +500,15 @@ dialog.text-modal::backdrop {
     --rdt-color-highlight-text: var(--fg);
     --rdt-color-btn: var(--muted);
     --rdt-color-btn-disabled: var(--border);
+    --rdt-color-bg: #16181c;
+    --rdt-color-highlight: #2a2d34;
+    --rdt-color-selected: #2a2d34;
+    --rdt-color-striped: #1e2026;
   }
   :root:not([data-theme="light"]) .rdt_TableRow code,
   :root:not([data-theme="light"]) .rdt_TableRow span { color: var(--fg) !important; }
   :root:not([data-theme="light"]) .rdt_headSeparator { --rdt-color-text-primary: var(--fg) !important; }
 }
-
-/* ── Sticky section title strip ── */
-.sticky-section-header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  padding: 0.2rem 1rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--muted);
-  z-index: 4; /* below toc (z-index 5) */
-  pointer-events: none;
-  opacity: 0.93;
-  transition: opacity 0.15s;
-}
-@media print { .sticky-section-header { display: none; } }
 
 /* ── Keyboard shortcut key styling ── */
 kbd {
