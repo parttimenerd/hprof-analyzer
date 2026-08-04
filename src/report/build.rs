@@ -555,10 +555,14 @@ pub fn build_model(
     g.idom = Vec::new();
     crate::trace::probe("build_model: after drop(g.idom) — before collection_attribution");
     let collection_attribution = build_collection_attribution(g, &overview);
+    crate::trace::probe("build_model: after collection_attribution");
     let fields_by_size = build_fields_by_size(g, &overview);
+    crate::trace::probe("build_model: after fields_by_size");
     let biggest_collections = build_biggest_collections(g);
     let collection_contents = build_collection_contents(g);
+    crate::trace::probe("build_model: after biggest_collections+contents");
     let top_retainers = build_top_retainers(&fields_by_size, &threads);
+    crate::trace::probe("build_model: after top_retainers");
     // ThreadLocal Leak Analyzer — gated on find_duplicates (same opt-in as dup
     // analysis; also implicitly enabled by --full-analysis via the flag fold).
     let thread_local_analysis = if opts.find_duplicates {
@@ -566,9 +570,11 @@ pub fn build_model(
     } else {
         Vec::new()
     };
+    crate::trace::probe("build_model: after thread_local_analysis");
     // Framework Auto-Analysis — always-on; each framework only emits when its
     // sentinel class is present in the heap.
     let framework_analysis = crate::pass2::scan_frameworks(g);
+    crate::trace::probe("build_model: after framework_analysis");
     let field_stats = if precomputed_field_stats.is_some() {
         // Precomputed before build_model to free the fwd CSR copy early (saves ~2 GB peak RSS).
         precomputed_field_stats
