@@ -696,8 +696,11 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
     let total_inbound = cap.inbound_off[n] as usize;
     cap.inbound_data = vec![(0u32, 0u16); total_inbound];
 
-    // Pass 2: fill inbound_data using a cursor array (copy of inbound_off[0..n]).
-    let mut cursor: Vec<u32> = cap.inbound_off[..n].to_vec();
+    // Pass 2: fill inbound_data using a u16 delta cursor per node.
+    // Each node accumulates at most edge_cap (≤ 500) inbound edges, so the
+    // delta from inbound_off[dst] fits in u16. This halves the cursor Vec from
+    // 4 bytes/node (Vec<u32>) to 2 bytes/node, saving ~1 GB on the 34 GB dump.
+    let mut cursor_delta: Vec<u16> = vec![0u16; n];
     for src in 0..n as u32 {
         let start = g.fwd_offsets[src as usize] as usize;
         let end = g.fwd_offsets[src as usize + 1] as usize;
@@ -706,15 +709,17 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
             if !cap.captured.get(dst) {
                 continue;
             }
-            let slot = cursor[dst] as usize;
-            if slot < cap.inbound_off[dst + 1] as usize {
+            let delta = cursor_delta[dst] as usize;
+            let capacity = (cap.inbound_off[dst + 1] - cap.inbound_off[dst]) as usize;
+            if delta < capacity {
+                let slot = cap.inbound_off[dst] as usize + delta;
                 let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
                 cap.inbound_data[slot] = (src, name_idx);
-                cursor[dst] += 1;
+                cursor_delta[dst] += 1;
             }
         }
     }
-    drop(cursor);
+    drop(cursor_delta);
 
     cap
 }
