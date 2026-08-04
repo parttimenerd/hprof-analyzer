@@ -542,6 +542,7 @@ pub fn build_model(
     // data, reducing the report-phase peak by ~4 GB.
     drop(dc_offsets);
     drop(dc_targets);
+    crate::trace::trim();
     crate::trace::probe("build_model: after drop(dc) — before type_ref/references/collections");
     let type_ref_graph = if opts.obj_graph {
         build_type_ref_graph(g)
@@ -553,6 +554,7 @@ pub fn build_model(
     // g.idom is not used after build_references. Free it now (~2 GB on large dumps)
     // before collection/attribution/framework sections run.
     g.idom = Vec::new();
+    crate::trace::trim();
     crate::trace::probe("build_model: after drop(g.idom) — before collection_attribution");
     let collection_attribution = build_collection_attribution(g, &overview);
     crate::trace::probe("build_model: after collection_attribution");

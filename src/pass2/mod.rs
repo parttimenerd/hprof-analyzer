@@ -629,6 +629,7 @@ impl Pass2 {
             fd_tl_entry_records,
         ) = fd_state.finish(&p1)?;
         crate::trace::probe("pass2: after field_decode_views (fused into 2a, no extra scan)");
+        crate::trace::trim();
         t_phase!("fielddecode done");
 
         // Finalize SingleScan query results while class metadata is still live.
