@@ -525,7 +525,8 @@ pub fn build_model(
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
-    let dominator_analysis = build_dominator_analysis(g, &dc_offsets, &dc_targets);
+    let dominator_analysis =
+        build_dominator_analysis(g, &dc_offsets, &dc_targets, depth_counts.len() as u32);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let obj_graph_flat = if opts.obj_graph {
         Some(build_obj_graph_flat(
@@ -1587,6 +1588,7 @@ fn build_dominator_analysis(
     g: &Graph,
     dc_offsets: &[u32],
     dc_targets: &[u32],
+    longest_chain_depth: u32,
 ) -> DominatorAnalysis {
     let n = g.n;
     let undef = u32::MAX;
@@ -1752,27 +1754,10 @@ fn build_dominator_analysis(
         pairs: pairs_vec,
     };
 
-    // Iterative DFS from virtual root to find longest chain.
-    // Reuse the already-built dc_offsets/dc_targets CSR — no separate
-    // Vec<Vec<u32>> allocation (~12 GB @514M objects).
-    let vroot_idx = n; // dc_offsets[n]..dc_offsets[n+1] = vroot's children
-    let mut longest: u32 = 0;
-    let mut stack: Vec<(usize, u32)> = vec![(vroot_idx, 0u32)];
-    while let Some((idx, depth)) = stack.pop() {
-        if depth > longest {
-            longest = depth;
-        }
-        let lo = dc_offsets[idx] as usize;
-        let hi = dc_offsets[idx + 1] as usize;
-        for &child in &dc_targets[lo..hi] {
-            stack.push((child as usize, depth + 1));
-        }
-    }
-
     DominatorAnalysis {
         big_drops,
         immediate_dominators,
-        longest_chain_depth: longest,
+        longest_chain_depth,
     }
 }
 
