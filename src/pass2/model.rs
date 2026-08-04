@@ -712,7 +712,9 @@ impl InboundBuilder {
         } = self;
 
         drop(id_map);
-        drop(id_map_c);
+        if let Some((blob, _)) = id_map_c {
+            crate::trace::drop_vec(blob);
+        }
         drop(class_addr_to_hist);
         drop(field_plans_dense);
         // Return freed heap pages to OS before the large inb_flat alloc, so
@@ -786,7 +788,7 @@ impl InboundBuilder {
         }
         // fwd_offsets and fwd_targets are no longer needed; free them before
         // Phase 4 allocates inb_data to reduce the coexistence peak.
-        drop(fwd_offsets);
+        crate::trace::drop_vec(fwd_offsets);
         drop(fwd_targets);
         crate::trace::trim();
         crate::trace::probe("inbound fwd-transpose: after transpose loop");
