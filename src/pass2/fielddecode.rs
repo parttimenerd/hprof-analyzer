@@ -985,8 +985,16 @@ pub(crate) struct FieldDecodeState {
     const_truncated: bool,
     const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>>,
     array_fill: FillAcc,
-    obj_array_raw: Vec<(u64, u64, u64, Vec<u32>)>,
+    /// Compact per-obj-array record (addr, non_null, count) for ALL obj arrays.
     obj_array_raw_compact: Vec<(u64, u32, u32)>,
+    /// Slot-target lists for obj arrays whose address is in `wanted_arrays` at
+    /// scan time, capped at COLL_VALUES_GROUP_CAP. Arrays seen before their
+    /// owning instance (rare; HPROF usually orders instances first) are added to
+    /// `obj_array_deferred_slots` instead and resolved in `finish()`.
+    obj_array_wanted_slots: HashMap<u64, Vec<u32>>,
+    /// Slot-target lists captured before `wanted_arrays` was populated for this
+    /// address; drained in `finish()`.
+    obj_array_deferred_slots: HashMap<u64, Vec<u32>>,
 }
 
 impl FieldDecodeState {
@@ -1040,8 +1048,9 @@ impl FieldDecodeState {
             const_truncated: false,
             const_owner_samples: HashMap::new(),
             array_fill: FillAcc::default(),
-            obj_array_raw: Vec::new(),
             obj_array_raw_compact: Vec::new(),
+            obj_array_wanted_slots: HashMap::new(),
+            obj_array_deferred_slots: HashMap::new(),
         }
     }
 
@@ -1501,7 +1510,16 @@ impl FieldDecodeState {
         let collect_attribution = self.collect_attribution;
         let obj_ref_width = self.obj_ref_width;
         let mut non_null: u64 = 0;
-        let mut slot_targets: Vec<u32> = Vec::new();
+        // Only decode slot targets when collect_attribution is on. We eagerly
+        // check wanted_arrays to avoid allocating a Vec for arrays that will
+        // never be joined (the common case: most arrays are not backing arrays
+        // of a tracked collection). When the owning instance hasn't been seen
+        // yet (addr not in wanted_arrays), we speculatively store in
+        // obj_array_deferred_slots so finish() can move them over.
+        let mut slot_targets: Option<Vec<u32>> = None;
+        let in_wanted = collect_attribution && self.wanted_arrays.contains_key(&addr);
+        let slots_cap = self.obj_array_wanted_slots.len() + self.obj_array_deferred_slots.len();
+        let capture_slots = collect_attribution && (in_wanted || slots_cap < COLL_VALUES_GROUP_CAP);
         for slot in 0..count as usize {
             let off = slot * obj_ref_width;
             if off + obj_ref_width > elem_ref_bytes.len() {
@@ -1510,9 +1528,12 @@ impl FieldDecodeState {
             let r = read_ref(&elem_ref_bytes[off..], obj_ref_width);
             if r != 0 {
                 non_null += 1;
-                if collect_attribution && slot_targets.len() < COLL_VALUES_PER_COLLECTION {
-                    if let Some(ti) = self.ic.index_of(&p1.id_map, r) {
-                        slot_targets.push(ti as u32);
+                if capture_slots {
+                    let tgts = slot_targets.get_or_insert_with(Vec::new);
+                    if tgts.len() < COLL_VALUES_PER_COLLECTION {
+                        if let Some(ti) = self.ic.index_of(&p1.id_map, r) {
+                            tgts.push(ti as u32);
+                        }
                     }
                 }
             }
@@ -1545,12 +1566,16 @@ impl FieldDecodeState {
                 self.containers_truncated = true;
             }
         }
-        if collect_attribution {
-            self.obj_array_raw
-                .push((addr, non_null, count, slot_targets));
-        } else {
-            self.obj_array_raw_compact
-                .push((addr, non_null as u32, count as u32));
+        // Always push compact (addr, non_null, count) for finish()-time joins.
+        self.obj_array_raw_compact
+            .push((addr, non_null as u32, count as u32));
+        // Stash slot targets if captured.
+        if let Some(tgts) = slot_targets {
+            if in_wanted {
+                self.obj_array_wanted_slots.insert(addr, tgts);
+            } else {
+                self.obj_array_deferred_slots.insert(addr, tgts);
+            }
         }
     }
 
@@ -1563,6 +1588,18 @@ impl FieldDecodeState {
         let mut coll_values: Vec<CollValuesRaw> = Vec::new();
         let mut coll_values_truncated = false;
 
+        // Move any deferred slot-targets that turned out to be in wanted_arrays
+        // into obj_array_wanted_slots. Deferred entries whose address never
+        // appeared as a backing array are simply discarded (slot targets unused).
+        for (addr, tgts) in self.obj_array_deferred_slots.drain() {
+            if self.wanted_arrays.contains_key(&addr) {
+                if self.obj_array_wanted_slots.len() < COLL_VALUES_GROUP_CAP {
+                    self.obj_array_wanted_slots.insert(addr, tgts);
+                }
+            }
+            // else: not a wanted array; discard slot targets (never used)
+        }
+
         for (addr, non_null_u32, count_u32) in self.obj_array_raw_compact.drain(..) {
             let non_null = non_null_u32 as u64;
             let count = count_u32 as u64;
@@ -1573,41 +1610,32 @@ impl FieldDecodeState {
                     .saturating_mul(obj_ref_width as u64);
                 self.coll_fill.add(used, count, want.coll_shallow, wasted);
                 coll_fill_tracked += 1;
-                if want.is_map {
-                    self.map_collision
-                        .add(non_null, count, want.coll_shallow, 0);
-                    map_collision_tracked += 1;
-                }
-            }
-        }
-        for (addr, non_null, count, slot_targets) in self.obj_array_raw.drain(..) {
-            if let Some(want) = self.wanted_arrays.get(&addr) {
-                let used = if want.size > 0 { want.size } else { non_null };
-                let wasted = count
-                    .saturating_sub(used.min(count))
-                    .saturating_mul(obj_ref_width as u64);
-                self.coll_fill.add(used, count, want.coll_shallow, wasted);
-                coll_fill_tracked += 1;
-                if let Some(rec) = self.container_records.get_mut(&want.coll_addr) {
-                    rec.elements = used;
-                    rec.capacity = count;
+                if collect_attribution {
+                    if let Some(rec) = self.container_records.get_mut(&want.coll_addr) {
+                        rec.elements = used;
+                        rec.capacity = count;
+                    }
                 }
                 if want.is_map {
                     self.map_collision
                         .add(non_null, count, want.coll_shallow, 0);
                     map_collision_tracked += 1;
                 }
-                if !slot_targets.is_empty() {
-                    if coll_values.len() < COLL_VALUES_GROUP_CAP {
-                        coll_values.push(CollValuesRaw {
-                            container_idx: want.coll_idx,
-                            kind: want.coll_kind,
-                            container_class: want.coll_class.clone(),
-                            owner: None,
-                            value_indices: slot_targets,
-                        });
-                    } else {
-                        coll_values_truncated = true;
+                if collect_attribution {
+                    if let Some(slot_targets) = self.obj_array_wanted_slots.remove(&addr) {
+                        if !slot_targets.is_empty() {
+                            if coll_values.len() < COLL_VALUES_GROUP_CAP {
+                                coll_values.push(CollValuesRaw {
+                                    container_idx: want.coll_idx,
+                                    kind: want.coll_kind,
+                                    container_class: want.coll_class.clone(),
+                                    owner: None,
+                                    value_indices: slot_targets,
+                                });
+                            } else {
+                                coll_values_truncated = true;
+                            }
+                        }
                     }
                 }
             }
