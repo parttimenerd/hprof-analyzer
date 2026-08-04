@@ -553,7 +553,7 @@ pub fn build_model(
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
     // g.idom is not used after build_references. Free it now (~2 GB on large dumps)
     // before collection/attribution/framework sections run.
-    g.idom = Vec::new();
+    crate::trace::drop_vec(std::mem::take(&mut g.idom));
     crate::trace::trim();
     crate::trace::probe("build_model: after drop(g.idom) — before collection_attribution");
     let collection_attribution = build_collection_attribution(g, &overview);

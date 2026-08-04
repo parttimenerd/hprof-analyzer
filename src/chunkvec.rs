@@ -9,17 +9,157 @@
 //! their sum.
 //!
 //! Indexing uses shift/mask (CHUNK_LOG) so the scatter-fill hot path stays cheap.
+//!
+//! Each chunk is backed by an anonymous mmap on Linux so that when it is freed
+//! (via `free_below` or drop) the pages are immediately returned to the OS via
+//! `munmap`, bypassing glibc's free-list. Without this, glibc retains freed
+//! pages in its arena and they are faulted back in on the next large malloc,
+//! inflating peak RSS by ~2 GB on the vscode dump.
 
 const CHUNK_LOG: usize = 26; // 2^26 u32 = 64M slots = 256 MB per chunk
 const CHUNK_LEN: usize = 1 << CHUNK_LOG;
 const CHUNK_MASK: usize = CHUNK_LEN - 1;
 
+// Minimum chunk size (in bytes) to back with mmap rather than the heap.
+// 1 MB is well above glibc's MMAP_THRESHOLD (128 KB) default but we want
+// every non-trivial chunk to be mmap-backed so drops always return pages.
+#[cfg(target_os = "linux")]
+const MMAP_MIN_BYTES: usize = 1 << 20; // 1 MB
+
+/// A single contiguous u32 slab, either heap-backed (Vec<u32>) or mmap-backed.
+/// The mmap variant bypasses glibc's free-list so pages are returned to the OS
+/// immediately on drop, preventing the dirty-page faultback that inflates RSS.
+enum Chunk {
+    Heap(Vec<u32>),
+    #[cfg(target_os = "linux")]
+    Mmap {
+        ptr: *mut u32,
+        len: usize, // element count
+    },
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl Send for Chunk {}
+#[cfg(target_os = "linux")]
+unsafe impl Sync for Chunk {}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Chunk::Heap(Vec::new())
+    }
+}
+
+impl Chunk {
+    fn new_zeroed(len: usize) -> Self {
+        #[cfg(target_os = "linux")]
+        let bytes = len * std::mem::size_of::<u32>();
+        #[cfg(target_os = "linux")]
+        if bytes >= MMAP_MIN_BYTES {
+            let ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    bytes,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                ) as *mut u32
+            };
+            if ptr != libc::MAP_FAILED as *mut u32 {
+                // mmap returns zeroed pages — no explicit write needed.
+                return Chunk::Mmap { ptr, len };
+            }
+            // Fall through to heap on mmap failure.
+        }
+        Chunk::Heap(vec![0u32; len])
+    }
+
+    #[inline(always)]
+    fn get(&self, off: usize) -> u32 {
+        match self {
+            Chunk::Heap(v) => v[off],
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { ptr, .. } => unsafe { *ptr.add(off) },
+        }
+    }
+
+    #[inline(always)]
+    fn set(&mut self, off: usize, val: u32) {
+        match self {
+            Chunk::Heap(v) => v[off] = val,
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { ptr, .. } => unsafe { *ptr.add(off) = val },
+        }
+    }
+
+    fn as_slice(&self, off: usize, end: usize) -> &[u32] {
+        match self {
+            Chunk::Heap(v) => &v[off..end],
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { ptr, .. } => unsafe {
+                std::slice::from_raw_parts(ptr.add(off), end - off)
+            },
+        }
+    }
+
+    #[allow(dead_code)]
+    fn as_ptr(&self) -> *const u32 {
+        match self {
+            Chunk::Heap(v) => v.as_ptr(),
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { ptr, .. } => *ptr as *const u32,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Chunk::Heap(v) => v.is_empty(),
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { len, .. } => *len == 0,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn elem_len(&self) -> usize {
+        match self {
+            Chunk::Heap(v) => v.len(),
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { len, .. } => *len,
+        }
+    }
+
+    /// Release this chunk's backing memory to the OS immediately.
+    fn free(&mut self) {
+        match self {
+            Chunk::Heap(v) => {
+                *v = Vec::new();
+            }
+            #[cfg(target_os = "linux")]
+            Chunk::Mmap { ptr, len } => {
+                if *len > 0 {
+                    let bytes = *len * std::mem::size_of::<u32>();
+                    unsafe {
+                        libc::munmap(*ptr as *mut libc::c_void, bytes);
+                    }
+                    *len = 0;
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Chunk {
+    fn drop(&mut self) {
+        self.free();
+    }
+}
+
 /// Fill-then-consume u32 array split into fixed 256 MB chunks so each chunk can
 /// be freed the instant its read cursor passes it (see module docs for the RSS
-/// rationale). Empty inner `Vec`s mark already-freed chunks.
+/// rationale). Empty inner chunks mark already-freed slots.
 #[derive(Default)]
 pub struct ChunkU32 {
-    chunks: Vec<Vec<u32>>,
+    chunks: Vec<Chunk>,
 }
 
 impl ChunkU32 {
@@ -40,13 +180,15 @@ impl ChunkU32 {
     }
 
     /// Allocate `len` u32 slots, zero-initialized, across power-of-two chunks.
+    /// On Linux each chunk is backed by an anonymous mmap so that freeing it
+    /// immediately returns pages to the OS (bypassing glibc's free-list).
     pub fn zeroed(len: usize) -> Self {
         let nchunks = len.div_ceil(CHUNK_LEN);
         let mut chunks = Vec::with_capacity(nchunks);
         let mut remaining = len;
         for _ in 0..nchunks {
             let this = remaining.min(CHUNK_LEN);
-            chunks.push(vec![0u32; this]);
+            chunks.push(Chunk::new_zeroed(this));
             remaining -= this;
         }
         ChunkU32 { chunks }
@@ -57,7 +199,7 @@ impl ChunkU32 {
     pub fn set(&mut self, idx: usize, val: u32) {
         let c = idx >> CHUNK_LOG;
         let o = idx & CHUNK_MASK;
-        self.chunks[c][o] = val;
+        self.chunks[c].set(o, val);
     }
 
     /// Get the value at `idx`.
@@ -65,30 +207,28 @@ impl ChunkU32 {
     pub fn get(&self, idx: usize) -> u32 {
         let c = idx >> CHUNK_LOG;
         let o = idx & CHUNK_MASK;
-        self.chunks[c][o]
+        self.chunks[c].get(o)
     }
 
     /// Free every chunk whose slots are entirely below `boundary` (exclusive).
     /// Idempotent: already-freed chunks stay empty. Call as the Phase-4 read
     /// cursor advances so consumed backing memory is returned promptly.
-    /// Uses MADV_FREE to advise the OS to reclaim physical pages immediately,
-    /// preventing jemalloc's free list from holding freed pages in RSS.
     pub fn free_below(&mut self, boundary: usize) {
         let last_chunk = boundary >> CHUNK_LOG; // chunks strictly before this are fully consumed
         for c in 0..last_chunk {
             if !self.chunks[c].is_empty() {
+                // For Mmap chunks, free() calls munmap which immediately returns
+                // pages to the OS. For Heap chunks, MADV_DONTNEED the pages first
+                // (so glibc returns them) then free the Vec.
                 #[cfg(target_os = "linux")]
-                {
-                    let chunk = &self.chunks[c];
-                    let ptr = chunk.as_ptr() as *mut libc::c_void;
-                    let len = chunk.len() * std::mem::size_of::<u32>();
-                    // MADV_DONTNEED: immediately returns pages to OS, reducing RSS
-                    // before jemalloc's free list delays the reclaim.
+                if let Chunk::Heap(ref v) = self.chunks[c] {
+                    let ptr = v.as_ptr() as *mut libc::c_void;
+                    let len = v.len() * std::mem::size_of::<u32>();
                     unsafe {
                         libc::madvise(ptr, len, libc::MADV_DONTNEED);
                     }
                 }
-                self.chunks[c] = Vec::new();
+                self.chunks[c].free();
             }
         }
     }
@@ -101,9 +241,9 @@ impl ChunkU32 {
         while i < end {
             let c = i >> CHUNK_LOG;
             let o = i & CHUNK_MASK;
-            let chunk = &self.chunks[c];
-            let take = (CHUNK_LEN - o).min(end - i);
-            out.extend_from_slice(&chunk[o..o + take]);
+            let chunk_end = ((c + 1) << CHUNK_LOG).min(end);
+            let take = chunk_end - i;
+            out.extend_from_slice(self.chunks[c].as_slice(o, o + take));
             i += take;
         }
     }
@@ -125,7 +265,7 @@ impl ChunkU32 {
             // end is exclusive; if end falls exactly on a chunk boundary, o1==0
             // which means the slice ends at the chunk's last element.
             let end_off = if o1 == 0 { CHUNK_LEN } else { o1 };
-            Some(&self.chunks[c0][o0..end_off])
+            Some(self.chunks[c0].as_slice(o0, end_off))
         } else {
             None
         }

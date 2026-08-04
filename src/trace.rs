@@ -109,3 +109,22 @@ pub fn trim() {
         malloc_trim(0);
     }
 }
+
+/// Drop a large `Vec` and immediately return its pages to the OS via
+/// MADV_DONTNEED, bypassing glibc's free-list entirely.
+/// On glibc, freed heap pages normally stay resident until malloc_trim is called
+/// (which only trims the top of the heap). MADV_DONTNEED immediately decommits
+/// the physical pages regardless of heap layout, so peak RSS reflects the true
+/// live set. No-op on non-Linux.
+pub fn drop_vec<T>(v: Vec<T>) {
+    #[cfg(target_os = "linux")]
+    {
+        let bytes = v.capacity() * std::mem::size_of::<T>();
+        if bytes >= 1 << 20 {
+            unsafe {
+                libc::madvise(v.as_ptr() as *mut libc::c_void, bytes, libc::MADV_DONTNEED);
+            }
+        }
+    }
+    drop(v);
+}

@@ -149,7 +149,7 @@ pub fn compute_dominators(
     // Phase 1 done: `ancestor` and `label` are dead. Reuse `ancestor`'s
     // buffer as `idom_pre` (no new allocation) and free `label`.
     let mut idom_pre = ancestor;
-    drop(label);
+    crate::trace::drop_vec(label);
 
     // ── Phase 2: compute immediate dominators (forward pre-order) ────────
     // SEMI-NCA: idom[w] = nearest ancestor of parent[w] on the DFS path
@@ -167,7 +167,7 @@ pub fn compute_dominators(
     // `d > semi[i]` guard). Free it before allocating `idom` so the ~2GB
     // (count*4 @514M) region can back the new (n+1)*4 `idom` array in place,
     // rather than adding a fresh 2GB on top of the dominator-window peak.
-    drop(semi);
+    crate::trace::drop_vec(semi);
     crate::trace::probe("dominator: after drop(semi), before idom alloc");
 
     // ── Translate pre-order idom back to node-index space ────────────────

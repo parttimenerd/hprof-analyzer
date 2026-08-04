@@ -1035,7 +1035,7 @@ fn analyze_to_report_inner(
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
         let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
-        rpo.parent_pre = Vec::new();
+        crate::trace::drop_vec(std::mem::take(&mut rpo.parent_pre));
         Some(c)
     } else {
         None
@@ -2241,7 +2241,7 @@ fn run(
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
         let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
-        rpo.parent_pre = Vec::new();
+        crate::trace::drop_vec(std::mem::take(&mut rpo.parent_pre));
         Some(c)
     } else {
         None
@@ -2496,7 +2496,7 @@ fn run(
         let v = std::mem::take(&mut rpo.dfn);
         Some(cvec::CompressedU32::compress(&v, compress)?)
     } else {
-        rpo.dfn = Vec::new();
+        crate::trace::drop_vec(std::mem::take(&mut rpo.dfn));
         None
     };
     crate::trace::trim();

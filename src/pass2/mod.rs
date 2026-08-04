@@ -1066,12 +1066,13 @@ impl Pass2 {
             }
             fwd_offsets.push(edge_acc as u32);
         }
-        drop(out_degree); // dead after prefix sum
+        crate::trace::drop_vec(out_degree); // dead after prefix sum
 
         // Compress shallow NOW, before fwd_targets (~6GB) is allocated.
         // class_idx and alloc_serial were already compressed before the 2a scan.
         let shallow_c = crate::cvec::CompressedU32::compress(&shallow, compress)?;
         if compress != crate::cvec::Codec::None {
+            crate::trace::drop_vec(shallow);
             shallow = Vec::new();
         }
         // Compress in_degree (~2GB raw counts) before fwd_targets alloc.
@@ -1081,6 +1082,7 @@ impl Pass2 {
         // on monotonically-constrained data (counts of edges per node).
         let in_degree_c = if compress != crate::cvec::Codec::None {
             let c = crate::cvec::CompressedU32::compress(&in_degree, compress)?;
+            crate::trace::drop_vec(in_degree);
             in_degree = Vec::new();
             Some(c)
         } else {
