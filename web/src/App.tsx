@@ -2073,14 +2073,14 @@ function SystemOverviewSection({ report }: { report: Report }) {
               const top = (r as GcRootRetainedRow).top_classes;
               if (!top || top.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
               return (
-                <span style={{ fontSize: "0.82em", lineHeight: 1.5 }}>
+                <div style={{ fontSize: "0.82em", lineHeight: 1.6, whiteSpace: "normal", padding: "2px 0" }}>
                   {top.map((cc, j) => (
-                    <span key={cc.class_name}>
-                      {j > 0 ? ", " : ""}
-                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{cc.class_name}</code><PivotBtn cls={cc.class_name} /><OqlBtn cls={cc.class_name} /><ListObjectsBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} ({fmtB(cc.retained)})
+                    <span key={cc.class_name} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap", marginRight: j < top.length - 1 ? "0.4em" : 0 }}>
+                      {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 2 }}>·</span> : null}
+                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.class_name}</code><PivotBtn cls={cc.class_name} /><OqlBtn cls={cc.class_name} /><ListObjectsBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} ({fmtB(cc.retained)})
                     </span>
                   ))}
-                </span>
+                </div>
               );
             },
           },
@@ -3537,18 +3537,18 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
   const components = data?.components ?? [];
   if (components.length === 0) return null;
   const cols: TableColumn<Component>[] = [
-    { id: "component", name: "Component", grow: 1, width: "160px", maxWidth: "400px", cell: (c) => <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>, selector: (c) => c.loader_label ?? "", sortable: true },
+    { id: "component", name: "Component", grow: 1, minWidth: "200px", maxWidth: "280px", cell: (c) => <code title={c.loader_label ?? undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{fmtLoader(c.loader_label ?? "")}</code>, selector: (c) => c.loader_label ?? "", sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: "140px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
-      id: "top_classes", name: "Top classes", grow: 2, maxWidth: "400px",
+      id: "top_classes", name: "Top classes", grow: 2, maxWidth: "520px",
       wrap: true,
       cell: (c) => (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", padding: "2px 0" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", padding: "2px 0", whiteSpace: "normal" }}>
           {c.top_classes.map((cc, j) => (
-            <span key={j} style={{ whiteSpace: "nowrap" }}>
-              {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 4 }}>·</span> : null}
-              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{cc.pretty_class}</code><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
+            <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap", minWidth: 0 }}>
+              {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 2 }}>·</span> : null}
+              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.pretty_class}</code><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
             </span>
           ))}
         </div>
@@ -4194,7 +4194,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
       id: "types", name: "Top Value Types", grow: 2, maxWidth: "400px",
       cell: (r) => r.top_value_types.length === 0
         ? <span>—</span>
-        : <>{r.top_value_types.map((s, j) => <span key={j} className="copy-cell" style={{ marginRight: j < r.top_value_types.length - 1 ? "0.5rem" : 0 }}>{j > 0 ? "" : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}<PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span>)}</>,
+        : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", padding: "2px 0" }}>{r.top_value_types.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap" }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "200px" }}>{s.type_name}</code><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>×{fmtCount(s.count)}</span></span>)}</div>,
     },
   ];
   return (
