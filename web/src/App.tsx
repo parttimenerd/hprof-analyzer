@@ -1818,7 +1818,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, maxWidth: "340px", cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
-    { id: "refs", name: "Boxed refs", right: true, width: "115px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
+    { id: "refs", name: "Boxed refs", right: true, width: "130px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
   ];
   return (
     <section id="boxed-numbers">
@@ -3539,15 +3539,16 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
       id: "top_classes", name: "Top classes", grow: 2,
+      wrap: true,
       cell: (c) => (
-        <>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", padding: "2px 0" }}>
           {c.top_classes.map((cc, j) => (
-            <span key={j}>
-              {j > 0 ? ", " : ""}
-              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{cc.pretty_class}</code><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> ({fmtB(cc.retained)})
+            <span key={j} style={{ whiteSpace: "nowrap" }}>
+              {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 4 }}>·</span> : null}
+              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{cc.pretty_class}</code><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
             </span>
           ))}
-        </>
+        </div>
       ),
     },
   ];
@@ -4035,13 +4036,13 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">None.</p>
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
-          { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-          { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
-          { id: "containers", name: "Containers", right: true, width: "120px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count, sortable: true },
-          { id: "holders", name: "Holder Instances", right: true, width: "140px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
-          { id: "elements", name: "Total Elements", right: true, width: "130px", format: (r) => fmtCount(r.total_elements), selector: (r) => r.total_elements, sortable: true },
-          { id: "retained", name: useKB ? "Total Retained (KB)" : "Total Retained", right: true, width: useKB ? "178px" : "130px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
-          { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted Bytes", right: true, width: useKB ? "140px" : "120px", cell: (r) => r.total_wasted_bytes != null ? (useKB ? <span title={fmtExactBytes(r.total_wasted_bytes)}>{fmtB(r.total_wasted_bytes)}</span> : fmtB(r.total_wasted_bytes)) : "—", selector: (r) => r.total_wasted_bytes ?? 0, sortable: true },
+          { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+          { id: "kind", name: "Kind", width: "80px", selector: (r) => r.container_kind, sortable: true },
+          { id: "containers", name: "Containers", right: true, width: "110px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count, sortable: true },
+          { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
+          { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.total_elements), selector: (r) => r.total_elements, sortable: true },
+          { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
+          { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "96px", cell: (r) => r.total_wasted_bytes != null ? (useKB ? <span title={fmtExactBytes(r.total_wasted_bytes)}>{fmtB(r.total_wasted_bytes)}</span> : fmtB(r.total_wasted_bytes)) : "—", selector: (r) => r.total_wasted_bytes ?? 0, sortable: true },
         ];
         return <StdTable columns={overallCols} data={mostOverall} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />;
       })()}
@@ -4051,11 +4052,11 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">None.</p>
       ) : (() => {
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
-          { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-          { id: "container", name: "Container Class", grow: 1, maxWidth: "340px", cell: (r) => <span className="copy-cell"><code>{r.container_class}</code><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
-          { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
-          { id: "elements", name: "Elements", right: true, width: "100px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
-          { id: "capacity", name: "Capacity", right: true, width: "100px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
+          { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+          { id: "container", name: "Container Class", grow: 1, maxWidth: "280px", cell: (r) => <span className="copy-cell"><code>{r.container_class}</code><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
+          { id: "kind", name: "Kind", width: "80px", selector: (r) => r.container_kind, sortable: true },
+          { id: "elements", name: "Elements", right: true, width: "90px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
+          { id: "capacity", name: "Capacity", right: true, width: "90px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
         ];
         return <StdTable columns={singleCols} data={biggestSingle} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />;
@@ -4225,14 +4226,13 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const hasElements = rows.some((r) => (r.elements ?? 0) > 0);
   type FBSRow = import("./types").FieldBySizeRow;
   const cols: TableColumn<FBSRow>[] = [
-    { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-    { id: "pointee", name: "Runtime Pointee Type", grow: 1, maxWidth: "340px", cell: (r) => <span className="copy-cell"><code>{r.pointee_type}</code><PivotBtn cls={r.pointee_type} /><OqlBtn cls={r.pointee_type} /><ListObjectsBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
-    { id: "category", name: "Category", width: "100px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—", sortable: true },
-    { id: "pointees", name: "Pointees", right: true, width: "100px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
-    ...(hasElements ? [{ id: "elements", name: "Elements", right: true, width: "100px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
-    { id: "holders", name: "Holder Instances", right: true, width: "140px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
-    { id: "sharing", name: "Sharing", right: true, width: "90px", selector: (r) => r.holder_instances > 0 ? r.pointees / r.holder_instances : 0, format: (r) => r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—", sortable: true },
-    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
+    { id: "field", name: "Class#field", grow: 2, minWidth: "160px", maxWidth: "280px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+    { id: "pointee", name: "Pointee Type", grow: 2, minWidth: "140px", maxWidth: "260px", cell: (r) => <span className="copy-cell"><code>{r.pointee_type}</code><PivotBtn cls={r.pointee_type} /><OqlBtn cls={r.pointee_type} /><ListObjectsBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
+    { id: "category", name: "Kind", width: "82px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—", sortable: true },
+    { id: "pointees", name: "Pointees", right: true, width: "88px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
+    ...(hasElements ? [{ id: "elements", name: "Elems", right: true, width: "80px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
+    { id: "holders", name: "Holders", right: true, width: "80px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
   ];
   return (
     <section id="fields-by-retained-size-classfield">
@@ -4255,11 +4255,10 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
           <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
             <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
             <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>
-            <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
-            <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalPointees)}</span>
-            {hasElements && <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + (r.elements ?? 0), 0))}</span>}
-            <span style={{ width: "140px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
-            <span style={{ width: "90px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
+            <span style={{ width: "72px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
+            <span style={{ width: "88px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalPointees)}</span>
+            {hasElements && <span style={{ width: "80px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + (r.elements ?? 0), 0))}</span>}
+            <span style={{ width: "80px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
             <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
           </div>
         </>
@@ -6112,7 +6111,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
   const leakCols: TableColumn<LeakRow>[] = [
     { id: "indicator", name: "Indicator", grow: 1, cell: (r) => <span>{r.indicator}</span> },
     { id: "value", name: "Value", right: true, width: "120px", selector: (r) => r.value, sortable: true },
-    { id: "hint", name: "What to check", grow: 2, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>{r.hint}</span> },
+    { id: "hint", name: "What to check", grow: 2, wrap: true, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)", whiteSpace: "normal" }}>{r.hint}</span> },
   ];
   return (
     <section id="leak-indicators">
@@ -6142,7 +6141,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
-          { id: "name", name: "Name", grow: 1, cell: (r) => {
+          { id: "name", name: "Name", grow: 1, maxWidth: "800px", cell: (r) => {
             const cls = r.name.split("#")[0];
             const isThreadLocal = r.name.includes("ThreadLocalMap$Entry");
             return (
@@ -6157,7 +6156,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
             );
           }, selector: (r) => r.name, sortable: true },
           { id: "kind", name: "Kind", width: "100px", selector: (r) => r.kind, sortable: true },
-          { id: "retained", name: "Retained", right: true, width: "110px",
+          { id: "retained", name: "Retained", right: true, width: "120px",
             format: (r) => fmtB(r.retained),
             cell: byteCell(r => r.retained, fmtB, useKB),
             selector: (r) => r.retained, sortable: true },
