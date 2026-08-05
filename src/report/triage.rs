@@ -634,7 +634,7 @@ impl Rule for OffHeap {
             TriageSeverity::Warning,
             "Off-heap (DirectByteBuffer)",
             format!(
-                "{} of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+                "{} of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS.",
                 format_bytes(cap),
             ),
             Some(("leak-indicators", "Leak Indicators")),
@@ -663,15 +663,19 @@ impl Rule for GcWaste {
                 )
             })
             .unwrap_or_default();
+        let size_desc = if o.unreachable_retained > o.unreachable_shallow + o.unreachable_shallow / 20 {
+            format!("{} shallow, {} retained", format_bytes(o.unreachable_shallow), format_bytes(o.unreachable_retained))
+        } else {
+            format_bytes(o.unreachable_shallow)
+        };
         Some(signal(
             "gc-waste",
             TriageSeverity::Warning,
             "GC waste",
             format!(
-                "{:.1}% of the heap is unreachable garbage ({} shallow, {} retained){}.",
+                "{:.1}% of the heap is unreachable garbage ({}){}.",
                 pct,
-                format_bytes(o.unreachable_shallow),
-                format_bytes(o.unreachable_retained),
+                size_desc,
                 cluster,
             ),
             Some(("unreachable-objects", "Unreachable Objects")),
@@ -1616,7 +1620,7 @@ impl Rule for DuplicatePrimArrays {
                 format_bytes(wasted),
                 pct_of(wasted, total),
             ),
-            Some(("dup-strings", "Duplicate Strings")),
+            Some(("duplicate-prim-arrays", "Duplicate Prim Arrays")),
         ))
     }
 }
