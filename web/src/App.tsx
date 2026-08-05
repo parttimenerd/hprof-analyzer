@@ -840,7 +840,7 @@ function WasteSummarySection({ report }: { report: Report }) {
     <section className="section" id="waste-summary" tabIndex={-1}>
       <h2>Waste Summary</h2>
       <p className="subtitle">
-        Approximately <strong>{fmtB(w.total_bytes)}</strong> looks reclaimable across the
+        <strong>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the
         sources below. Figures are approximate and may overlap slightly.
       </p>
       <div className="waste-summary-table">
@@ -3145,7 +3145,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <p className="subtitle">
             Expand a package to drill into its sub-packages. Totals are cumulative over the subtree. Only top-level
             dominators retaining at least {fmtPct(t.threshold_bp / 100)} of the
-            heap are included (smaller ones are pruned, MAT-style).
+            heap are included; smaller ones are pruned.
           </p>
           <ZoomableTreemap
             root={pkgRoot}
@@ -3768,7 +3768,8 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
-        {fmtCount(cfr?.tracked ?? 0)} tracked of {fmtCount(cfr?.total ?? 0)} collections.
+        What fraction of their capacity collections are using. Bucketed by fill %; low-fill collections waste allocated backing-array memory.
+        {cfr && <>{" "}{fmtCount(cfr.tracked)} of {fmtCount(cfr.total)} collections tracked.</>}
       </p>
       {cfrBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -3778,7 +3779,8 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collections by Size</h3>
       <p className="subtitle">
-        {fmtCount(cbs?.tracked ?? 0)} tracked; {fmtCount(cbs?.empty_count ?? 0)} empty.
+        How many elements collections hold, bucketed by size; useful for spotting oversized pre-allocated collections.
+        {cbs && <>{" "}{fmtCount(cbs.tracked)} tracked; {fmtCount(cbs.empty_count)} empty.</>}
       </p>
       {cbsBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -3802,7 +3804,10 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       })()}
 
       <h3>Array Fill Ratio</h3>
-      <p className="subtitle">{fmtCount(afr?.tracked ?? 0)} tracked object arrays.</p>
+      <p className="subtitle">
+        Non-null element ratio of object arrays — low fill means most slots are empty, wasting heap.
+        {afr && <>{" "}{fmtCount(afr.tracked)} tracked.</>}
+      </p>
       {afrBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (
@@ -5529,7 +5534,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Which classes own what: who is the dominator (last thing keeping objects alive) and how much retained heap flows through them.</p>
+      <p className="subtitle">Which classes hold the most retained heap, and the objects they keep alive.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
