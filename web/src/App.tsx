@@ -1701,9 +1701,9 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   const w = d.char_array_waste;
   return (
     <section id="duplicate-strings-approximate">
-      <h2>Duplicate Strings (approximate)</h2>
+      <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        Opt-in (<code>--find-duplicates</code>): each <code>java.lang.String</code> value hashed to 64 bits; collisions accepted as approximation.
+        String values seen more than once — each duplicate is wasted heap that <code>String.intern()</code> or a deduplication pass could reclaim. Values are hashed to 64 bits; hash collisions accepted as approximation.
       </p>
       <ul>
         <li>Total String instances: {fmtCount(d.total_string_instances)}</li>
@@ -1851,8 +1851,8 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers consume a large share of shallow heap
-        (candidates for value-type / record optimisation).
+        Classes where object headers consume a large share of shallow heap — candidates for value-type or record optimisation.
+        {rows[0]?.pretty_class === "java.lang.Object" && " Note: java.lang.Object appearing first is expected — it has no fields so headers are 100% of its shallow size; focus on application classes below it."}
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -3308,7 +3308,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       name: "State",
       width: "145px",
       selector: (t) => t.thread_state ?? "",
-      cell: (t) => <span title={t.thread_state || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state || "—"}</span>,
+      cell: (t) => <span title={t.thread_state?.replace(/[\[\]]/g, "") || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state ? threadStateLabel(t.thread_state) : "—"}</span>,
       sortable: true,
     },
     {
@@ -3359,7 +3359,7 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
     { id: "loader", name: "Context Class Loader", grow: 1, width: "188px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
     { id: "daemon", name: "Daemon", width: "100px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no", sortable: true },
     { id: "priority", name: "Priority", right: true, width: "95px", format: (t) => String(t.priority), selector: (t) => t.priority, sortable: true },
-    { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state || "—"}</span>, sortable: true },
+    { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state?.replace(/[\[\]]/g, "") || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state ? threadStateLabel(t.thread_state) : "—"}</span>, sortable: true },
   ];
   return (
     <details className="thread-overview-detail">
@@ -3531,7 +3531,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component); % Heap is the share of total reachable heap.
+        Retained heap grouped by class loader (component). Retained sums may exceed total heap — objects owned by the boot loader are counted even when referenced by app code, so totals across components can overlap.
       </p>
       <details open>
         <summary>Components by retained heap ({fmtCount(components.length)} rows)</summary>
@@ -4143,9 +4143,8 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
       <p className="subtitle">
-        The largest individual collection instances. Owner is the primary incoming <code>Class#field</code>;
-        value type is the dominant runtime element type (<code>varies</code> when none dominates).
-        Owner/retained/value columns require <code>--collections</code>.
+        The largest individual collection instances by element count.
+        {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns are only populated with <code>--collections</code> — re-run with that flag to see which fields hold these collections.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind}`} />)}
@@ -4213,11 +4212,10 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   ];
   return (
     <section id="fields-by-retained-size-classfield">
-      <h2>Fields by Retained Size (Class#field)</h2>
+      <h2>Fields by Retained Size</h2>
       <p className="subtitle">
-        Which holder <code>Class#field</code> retains the most memory, summed over every object the
-        field points at. Runtime pointee type is the dominant concrete class reached through the
-        field (<code>varies</code> when no single type dominates).
+        Which <code>Class#field</code> retains the most heap across all its instances — useful for pinpointing which specific field is accumulating data.
+        Runtime pointee type is the dominant concrete class reached through the field.
       </p>
       {data.truncated && (
         <p className="subtitle">
@@ -5721,7 +5719,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? `Unreachable objects are eligible for collection but have not yet been reclaimed. At ${fmtPct(unreachablePct)} of heap total (reachable + unreachable) this is elevated — the JVM may not have had time to GC before the dump was taken, or finalization may be backed up.`
+              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of heap total this is elevated — likely the dump was taken before a GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
               : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of heap total) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
