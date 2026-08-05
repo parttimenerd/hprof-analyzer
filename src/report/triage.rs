@@ -436,11 +436,11 @@ impl Rule for OneLeakOrMany {
             None => format!("`{}`", o.display_class),
         }) {
             Some(name) => format!(
-                "the single biggest object, {}, retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
+                "the single biggest object, {}, retains {:.1}% and the top 10 retain {:.1}% of the heap; {} objects each hold ≥1%.",
                 name, top1_pct, top10_pct, rc.num_objects_ge_1pct,
             ),
             None => format!(
-                "the single biggest object retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
+                "the single biggest object retains {:.1}% and the top 10 retain {:.1}% of the heap; {} objects each hold ≥1%.",
                 top1_pct, top10_pct, rc.num_objects_ge_1pct,
             ),
         };
@@ -477,7 +477,7 @@ impl Rule for ClassloaderLeak {
             return Some(signal_cls(
                 "classloader-leak",
                 TriageSeverity::Info,
-                "Classloader reload (low count)",
+                "Class-loader reload (low count)",
                 format!(
                     "`{}` is loaded by {} class loaders ({} retained) — possible reload, but count is low; investigate only if count grows.",
                     dup.pretty_class,
@@ -491,7 +491,7 @@ impl Rule for ClassloaderLeak {
         Some(signal_cls(
             "classloader-leak",
             TriageSeverity::Warning,
-            "Classloader leak",
+            "Class-loader leak",
             format!(
                 "`{}` is loaded by {} class loaders ({} retained) — classic reload leak.",
                 dup.pretty_class,
@@ -611,7 +611,7 @@ impl Rule for ProxyLambdaBloat {
             TriageSeverity::Info,
             "Proxy/lambda bloat",
             format!(
-                "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible classloader churn.",
+                "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible class-loader churn.",
                 fmt_count(anon),
                 fmt_count(loaded),
                 share,
@@ -847,9 +847,9 @@ impl Rule for ClassloaderExplosion {
         Some(signal(
             "classloader-explosion",
             TriageSeverity::Warning,
-            "Classloader explosion",
+            "Class-loader explosion",
             format!(
-                "{} live ClassLoader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
+                "{} live class-loader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
                 fmt_count(n),
             ),
             Some(("system-overview", "System Overview")),
@@ -1173,7 +1173,7 @@ impl Rule for StaticFieldAnchor {
             TriageSeverity::Warning,
             "Static-field anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — this object lives for the classloader lifetime and is never evicted.",
+                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — this object lives for the class-loader lifetime and is never evicted.",
                 s.pretty_class,
                 format_bytes(s.retained),
                 pct,
@@ -1436,7 +1436,7 @@ impl Rule for BigDropConcentration {
                 pct,
                 format_bytes(row.drop_bytes),
             ),
-            Some(("dominator-tree", "Dominator Tree")),
+            Some(("dominator-analysis", "Dominator Analysis")),
             &row.display_class,
         ))
     }
@@ -1542,9 +1542,9 @@ impl Rule for EmptyCollectionCemetery {
             TriageSeverity::Info,
             "Empty-collection cemetery",
             format!(
-                "{} of {} tracked collections ({:.1}%) are empty (size == 0) — \
+                "{} of {} tracked collections ({:.1}%) are empty — \
                  pre-allocated but never populated containers waste object-header \
-                 overhead; consider lazy initialisation or null.",
+                 overhead; consider lazy initialization or null.",
                 fmt_count(cbs.empty_count),
                 fmt_count(cbs.tracked),
                 share_pct,

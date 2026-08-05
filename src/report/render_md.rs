@@ -1138,7 +1138,7 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
 The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), \
 not an instance name — the hprof format does not record loader names. \
 Multiple rows with the same loader class are distinct loader instances; \
-many such instances each holding significant heap can signal a classloader leak. \
+many such instances each holding significant heap can signal a class-loader leak. \
 The **Address** column distinguishes them._\n\n",
         );
         let mut t = Table::new(
@@ -1184,7 +1184,7 @@ The **Address** column distinguishes them._\n\n",
         out.push_str(
             "_Class names loaded by more than one class loader. \
 The same class loaded N times means N separate copies of its static state and \
-N times the metaspace cost — a typical symptom of classloader leaks (e.g. \
+N times the metaspace cost — a typical symptom of class-loader leaks (e.g. \
 each web-app reload or plugin load creates a new loader that never gets GC'd). \
 Check the per-loader breakdown: if one loader holds almost all the instances \
 the others are likely leaked copies._\n\n",
@@ -1298,7 +1298,7 @@ that requires field-labeled reference paths._\n\n",
                     "_Note: `java.lang.Class` objects are normal — every loaded class has one. \
 This suspect reflects class-metadata memory, not a leak in application code. \
 It is worth investigating only if the instance count is unexpectedly high \
-(e.g. due to classloader leaks)._\n\n",
+(e.g. due to class-loader leaks)._\n\n",
                 );
             }
         }

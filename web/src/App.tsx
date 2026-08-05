@@ -332,7 +332,7 @@ function Nav({ report }: { report: Report }) {
     else items.push([id, label, undefined, badge]);
   };
   addData("duplicate-strings-approximate", "Duplicate Strings");
-  addData("duplicate-prim-arrays", "Duplicate Prim Arrays");
+  addData("duplicate-prim-arrays", "Duplicate Primitive Arrays");
   if (report.overview.boxed_numbers?.length) addData("boxed-numbers", "Boxed Numbers");
   if (report.overview.header_overhead?.length) addData("object-header-overhead", "Header Overhead");
   if (report.top_components?.components?.length) addData("top-components", "Top Components");
@@ -572,7 +572,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
   if (showLeakRisk) badges.push({ label: "LEAK RISK", color: "var(--critical, #c0392b)" });
   if (showHighGC) badges.push({ label: "HIGH GC PRESSURE", color: "var(--warning, #e67e22)" });
   if (showOffHeap) badges.push({ label: "OFF-HEAP MEMORY", color: "var(--info, #2980b9)" });
-  if (showStaleThreadLocals) badges.push({ label: "STALE THREADLOCALS", color: "var(--warning, #e67e22)" });
+  if (showStaleThreadLocals) badges.push({ label: "STALE THREAD LOCALS", color: "var(--warning, #e67e22)" });
 
   const dumpMs = ov.dump_creation ?? 0;
   const src = ov.source_name ?? "";
@@ -686,7 +686,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
 
 // Browser-friendly overrides for signals whose CLI-oriented text doesn't fit the web UI.
 const SIGNAL_DETAIL_OVERRIDES: Record<string, string> = {
-  "collections-not-analyzed": "run Full Analysis to check for wasted capacity.",
+  "collections-not-analyzed": "Run Full Analysis to check for wasted capacity.",
 };
 
 function LeakScoreDashboard({ report }: { report: Report }) {
@@ -1111,7 +1111,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
       ...(hasIncomingRefCount ? [{
         id: "incoming_ref_count",
         name: "Inbound Refs",
-        width: "116px",
+        width: "130px",
         grow: 0,
         right: true,
         selector: (r: HistRow) => r.incoming_ref_count ?? 0,
@@ -1233,12 +1233,12 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         </button>
         {hiddenSmall > 0 && (
           <button className="show-more-btn" onClick={() => setShowAll(true)}>
-            + {fmtCount(hiddenSmall)} rows &lt;0.1%
+            + {fmtCount(hiddenSmall)} rows &lt; 0.1%
           </button>
         )}
         {showAll && !filter && (
           <button className="show-more-btn" onClick={() => setShowAll(false)}>
-            Hide &lt;0.1% rows
+            Hide &lt; 0.1% rows
           </button>
         )}
         {kbBtn}
@@ -1530,7 +1530,7 @@ function gcRootTagLabel(tag: number): string {
 function RecordCensusSection({ report }: { report: Report }) {
   const c = report.overview.record_census;
   const rows: { label: string; count: number }[] = [
-    { label: "UTF8 strings", count: c.utf8_records },
+    { label: "UTF-8 strings", count: c.utf8_records },
     { label: "Load class", count: c.load_class_records },
     { label: "Unload class", count: c.unload_class_records },
     { label: "Stack frames", count: c.stack_frame_records },
@@ -1549,7 +1549,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Raw HPROF record-type breakdown — verify the dump is complete and that allocation-site frames were captured (<code>java -agentlib:hprof=heap=dump,depth=8</code>).
+        Raw HPROF record-type breakdown — verify the dump is complete. Allocation-site frames (used by the Allocation Sites section) require the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -1808,7 +1808,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
-    { id: "refs", name: "Boxed refs", right: true, width: "130px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
+    { id: "refs", name: "Boxed Refs", right: true, width: "130px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
   ];
   return (
     <section id="boxed-numbers">
@@ -1835,7 +1835,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, maxWidth: "312px", cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
-    { id: "hdr", name: "Header/obj", right: true, width: "122px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
+    { id: "hdr", name: "Header per obj", right: true, width: "130px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
     { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "176px" : "140px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
     { id: "pct", name: "% of Shallow", right: true, width: "134px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp, sortable: true },
     { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "140px" : "105px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
@@ -2052,7 +2052,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           },
           { id: "type", name: "Root Type", width: "210px", selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
-          { id: "pct", name: "% of roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
+          { id: "pct", name: "% of Roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
             id: "top_classes", name: "Top retained classes", grow: 1, maxWidth: "408px", wrap: true,
@@ -2244,7 +2244,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
-    { id: "pct", name: "% Suspect", right: true, width: "120px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained, sortable: true },
+    { id: "pct", name: "% of Suspect", right: true, width: "125px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained, sortable: true },
   ];
   return (
     <details open>
@@ -3090,7 +3090,7 @@ function TopConsumersSection({ report }: { report: Report }) {
     { id: "bar", name: "", width: "80px", cell: (c) => <span className="bar-bg"><span className="bar-fill" style={{ width: `${maxClsRetained > 0 ? (c.retained / maxClsRetained) * 100 : 0}%` }} /></span> },
     { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "135px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
-    { id: "bpi", name: "B/obj", right: true, width: "90px", sortable: true, selector: c => c.instances > 0 ? c.retained / c.instances : 0,
+    { id: "bpi", name: "B / Inst", right: true, width: "90px", sortable: true, selector: c => c.instances > 0 ? c.retained / c.instances : 0,
       cell: c => {
         if (c.instances === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
         const bpi = c.retained / c.instances;
@@ -3309,7 +3309,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   const cols: TableColumn<ThreadInfo>[] = [
     {
       id: "name",
-      name: "Thread name",
+      name: "Thread Name",
       grow: 1,
       minWidth: "120px",
       maxWidth: "360px",
@@ -3345,7 +3345,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
     },
     {
       id: "stack_depth",
-      name: "Stack depth",
+      name: "Stack Depth",
       right: true,
       width: "128px",
       selector: (t) => t.frames?.length ?? 0,
@@ -3528,7 +3528,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: "140px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
-      id: "top_classes", name: "Top classes", grow: 2, maxWidth: "520px",
+      id: "top_classes", name: "Top Classes", grow: 2, maxWidth: "520px",
       wrap: true,
       cell: (c) => (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", padding: "2px 0", whiteSpace: "normal" }}>
@@ -3571,7 +3571,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     const totalBytes = buckets.reduce((s, b) => s + b.shallow, 0);
     type Bucket = (typeof buckets)[0];
     const cols: TableColumn<Bucket>[] = [
-      { id: "len", name: "Max length", right: true, width: "120px", format: (b) => `≤ ${fmtCount(b.upper_len)}`, selector: (b) => b.upper_len, sortable: true },
+      { id: "len", name: "Max Length", right: true, width: "120px", format: (b) => `≤ ${fmtCount(b.upper_len)}`, selector: (b) => b.upper_len, sortable: true },
       { id: "objects", name: "Objects", right: true, width: "110px", format: (b) => fmtCount(b.objects), selector: (b) => b.objects, sortable: true },
       { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(b => b.shallow, fmtB, useKB), selector: (b) => b.shallow, sortable: true },
       { id: "pct", name: "% Heap", right: true, width: "100px", format: (b) => totalShallow > 0 ? fmtPct(b.shallow / totalShallow * 100) : "—", selector: (b) => b.shallow, sortable: true },
@@ -3601,14 +3601,14 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
       <p className="subtitle">
-        Array-length distribution bucketed by powers of two; the "Max length" column is the inclusive upper bound of each bucket.
+        Array-length distribution bucketed by powers of two; the "Max Length" column is the inclusive upper bound of each bucket.
       </p>
       {empty ? (
         <p className="subtitle">No arrays found.</p>
       ) : (
         <>
-          {bucketTable("Object arrays", obj)}
-          {bucketTable("Primitive arrays", prim)}
+          {bucketTable("Object Arrays", obj)}
+          {bucketTable("Primitive Arrays", prim)}
           <p>Zero-length arrays: {fmtCount(zero)}</p>
         </>
       )}
@@ -3649,7 +3649,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
       { id: "class", name: "Array class", grow: 1, maxWidth: hasOwner ? "337px" : "575px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
-      ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "130px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—", sortable: true } as TableColumn<import("./types").TopArrayRow>] : []),
+      ...(hasFill ? [{ id: "fill", name: "Used / Length", right: true, width: "130px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—", sortable: true } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
       ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "337px", cell: (r: import("./types").TopArrayRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
     ];
@@ -3948,7 +3948,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   const totalObjects = rows.reduce((s, r) => s + r.objects, 0);
 
   const cols: TableColumn<WasteRow>[] = [
-    { id: "type", name: "Waste type", grow: 2, maxWidth: "400px", selector: (r) => r.type, cell: (r) => <span>{r.type}</span>, sortable: true },
+    { id: "type", name: "Waste Type", grow: 2, maxWidth: "400px", selector: (r) => r.type, cell: (r) => <span>{r.type}</span>, sortable: true },
     {
       id: "wasted",
       name: useKB ? "Wasted (KB)" : "Wasted",
@@ -3967,7 +3967,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       selector: (r) => r.objects,
       sortable: true,
     },
-    { id: "fix", name: "Fix suggestion", grow: 2, maxWidth: "400px", selector: (r) => r.fix, sortable: true },
+    { id: "fix", name: "Fix Suggestion", grow: 2, maxWidth: "400px", selector: (r) => r.fix, sortable: true },
   ];
 
   const showCollectionsNote = !ca && (hasDs || hasDp);
@@ -5573,7 +5573,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
           { id: "object", name: "Object", grow: 1, maxWidth: "310px", cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ListObjectsBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
           { id: "largest_child", name: "Largest Child", grow: 1, maxWidth: "310px", cell: (r) => r.largest_child_class ? <span className="copy-cell"><code>{r.largest_child_class}</code><PivotBtn cls={r.largest_child_class} /><OqlBtn cls={r.largest_child_class} /><ListObjectsBtn cls={r.largest_child_class} /></span> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
-          { id: "child_ret", name: useKB ? "Child Ret. (KB)" : "Child Ret.", right: true, width: useKB ? "150px" : "110px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
+          { id: "child_ret", name: useKB ? "Child Retained (KB)" : "Child Retained", right: true, width: useKB ? "160px" : "130px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
           { id: "drop", name: useKB ? "Drop (KB)" : "Drop", right: true, width: useKB ? "120px" : "110px", cell: byteCell(r => r.drop_bytes, fmtB, useKB), selector: (r) => r.drop_bytes, sortable: true },
         ];
         const totalDropRetained = drops.reduce((s, r) => s + r.retained, 0);
@@ -6146,7 +6146,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
               </span>
             );
           }, selector: (r) => r.name, sortable: true },
-          { id: "kind", name: "Kind", width: "115px", selector: (r) => r.kind, sortable: true },
+          { id: "kind", name: "Kind", width: "115px", format: (r) => r.kind === "stack-frame" ? "Stack Frame" : r.kind === "field" ? "Field" : r.kind, selector: (r) => r.kind, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "120px",
             format: (r) => fmtB(r.retained),
             cell: byteCell(r => r.retained, fmtB, useKB),
