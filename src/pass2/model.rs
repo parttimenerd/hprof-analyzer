@@ -1360,7 +1360,7 @@ impl InboundBuilder {
 
             match sub_tag {
                 // Root sub-records: skip (no edges to/from these for our purposes)
-                heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+                heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
                     r.skip(ids)?;
                     checked_sub!(remaining, ids);
                 }
@@ -1368,7 +1368,7 @@ impl InboundBuilder {
                     r.skip(2 * ids)?;
                     checked_sub!(remaining, 2 * ids);
                 }
-                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
                     r.skip(ids + 8)?;
                     checked_sub!(remaining, ids + 8);
                 }
@@ -1475,7 +1475,12 @@ impl InboundBuilder {
                         }
                     }
                     on_outbound(src_idx, fwd)?;
+                }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                    // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
+                    r.skip(ids + 4 + 4 + 1)?;
+                    checked_sub!(remaining, ids + 4 + 4 + 1);
                 }
+
                 heap::PRIM_ARRAY_DUMP => {
                     // No reference edges in primitive arrays.
                     let addr = r.id()?;
@@ -1641,7 +1646,7 @@ fn scan_fwd_segment(
         checked_sub!(remaining, 1u64);
 
         match sub_tag {
-            heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+            heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
                 r.skip(ids)?;
                 checked_sub!(remaining, ids);
             }
@@ -1649,7 +1654,7 @@ fn scan_fwd_segment(
                 r.skip(2 * ids)?;
                 checked_sub!(remaining, 2 * ids);
             }
-            heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+            heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
                 r.skip(ids + 8)?;
                 checked_sub!(remaining, ids + 8);
             }
@@ -1730,7 +1735,12 @@ fn scan_fwd_segment(
                         }
                     }
                 }
-            }
+            }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                    // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
+                    r.skip(ids + 4 + 4 + 1)?;
+                    checked_sub!(remaining, ids + 4 + 4 + 1);
+                }
+
             heap::PRIM_ARRAY_DUMP => {
                 let addr = r.id()?;
                 r.skip(4)?;

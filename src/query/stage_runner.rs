@@ -58,6 +58,10 @@ pub fn root_tag_name(tag: u8) -> std::borrow::Cow<'static, str> {
         heap::ROOT_MONITOR_USED => "Busy Monitor",
         heap::ROOT_THREAD_OBJ => "Thread",
         heap::ROOT_UNKNOWN => "Unknown",
+        heap::ROOT_INTERNED_STRING => "Interned String",
+        heap::ROOT_DEBUGGER => "Debugger",
+        heap::ROOT_VM_INTERNAL => "VM Internal",
+        heap::ROOT_JNI_MONITOR => "JNI Monitor",
         // Any code outside the known HPROF sub-tag set: surface the numeric tag
         // rather than a misleading "Unknown" so the value stays diagnosable.
         other => return std::borrow::Cow::Owned(format!("root tag {other}")),

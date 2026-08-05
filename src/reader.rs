@@ -31,8 +31,16 @@ pub struct HprofReader {
 }
 
 impl HprofReader {
-    /// Open a dump (gzip/zip auto-detected via magic) and consume its HPROF header.
+    /// Open a dump (gzip/zip/tar.gz auto-detected) and consume its HPROF header.
     pub fn open(path: &str) -> io::Result<Self> {
+        let lower = path.to_ascii_lowercase();
+
+        // tar.gz: gunzip then stream the first .hprof entry from the tar archive.
+        #[cfg(feature = "native")]
+        if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+            return Self::open_tar_gz(path);
+        }
+
         let file = File::open(path)?;
         let mut peek = BufReader::new(file);
         let mut magic = [0u8; 4];
@@ -65,6 +73,48 @@ impl HprofReader {
         };
         r.read_header()?;
         Ok(r)
+    }
+
+    /// Open a `.hprof.tar.gz` (or `.tgz`), find the first `.hprof` entry, and
+    /// stream it through the parser. The tar archive is read sequentially — no
+    /// Seek required — so multi-gigabyte archives decompress on-the-fly.
+    #[cfg(feature = "native")]
+    fn open_tar_gz(path: &str) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let gz = GzDecoder::new(BufReader::new(file));
+        // Leak the archive to give it `'static` lifetime so `tar::Entry` (which
+        // borrows it) can be boxed as `Box<dyn Read + 'static>`. The archive's
+        // only resource is the file handle, which is consumed by reading the
+        // entry stream; the small archive wrapper struct (<1 KB) is the only
+        // memory that is permanently leaked per call.
+        let archive: &'static mut tar::Archive<_> =
+            Box::leak(Box::new(tar::Archive::new(gz)));
+        for entry in archive.entries()? {
+            let entry = entry?;
+            let ends_with_hprof = entry
+                .path_bytes()
+                .to_ascii_lowercase()
+                .ends_with(b".hprof");
+            if ends_with_hprof {
+                let inner: Box<dyn Read> = Box::new(entry);
+                let mut r = HprofReader {
+                    format: String::new(),
+                    id_size: 4,
+                    timestamp_ms: 0,
+                    inner,
+                    buf: vec![0u8; BUF_CAP],
+                    pos: 0,
+                    end: 0,
+                    bytes_consumed: 0,
+                };
+                r.read_header()?;
+                return Ok(r);
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "no .hprof entry found in tar archive",
+        ))
     }
 
     /// Open a `.hprof.zip`, find the first `.hprof` entry, and stream it through

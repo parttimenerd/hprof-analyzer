@@ -34,7 +34,7 @@ mat-oracle = []
 # The WASM crate depends on hprof-analyzer with default-features = false to
 # avoid pulling in these non-WASM-compatible crates.
 default = ["native"]
-native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip"]
+native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip", "dep:tar"]
 
 [dependencies]
 base64 = "0.22"
@@ -47,6 +47,7 @@ zstd = { version = "0.13", default-features = false, optional = true }
 # Used for reading Eclipse MAT plugin jars (DEFLATE-compressed entries) to
 # detect the installed MAT parser ID. deflate feature only; no bzip2/zstd needed.
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+tar = { version = "0.4", optional = true }
 scraper = { version = "0.27", optional = true }
 # pinned to =1.2.1: schemars 1.x had breaking API changes; bump carefully
 schemars = "=1.2.1"
@@ -94,4 +95,13 @@ too_many_arguments = "allow"
 [profile.release]
 lto = true
 codegen-units = 1
+panic = "abort"
+
+# Fast iteration profile: no LTO, many codegen units, full opt level.
+# Use with: cargo build --profile fast
+# Suitable for testing on many cores; binary is ~10-15% slower than release.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 256
 panic = "abort"

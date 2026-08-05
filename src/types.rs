@@ -31,17 +31,27 @@ pub mod heap {
     pub const ROOT_THREAD_BLOCK: u8 = 0x06;
     pub const ROOT_MONITOR_USED: u8 = 0x07;
     pub const ROOT_THREAD_OBJ: u8 = 0x08;
-    /// Synthetic system-class root (MAT addSystemClassRootsIfMissing): a
-    /// boot-loader class object rooted with no explicit HPROF root record.
-    /// 0x00 is unused by HPROF root sub-tags (which are 0x01..=0x08, 0xff).
+    /// Wire: `id`. Emitted by Android ART as an explicit root for interned strings.
+    pub const ROOT_INTERNED_STRING: u8 = 0x89;
+    /// Wire: `id`. Android ART root for objects held by the debugger.
+    pub const ROOT_DEBUGGER: u8 = 0x8b;
+    /// Wire: `id`. Android ART root for VM-internal references.
+    pub const ROOT_VM_INTERNAL: u8 = 0x8d;
+    /// Wire: `id` + `u4 thread_serial` + `u4 frame_num`. Android ART JNI monitor root.
+    pub const ROOT_JNI_MONITOR: u8 = 0x8e;
+    /// Wire: `id` + `u4 stack_serial` + `u4 count` + `u1 elem_type` (no element data).
+    /// Android ART obsolete variant of PRIM_ARRAY_DUMP that omits the payload.
+    pub const PRIM_ARRAY_NODATA_DUMP: u8 = 0xc3;
+    /// Synthetic system-class root used internally (MAT addSystemClassRootsIfMissing).
+    /// Also emitted by some non-HotSpot JVMs (e.g. IBM J9) as an explicit root.
+    /// Wire: `id` only.
     pub const ROOT_SYSTEM_CLASS: u8 = 0x00;
     pub const CLASS_DUMP: u8 = 0x20;
     pub const INSTANCE_DUMP: u8 = 0x21;
     pub const OBJ_ARRAY_DUMP: u8 = 0x22;
     pub const PRIM_ARRAY_DUMP: u8 = 0x23;
     /// HEAP_DUMP_INFO: `u4 heap_id` + `id heap_name_string_id`. Carries no
-    /// object/class data (and no compressed-oops flag) — consumed and skipped
-    /// so it does not corrupt the sub-record stream.
+    /// object/class data — consumed and skipped so sub-record stream stays aligned.
     pub const HEAP_DUMP_INFO: u8 = 0xfe;
 }
 

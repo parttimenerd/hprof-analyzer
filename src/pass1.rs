@@ -485,6 +485,13 @@ fn scan_heap_segment(
                 gc_root_types.push(sub_tag);
                 sub_remaining(&mut remaining, ids)?;
             }
+            heap::ROOT_SYSTEM_CLASS => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
+                gc_root_addrs.push(r.id()?);
+                gc_root_types.push(sub_tag);
+                *has_sticky_class_roots = true;
+                sub_remaining(&mut remaining, ids)?;
+            }
             heap::ROOT_JNI_GLOBAL => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
@@ -492,7 +499,7 @@ fn scan_heap_segment(
                 r.skip(ids)?; // JNI global ref id
                 sub_remaining(&mut remaining, 2 * ids)?;
             }
-            heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+            heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let local_id = r.id()?;
                 let thread_serial = r.u4()?;
@@ -638,6 +645,31 @@ fn scan_heap_segment(
                     tmp_hprof_offsets.push(record_off);
                 }
                 sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
+                *prim_array_count += 1;
+            }
+            // Android ART roots: id-only wire format, treated as plain GC roots.
+            heap::ROOT_INTERNED_STRING
+            | heap::ROOT_DEBUGGER
+            | heap::ROOT_VM_INTERNAL => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
+                gc_root_addrs.push(r.id()?);
+                gc_root_types.push(sub_tag);
+                sub_remaining(&mut remaining, ids)?;
+            }
+            heap::PRIM_ARRAY_NODATA_DUMP => {
+                // Android ART: header identical to PRIM_ARRAY_DUMP but no element bytes.
+                let addr = r.id()?;
+                let stack_serial = r.u4()?;
+                tmp_alloc_serial.push(stack_serial);
+                let count = r.u4()? as u64;
+                let elem_type_code = r.u1()?;
+                tmp_addrs.push(addr);
+                tmp_class_ids.push((2u32 << 30) | elem_type_code as u32);
+                tmp_elem_count.push(count as u32);
+                if capture_hprof_offsets {
+                    tmp_hprof_offsets.push(r.bytes_consumed() - 1 - (ids + 4 + 4 + 1));
+                }
+                sub_remaining(&mut remaining, ids + 4 + 4 + 1)?;
                 *prim_array_count += 1;
             }
             heap::HEAP_DUMP_INFO => {

@@ -26,6 +26,10 @@ pub(crate) fn gc_root_type_label(ty: u8) -> &'static str {
         heap::ROOT_THREAD_BLOCK => "Thread Block",
         heap::ROOT_MONITOR_USED => "Busy Monitor",
         heap::ROOT_THREAD_OBJ => "Thread",
+        heap::ROOT_INTERNED_STRING => "Interned String",
+        heap::ROOT_DEBUGGER => "Debugger",
+        heap::ROOT_VM_INTERNAL => "VM Internal",
+        heap::ROOT_JNI_MONITOR => "JNI Monitor",
         _ => "Unknown",
     }
 }
@@ -114,6 +118,10 @@ pub(crate) fn gc_root_type_label_opt(code: u8) -> Option<&'static str> {
         heap::ROOT_MONITOR_USED => Some("Busy Monitor"),
         heap::ROOT_THREAD_OBJ => Some("Thread"),
         heap::ROOT_SYSTEM_CLASS => Some("System Class"),
+        heap::ROOT_INTERNED_STRING => Some("Interned String"),
+        heap::ROOT_DEBUGGER => Some("Debugger"),
+        heap::ROOT_VM_INTERNAL => Some("VM Internal"),
+        heap::ROOT_JNI_MONITOR => Some("JNI Monitor"),
         _ => None,
     }
 }

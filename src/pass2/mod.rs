@@ -1408,7 +1408,7 @@ impl Pass2 {
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
-                heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+                heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
                     r.skip(ids)?;
                     checked_sub!(remaining, ids);
                 }
@@ -1416,7 +1416,7 @@ impl Pass2 {
                     r.skip(2 * ids)?;
                     checked_sub!(remaining, 2 * ids);
                 }
-                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
                     r.skip(ids + 8)?;
                     checked_sub!(remaining, ids + 8);
                 }
@@ -1560,7 +1560,12 @@ impl Pass2 {
                             }
                         }
                     }
+                }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                    // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
+                    r.skip(ids + 4 + 4 + 1)?;
+                    checked_sub!(remaining, ids + 4 + 4 + 1);
                 }
+
                 heap::PRIM_ARRAY_DUMP => {
                     let addr = r.id()?;
                     r.skip(4)?;
@@ -1679,7 +1684,7 @@ impl Pass2 {
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
-                heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+                heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
                     r.skip(ids)?;
                     checked_sub!(remaining, ids);
                 }
@@ -1687,7 +1692,7 @@ impl Pass2 {
                     r.skip(2 * ids)?;
                     checked_sub!(remaining, 2 * ids);
                 }
-                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
                     r.skip(ids + 8)?;
                     checked_sub!(remaining, ids + 8);
                 }
@@ -1802,7 +1807,12 @@ impl Pass2 {
                         let ref_val = read_id(chunk, id_size);
                         add_edge!(src_idx, ref_val, false, 0u16);
                     }
+                }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                    // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
+                    r.skip(ids + 4 + 4 + 1)?;
+                    checked_sub!(remaining, ids + 4 + 4 + 1);
                 }
+
                 heap::PRIM_ARRAY_DUMP => {
                     let _addr = r.id()?;
                     r.skip(4)?;

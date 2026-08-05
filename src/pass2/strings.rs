@@ -60,7 +60,7 @@ where
                     let sub_tag = r.u1()?;
                     sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
-                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                        heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
                             r.skip(ids)?;
                             sub_remaining(&mut remaining, ids)?;
                         }
@@ -68,7 +68,7 @@ where
                             r.skip(2 * ids)?;
                             sub_remaining(&mut remaining, 2 * ids)?;
                         }
-                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
                             sub_remaining(&mut remaining, ids + 8)?;
                         }
@@ -100,7 +100,12 @@ where
                             let byte_len = count.saturating_mul(ids);
                             r.skip(byte_len)?;
                             sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
-                        }
+                        }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                    // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
+                    r.skip(ids + 4 + 4 + 1)?;
+                    sub_remaining(&mut remaining, ids + 4 + 4 + 1)?;
+                }
+
                         heap::PRIM_ARRAY_DUMP => {
                             r.skip(ids + 4)?;
                             let count = r.u4()? as u64;

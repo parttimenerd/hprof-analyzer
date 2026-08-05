@@ -133,15 +133,20 @@ sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
 hprof-analyzer heap.hprof report.html
 ```
 
-Gzip-compressed dumps (`.hprof.gz`) are read transparently. Analysis time
-scales with the dump — seconds for small dumps, minutes for multi-gigabyte
-ones (see [Performance](#performance)).
+Gzip-compressed dumps (`.hprof.gz`) and gzip-compressed tar archives
+(`.hprof.tar.gz`, `.tar.gz`, `.tgz`) are read transparently — no decompression
+to disk needed. Analysis time scales with the dump — seconds for small dumps,
+minutes for multi-gigabyte ones (see [Performance](#performance)).
 
 ## Why you might want it
 
 - **Memory-efficient and fast.** Two-pass streaming keeps peak RSS well below
   the dump size and uses a fraction of what MAT needs — no heap-size flag to
   tune. See [Performance](#performance) for measured numbers.
+- **Broad JVM compatibility.** Reads dumps from HotSpot, OpenJ9/IBM J9, and
+  Android ART. Handles all standard and JVM-specific HPROF sub-tags, including
+  `ROOT_SYSTEM_CLASS` (IBM J9) and the five Android ART-specific root and array
+  tags.
 - **Scriptable and CI-friendly.** Never prompts, never opens a window. Emit
   JSON, diff two dumps to catch memory growth in a pipeline, or gate a build on
   retained-size regressions.
@@ -249,7 +254,8 @@ Node.js/npm is only needed if you modify the web sources under `web/src/`.
 ```
 hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
 
-  <INPUT>   a .hprof[.gz] heap dump  → analyze it and write a report
+  <INPUT>   a .hprof, .hprof.gz, .hprof.tar.gz, .tar.gz, or .tgz heap dump
+              → analyze it and write a report
             a saved report .json[.gz] → re-render it to another format
 
 Named subcommands:

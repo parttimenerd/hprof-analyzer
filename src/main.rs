@@ -632,7 +632,7 @@ fn main() {
         Some(Cmd::Server { input, port }) => {
             if !input_is_hprof(&input) {
                 fail(format!(
-                    "'{input}' is not an HPROF dump; the `server` subcommand needs a .hprof[.zip] file"
+                    "'{input}' is not an HPROF dump; the `server` subcommand needs a .hprof[.gz/.zip/.tar.gz] file"
                 ));
             }
             let opts = AnalyzeOptions {
@@ -660,7 +660,7 @@ fn main() {
         }) => {
             if !input_is_hprof(&input) {
                 fail(format!(
-                    "'{input}' is not an HPROF dump; the `query` subcommand needs a .hprof[.zip] file"
+                    "'{input}' is not an HPROF dump; the `query` subcommand needs a .hprof[.gz/.zip/.tar.gz] file"
                 ));
             }
             // --server and --repl take their queries from HTTP/stdin, so any
@@ -753,7 +753,7 @@ fn main() {
                 mat_binary,
             } => {
                 if !input_is_hprof(&input) {
-                    fail(format!("'{input}' does not look like a .hprof[.gz] file"));
+                    fail(format!("'{input}' does not look like a .hprof[.gz/.zip/.tar.gz] file"));
                 }
                 progress::set_enabled(std::io::stderr().is_terminal());
                 let mat_dir = dir.as_deref().unwrap_or_else(|| {
@@ -767,7 +767,10 @@ fn main() {
                     .and_then(|s| s.to_str())
                     .unwrap_or("dump");
                 let prefix = base
-                    .strip_suffix(".hprof.gz")
+                    .strip_suffix(".hprof.tar.gz")
+                    .or_else(|| base.strip_suffix(".hprof.gz"))
+                    .or_else(|| base.strip_suffix(".tar.gz"))
+                    .or_else(|| base.strip_suffix(".tgz"))
                     .or_else(|| base.strip_suffix(".hprof"))
                     .unwrap_or(base);
                 let mat_bin_path = mat_binary.as_deref().map(std::path::Path::new);
@@ -879,7 +882,7 @@ fn run_default(cli: Cli) {
             }
         };
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
-        // input basename with a trailing `.hprof[.gz]` stripped, matching how
+        // input basename with a trailing `.hprof[.gz/.tar.gz]` stripped, matching how
         // MAT names its cache files (`dump_.hprof` -> `dump_.<kind>.index`).
         let mat = match cli.mat.as_deref() {
             Some(dir) => {
@@ -888,7 +891,10 @@ fn run_default(cli: Cli) {
                     .and_then(|s| s.to_str())
                     .unwrap_or("dump");
                 let prefix = base
-                    .strip_suffix(".hprof.gz")
+                    .strip_suffix(".hprof.tar.gz")
+                    .or_else(|| base.strip_suffix(".hprof.gz"))
+                    .or_else(|| base.strip_suffix(".tar.gz"))
+                    .or_else(|| base.strip_suffix(".tgz"))
                     .or_else(|| base.strip_suffix(".hprof"))
                     .unwrap_or(base);
                 match mat::MatEmitter::new(dir, prefix, cli.mat_binary.as_deref()) {
@@ -1180,7 +1186,12 @@ fn input_is_hprof(input: &str) -> bool {
         return false;
     }
     let lower = input.to_ascii_lowercase();
-    if lower.ends_with(".hprof") || lower.ends_with(".hprof.gz") || lower.ends_with(".hprof.zip") {
+    if lower.ends_with(".hprof")
+        || lower.ends_with(".hprof.gz")
+        || lower.ends_with(".hprof.zip")
+        || lower.ends_with(".tar.gz")
+        || lower.ends_with(".tgz")
+    {
         return true;
     }
     looks_like_hprof(input)

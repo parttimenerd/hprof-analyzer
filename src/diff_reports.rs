@@ -36,7 +36,9 @@ fn load_report(path: &str) -> io::Result<Report> {
                 let lower = path.to_ascii_lowercase();
                 let is_hprof_ext = lower.ends_with(".hprof")
                     || lower.ends_with(".hprof.gz")
-                    || lower.ends_with(".hprof.zip");
+                    || lower.ends_with(".hprof.zip")
+                    || lower.ends_with(".tar.gz")
+                    || lower.ends_with(".tgz");
                 let is_hprof_magic = std::fs::File::open(path)
                     .ok()
                     .and_then(|mut f| {
