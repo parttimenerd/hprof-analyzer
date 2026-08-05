@@ -2063,7 +2063,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           },
           { id: "type", name: "Root Type", grow: 1, selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
-          { id: "pct", name: "%", right: true, width: "80px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
+          { id: "pct", name: "% of roots", right: true, width: "90px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
             id: "top_classes", name: "Top retained classes", grow: 2,
@@ -6142,9 +6142,25 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
-          { id: "name", name: "Name", grow: 1, cell: (r) => { const cls = r.name.split("#")[0]; return <span className="copy-cell"><code>{r.name}</code><CopyBtn text={r.name} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /></span>; }, selector: (r) => r.name, sortable: true },
-          { id: "kind", name: "Kind", width: "120px", selector: (r) => r.kind, sortable: true },
-          { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "120px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
+          { id: "name", name: "Name", grow: 1, cell: (r) => {
+            const cls = r.name.split("#")[0];
+            const isThreadLocal = r.name.includes("ThreadLocalMap$Entry");
+            return (
+              <span className="copy-cell">
+                <code>{r.name}</code>
+                <CopyBtn text={r.name} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} />
+                {isThreadLocal && (
+                  <span title="ThreadLocal entries stay alive as long as the thread lives. In thread-pooled servers (Netty, Tomcat) values are never released unless explicitly removed — common cause of slow leaks."
+                        style={{ marginLeft: 4, color: "var(--warn, #c84)", fontSize: "0.8em", cursor: "help" }}>⚠ TL</span>
+                )}
+              </span>
+            );
+          }, selector: (r) => r.name, sortable: true },
+          { id: "kind", name: "Kind", width: "100px", selector: (r) => r.kind, sortable: true },
+          { id: "retained", name: "Retained", right: true, width: "110px",
+            format: (r) => fmtB(r.retained),
+            cell: byteCell(r => r.retained, fmtB, useKB),
+            selector: (r) => r.retained, sortable: true },
         ];
         return <StdTable columns={retainerCols} data={rows} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />;
       })()}
