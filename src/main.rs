@@ -1,8 +1,9 @@
 //! CLI entry point and two-pass orchestration for the HPROF heap-dump analyzer.
 //!
-//! The default (no-subcommand) form sniffs the positional input: a `.hprof[.gz]`
-//! dump (or HPROF magic) runs the analyze pipeline, anything else is re-rendered
-//! as a saved Report JSON. Named subcommands: `compare mat` (MAT export vs our
+//! The default (no-subcommand) form sniffs the positional input: a `.hprof`,
+//! `.hprof.gz`, `.tar.gz`, or `.tgz` dump (or HPROF magic) runs the analyze
+//! pipeline, anything else is re-rendered as a saved Report JSON. Named
+//! subcommands: `compare mat` (MAT export vs our
 //! JSON) / `compare reports` (cross-dump growth), `completions` (shell completion
 //! scripts), and `dev` (diagnostics).
 //!
@@ -69,9 +70,9 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_complete::Shell;
 
 /// Analyze a heap dump or re-render a saved report. The input is sniffed:
-/// a `.hprof[.gz]` dump (or any file starting with the HPROF magic) runs the
-/// full analysis pipeline; anything else is treated as a saved Report JSON and
-/// re-rendered.
+/// a `.hprof`, `.hprof.gz`, `.tar.gz`, or `.tgz` dump (or any file starting
+/// with the HPROF magic) runs the full analysis pipeline; anything else is
+/// treated as a saved Report JSON and re-rendered.
 #[derive(Parser)]
 #[command(
     name = "hprof-analyzer",
@@ -106,9 +107,9 @@ struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
 
-    /// A `.hprof[.gz]` heap dump to analyze, or a saved Report JSON (or
-    /// `.json.gz`, or `-` for stdin) to re-render. Required when no subcommand
-    /// is given.
+    /// A `.hprof`, `.hprof.gz`, `.hprof.tar.gz`, `.tar.gz`, or `.tgz` heap dump
+    /// to analyze, or a saved Report JSON (or `.json.gz`, or `-` for stdin) to
+    /// re-render. Required when no subcommand is given.
     #[arg(value_hint = ValueHint::FilePath)]
     input: Option<String>,
 
@@ -283,7 +284,7 @@ enum Cmd {
     },
     /// Start a loopback HTTP server exposing OQL and report-section endpoints.
     Server {
-        /// Path to the .hprof dump.
+        /// Path to the .hprof dump (.hprof, .hprof.gz, .tar.gz, .tgz).
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
         /// Port to bind (default 7070; loopback only).
@@ -295,7 +296,7 @@ enum Cmd {
     /// reference-graph attributes (@retainedHeapSize, dominators(x), @inbounds,
     /// path(a,b), ...) need the full report instead. See docs/OQL.md.
     Query {
-        /// Path to the .hprof (or .hprof.zip) dump.
+        /// Path to the .hprof dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
         /// OQL query text (may be repeated). For a `-- @viz` directive use the
@@ -360,7 +361,7 @@ enum MatCmd {
     /// `<dump>.<kind>.index` matching MAT's own naming convention. After this
     /// completes, Eclipse MAT can open the dump instantly without re-parsing.
     Caches {
-        /// The `.hprof[.gz]` heap dump to analyze.
+        /// The `.hprof`, `.hprof.gz`, `.tar.gz`, or `.tgz` heap dump to analyze.
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
         /// Directory to write the MAT index files into. Defaults to the
