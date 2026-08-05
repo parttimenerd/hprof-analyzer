@@ -3811,8 +3811,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Map Collision Ratio</h3>
       <p className="subtitle">
-        {fmtCount(mcr?.tracked ?? 0)} tracked of {fmtCount(mcr?.total ?? 0)} maps (occupied slots ÷ size; lower is
-        worse).
+        {fmtCount(mcr?.tracked ?? 0)} tracked of {fmtCount(mcr?.total ?? 0)} maps. Load factor = occupied slots ÷ capacity; high values (≥ 90%) mean dense packing with likely collision chains.
       </p>
       {mcrBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -5559,7 +5558,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Dominators where retained heap concentrates: retained heap minus the largest single child. Threshold{" "}
+        Dominators where retained heap greatly exceeds their largest child's retained heap — the "drop" is memory held directly or spread across many small children. Threshold{" "}
         {thresholdMb} MB (1% of reachable shallow).
       </p>
       {drops.length === 0 ? (
@@ -5597,8 +5596,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Objects immediately dominated, rolled up by the dominator's class; a heavy dominated shallow heap under one
-        class flags a retention hub.
+        How many objects each class directly dominates, and how much shallow heap those dominated objects occupy. A dominator class with high dominated-shallow heap is a retention hub.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
       </p>
       {idoms.length === 0 ? (
@@ -5798,7 +5796,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} DirectByteBuffer objects`}
         </p>
         <p>
-          This memory is committed from native (OS) memory — it does NOT appear in the JVM heap totals above.
+          This memory is committed from native (OS) memory — it does <em>not</em> appear in the JVM heap totals above.
         </p>
         <p>
           Check for NIO buffer pools or caches that are not releasing buffers. Common causes: Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
@@ -9962,7 +9960,7 @@ function GlossarySection() {
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
     ["Top-level dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Biggest Objects" and "Retention Concentration" views rank these.</>],
-    ["Dominator depth", <>how many dominator-tree hops an object sits below a GC root. Shallow depth means most objects are held close to a root; deep depth means retention flows through long chains.</>],
+    ["Dominator depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects are held close to a root; high depth means retention flows through long chains.</>],
     ["Accumulation point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class, meaning where a <a href="https://en.wikipedia.org/wiki/Memory_leak" target="_blank" rel="noreferrer">memory leak</a> accumulates.</>],
     ["Class loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
