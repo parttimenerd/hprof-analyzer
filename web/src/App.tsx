@@ -3214,9 +3214,9 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   ];
   return (
     <div className="thread-locals-inline">
-      <p className="thread-locals-label">Local Root Objects ({fmtCount(objs.length)}
-        {objs.length < totalCount && ` — showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`}
-      )</p>
+      <p className="thread-locals-label">Local Root Objects ({objs.length < totalCount
+        ? `showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`
+        : fmtCount(objs.length)})</p>
       <StdTable columns={cols} data={objs} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
     </div>
   );
@@ -6095,7 +6095,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
-        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See Off-Heap NIO section.</strong>
+        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See Off-Heap NIO section.</strong>
         : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that don't release on close, or Netty/gRPC allocators misconfigured with no max.",
     }] : []),
   ];
@@ -11293,7 +11293,7 @@ export default function App({ report }: { report: Report }) {
       <ReportHeader report={report} />
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
-          {expandAllTables ? "⊟ Collapse Tables" : "⊞ Expand All Tables"}
+          {expandAllTables ? "⊟ Collapse All Tables" : "⊞ Expand All Tables"}
         </button>
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml((report.overview.source_name || "heap-report").replace(/[^a-z0-9._-]/gi, "_") + ".html")}>⬇ Save HTML</button>
         {(window as any).__wasmSession && (
