@@ -673,6 +673,7 @@ kbd {
   border-radius: 6px;
   background: var(--card, #f7f7f8);
   min-height: 200px;
+  max-height: 440px;
   font-size: 0.82rem;
   overflow: hidden;
   display: flex;
@@ -792,3 +793,12 @@ kbd {
 .inspector-field-bar-track { height: 4px; background: var(--border); border-radius: 2px; margin-top: 2px; }
 .inspector-field-bar-fill { height: 4px; background: var(--accent, #3b82f6); border-radius: 2px; min-width: 2px; }
 .leak-chain-svg { display: block; margin: 8px 0; }
+.trg-field-dist li { flex-wrap: wrap; gap: 4px; }
+.trg-field-name-tag { font-family: var(--mono); font-size: 0.78rem; background: var(--code-bg, rgba(0,0,0,0.06)); padding: 1px 4px; border-radius: 3px; flex-shrink: 0; }
+.trg-field-dst { font-size: 0.78rem; color: var(--muted); flex-shrink: 0; }
+.inspector-field-tags { display: inline-flex; gap: 3px; flex-wrap: wrap; margin-left: 4px; }
+.inspector-field-tag { font-family: var(--mono); font-size: 0.72rem; background: var(--code-bg, rgba(0,0,0,0.06)); color: var(--muted); padding: 0px 3px; border-radius: 3px; }
+.trg-gcpath-section { margin: 0.5rem 0 0; padding: 0.4rem 0.5rem; border-top: 1px solid var(--border); }
+
+/* Cytoscape graph canvas containers */
+.cy-graph-container { width: 100%; height: 440px; border: 1px solid var(--border); border-radius: 6px; background: var(--card, #f7f7f8); display: block; }

@@ -21,6 +21,9 @@ import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 import { sankey, sankeyLinkHorizontal } from "d3-sankey";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
 import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
+import cytoscape from "cytoscape";
+import coseBilkent from "cytoscape-cose-bilkent";
+cytoscape.use(coseBilkent as cytoscape.Ext);
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto. Persists the choice in localStorage so it
@@ -4645,21 +4648,19 @@ function DomGraphView({ pairs, idoms }: {
   pairs: ImmDomPair[];
   idoms: import("./types").ImmediateDominatorRow[];
 }) {
-  const W = 700, H = 440;
+  const [fmtB] = useFmtBytes();
+  const totalHeap = React.useMemo(() => pairs.reduce((s, p) => s + p.dominated_retained, 0), [pairs]);
   const [layoutKey, setLayoutKey] = React.useState(0);
-  const [pan, setPan] = React.useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = React.useState(1);
   const [selected, setSelected] = React.useState<string | null>(null);
-  const nodeOverrides = React.useRef<Map<string, { x: number; y: number }>>(new Map());
-  const [overrideVersion, setOverrideVersion] = React.useState(0);
-  const svgRef = React.useRef<SVGSVGElement>(null);
-  const svgInteract = React.useRef<{
-    mode: "none" | "pan" | "drag";
-    startX: number; startY: number;
-    panStart: { x: number; y: number };
-    dragId: string | null;
-    hasMoved: boolean;
-  }>({ mode: "none", startX: 0, startY: 0, panStart: { x: 0, y: 0 }, dragId: null, hasMoved: false });
+  const [focusMode, setFocusMode] = React.useState<"all" | "up" | "down">("all");
+  const [layoutMode, setLayoutMode] = React.useState<"force" | "tree">("force");
+  const [showPct, setShowPct] = React.useState(false);
+  const [showEdgeLabels, setShowEdgeLabels] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  // Extra nodes injected by "Expand context" for isolated nodes
+  const [extraClasses, setExtraClasses] = React.useState<Set<string>>(new Set());
+  const cyContainerRef = React.useRef<HTMLDivElement>(null);
+  const cyRef = React.useRef<cytoscape.Core | null>(null)
 
   // Build retained map per class (sum dominated_retained for each dominator_class)
   const retMap = React.useMemo(() => {
@@ -4668,209 +4669,339 @@ function DomGraphView({ pairs, idoms }: {
       m.set(p.dominator_class, (m.get(p.dominator_class) ?? 0) + p.dominated_retained);
       if (!m.has(p.dominated_class)) m.set(p.dominated_class, 0);
     }
-    // Also seed from idoms rows
     for (const r of idoms) {
       if (!m.has(r.dominator_class)) m.set(r.dominator_class, 0);
     }
     return m;
   }, [pairs, idoms]);
 
+  // Retained bytes per dominator→dominated edge
   const topN = 50;
-  const fdNodes = React.useMemo(() => {
-    const sorted = [...retMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN);
-    const maxRet = Math.max(...sorted.map(([, r]) => r), 1);
-    return sorted.map(([cls, ret], i): FDNode => ({
+  const { fdNodes, fdEdges } = React.useMemo(() => {
+    const sorted = [...retMap.entries()].sort((a, b) => b[1] - a[1]);
+    // Always include top-N by retained, plus any extra classes from "Expand context"
+    const topSet = new Set(sorted.slice(0, topN).map(([cls]) => cls));
+    for (const cls of extraClasses) topSet.add(cls);
+    const included = sorted.filter(([cls]) => topSet.has(cls));
+    const maxRet = Math.max(...included.map(([, r]) => r), 1);
+    const fdNodes = included.map(([cls, ret]): { id: string; r: number; ret: number } => ({
       id: cls,
-      x: W / 2 + Math.cos((i / sorted.length) * 2 * Math.PI) * 150,
-      y: H / 2 + Math.sin((i / sorted.length) * 2 * Math.PI) * 150,
       r: Math.max(8, Math.min(28, 8 + 20 * Math.sqrt(ret / maxRet))),
-      vx: 0,
-      vy: 0,
+      ret,
     }));
-  }, [retMap, layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const nodeIds = React.useMemo(() => new Set(fdNodes.map(n => n.id)), [fdNodes]);
-  const idxMap = React.useMemo(() => new Map(fdNodes.map((n, i) => [n.id, i])), [fdNodes]);
-
-  const fdEdges = React.useMemo(() =>
-    pairs
+    const nodeIds = new Set(fdNodes.map(n => n.id));
+    const fdEdges = pairs
       .filter(p => nodeIds.has(p.dominator_class) && nodeIds.has(p.dominated_class) && p.dominator_class !== p.dominated_class)
-      .map(p => ({ src: idxMap.get(p.dominator_class)!, dst: idxMap.get(p.dominated_class)! }))
-      .filter(e => e.src !== undefined && e.dst !== undefined),
-    [pairs, nodeIds, idxMap]
-  );
+      .map(p => ({ src: p.dominator_class, dst: p.dominated_class, retained: p.dominated_retained }));
+    return { fdNodes, fdEdges };
+  }, [retMap, pairs, extraClasses]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const positions = React.useMemo(
-    () => runForceLayoutD3(fdNodes, fdEdges, W, H),
-    [fdNodes, fdEdges] // eslint-disable-line react-hooks/exhaustive-deps
-  );
-
-  React.useEffect(() => {
-    nodeOverrides.current = new Map();
-    setOverrideVersion(v => v + 1);
-    setPan({ x: 0, y: 0 });
-    setZoom(1);
-  }, [positions]);
-
-  const effectivePositions = React.useMemo(() => {
-    void overrideVersion;
-    if (nodeOverrides.current.size === 0) return positions;
-    return positions.map(p => {
-      const ov = nodeOverrides.current.get(p.id);
-      return ov ? { ...p, x: ov.x, y: ov.y } : p;
-    });
-  }, [positions, overrideVersion]);
-
-  const connectedTo = React.useMemo(() => {
-    if (!selected) return null;
-    const s = new Set([selected]);
-    for (const p of pairs) {
-      if (p.dominator_class === selected) s.add(p.dominated_class);
-      if (p.dominated_class === selected) s.add(p.dominator_class);
+  // Build adjacency for ancestor/subtree traversal (class-level graph)
+  const { parentsOf, childrenOf } = React.useMemo(() => {
+    const parentsOf = new Map<string, string[]>();
+    const childrenOf = new Map<string, string[]>();
+    for (const e of fdEdges) {
+      if (!parentsOf.has(e.dst)) parentsOf.set(e.dst, []);
+      parentsOf.get(e.dst)!.push(e.src);
+      if (!childrenOf.has(e.src)) childrenOf.set(e.src, []);
+      childrenOf.get(e.src)!.push(e.dst);
     }
-    return s;
-  }, [selected, pairs]);
+    return { parentsOf, childrenOf };
+  }, [fdEdges]);
 
-  const handleSvgMouseDown = React.useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    if (e.button !== 0 && e.button !== 1) return;
-    svgInteract.current = { mode: "pan", startX: e.clientX, startY: e.clientY, panStart: { x: pan.x, y: pan.y }, dragId: null, hasMoved: false };
-    e.preventDefault();
-  }, [pan]);
+  // Walk ancestors (BFS upward) from a node
+  const getAncestors = React.useCallback((id: string): Set<string> => {
+    const visited = new Set<string>();
+    const queue = [id];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      for (const p of (parentsOf.get(cur) ?? [])) {
+        if (!visited.has(p)) { visited.add(p); queue.push(p); }
+      }
+    }
+    return visited;
+  }, [parentsOf]);
 
-  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    svgInteract.current = { mode: "drag", startX: e.clientX, startY: e.clientY, panStart: { x: pan.x, y: pan.y }, dragId: id, hasMoved: false };
-    e.preventDefault();
-  }, [pan]);
+  // Walk subtree (BFS downward) from a node
+  const getSubtree = React.useCallback((id: string): Set<string> => {
+    const visited = new Set<string>();
+    const queue = [id];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      for (const c of (childrenOf.get(cur) ?? [])) {
+        if (!visited.has(c)) { visited.add(c); queue.push(c); }
+      }
+    }
+    return visited;
+  }, [childrenOf]);
+
+  // Ancestry breadcrumb: shortest path from any root (no incoming edges) to selected
+  const ancestorChain = React.useMemo((): string[] => {
+    if (!selected) return [];
+    // BFS from selected upward, build path
+    const prev = new Map<string, string>();
+    const queue = [selected];
+    const visited = new Set([selected]);
+    let root: string | null = null;
+    while (queue.length) {
+      const cur = queue.shift()!;
+      const parents = parentsOf.get(cur) ?? [];
+      if (parents.length === 0) { root = cur; break; }
+      for (const p of parents) {
+        if (!visited.has(p)) { visited.add(p); prev.set(p, cur); queue.push(p); }
+      }
+    }
+    if (!root || root === selected) return [selected];
+    const chain: string[] = [];
+    let cur: string | null = root;
+    while (cur) { chain.push(cur); cur = prev.get(cur) ?? null; }
+    if (chain[chain.length - 1] !== selected) chain.push(selected);
+    return chain;
+  }, [selected, parentsOf]);
 
   React.useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const s = svgInteract.current;
-      if (s.mode === "none") return;
-      const dx = e.clientX - s.startX;
-      const dy = e.clientY - s.startY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) s.hasMoved = true;
-      if (s.mode === "pan") {
-        setPan({ x: s.panStart.x + dx, y: s.panStart.y + dy });
-      } else if (s.mode === "drag" && s.dragId) {
-        const rect = svgRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const newX = (e.clientX - rect.left - s.panStart.x) / zoom;
-        const newY = (e.clientY - rect.top - s.panStart.y) / zoom;
-        nodeOverrides.current.set(s.dragId!, { x: newX, y: newY });
-        setOverrideVersion(v => v + 1);
-      }
-    };
-    const onUp = () => { svgInteract.current.mode = "none"; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [positions, zoom]);
+    if (!cyContainerRef.current) return;
+    void layoutKey; void layoutMode;
+    const maxEdgeRet = Math.max(...fdEdges.map(e => e.retained), 1);
+    const elements: cytoscape.ElementDefinition[] = [
+      ...fdNodes.map(n => ({
+        data: {
+          id: n.id,
+          label: n.id.split(".").pop() ?? n.id,
+          pctLabel: totalHeap > 0 ? `${(n.ret / totalHeap * 100).toFixed(1)}%` : "",
+          size: n.r * 2,
+          color: tpfgColor(n.id),
+          retained: n.ret,
+        },
+      })),
+      ...fdEdges.map((e, i) => ({
+        data: {
+          id: `e${i}`, source: e.src, target: e.dst,
+          weight: Math.max(1, 1 + 3 * Math.sqrt(e.retained / maxEdgeRet)),
+          retained: e.retained,
+          retLabel: fmtB(e.retained),
+        },
+      })),
+    ];
 
-  const handleWheel = React.useCallback((e: React.WheelEvent<SVGSVGElement>) => {
-    e.preventDefault();
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const newZoom = Math.max(0.15, Math.min(8, zoom * factor));
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    setPan(p => ({
-      x: mx - (mx - p.x) * (newZoom / zoom),
-      y: my - (my - p.y) * (newZoom / zoom),
-    }));
-    setZoom(newZoom);
-  }, [zoom]);
+    const layout = layoutMode === "tree"
+      ? { name: "breadthfirst", directed: true, spacingFactor: 1.4, padding: 24, fit: true } as any
+      : { name: "cose-bilkent", animate: false, nodeDimensionsIncludeLabels: true, idealEdgeLength: 100, nodeRepulsion: 8000, padding: 24 } as any;
+
+    const cy = cytoscape({
+      container: cyContainerRef.current,
+      elements,
+      style: buildDomGraphStyle(),
+      layout,
+      wheelSensitivity: 0.3,
+      minZoom: 0.05,
+      maxZoom: 5,
+    });
+
+    if (layoutMode === "force") {
+      let zoomTimer: ReturnType<typeof setTimeout> | null = null;
+      let lastLayoutZoom = 1;
+      cy.on("zoom", () => {
+        const z = cy.zoom();
+        if (Math.abs(z - lastLayoutZoom) < 0.4) return;
+        lastLayoutZoom = z;
+        if (zoomTimer) clearTimeout(zoomTimer);
+        zoomTimer = setTimeout(() => {
+          cy.layout({ name: "cose-bilkent", animate: false, nodeDimensionsIncludeLabels: true,
+            idealEdgeLength: Math.round(100 * Math.max(1, z)), nodeRepulsion: Math.round(8000 * Math.max(1, z)),
+            padding: 24, fit: false } as any).run();
+        }, 250);
+      });
+    }
+
+    cy.on("tap", "node", evt => {
+      const id = evt.target.data("id") as string;
+      setSelected(prev => {
+        const next = prev === id ? null : id;
+        applyCyHighlight(cy, next);
+        return next;
+      });
+    });
+    cy.on("tap", evt => {
+      if (evt.target === cy) { setSelected(null); applyCyHighlight(cy, null); }
+    });
+
+    cyRef.current?.destroy();
+    cyRef.current = cy;
+    return () => { cy.destroy(); cyRef.current = null; };
+  }, [fdNodes, fdEdges, layoutKey, layoutMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggle % labels on nodes
+  React.useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.nodes().forEach(n => {
+      const base = n.data("label") as string;
+      const pct = n.data("pctLabel") as string;
+      n.style("label", showPct && pct ? `${base}\n${pct}` : base);
+    });
+  }, [showPct]);
+
+  // Toggle edge retained labels
+  React.useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.edges().forEach(e => {
+      e.style("label", showEdgeLabels ? (e.data("retLabel") as string ?? "") : "");
+    });
+  }, [showEdgeLabels]);
+
+  // Apply focus mode: dim nodes outside ancestors/subtree of selected
+  React.useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.elements().removeStyle("opacity");
+    if (!selected || focusMode === "all") return;
+    const related = focusMode === "up" ? getAncestors(selected) : getSubtree(selected);
+    related.add(selected);
+    cy.nodes().forEach(n => {
+      if (!related.has(n.data("id") as string)) n.style("opacity", 0.08);
+    });
+    cy.edges().forEach(e => {
+      const src = e.source().data("id") as string;
+      const dst = e.target().data("id") as string;
+      if (!related.has(src) || !related.has(dst)) e.style("opacity", 0.04);
+    });
+  }, [selected, focusMode, getAncestors, getSubtree]);
 
   if (pairs.length === 0) {
     return <p className="subtitle">No dominator pair data available.</p>;
   }
 
+  const btnStyle = (active: boolean) => ({
+    padding: "0.15rem 0.55rem", fontSize: "0.82rem",
+    border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+    background: active ? "var(--accent)" : "transparent",
+    color: active ? "#fff" : "var(--fg)",
+  });
+
+  const divider = <span style={{ width: 1, height: 16, background: "var(--border)", display: "inline-block", margin: "0 2px" }} />;
+
+  // Jump-to search: highlight matching nodes, center on first match
+  const handleSearch = React.useCallback((q: string) => {
+    setSearch(q);
+    const cy = cyRef.current;
+    if (!cy) return;
+    if (!q) { cy.elements().removeStyle("opacity"); return; }
+    const lc = q.toLowerCase();
+    const matches = cy.nodes().filter(n => (n.data("id") as string).toLowerCase().includes(lc));
+    if (matches.length === 0) return;
+    cy.elements().style("opacity", 0.1);
+    matches.style("opacity", 1);
+    cy.center(matches[0]);
+  }, []);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      {/* Toolbar row 1: layout controls */}
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
         <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
-          style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
-          title="Re-run force layout">↺ Layout</button>
-        <button onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1); }}
-          style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
-          title="Reset view">⊡ View</button>
-        <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Top {Math.min(topN, fdNodes.length)} classes · drag nodes · scroll to zoom · click to inspect</span>
+          style={btnStyle(false)} title="Re-run layout">↺</button>
+        <button onClick={() => cyRef.current?.fit(undefined, 24)}
+          style={btnStyle(false)} title="Fit to view">⊡</button>
+        {divider}
+        <button onClick={() => setLayoutMode("force")} style={btnStyle(layoutMode === "force")} title="Force layout">Force</button>
+        <button onClick={() => setLayoutMode("tree")} style={btnStyle(layoutMode === "tree")} title="Tree layout (dominators at top)">Tree</button>
+        {divider}
+        <button onClick={() => setFocusMode("all")} style={btnStyle(focusMode === "all")} title="Show all nodes">All</button>
+        <button onClick={() => setFocusMode("up")} style={btnStyle(focusMode === "up")} title="Show only ancestors of selected node (what retains it)">▲ Retained by</button>
+        <button onClick={() => setFocusMode("down")} style={btnStyle(focusMode === "down")} title="Show only subtree of selected node (what it retains)">▼ Retains</button>
+        {divider}
+        <button onClick={() => setShowPct(v => !v)} style={btnStyle(showPct)} title="Overlay % of total heap on each node">% Labels</button>
+        <button onClick={() => setShowEdgeLabels(v => !v)} style={btnStyle(showEdgeLabels)} title="Show retained bytes on each edge">Edge Labels</button>
+        <span style={{ fontSize: "0.82rem", color: "var(--muted)", marginLeft: "auto" }}>
+          {fdNodes.length} classes · {fdEdges.length} edges
+        </span>
       </div>
-      <svg
-        ref={svgRef}
-        width={W} height={H}
-        style={{ display: "block", background: "var(--card, #f7f7f8)", borderRadius: 6, border: "1px solid var(--border)", cursor: "grab", maxWidth: "100%" }}
-        onMouseDown={handleSvgMouseDown}
-        onWheel={handleWheel}
-        onClick={e => { if ((e.target as SVGElement).tagName === "svg" && !svgInteract.current.hasMoved) setSelected(null); }}
-      >
-        <defs>
-          <marker id="dom-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 z" fill="var(--muted, #888)" />
-          </marker>
-        </defs>
-        <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-          {/* Edges */}
-          {fdEdges.map((e, i) => {
-            const src = effectivePositions[e.src];
-            const dst = effectivePositions[e.dst];
-            if (!src || !dst) return null;
-            const dimmed = connectedTo !== null && (!connectedTo.has(src.id) || !connectedTo.has(dst.id));
-            return (
-              <line key={i}
-                x1={src.x} y1={src.y} x2={dst.x} y2={dst.y}
-                stroke="var(--muted, #aaa)"
-                strokeWidth={1 / zoom}
-                opacity={dimmed ? 0.1 : 0.4}
-                markerEnd="url(#dom-arrow)"
-              />
-            );
-          })}
-          {/* Nodes */}
-          {effectivePositions.map((p) => {
-            const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
-            const isSelected = p.id === selected;
-            const dimmed = connectedTo !== null && !connectedTo.has(p.id);
-            return (
-              <g key={p.id}
-                style={{ cursor: "pointer" }}
-                onMouseDown={e => handleNodeMouseDown(e, p.id)}
-                onClick={e => { e.stopPropagation(); if (!isSelected) { setSelected(p.id); fireInspect({ kind: "class", cls: p.id }); } else setSelected(null); }}
+      {/* Toolbar row 2: search */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+        <input
+          type="search"
+          placeholder="Jump to class…"
+          value={search}
+          onChange={e => handleSearch(e.target.value)}
+          style={{ flex: "0 0 220px", fontSize: "0.82rem", padding: "0.15rem 0.4rem", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--fg)" }}
+        />
+        {search && (
+          <button onClick={() => handleSearch("")} style={btnStyle(false)} title="Clear search">✕</button>
+        )}
+      </div>
+
+      {/* Graph canvas */}
+      <div className="cy-graph-container" ref={cyContainerRef} />
+
+      {/* Ancestry breadcrumb */}
+      {selected && ancestorChain.length > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", fontSize: "0.78rem", padding: "0.3rem 0.5rem", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 6 }}>
+          <span style={{ color: "var(--muted)", flexShrink: 0 }}>▲ via:</span>
+          {ancestorChain.map((cls, i) => (
+            <React.Fragment key={cls}>
+              {i > 0 && <span style={{ color: "var(--muted)" }}>→</span>}
+              <button
+                className="trg-link-btn"
+                style={cls === selected ? { fontWeight: 700 } : undefined}
+                title={cls}
+                onClick={() => { setSelected(cls); const cy = cyRef.current; if (cy) { applyCyHighlight(cy, cls); cy.getElementById(cls).select(); } }}
               >
-                <circle
-                  cx={p.x} cy={p.y} r={screenR}
-                  fill={tpfgColor(p.id)}
-                  opacity={dimmed ? 0.2 : 0.85}
-                  stroke={isSelected ? "var(--accent, #0066cc)" : "var(--border, #ccc)"}
-                  strokeWidth={isSelected ? 2.5 / zoom : 1 / zoom}
-                />
-                <text
-                  x={p.x} y={p.y + screenR + 11 / zoom}
-                  textAnchor="middle"
-                  fontSize={9 / zoom}
-                  fill="var(--fg)"
-                  opacity={dimmed ? 0.3 : 1}
-                  style={{ pointerEvents: "none", userSelect: "none" }}
-                >
-                  {p.id.split(".").pop()?.slice(0, 14)}
-                </text>
-              </g>
-            );
-          })}
-        </g>
-      </svg>
+                {cls.split(".").pop()}
+              </button>
+              {retMap.has(cls) && (
+                <span style={{ color: "var(--muted)", fontSize: "0.72rem" }}>{fmtB(retMap.get(cls)!)}</span>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+
+      {/* Selected node info */}
       {selected && (
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.4rem", fontSize: "0.82rem", flexWrap: "wrap" }}>
-          <code style={{ color: "var(--muted)", wordBreak: "break-all", flex: "1 1 auto" }}>{selected}</code>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.82rem", flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: "0.4rem" }}>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: tpfgColor(selected), display: "inline-block", flexShrink: 0 }} />
+          <code style={{ wordBreak: "break-all", flex: "1 1 auto" }} title={selected}>{selected}</code>
+          {retMap.has(selected) && totalHeap > 0 && (
+            <span style={{ color: "var(--muted)", fontSize: "0.78rem", flexShrink: 0 }}>
+              retains {fmtB(retMap.get(selected)!)} ({(retMap.get(selected)! / totalHeap * 100).toFixed(1)}%)
+            </span>
+          )}
+          {retMap.has(selected) && totalHeap === 0 && (
+            <span style={{ color: "var(--muted)", fontSize: "0.78rem", flexShrink: 0 }}>
+              retains {fmtB(retMap.get(selected)!)}
+            </span>
+          )}
+          {/* Expand context: add dominators/dominated of this node from full dataset */}
+          {(() => {
+            const cy = cyRef.current;
+            const isIsolated = cy ? cy.getElementById(selected).connectedEdges().length === 0 : false;
+            const hasDomRelations = pairs.some(p => p.dominator_class === selected || p.dominated_class === selected);
+            if (!isIsolated && !hasDomRelations) return null;
+            const canExpand = pairs.some(p =>
+              (p.dominator_class === selected || p.dominated_class === selected) &&
+              !extraClasses.has(p.dominator_class === selected ? p.dominated_class : p.dominator_class)
+            );
+            if (!canExpand) return null;
+            return (
+              <button className="show-more-btn" style={{ flexShrink: 0 }} title="Add this node's dominator chain to the graph"
+                onClick={() => {
+                  const related = new Set<string>();
+                  for (const p of pairs) {
+                    if (p.dominator_class === selected) related.add(p.dominated_class);
+                    if (p.dominated_class === selected) related.add(p.dominator_class);
+                  }
+                  setExtraClasses(prev => new Set([...prev, ...related]));
+                }}>
+                Expand context
+              </button>
+            );
+          })()}
           <button className="show-more-btn" style={{ flexShrink: 0 }}
-            onClick={() => fireInspect({ kind: "class", cls: selected })}>
-            Inspect →
-          </button>
+            onClick={() => fireInspect({ kind: "class", cls: selected })}>Inspect →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
-            onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
-            Instances →
-          </button>
+            onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>Instances →</button>
         </div>
       )}
     </div>
@@ -5602,6 +5733,137 @@ function CustomQueriesSection({ report }: { report: Report }) {
   );
 }
 
+// ── Shared Cytoscape helpers ──────────────────────────────────────────────────
+
+function buildDomGraphStyle(): cytoscape.Stylesheet[] {
+  return [
+    { selector: "node", style: {
+        label: "data(label)", "font-size": 11, "background-color": "data(color)",
+        width: "data(size)", height: "data(size)", color: "#222",
+        "text-valign": "bottom", "text-halign": "center", "text-margin-y": 3,
+        "text-outline-width": 2, "text-outline-color": "#fff", "min-zoomed-font-size": 8,
+      } as any },
+    { selector: "node:selected", style: { "border-width": 3, "border-color": "#0066cc", "border-opacity": 1 } as any },
+    { selector: "edge", style: {
+        width: "data(weight)", "line-color": "#888", "target-arrow-color": "#888",
+        "target-arrow-shape": "triangle", "curve-style": "bezier", opacity: 0.5,
+      } as any },
+  ];
+}
+
+function buildCyBaseStyle(): cytoscape.Stylesheet[] {
+  return [
+    {
+      selector: "node",
+      style: {
+        label: "data(label)",
+        "font-size": 11,
+        "background-color": "data(color)",
+        width: "data(size)",
+        height: "data(size)",
+        color: "#222",
+        "text-valign": "bottom",
+        "text-halign": "center",
+        "text-margin-y": 3,
+        "text-outline-width": 2,
+        "text-outline-color": "#fff",
+        "min-zoomed-font-size": 8,
+      } as any,
+    },
+    {
+      selector: "node:selected",
+      style: { "border-width": 3, "border-color": "#0066cc", "border-opacity": 1 } as any,
+    },
+    {
+      selector: "edge",
+      style: {
+        width: "data(weight)",
+        "line-color": "#999",
+        "target-arrow-color": "#999",
+        "target-arrow-shape": "triangle",
+        "curve-style": "bezier",
+        opacity: 0.6,
+      } as any,
+    },
+  ];
+}
+
+function buildCyStyleWithFields(showFields: boolean): cytoscape.Stylesheet[] {
+  const base = buildCyBaseStyle();
+  if (showFields) {
+    base.push({
+      selector: "edge[fields]",
+      style: {
+        label: "data(fields)",
+        "font-size": 8,
+        color: "#555",
+        "text-rotation": "autorotate",
+        "text-outline-width": 1,
+        "text-outline-color": "#fff",
+      } as any,
+    });
+  }
+  return base;
+}
+
+function makeCyInstance(
+  container: HTMLDivElement,
+  elements: cytoscape.ElementDefinition[],
+  style: cytoscape.Stylesheet[],
+): cytoscape.Core {
+  const cy = cytoscape({
+    container,
+    elements,
+    style,
+    layout: {
+      name: "cose-bilkent",
+      animate: false,
+      nodeDimensionsIncludeLabels: true,
+      idealEdgeLength: 100,
+      nodeRepulsion: 8000,
+      padding: 24,
+    } as any,
+    wheelSensitivity: 0.3,
+    minZoom: 0.05,
+    maxZoom: 5,
+  });
+
+  // Spread nodes apart as the user zooms in: re-run layout with longer edges.
+  let zoomTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastLayoutZoom = 1;
+  cy.on("zoom", () => {
+    const z = cy.zoom();
+    if (Math.abs(z - lastLayoutZoom) < 0.4) return;
+    lastLayoutZoom = z;
+    if (zoomTimer) clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => {
+      cy.layout({
+        name: "cose-bilkent",
+        animate: false,
+        nodeDimensionsIncludeLabels: true,
+        idealEdgeLength: Math.round(100 * Math.max(1, z)),
+        nodeRepulsion: Math.round(8000 * Math.max(1, z)),
+        padding: 24,
+        fit: false,
+      } as any).run();
+    }, 250);
+  });
+
+  return cy;
+}
+
+/** Dim all nodes/edges that are not directly connected to the tapped node. Pass null to clear. */
+function applyCyHighlight(cy: cytoscape.Core, nodeId: string | null): void {
+  if (!nodeId) {
+    cy.elements().removeStyle("opacity");
+    return;
+  }
+  const node = cy.getElementById(nodeId);
+  const neighborhood = node.neighborhood().add(node);
+  cy.elements().difference(neighborhood).style("opacity", 0.1);
+  neighborhood.removeStyle("opacity");
+}
+
 // ── Type Reference Graph (TPFG, V13) ─────────────────────────────────────────
 // Rich interactive force-directed class-to-class reference topology.
 // Graph tab: SVG force graph with stable spring layout.
@@ -5718,12 +5980,9 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   const [selected, setSelected] = React.useState<string | null>(null);
   const [fullscreen, setFullscreen] = React.useState(false);
   const [layoutKey, setLayoutKey] = React.useState(0);
-  const svgRef = React.useRef<HTMLDivElement>(null);
-  const [w, setW] = React.useState(800);
-  const svgH = 520;
-
-  // Hover tooltip state
-  const [tooltip, setTooltip] = React.useState<{ x: number; y: number; cls: string; retained: number; instances: number } | null>(null);
+  const [showEdgeFields, setShowEdgeFields] = React.useState(false);
+  const cyContainerRef = React.useRef<HTMLDivElement>(null);
+  const cyRef = React.useRef<cytoscape.Core | null>(null);
 
   // Build histogram lookup map once
   const histMap = React.useMemo(() => {
@@ -5731,17 +5990,6 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     for (const r of histogram) m.set(r.pretty_class, r);
     return m;
   }, [histogram]);
-
-  // Responsive width
-  React.useLayoutEffect(() => {
-    if (!svgRef.current) return;
-    const ro = new ResizeObserver((ents) => {
-      const bw = ents[0]?.contentRect.width;
-      if (bw && bw > 0) setW(Math.floor(bw));
-    });
-    ro.observe(svgRef.current);
-    return () => ro.disconnect();
-  }, []);
 
   // Esc closes fullscreen / popover
   React.useEffect(() => {
@@ -5781,164 +6029,96 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     [nodeInfos, sizeBy],
   );
 
-  // Initial radial placement, then force layout — recomputed only when layoutKey / nodes change
-  const positions = React.useMemo(() => {
-    if (nodeInfos.length === 0) return [] as FDNode[];
-    const sorted = [...nodeInfos].sort((a, b) =>
-      (sizeBy === "retained" ? b.retFlow - a.retFlow : b.edgeCount - a.edgeCount));
-    const nodes: FDNode[] = sorted.map((n, i) => {
-      const w2 = sizeBy === "retained" ? n.retFlow : n.edgeCount;
-      const r = Math.max(6, Math.min(28, 6 + 22 * Math.sqrt(w2 / maxWeight)));
-      // Spiral initial placement
-      const angle = (i / sorted.length) * 2 * Math.PI * 3;
-      const radius = 60 + i * 2;
-      return {
-        id: n.cls,
-        x: w / 2 + radius * Math.cos(angle),
-        y: svgH / 2 + radius * Math.sin(angle),
-        vx: 0, vy: 0, r,
-      };
-    });
-    const idxMap = new Map(nodes.map((n, i) => [n.id, i]));
-    const fdEdges = graphEdges.map(e => ({
-      src: idxMap.get(e.src_class) ?? -1,
-      dst: idxMap.get(e.dst_class) ?? -1,
-    })).filter(e => e.src >= 0 && e.dst >= 0);
-    return runForceLayoutD3(nodes, fdEdges, w, svgH);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeInfos, graphEdges, layoutKey, w, sizeBy, maxWeight]);
-
-
-  // Pan / zoom / node-drag state
-  const [pan, setPan] = React.useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = React.useState(1);
-  // Per-node position overrides (applied on top of force-layout positions)
-  const nodeOverrides = React.useRef<Map<string, { x: number; y: number }>>(new Map());
-  const [overrideVersion, setOverrideVersion] = React.useState(0);
-  // Reset overrides when layout changes
-  React.useEffect(() => {
-    nodeOverrides.current = new Map();
-    setOverrideVersion(v => v + 1);
-    setPan({ x: 0, y: 0 });
-    setZoom(1);
-  }, [positions]);
-
-  const svgInteract = React.useRef<{
-    mode: "none" | "pan" | "drag";
-    startX: number; startY: number;
-    panStart: { x: number; y: number };
-    dragId: string | null;
-    hasMoved: boolean;
-  }>({ mode: "none", startX: 0, startY: 0, panStart: { x: 0, y: 0 }, dragId: null, hasMoved: false });
-
-  const handleSvgMouseDown = React.useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    if (e.button !== 0 && e.button !== 1) return;
-    svgInteract.current = {
-      mode: "pan", startX: e.clientX, startY: e.clientY,
-      panStart: { x: pan.x, y: pan.y }, dragId: null, hasMoved: false,
-    };
-    e.preventDefault();
-  }, [pan]);
-
-  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    svgInteract.current = {
-      mode: "drag", startX: e.clientX, startY: e.clientY,
-      panStart: { x: pan.x, y: pan.y }, dragId: id, hasMoved: false,
-    };
-    e.preventDefault();
-  }, [pan]);
-
-  const svgElRef = React.useRef<SVGSVGElement>(null);
-
-  React.useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const s = svgInteract.current;
-      if (s.mode === "none") return;
-      const dx = e.clientX - s.startX;
-      const dy = e.clientY - s.startY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) s.hasMoved = true;
-      if (s.mode === "pan") {
-        setPan({ x: s.panStart.x + dx, y: s.panStart.y + dy });
-      } else if (s.mode === "drag" && s.dragId) {
-        const base = positions.find(p => p.id === s.dragId!);
-        const prev = nodeOverrides.current.get(s.dragId!) ?? { x: base?.x ?? 0, y: base?.y ?? 0 };
-        const rect = svgElRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const newX = (e.clientX - rect.left - s.panStart.x) / zoom;
-        const newY = (e.clientY - rect.top - s.panStart.y) / zoom;
-        nodeOverrides.current.set(s.dragId!, { x: newX, y: newY });
-        setOverrideVersion(v => v + 1);
-      }
-    };
-    const onUp = (e: MouseEvent) => {
-      const s = svgInteract.current;
-      if (s.mode === "none") return;
-      svgInteract.current.mode = "none";
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [positions, zoom]);
-
-  const handleWheel = React.useCallback((e: React.WheelEvent<SVGSVGElement>) => {
-    e.preventDefault();
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const newZoom = Math.max(0.15, Math.min(8, zoom * factor));
-    // Zoom toward mouse cursor
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    setPan(p => ({
-      x: mx - (mx - p.x) * (newZoom / zoom),
-      y: my - (my - p.y) * (newZoom / zoom),
-    }));
-    setZoom(newZoom);
-  }, [zoom]);
-
-  // Effective positions: force-layout + overrides
-  const effectivePositions = React.useMemo(() => {
-    // overrideVersion is read to trigger recompute when overrides change
-    void overrideVersion;
-    if (nodeOverrides.current.size === 0) return positions;
-    return positions.map(p => {
-      const ov = nodeOverrides.current.get(p.id);
-      return ov ? { ...p, x: ov.x, y: ov.y } : p;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [positions, overrideVersion]);
-
-  const effectivePosMap = React.useMemo(
-    () => new Map(effectivePositions.map(p => [p.id, p])),
-    [effectivePositions],
-  );
-
-  const ogCtxForHint = React.useContext(ObjGraphCtx);
-
-  // Filter highlight set
-  const filterLc = filter.toLowerCase().trim();
-  const matchedNodes = React.useMemo(() => {
-    if (!filterLc) return null;
-    return new Set(positions.map(p => p.id).filter(id => id.toLowerCase().includes(filterLc)));
-  }, [positions, filterLc]);
-
-  // Connected nodes for selected highlight
-  const connectedTo = React.useMemo(() => {
-    if (!selected) return null;
-    const s = new Set([selected]);
-    for (const e of graphEdges) {
-      if (e.src_class === selected) s.add(e.dst_class);
-      if (e.dst_class === selected) s.add(e.src_class);
-    }
-    return s;
-  }, [selected, graphEdges]);
-
-  // Max edge retained for stroke scaling
   const maxEdgeRet = React.useMemo(
     () => graphEdges.reduce((m, e) => Math.max(m, e.retained_weight), 1),
     [graphEdges],
   );
+
+  const ogCtxForHint = React.useContext(ObjGraphCtx);
+
+  // Build Cytoscape elements and mount
+  React.useEffect(() => {
+    if (!cyContainerRef.current || view !== "graph") return;
+    void layoutKey;
+    if (nodeInfos.length === 0) return;
+    const elements: cytoscape.ElementDefinition[] = [
+      ...nodeInfos.map(n => {
+        const w2 = sizeBy === "retained" ? n.retFlow : n.edgeCount;
+        const r = Math.max(6, Math.min(28, 6 + 22 * Math.sqrt(w2 / maxWeight)));
+        return {
+          data: {
+            id: n.cls,
+            label: tpfgShortName(n.cls),
+            size: r * 2,
+            color: tpfgColor(n.cls),
+          },
+        };
+      }),
+      ...graphEdges.map((e, i) => {
+        const sw = Math.max(0.5, Math.min(4, 0.5 + 3.5 * Math.sqrt(e.retained_weight / maxEdgeRet)));
+        return {
+          data: {
+            id: `e${i}`,
+            source: e.src_class,
+            target: e.dst_class,
+            weight: sw,
+            fields: e.top_field_names && e.top_field_names.length > 0
+              ? e.top_field_names.slice(0, 2).join(", ")
+              : undefined,
+          },
+        };
+      }),
+    ];
+    const style = buildCyStyleWithFields(showEdgeFields);
+    const cy = makeCyInstance(cyContainerRef.current, elements, style);
+    cy.on("tap", "node", evt => {
+      const id = evt.target.data("id") as string;
+      setSelected(prev => {
+        const next = prev === id ? null : id;
+        applyCyHighlight(cy, next);
+        return next;
+      });
+    });
+    cy.on("tap", evt => {
+      if (evt.target === cy) { setSelected(null); applyCyHighlight(cy, null); }
+    });
+    cyRef.current?.destroy();
+    cyRef.current = cy;
+    return () => { cy.destroy(); cyRef.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeInfos, graphEdges, layoutKey, sizeBy, maxWeight, maxEdgeRet, view]);
+
+  // Update edge field labels style when toggle changes without re-running layout
+  React.useEffect(() => {
+    if (!cyRef.current) return;
+    cyRef.current.style(buildCyStyleWithFields(showEdgeFields) as any).update();
+  }, [showEdgeFields]);
+
+  // Apply filter highlight via Cytoscape style
+  const filterLc = filter.toLowerCase().trim();
+  React.useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.nodes().removeStyle("opacity");
+    cy.edges().removeStyle("opacity");
+    if (!filterLc) return;
+    const matched = cy.nodes().filter(n => (n.data("id") as string).toLowerCase().includes(filterLc));
+    const unmatched = cy.nodes().difference(matched);
+    unmatched.style("opacity", 0.1);
+    cy.edges().forEach(e => {
+      const srcMatch = (e.source().data("id") as string).toLowerCase().includes(filterLc);
+      const dstMatch = (e.target().data("id") as string).toLowerCase().includes(filterLc);
+      if (!srcMatch || !dstMatch) e.style("opacity", 0.05);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterLc]);
+
+  // Sync node highlight when selected changes via sidebar link clicks
+  React.useEffect(() => {
+    if (!cyRef.current || filterLc) return;
+    applyCyHighlight(cyRef.current, selected);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   const tableCols: TableColumn<TypeEdge>[] = [
     { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
@@ -5998,6 +6178,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     return edges.filter(e => e.src_class === parentClass).sort((a, b) => b.retained_weight - a.retained_weight);
   }, [parentClass, edges]);
 
+
   const wrapStyle: React.CSSProperties = fullscreen
     ? { position: "fixed", inset: 0, background: "var(--bg)", zIndex: 9999, overflow: "auto", padding: "1rem" }
     : {};
@@ -6033,10 +6214,13 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               title="Toggle: size nodes by retained heap flow vs edge count">
               Size: {sizeBy === "retained" ? "Retained" : "Edges"}
             </button>
+            <button onClick={() => setShowEdgeFields(v => !v)}
+              style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: showEdgeFields ? "var(--accent)" : "transparent", color: showEdgeFields ? "#fff" : "var(--fg)" }}
+              title="Show field names on edges">Fields</button>
             <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
               style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
               title="Re-run force layout from scratch">↺ Layout</button>
-            <button onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1); }}
+            <button onClick={() => cyRef.current?.fit(undefined, 24)}
               style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
               title="Reset zoom and pan to default">⊡ View</button>
             <button onClick={() => setFullscreen(f => !f)}
@@ -6050,114 +6234,15 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
       {/* Graph view */}
       {view === "graph" && (
         <div className="trg-graph-layout">
-        <div ref={svgRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
-          {positions.length === 0 && (
+        <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+          {nodeInfos.length === 0 && (
             <p className="subtitle">No type reference data — run with <code>--obj-graph</code>.</p>
           )}
-          {positions.length > 0 && (
+          {nodeInfos.length > 0 && (
             <>
-              <svg
-                ref={svgElRef}
-                width={w} height={svgH}
-                style={{ display: "block", background: "var(--card, #f7f7f8)", borderRadius: 6, border: "1px solid var(--border)", cursor: svgInteract.current.mode === "pan" ? "grabbing" : "grab" }}
-                onClick={e => { if ((e.target as SVGElement).tagName === "svg") setSelected(null); }}
-                onMouseDown={handleSvgMouseDown}
-                onWheel={handleWheel}
-              >
-                <defs>
-                  <marker id="tpfg-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-                    <path d="M0,0 L0,6 L6,3 z" fill="var(--muted, #888)" />
-                  </marker>
-                </defs>
-                <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-                {/* Edges */}
-                {graphEdges.map((e, i) => {
-                  const sp = effectivePosMap.get(e.src_class);
-                  const dp = effectivePosMap.get(e.dst_class);
-                  if (!sp || !dp) return null;
-                  const highlighted = matchedNodes
-                    ? (matchedNodes.has(e.src_class) && matchedNodes.has(e.dst_class))
-                    : connectedTo
-                      ? (connectedTo.has(e.src_class) && connectedTo.has(e.dst_class))
-                      : true;
-                  const opacity = highlighted ? 0.55 : 0.1;
-                  const sw = Math.max(0.5, Math.min(5, 0.5 + 4.5 * Math.sqrt(e.retained_weight / maxEdgeRet)));
-                  // Offset line endpoints by radius so arrows touch node edge
-                  const dx = dp.x - sp.x, dy = dp.y - sp.y;
-                  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-                  const x1 = sp.x + (dx / len) * sp.r;
-                  const y1 = sp.y + (dy / len) * sp.r;
-                  const x2 = dp.x - (dx / len) * (dp.r + 6);
-                  const y2 = dp.y - (dy / len) * (dp.r + 6);
-                  return (
-                    <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-                      stroke="var(--muted, #888)" strokeWidth={sw / zoom}
-                      opacity={opacity}
-                      markerEnd="url(#tpfg-arrow)"
-                    />
-                  );
-                })}
-                {/* Nodes */}
-                {effectivePositions.map(p => {
-                  const isSelected = p.id === selected;
-                  const inFilter = matchedNodes ? matchedNodes.has(p.id) : true;
-                  const inConnected = connectedTo ? connectedTo.has(p.id) : true;
-                  const dimmed = (matchedNodes && !inFilter) || (connectedTo && !inConnected);
-                  const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
-                  return (
-                    <g key={p.id}
-                      transform={`translate(${p.x},${p.y})`}
-                      style={{ cursor: "pointer" }}
-                      onMouseEnter={(e) => {
-                        const rect = svgRef.current?.getBoundingClientRect();
-                        const h = histMap.get(p.id);
-                        setTooltip({
-                          x: e.clientX - (rect?.left ?? 0) + 12,
-                          y: e.clientY - (rect?.top ?? 0) - 10,
-                          cls: p.id,
-                          retained: h?.retained ?? 0,
-                          instances: h?.instances ?? 0,
-                        });
-                      }}
-                      onMouseLeave={() => setTooltip(null)}
-                      onMouseDown={(e) => { e.stopPropagation(); handleNodeMouseDown(e, p.id); }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!svgInteract.current.hasMoved) {
-                          if (isSelected) { setSelected(null); }
-                          else { setSelected(p.id); }
-                        }
-                      }}
-                    >
-                      <circle r={screenR + (isSelected ? 3 / zoom : 0)}
-                        fill={tpfgColor(p.id)}
-                        opacity={dimmed ? 0.12 : 0.85}
-                        stroke={isSelected ? "var(--fg)" : "transparent"}
-                        strokeWidth={isSelected ? 2 / zoom : 0}
-                      />
-                      <text
-                        fontSize={Math.min(9, Math.max(6, p.r * 0.55)) / zoom}
-                        fill="var(--bg, #fff)"
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        opacity={dimmed ? 0.2 : 1}
-                        style={{ pointerEvents: "none", userSelect: "none" }}
-                      >
-                        {tpfgShortName(p.id).slice(0, Math.floor(screenR / 2.8) + 4)}
-                      </text>
-                    </g>
-                  );
-                })}
-                </g>
-              </svg>
-              {tooltip && (
-                <div className="trg-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
-                  <strong>{tooltip.cls.split(".").pop()}</strong><br/>
-                  {fmtCount(tooltip.instances)} instances · {formatBytes(tooltip.retained)}
-                </div>
-              )}
+              <div className="cy-graph-container" ref={cyContainerRef} />
               <p style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "0.25rem 0 0" }}>
-                Showing top {positions.length} of {nodeInfos.length + (edges.length > 0 ? 0 : 0)} classes by retained flow.
+                Showing top {nodeInfos.length} classes by retained flow.
                 Scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect.
                 {(window as any).__wasmExploration
                   ? <> · <span className="trg-hint-wasm">WASM active — live instance browse available</span></>
@@ -6190,12 +6275,61 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                     <tr><th>Instances</th><td>{fmtCount(selInfo.hist.instances)}</td></tr>
                     <tr><th>Shallow</th><td>{fmtB(selInfo.hist.shallow)}</td></tr>
                     <tr><th>Retained</th><td><strong>{fmtB(selInfo.hist.retained)}</strong></td></tr>
+                    {parentClass && histMap.has(parentClass) && histMap.get(parentClass)!.retained > 0 && (
+                      <>
+                        <tr><th>Parent dom.</th><td><button className="trg-link-btn" onClick={() => setSelected(parentClass)} title={parentClass}>{tpfgShortName(parentClass)}</button></td></tr>
+                        <tr><th>% of parent</th><td>{Math.round(selInfo.hist.retained / histMap.get(parentClass)!.retained * 100)}%</td></tr>
+                      </>
+                    )}
                     <tr><th>Max instance</th><td>{fmtB(selInfo.hist.max_instance_shallow)}</td></tr>
+                    {selInfo.hist.instances > 0 && (
+                      <tr><th>Avg instance</th><td>{fmtB(Math.round(selInfo.hist.shallow / selInfo.hist.instances))}</td></tr>
+                    )}
                     {selInfo.hist.incoming_ref_count != null && (
                       <tr><th>Incoming refs</th><td>{fmtCount(selInfo.hist.incoming_ref_count)}</td></tr>
                     )}
                   </tbody>
                 </table>
+              )}
+              {(() => {
+                // Build top-field rows from all outbound edges' top_field_names
+                const fieldMap = new Map<string, { dst: string; count: number; weight: number }>();
+                for (const e of selAllOutEdges) {
+                  if (!e.top_field_names || e.top_field_names.length === 0) continue;
+                  for (const f of e.top_field_names) {
+                    const existing = fieldMap.get(f);
+                    if (existing) {
+                      existing.count += e.edge_count;
+                      existing.weight += e.retained_weight;
+                    } else {
+                      fieldMap.set(f, { dst: e.dst_class, count: e.edge_count, weight: e.retained_weight });
+                    }
+                  }
+                }
+                const fieldRows = Array.from(fieldMap.entries())
+                  .sort((a, b) => b[1].count - a[1].count)
+                  .slice(0, 5);
+                if (fieldRows.length === 0) return null;
+                return (
+                  <>
+                    <p className="trg-sidebar-section-label">⊟ Top fields</p>
+                    <ul className="trg-edge-list trg-field-dist">
+                      {fieldRows.map(([field, info], i) => (
+                        <li key={i}>
+                          <span className="trg-field-name-tag">{field}</span>
+                          <span className="trg-field-dst">→ <button className="trg-link-btn" onClick={() => setSelected(info.dst)}>{tpfgShortName(info.dst)}</button></span>
+                          <span className="trg-edge-stat">×{fmtCount(info.count)} · {fmtB(info.weight)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                );
+              })()}
+              {selInfo.hist.root_path && selInfo.hist.root_path.length > 0 && (
+                <div className="trg-gcpath-section">
+                  <p className="trg-sidebar-section-label">⊘ GC root path</p>
+                  <RootPathChain steps={selInfo.hist.root_path} />
+                </div>
               )}
               {selAllOutEdges.length > 0 && (
                 <>
@@ -6262,6 +6396,12 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 </button>
                 <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
                   Instances →
+                </button>
+                <button className="show-more-btn" title="Jump to Object Graph section" onClick={() => {
+                  window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: { cls: selected } }));
+                  window.location.hash = "#object-graph";
+                }}>
+                  Graph →
                 </button>
               </div>
               <div className="trg-sidebar-btns">
@@ -6696,8 +6836,8 @@ function OGEGraphView({ data, onNavigate }: {
   const [layoutKey, setLayoutKey] = React.useState(0);
   const [graphSelected, setGraphSelected] = React.useState<number | null>(null);
   const [fmtB] = useFmtBytes();
-
-  const svgW = 700, svgH = 440;
+  const cyContainerRef = React.useRef<HTMLDivElement>(null);
+  const cyRef = React.useRef<cytoscape.Core | null>(null);
 
   // Select top-N nodes by retained
   const topNodes = React.useMemo(() => {
@@ -6709,141 +6849,61 @@ function OGEGraphView({ data, onNavigate }: {
 
   const topNodeSet = React.useMemo(() => new Set(topNodes.map(n => n.id)), [topNodes]);
 
-  // Build FD nodes and edges
-  const { fdNodes, fdEdges } = React.useMemo(() => {
+  const cyElements = React.useMemo(() => {
     const maxRet = topNodes.reduce((m, n) => Math.max(m, n.retained), 1);
-    const fdNodes: FDNode[] = topNodes.map((n, i) => {
-      const angle = (i / topNodes.length) * 2 * Math.PI;
-      const radius = Math.min(svgW, svgH) * 0.35;
-      return {
+    const nodeEls: cytoscape.ElementDefinition[] = topNodes.map(n => ({
+      data: {
         id: n.id,
-        x: svgW / 2 + radius * Math.cos(angle),
-        y: svgH / 2 + radius * Math.sin(angle),
-        vx: 0,
-        vy: 0,
-        r: Math.max(6, Math.min(28, Math.sqrt(n.retained / maxRet) * 32)),
-      };
-    });
-    const idxMap = new Map(fdNodes.map((n, i) => [n.id, i]));
-    const fdEdges: { src: number; dst: number }[] = [];
+        label: (n.display_class.split(".").pop() ?? n.display_class),
+        size: Math.max(12, Math.min(56, Math.sqrt(n.retained / maxRet) * 64)),
+        color: tpfgColor(n.display_class),
+      },
+    }));
+    const edgeEls: cytoscape.ElementDefinition[] = [];
+    const seen = new Set<string>();
     for (const n of topNodes) {
       const srcEdges = data.edges[n.id] ?? [];
       for (const e of srcEdges) {
         const dstKey = String(e.child_idx);
-        if (topNodeSet.has(dstKey)) {
-          const srcIdx = idxMap.get(n.id);
-          const dstIdx = idxMap.get(dstKey);
-          if (srcIdx !== undefined && dstIdx !== undefined && srcIdx !== dstIdx) {
-            fdEdges.push({ src: srcIdx, dst: dstIdx });
-          }
-        }
+        if (!topNodeSet.has(dstKey) || n.id === dstKey) continue;
+        const key = `${n.id}→${dstKey}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edgeEls.push({
+          data: {
+            id: key,
+            source: n.id,
+            target: dstKey,
+            weight: 1,
+            fields: e.field_name ? `.${e.field_name}` : undefined,
+          },
+        });
       }
     }
-    return { fdNodes, fdEdges };
+    return [...nodeEls, ...edgeEls];
   }, [topNodes, topNodeSet, data.edges]);
 
-  const positions = React.useMemo(() => {
-    // layoutKey read to trigger re-run
+  React.useEffect(() => {
+    if (!cyContainerRef.current) return;
     void layoutKey;
-    return runForceLayoutD3(fdNodes, fdEdges, svgW, svgH);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fdNodes, fdEdges, layoutKey]);
-
-  // Pan / zoom / drag state
-  const [pan, setPan] = React.useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = React.useState(1);
-  const nodeOverrides = React.useRef<Map<string, { x: number; y: number }>>(new Map());
-  const [overrideVersion, setOverrideVersion] = React.useState(0);
-
-  React.useEffect(() => {
-    nodeOverrides.current = new Map();
-    setOverrideVersion(v => v + 1);
-    setPan({ x: 0, y: 0 });
-    setZoom(1);
-  }, [positions]);
-
-  const svgInteract = React.useRef<{
-    mode: "none" | "pan" | "drag";
-    startX: number; startY: number;
-    panStart: { x: number; y: number };
-    dragId: string | null;
-    hasMoved: boolean;
-  }>({ mode: "none", startX: 0, startY: 0, panStart: { x: 0, y: 0 }, dragId: null, hasMoved: false });
-
-  const handleSvgMouseDown = React.useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    if (e.button !== 0 && e.button !== 1) return;
-    svgInteract.current = {
-      mode: "pan", startX: e.clientX, startY: e.clientY,
-      panStart: { x: pan.x, y: pan.y }, dragId: null, hasMoved: false,
-    };
-    e.preventDefault();
-  }, [pan]);
-
-  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    svgInteract.current = {
-      mode: "drag", startX: e.clientX, startY: e.clientY,
-      panStart: { x: pan.x, y: pan.y }, dragId: id, hasMoved: false,
-    };
-    e.preventDefault();
-  }, [pan]);
-
-  const svgDivRef = React.useRef<HTMLDivElement>(null);
-  const svgElRef = React.useRef<SVGSVGElement>(null);
-
-  React.useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const s = svgInteract.current;
-      if (s.mode === "none") return;
-      const dx = e.clientX - s.startX;
-      const dy = e.clientY - s.startY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) s.hasMoved = true;
-      if (s.mode === "pan") {
-        setPan({ x: s.panStart.x + dx, y: s.panStart.y + dy });
-      } else if (s.mode === "drag" && s.dragId) {
-        const rect = svgElRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const newX = (e.clientX - rect.left - s.panStart.x) / zoom;
-        const newY = (e.clientY - rect.top - s.panStart.y) / zoom;
-        nodeOverrides.current.set(s.dragId!, { x: newX, y: newY });
-        setOverrideVersion(v => v + 1);
-      }
-    };
-    const onUp = () => { svgInteract.current.mode = "none"; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [zoom]);
-
-  const handleWheel = React.useCallback((e: React.WheelEvent<SVGSVGElement>) => {
-    e.preventDefault();
-    const rect = svgDivRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const newZoom = Math.max(0.15, Math.min(8, zoom * factor));
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    setPan(p => ({
-      x: mx - (mx - p.x) * (newZoom / zoom),
-      y: my - (my - p.y) * (newZoom / zoom),
-    }));
-    setZoom(newZoom);
-  }, [zoom]);
-
-  const effectivePositions = React.useMemo(() => {
-    void overrideVersion;
-    if (nodeOverrides.current.size === 0) return positions;
-    return positions.map(p => {
-      const ov = nodeOverrides.current.get(p.id);
-      return ov ? { ...p, x: ov.x, y: ov.y } : p;
+    if (cyElements.length === 0) return;
+    const style = buildCyStyleWithFields(true);
+    const cy = makeCyInstance(cyContainerRef.current, cyElements, style);
+    cy.on("tap", "node", evt => {
+      const id = parseInt(evt.target.data("id") as string, 10);
+      applyCyHighlight(cy, String(id));
+      setGraphSelected(id);
+      const nodeInfo = data.nodes[String(id)];
+      if (nodeInfo) fireInspect({ kind: "instance", idx: id, cls: nodeInfo.display_class });
     });
+    cy.on("tap", evt => {
+      if (evt.target === cy) { setGraphSelected(null); applyCyHighlight(cy, null); }
+    });
+    cyRef.current?.destroy();
+    cyRef.current = cy;
+    return () => { cy.destroy(); cyRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [positions, overrideVersion]);
-
-  const effectivePosMap = React.useMemo(
-    () => new Map(effectivePositions.map(p => [p.id, p])),
-    [effectivePositions],
-  );
+  }, [cyElements, layoutKey]);
 
   // Selected node sidebar data
   const selectedNodeData = graphSelected !== null ? data.nodes[String(graphSelected)] : null;
@@ -6871,40 +6931,6 @@ function OGEGraphView({ data, onNavigate }: {
     } catch { /* ignore */ }
   }, [graphSelected]);
 
-  // connectedTo: set of node string-ids adjacent to the selected node (null = no selection = no dimming)
-  const connectedTo = React.useMemo(() => {
-    if (graphSelected === null) return null;
-    const selKey = String(graphSelected);
-    const s = new Set<string>([selKey]);
-    for (const n of topNodes) {
-      const srcEdges = data.edges[n.id] ?? [];
-      for (const e of srcEdges) {
-        const dstKey = String(e.child_idx);
-        if (n.id === selKey && topNodeSet.has(dstKey)) s.add(dstKey);
-        if (dstKey === selKey && topNodeSet.has(n.id)) s.add(n.id);
-      }
-    }
-    return s;
-  }, [graphSelected, topNodes, topNodeSet, data.edges]);
-
-  // Build visible edges for rendering
-  const visibleEdges = React.useMemo(() => {
-    const result: { x1: number; y1: number; x2: number; y2: number; key: string; fieldName: string; srcKey: string; dstKey: string }[] = [];
-    for (const n of topNodes) {
-      const srcPos = effectivePosMap.get(n.id);
-      if (!srcPos) continue;
-      const srcEdges = data.edges[n.id] ?? [];
-      for (const e of srcEdges) {
-        const dstKey = String(e.child_idx);
-        if (!topNodeSet.has(dstKey)) continue;
-        const dstPos = effectivePosMap.get(dstKey);
-        if (!dstPos) continue;
-        result.push({ x1: srcPos.x, y1: srcPos.y, x2: dstPos.x, y2: dstPos.y, key: `${n.id}-${dstKey}`, fieldName: e.field_name ?? "", srcKey: n.id, dstKey });
-      }
-    }
-    return result;
-  }, [topNodes, topNodeSet, effectivePosMap, data.edges]);
-
   const shortLabel = (cls: string) => cls.split(".").pop() ?? cls;
 
   return (
@@ -6925,96 +6951,21 @@ function OGEGraphView({ data, onNavigate }: {
             onClick={() => { setLayoutKey(k => k + 1); }}>
             ↺ Re-layout
           </button>
+          <button className="btn-link" style={{ fontSize: "0.8rem" }}
+            onClick={() => cyRef.current?.fit(undefined, 24)}>
+            ⊡ View
+          </button>
           <span style={{ fontSize: "0.75rem", color: "var(--muted)", marginLeft: "auto" }}>
-            {topNodes.length} nodes · {visibleEdges.length} edges
+            {topNodes.length} nodes
           </span>
         </div>
       </div>
 
-      {/* SVG graph */}
-      <div ref={svgDivRef} style={{ flex: "1 1 480px", minWidth: 0, position: "relative", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", background: "var(--card)", cursor: "grab" }}>
-        <svg
-          ref={svgElRef}
-          width={svgW}
-          height={svgH}
-          style={{ display: "block", width: "100%", height: svgH, touchAction: "none" }}
-          onMouseDown={handleSvgMouseDown}
-          onWheel={handleWheel}
-        >
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-            {/* Edges */}
-            {visibleEdges.map(e => {
-              const dimmed = connectedTo !== null && !(connectedTo.has(e.srcKey) && connectedTo.has(e.dstKey));
-              return (
-                <line key={e.key} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-                  stroke="var(--muted, #888)" strokeWidth={0.8 / zoom}
-                  opacity={dimmed ? 0.08 : 0.35} />
-              );
-            })}
-            {/* Edge field labels (only when few edges) */}
-            {visibleEdges.length <= 25 && visibleEdges.map(e => {
-              if (!e.fieldName) return null;
-              const mx = (e.x1 + e.x2) / 2;
-              const my = (e.y1 + e.y2) / 2;
-              const dimmed = connectedTo !== null && !(connectedTo.has(e.srcKey) && connectedTo.has(e.dstKey));
-              return (
-                <text key={`lbl-${e.key}`}
-                  x={mx} y={my - 4 / zoom}
-                  textAnchor="middle" fontSize={7 / zoom}
-                  fill="var(--muted)" opacity={dimmed ? 0.1 : 0.7}
-                  style={{ pointerEvents: "none", userSelect: "none" }}>
-                  .{e.fieldName}
-                </text>
-              );
-            })}
-            {/* Nodes */}
-            {effectivePositions.map(p => {
-              const nodeInfo = data.nodes[p.id];
-              if (!nodeInfo) return null;
-              const isSelected = graphSelected === parseInt(p.id, 10);
-              const label = shortLabel(nodeInfo.display_class);
-              const screenR = p.r * Math.pow(zoom, 0.15) / zoom;
-              const dimmed = connectedTo !== null && !connectedTo.has(p.id);
-              return (
-                <g key={p.id} style={{ cursor: "pointer" }}
-                  onMouseDown={e => handleNodeMouseDown(e, p.id)}
-                  onClick={e => {
-                    if (!(svgInteract.current as any).hasMoved) {
-                      setGraphSelected(parseInt(p.id, 10));
-                      fireInspect({ kind: "instance", idx: parseInt(p.id, 10), cls: nodeInfo.display_class });
-                    }
-                    e.stopPropagation();
-                  }}>
-                  <circle
-                    cx={p.x} cy={p.y} r={screenR}
-                    fill={tpfgColor(nodeInfo.display_class)}
-                    stroke={isSelected ? "var(--fg, #222)" : "none"}
-                    strokeWidth={isSelected ? 2 / zoom : 0}
-                    opacity={dimmed ? 0.15 : 0.82}
-                  />
-                  <text
-                    x={p.x} y={p.y}
-                    fontSize={Math.min(8, Math.max(6, p.r * 0.55)) / zoom}
-                    fill="var(--bg, #fff)"
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    style={{ pointerEvents: "none", userSelect: "none" }}
-                    opacity={dimmed ? 0.2 : 1}
-                  >
-                    {label.slice(0, Math.floor(screenR / 2.8) + 4)}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-        </svg>
-        <p style={{ fontSize: "0.72rem", color: "var(--muted)", margin: "0.2rem 0.4rem", padding: 0 }}>
-          Scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect
-        </p>
-      </div>
+      {/* Cytoscape graph */}
+      <div className="cy-graph-container" ref={cyContainerRef} style={{ flex: "1 1 480px" }} />
 
       {/* Sidebar */}
-      <div style={{ flex: "0 0 220px", minWidth: 180, fontSize: "0.82rem" }}>
+      <div style={{ flex: "0 0 220px", minWidth: 180, fontSize: "0.82rem", maxHeight: 440, overflowY: "auto" }}>
         {!graphSelected || !selectedNodeData ? (
           <div style={{ color: "var(--muted)", padding: "0.5rem 0" }}>
             <p style={{ margin: "0 0 0.3rem" }}>Click a node to see details.</p>
@@ -9892,6 +9843,13 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                 <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.dst_class })}>
                   {e.dst_class.split(".").pop()}
                 </button>
+                {e.top_field_names && e.top_field_names.length > 0 && (
+                  <span className="inspector-field-tags">
+                    {e.top_field_names.slice(0, 3).map((f: string) => (
+                      <span key={f} className="inspector-field-tag">.{f}</span>
+                    ))}
+                  </span>
+                )}
                 <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
               </li>
             ))}
@@ -9905,6 +9863,13 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                 <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.src_class })}>
                   {e.src_class.split(".").pop()}
                 </button>
+                {e.top_field_names && e.top_field_names.length > 0 && (
+                  <span className="inspector-field-tags">
+                    {e.top_field_names.slice(0, 3).map((f: string) => (
+                      <span key={f} className="inspector-field-tag">.{f}</span>
+                    ))}
+                  </span>
+                )}
                 <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
               </li>
             ))}
