@@ -5644,7 +5644,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class to see which classes dominate it (left) and which classes it dominates (right). Click any node or table row to pivot.
+            Select a class to see which classes dominate it (left) and which it dominates (right). Click any node or table row to re-focus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -5800,9 +5800,6 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
         <p>
           <strong>{formatBytes(capacity)}</strong>
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
-        </p>
-        <p>
-          This memory is allocated from native (OS) memory — it does <em>not</em> appear in the JVM heap totals above.
         </p>
         <p>
           Check for NIO buffer pools or caches that are not releasing buffers. Common causes: Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
@@ -5998,7 +5995,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
         Share of the reachable heap retained by the few largest top-level dominators. If{" "}
         <strong>Top 1</strong> is already high, freeing that one object reclaims most memory; if
         the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
-        the leak is spread across many peers.
+        retention is spread across many peers.
       </p>
       <ConcentrationChart rc={rc} />
       <ConcentrationStackedBar rc={rc} />
