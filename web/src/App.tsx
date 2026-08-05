@@ -1962,7 +1962,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           {o.dump_creation !== null && (
             <>
               <dt>Dump created</dt>
-              <dd>{formatEpochMs(o.dump_creation)}</dd>
+              <dd><span title={formatEpochMs(o.dump_creation)}>{formatDateNice(o.dump_creation)}</span></dd>
             </>
           )}
           <dt>Total objects</dt>
