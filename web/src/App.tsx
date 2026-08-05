@@ -8785,7 +8785,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {wasmOutboundEdges && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  Live refs from WASM ({wasmOutboundTotal} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
+                  Live references from loaded heap ({wasmOutboundTotal} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
                 </p>
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
@@ -9042,7 +9042,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (currentNode?.edges_unknown) {
                   return (
                     <p className="subtitle">
-                      Inbound refs unavailable in the static report. Load the .hprof in the browser for the full inbound graph.
+                      Inbound references not available in this report. Load the .hprof in the browser for the full inbound graph.
                     </p>
                   );
                 }
