@@ -255,6 +255,9 @@ th.sortable.active { color: var(--accent); }
 .copy-btn { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.15rem; line-height: 1; border-radius: 3px; }
 .copy-btn:hover, .copy-btn:focus { color: var(--accent); visibility: visible; outline: none; }
 td:hover .copy-btn, .rdt_TableRow:hover .copy-btn, .copy-cell:focus-within .copy-btn, li:hover .copy-btn, h3:hover .copy-btn, p:hover .copy-btn { visibility: visible; }
+/* Triage bullets: collapse hidden buttons to zero width so they don't create gaps in inline text */
+.oom li .copy-btn { width: 0; overflow: hidden; padding: 0; }
+.oom li:hover .copy-btn { width: auto; overflow: visible; padding: 0 0.15rem; }
 
 /* Print: hide interactive chrome, expand collapsibles, avoid mid-card breaks. */
 @media print {

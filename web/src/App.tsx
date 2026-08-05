@@ -686,7 +686,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
 
 // Browser-friendly overrides for signals whose CLI-oriented text doesn't fit the web UI.
 const SIGNAL_DETAIL_OVERRIDES: Record<string, string> = {
-  "collections-not-analyzed": "_Collection waste not analyzed — run Full Analysis to check for wasted capacity._",
+  "collections-not-analyzed": "run Full Analysis to check for wasted capacity.",
 };
 
 function LeakScoreDashboard({ report }: { report: Report }) {
@@ -741,7 +741,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3 style={{ marginBottom: "0.1rem" }}>Leak Score</h3>
-      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Composite signal: % heap retained + B/instance + dominator hub + depth from GC root.</p>
+      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Higher score = more likely root cause. Click a card to inspect the class.</p>
       <div className="leak-score-grid">
         {rows.map(r => {
           const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
@@ -783,7 +783,7 @@ function OomTriage({ report }: { report: Report }) {
       </p>
       <ul>
         {signals.map((s, i) => {
-          const detail = SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail;
+          const detail = (SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail).replace(/\blazy initialisation\b/g, "lazy initialization");
           return (
             <li key={i}>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
@@ -1211,7 +1211,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   return (
     <div>
       <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
-        Next to each class: <span title="Open in Inspector">⬡</span> = Open in Inspector · <span title="Copy OQL query">⌗</span> = copy OQL · <span title="Instances in Inspector">⬡≡</span> = Instances in Inspector · <span title="Copy class name">⎘</span> = copy name
+        Next to each class: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> copy OQL · <span title="List all instances">⬡≡</span> list instances · <span title="Copy class name">⎘</span> copy name
       </p>
       <div className="tools">
         <input
@@ -1408,7 +1408,7 @@ function ListObjectsBtn({ cls }: { cls: string }) {
     <button className="copy-btn" onClick={(e) => { e.stopPropagation(); fireInspect({ kind: "instances", cls, page: 0 }); }}
       title={`Instances in Inspector: "${cls}"`}
       aria-label="Instances in Inspector"
-      style={{ visibility: "visible", opacity: 0.7 }}>
+      style={{ opacity: 0.7 }}>
       ⬡≡
     </button>
   );
@@ -1572,13 +1572,8 @@ function SizeDistributionSection({ report }: { report: Report }) {
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
         How retained heap is distributed across {fmtCount(d.count)} top-level dominators — shows whether memory is held by a few giant objects or spread across many small ones.
+        Smallest / largest: {fmtB(d.min)} / {fmtB(d.max)} · median: {fmtB(d.median)} · total: {fmtB(d.total)}.
       </p>
-      <ul>
-        <li>Dominators: {fmtCount(d.count)}</li>
-        <li>Smallest / largest retained: {fmtB(d.min)} / {fmtB(d.max)}</li>
-        <li>Median retained: {fmtB(d.median)}</li>
-        <li>Total retained (top-level): {fmtB(d.total)}</li>
-      </ul>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
         <span style={{ width: useKB ? "140px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
@@ -1690,7 +1685,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     const wasRun = report.analysis_flags?.find_duplicates ?? false;
     return (
       <section id="duplicate-strings-approximate">
-        <h2>Duplicate Strings (approximate)</h2>
+        <h2>Duplicate Strings</h2>
         <p className="subtitle">
           {wasRun
             ? "Duplicate-string analysis ran but found no data."
@@ -1708,14 +1703,10 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        String values seen more than once — each duplicate is wasted heap that <code>String.intern()</code> or a deduplication pass could reclaim. Values are hashed to 64 bits; hash collisions accepted as approximation.
+        String values seen more than once — each duplicate is wasted heap that <code>String.intern()</code> or a deduplication pass could reclaim.
+        Approx wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
+        {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
-      <ul>
-        <li>Total String instances: {fmtCount(d.total_string_instances)}</li>
-        <li>Distinct values: {fmtCount(d.distinct_values)}</li>
-        <li>Duplicated values: {fmtCount(d.duplicated_values)}</li>
-        <li>Approx wasted bytes: {fmtB(d.approx_wasted_bytes)}</li>
-      </ul>
 
       {d.top_duplicated.length > 0 && (
         <TopDuplicatedTable rows={d.top_duplicated} />
@@ -1770,7 +1761,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
     const wasRun = report.analysis_flags?.find_duplicates ?? false;
     return (
       <section id="duplicate-prim-arrays">
-        <h2>Duplicate Primitive Arrays (approximate)</h2>
+        <h2>Duplicate Primitive Arrays</h2>
         <p className="subtitle">
           {wasRun
             ? "Duplicate primitive-array analysis ran but found no data."
@@ -1785,14 +1776,11 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
   }
   return (
     <section id="duplicate-prim-arrays">
-      <h2>Duplicate Primitive Arrays (approximate)</h2>
+      <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
-        Opt-in (<code>--find-duplicates</code>): each primitive array hashed to 64 bits by
-        content and element type; collisions accepted as approximation.
+        Primitive arrays with identical content and element type — content-identical copies that could be deduplicated.
+        Approx wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Hashed to 64 bits; collisions accepted as approximation.
       </p>
-      <ul>
-        <li>Approx wasted bytes: {fmtB(d.total_wasted_bytes)}</li>
-      </ul>
       {d.rows.length > 0 && (
         <DupPrimArrayRowsTable rows={d.rows} />
       )}
@@ -1856,8 +1844,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers consume a large share of shallow heap — candidates for value-type or record optimisation.
-        {rows[0]?.pretty_class === "java.lang.Object" && " Note: java.lang.Object appearing first is expected — it has no fields so headers are 100% of its shallow size; focus on application classes below it."}
+        Classes where object headers consume a large share of shallow heap — candidates for value-type or record optimization.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -2769,7 +2756,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           <PivotBtn cls={s.pretty_class} />
           <OqlBtn cls={s.pretty_class} />
           <ListObjectsBtn cls={s.pretty_class} />
-        </span>
+        </span>{" "}
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
@@ -3198,7 +3185,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               ];
               return (
                 <div style={{ marginTop: "0.75rem" }}>
-                  <h3 style={{ margin: "0 0 0.4rem" }}>Classes in <code>{pkgPrefix || "(default package)"}</code></h3>
+                  <h3 style={{ margin: "0 0 0.4rem" }}>Classes in {pkgPrefix ? <code>{pkgPrefix}</code> : "(default package)"}</h3>
                   <StdTable columns={leafCols} data={leafRows} searchKeys={["short"]} defaultSortFieldId="retained" />
                 </div>
               );
@@ -3614,8 +3601,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
       <p className="subtitle">
-        Array-length distribution bucketed by power-of-two element length; Max length is the inclusive upper bound of
-        each bucket.
+        Array-length distribution bucketed by powers of two; the "Max length" column is the inclusive upper bound of each bucket.
       </p>
       {empty ? (
         <p className="subtitle">No arrays found.</p>
@@ -3804,7 +3790,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         ];
         return (
           <>
-            <StdTable columns={cbsCols} data={cbsBuckets} searchKeys={[]} fmtBtn={kbBtnCbs} defaultSortFieldId="shallow" defaultSortAsc={false} />
+            <StdTable columns={cbsCols} data={cbsBuckets} searchKeys={[]} fmtBtn={kbBtnCbs} defaultSortFieldId="size" defaultSortAsc={true} />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "142px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</span>
@@ -5652,7 +5638,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       {hasPairs && (
         <div ref={navigatorRef}>
-          <h3>Who Holds This Class? (Two-sided Navigator)</h3>
+          <h3>Who Holds This Class?</h3>
           <p className="subtitle">
             Select a class to see which classes dominate it (left) and which classes it dominates (right). Click any node or table row to pivot.
           </p>
@@ -5740,8 +5726,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
         <>
           <p className="subtitle">
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects,{" "}
-            {fmtB(data?.unreachable_shallow ?? 0)} shallow heap
-            {` (within the unreachable forest retained = shallow since all paths stay in-forest; top ${fmtCount(rows.length)} classes by shallow).`}
+            {fmtB(data?.unreachable_shallow ?? 0)} shallow heap.
+            Showing top {fmtCount(rows.length)} classes by shallow size.
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
@@ -5922,7 +5908,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
                 <code>{s.frames[0]}</code>
                 {cls && <PivotBtn cls={cls} />}
                 {cls && <OqlBtn cls={cls} />}
-                {cls && <ListObjectsBtn cls={cls} />}                <ListObjectsBtn cls={cls} />
+                {cls && <ListObjectsBtn cls={cls} />}
               </span>
             );
             if (s.frames.length === 1) {
@@ -6069,9 +6055,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        Objects per idom-hop below a GC root. Shallow depth means most objects are held close to a
-        root; deep depth means retention flows through long chains (nested collections, linked
-        structures). Max depth: {maxDepth}.
+        How far objects sit from a GC root in the dominator tree. Shallow = objects held close to roots; deep = long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -11390,7 +11374,7 @@ export default function App({ report }: { report: Report }) {
           hprof-analyzer
         </a>
         {" "}(<a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener noreferrer">cargo install hprof-analyzer</a>)
-        {report.generated ? ` · ${report.generated}` : null}
+        {report.generated ? ` · ${formatDateNice(new Date(report.generated).getTime())}` : null}
         {" · "}This report is a self-contained HTML file — no server required.
       </footer>
     </div>
