@@ -3779,7 +3779,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collections by Size</h3>
       <p className="subtitle">
-        How many elements collections hold, bucketed by size; useful for spotting oversized pre-allocated collections.
+        Element-count distribution of collections, bucketed by size — useful for spotting oversized or pre-allocated collections.
         {cbs && <>{" "}{fmtCount(cbs.tracked)} tracked; {fmtCount(cbs.empty_count)} empty.</>}
       </p>
       {cbsBuckets.length === 0 ? (
@@ -4059,8 +4059,8 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <>
           <h3>Tiny Collection Overhead</h3>
           <p className="subtitle">
-            Empty (size-0) and singleton (size-1) collections whose wrapper objects are pure overhead.
-            Overhead bytes = object count × reference-slot width.
+            Empty (size-0) and singleton (size-1) collections whose wrapper objects are pure overhead — the data could be stored in the field itself (null or a single reference).
+            Overhead = object count × reference-slot width.
           </p>
           <TinyCollectionTable rows={data.tiny_overhead} />
         </>
@@ -5895,7 +5895,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is additive; retained is omitted because summing per-object retained over-counts shared subgraphs.</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap sums across traces; retained is excluded because summing per-object retained over-counts shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking was off in this dump (<code>stack_trace_serial = 0</code>); no allocation sites available.
