@@ -135,15 +135,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download binary artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: hprof-analyzer-linux
-          path: target/release
-
-      - name: Make binary executable
-        run: chmod +x target/release/hprof-analyzer
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -157,8 +148,19 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # Download AFTER cache restore — rust-cache restores target/ and would
+      # overwrite the artifact if this step came first.
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hprof-analyzer-linux
+          path: target/release
+
+      - name: Make binary executable
+        run: chmod +x target/release/hprof-analyzer
+
       - name: Generate sample reports
-        run: BIN=target/release/hprof-analyzer ./scripts/gen-samples.sh
+        run: BIN=$(pwd)/target/release/hprof-analyzer ./scripts/gen-samples.sh
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
