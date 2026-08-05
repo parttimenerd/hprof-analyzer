@@ -2063,7 +2063,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           },
           { id: "type", name: "Root Type", grow: 1, selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
-          { id: "pct", name: "% of roots", right: true, width: "96px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
+          { id: "pct", name: "% of roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
             id: "top_classes", name: "Top retained classes", grow: 2,
@@ -4231,7 +4231,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     { id: "category", name: "Kind", width: "82px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—", sortable: true },
     { id: "pointees", name: "Pointees", right: true, width: "88px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
     ...(hasElements ? [{ id: "elements", name: "Elems", right: true, width: "80px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
-    { id: "holders", name: "Holders", right: true, width: "80px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
+    { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
   ];
   return (
