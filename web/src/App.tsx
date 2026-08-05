@@ -2063,12 +2063,12 @@ function SystemOverviewSection({ report }: { report: Report }) {
               </span>
             ),
           },
-          { id: "type", name: "Root Type", grow: 1, selector: (r) => r.root_type, sortable: true },
+          { id: "type", name: "Root Type", grow: 1, maxWidth: "260px", selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
           { id: "pct", name: "% of roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
-            id: "top_classes", name: "Top retained classes", grow: 2,
+            id: "top_classes", name: "Top retained classes", grow: 2, maxWidth: "360px",
             cell: (r: GcRow) => {
               const top = (r as GcRootRetainedRow).top_classes;
               if (!top || top.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
@@ -2094,10 +2094,11 @@ function SystemOverviewSection({ report }: { report: Report }) {
             <StdTable columns={gcCols} data={gcRows} searchKeys={["root_type"]} defaultSortFieldId="retained" defaultSortAsc={false} />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "90px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }} />
-              <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
+              <span style={{ flex: 1, maxWidth: "260px", paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalCount)}</span>
               <span style={{ width: "104px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100%</span>
               <span style={{ width: "128px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
+              <span style={{ flex: 2, maxWidth: "360px", paddingLeft: 5, paddingRight: 5 }} />
             </div>
             {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
               <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — likely a native code reference leak.</p>
