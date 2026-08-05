@@ -9996,7 +9996,7 @@ function GlossarySection() {
           <tr><td><kbd>g</kbd> <kbd>t</kbd></td><td>Jump to Top Consumers</td></tr>
           <tr><td><kbd>g</kbd> <kbd>d</kbd></td><td>Jump to Dominator Analysis</td></tr>
           <tr><td><kbd>g</kbd> <kbd>r</kbd></td><td>Jump to Type Reference Graph</td></tr>
-          <tr><td><kbd>g</kbd> <kbd>o</kbd></td><td>Jump to Object Graph</td></tr>
+          <tr><td><kbd>g</kbd> <kbd>o</kbd></td><td>Jump to Object Graph Explorer</td></tr>
           <tr><td><kbd>Alt</kbd>+<kbd>←</kbd></td><td>Back in Object Explorer</td></tr>
           <tr><td><kbd>Alt</kbd>+<kbd>→</kbd></td><td>Forward in Object Explorer</td></tr>
           <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Prev/next peer instance in Object Explorer</td></tr>
