@@ -4309,15 +4309,16 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
           <React.Fragment key={stats.kind}>
             <h3>{stats.kind} References</h3>
             <p className="subtitle">{kindCaption(stats.kind)}</p>
-            <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
-            {stats.null_referent_count != null && stats.null_referent_count > 0 && (
-              <p className="subtitle">
-                {fmtCount(stats.null_referent_count)} of {fmtCount(stats.reference_instances)} {stats.kind} references have a null referent (GC'd but not yet cleaned up).
-                {stats.null_referent_count / stats.reference_instances > 0.5 && (
-                  <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue may not be drained.</span>
-                )}
-              </p>
-            )}
+            <p className="subtitle">
+              {fmtCount(stats.reference_instances)} reference instances.
+              {stats.null_referent_count != null && stats.null_referent_count > 0 && (
+                <> {fmtCount(stats.null_referent_count)} have a null referent (GC'd but not yet cleaned up).
+                  {stats.null_referent_count / stats.reference_instances > 0.5 && (
+                    <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue may not be drained.</span>
+                  )}
+                </>
+              )}
+            </p>
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
