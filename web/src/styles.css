@@ -248,6 +248,10 @@ th.sortable.active { color: var(--accent); }
 /* In DataTable cells: stretch copy-cell to fill the cell so code truncates at the right boundary */
 .rdt_TableCell .copy-cell { display: flex; width: 100%; min-width: 0; }
 .rdt_TableCell .copy-cell code { min-width: 0; flex-shrink: 1; }
+/* Reduce default 16px horizontal padding to 8px so narrow columns (like the 36px rank "#" column)
+   have enough room for their header text and sort icon without clipping. */
+.rdt_TableCol { padding-left: 8px; padding-right: 8px; }
+.rdt_TableCell { padding-left: 8px; padding-right: 8px; }
 .copy-btn { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.15rem; line-height: 1; border-radius: 3px; }
 .copy-btn:hover, .copy-btn:focus { color: var(--accent); visibility: visible; outline: none; }
 td:hover .copy-btn, .rdt_TableRow:hover .copy-btn, .copy-cell:focus-within .copy-btn, li:hover .copy-btn, h3:hover .copy-btn, p:hover .copy-btn { visibility: visible; }
@@ -819,7 +823,7 @@ kbd {
 /* GC Root Heatmap */
 .gc-heatmap-table { border-collapse: collapse; font-size: 0.78rem; max-width: 100%; }
 .gc-heatmap-table th, .gc-heatmap-table td { padding: 4px 6px; border: 1px solid var(--border); }
-.gc-heatmap-colhead { font-family: var(--mono); font-size: 0.72rem; text-align: center; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-heatmap-colhead { font-family: var(--mono); font-size: 0.72rem; text-align: center; width: 70px; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gc-heatmap-rowlabel { text-align: left; white-space: nowrap; color: var(--muted); font-size: 0.75rem; }
 .gc-heatmap-cell { text-align: center; cursor: pointer; font-size: 0.72rem; min-width: 58px; white-space: nowrap; transition: filter 0.1s; }
 .gc-heatmap-cell:hover { filter: brightness(1.1); }
@@ -828,7 +832,7 @@ kbd {
 
 /* Leak Score Dashboard */
 .leak-score-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 0.5rem; }
-.leak-score-card { position: relative; min-width: 150px; max-width: 220px; flex: 1 1 150px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--card, #f9f9fb); }
+.leak-score-card { position: relative; min-width: 180px; max-width: 240px; flex: 1 1 180px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--card, #f9f9fb); }
 .leak-score-bar { position: absolute; top: 0; left: 0; height: 3px; background: var(--accent, #3b82f6); transition: width 0.3s; }
 .leak-score-high .leak-score-bar { background: #e55; }
 .leak-score-mid .leak-score-bar { background: #e90; }

@@ -755,7 +755,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
               title={`Score: ${r.score.toFixed(0)} | depth: ${r.depth} | ${(r.pct*100).toFixed(1)}% heap | ${r.instances} instances`}>
               <div className="leak-score-bar" style={{ width: `${r.score}%` }} />
               <div className="leak-score-body">
-                <button className="trg-link-btn leak-score-cls" onClick={() => fireInspect({ kind: "class", cls: r.cls })}>
+                <button className="trg-link-btn leak-score-cls" title={r.cls} onClick={() => fireInspect({ kind: "class", cls: r.cls })}>
                   <code>{r.cls.split(".").pop()}</code>
                 </button>
                 <span className="leak-score-num">{r.score.toFixed(0)}</span>
