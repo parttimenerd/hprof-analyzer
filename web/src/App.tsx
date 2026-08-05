@@ -1956,7 +1956,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           {o.compressed_oops !== null && (
             <>
               <dt>Compressed OOPs</dt>
-              <dd>{o.compressed_oops ? "yes" : "no"}</dd>
+              <dd>{o.compressed_oops ? "Yes" : "No"}</dd>
             </>
           )}
           {o.dump_creation !== null && (
@@ -2776,7 +2776,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             a <strong>{s.root_type_label}</strong> GC root
           </>
         ) : (
-          <span style={{ color: "var(--muted)" }}>multiple / ambiguous roots (no single holding root identified)</span>
+          <span style={{ color: "var(--muted)" }}>multiple roots — no single holder identified</span>
         )}
       </p>
       {s.keywords.length > 0 && (
@@ -3369,9 +3369,9 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
     { id: "name", name: "Name", grow: 1, maxWidth: "127px", cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a>, selector: (t) => t.name ?? "", sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "118px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained, sortable: true },
-    { id: "max_local", name: useKB ? "Max. Locals' Retained (KB)" : "Max. Locals' Retained", right: true, width: useKB ? "225px" : "190px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained, sortable: true },
+    { id: "max_local", name: useKB ? "Max Local Retained (KB)" : "Max Local Retained", right: true, width: useKB ? "225px" : "190px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained, sortable: true },
     { id: "loader", name: "Context Class Loader", grow: 1, maxWidth: "155px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
-    { id: "daemon", name: "Daemon", width: "100px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no", sortable: true },
+    { id: "daemon", name: "Daemon", width: "100px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "Yes" : "No", sortable: true },
     { id: "priority", name: "Priority", right: true, width: "95px", format: (t) => String(t.priority), selector: (t) => t.priority, sortable: true },
     { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state?.replace(/[\[\]]/g, "") || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state ? threadStateLabel(t.thread_state) : "—"}</span>, sortable: true },
   ];
@@ -4297,7 +4297,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
   return (
     <section id="references">
       <h2>References</h2>
-      <p className="subtitle">Soft/weak/phantom reference referents (what they point at).</p>
+      <p className="subtitle">Soft, weak, and phantom references — their referents, retention, and null-referent counts.</p>
       {kinds.length === 0 ? (
         <p className="subtitle">No soft, weak, or phantom references found.</p>
       ) : (
@@ -4316,7 +4316,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             )}
             <h4>Referent classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
-            <h4>Only-weakly retained (approximate)</h4>
+            <h4>Only weakly retained (approximate)</h4>
             <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
@@ -10078,7 +10078,7 @@ function SeriesTable({
       id: "new",
       name: "New?",
       width: "60px",
-      cell: (r: SRow) => ("is_new" in r && r.is_new ? "yes" : ""),
+      cell: (r: SRow) => ("is_new" in r && r.is_new ? "Yes" : ""),
       selector: (r: SRow) => ("is_new" in r && r.is_new ? 1 : 0),
       sortable: true,
     } as TableColumn<SRow>] : []),
