@@ -824,6 +824,7 @@ kbd {
 .gc-heatmap-table { border-collapse: collapse; font-size: 0.78rem; max-width: 100%; }
 .gc-heatmap-table th, .gc-heatmap-table td { padding: 4px 6px; border: 1px solid var(--border); }
 .gc-heatmap-colhead { font-family: var(--mono); font-size: 0.72rem; text-align: center; width: 70px; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-heatmap-coltext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 62px; }
 .gc-heatmap-rowlabel { text-align: left; white-space: nowrap; color: var(--muted); font-size: 0.75rem; }
 .gc-heatmap-cell { text-align: center; cursor: pointer; font-size: 0.72rem; min-width: 58px; white-space: nowrap; transition: filter 0.1s; }
 .gc-heatmap-cell:hover { filter: brightness(1.1); }
@@ -838,7 +839,7 @@ kbd {
 .leak-score-mid .leak-score-bar { background: #e90; }
 .leak-score-low .leak-score-bar { background: var(--accent, #3b82f6); }
 .leak-score-body { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 2px; gap: 4px; }
-.leak-score-cls { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.82rem; }
+.leak-score-cls { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.82rem; }
 .leak-score-num { font-size: 1.1rem; font-weight: 700; color: var(--muted); min-width: 32px; text-align: right; }
 .leak-score-high .leak-score-num { color: #c44; }
 .leak-score-mid .leak-score-num { color: #b80; }

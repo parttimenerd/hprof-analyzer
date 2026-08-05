@@ -1896,7 +1896,7 @@ function GcRootHeatmap({ rows }: { rows: GcRootRetainedRow[] }) {
             <th className="gc-heatmap-rowlabel" />
             {topCols.map(cls => (
               <th key={cls} className="gc-heatmap-colhead" title={cls}>
-                {cls.split(".").pop()}
+                <div className="gc-heatmap-coltext">{cls.split(".").pop()}</div>
               </th>
             ))}
           </tr>
@@ -5451,7 +5451,7 @@ function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[]
               <th className="gc-heatmap-rowlabel" style={{ minWidth: 140 }}>Dominator ↓</th>
               {topCols.map(cls => (
                 <th key={cls} className="gc-heatmap-colhead" title={cls}>
-                  {cls.split(".").pop()}
+                  <div className="gc-heatmap-coltext">{cls.split(".").pop()}</div>
                 </th>
               ))}
               <th className="gc-heatmap-colhead" style={{ color: "var(--muted)", fontStyle: "italic" }}>Total</th>
