@@ -8228,7 +8228,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           if (pct < 50) return null;
           return (
             <div style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.75rem", background: "var(--warn-bg, #fef3c7)", border: "1px solid var(--warn-border, #fde68a)", borderRadius: 5, fontSize: "0.82rem", color: "var(--warn, #92400e)" }}>
-              ⚠ Top 3 objects hold <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(top3total)}) — likely a small number of large leaks. Investigate these first.
+              ⚠ Top 3 objects hold <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(top3total)}) — a small number of large retainers dominate. Investigate these first.
             </div>
           );
         })()}
@@ -8734,7 +8734,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       {!bannerDismissed && !!(window as any).__wasmSession && !(window as any).__wasmExploration && (
         <div style={{ background: "var(--accent-bg, #eff6ff)", border: "1px solid var(--accent-border, #bfdbfe)", borderRadius: 6, padding: "0.4rem 0.6rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
           <span style={{ flex: 1 }}>
-            WASM session loaded. Enable full exploration to use inbound refs and GC root paths.
+            Heap loaded in browser. Enable full exploration to use inbound references and GC root paths.
           </span>
           <button className="copy-btn" style={{ flexShrink: 0 }}
             onClick={async () => {
