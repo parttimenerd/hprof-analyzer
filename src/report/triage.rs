@@ -1620,7 +1620,7 @@ impl Rule for DuplicatePrimArrays {
                 format_bytes(wasted),
                 pct_of(wasted, total),
             ),
-            Some(("duplicate-prim-arrays", "Duplicate Prim Arrays")),
+            Some(("duplicate-prim-arrays", "Duplicate Primitive Arrays")),
         ))
     }
 }

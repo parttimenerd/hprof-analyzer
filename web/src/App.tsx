@@ -1211,7 +1211,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   return (
     <div>
       <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
-        Next to each class: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances">⬡≡</span> List instances · <span title="Copy class name">⎘</span> Copy name
+        Next to each class: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances">⬡≡</span> List Instances · <span title="Copy class name">⎘</span> Copy Name
       </p>
       <div className="tools">
         <input
@@ -2859,7 +2859,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List instances</p>
+      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
         <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
       ) : (
@@ -3214,7 +3214,7 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   ];
   return (
     <div className="thread-locals-inline">
-      <p className="thread-locals-label">Local root objects ({fmtCount(objs.length)}
+      <p className="thread-locals-label">Local Root Objects ({fmtCount(objs.length)}
         {objs.length < totalCount && ` — showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`}
       )</p>
       <StdTable columns={cols} data={objs} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
@@ -3226,7 +3226,8 @@ function threadStateLabel(raw: string): string {
   // "alive, waiting, waiting indefinitely, parked" → "waiting"
   const parts = raw.replace(/[\[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
   const nonAlive = parts.filter((p) => p !== "alive" && p !== "runnable");
-  return nonAlive[nonAlive.length - 1] ?? parts[0] ?? raw;
+  const label = nonAlive[nonAlive.length - 1] ?? parts[0] ?? raw;
+  return label.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function fmtLoader(raw: string): string {
@@ -3248,7 +3249,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         {" "}<span className="thread-meta-inline">
           {fmtB(t.retained)} retained
           {stateLabel && <span className="thread-state-badge">{stateLabel}</span>}
-          {t.is_daemon && <span className="thread-daemon-badge">daemon</span>}
+          {t.is_daemon && <span className="thread-daemon-badge">Daemon</span>}
         </span>
       </summary>
       <div className="thread-body">
@@ -3479,13 +3480,13 @@ function ThreadsSection({ report }: { report: Report }) {
               className="theme-toggle"
               onClick={() => { setOpenAll(true); setGenKey((k) => k + 1); }}
             >
-              Expand all
+              Expand All
             </button>
             <button
               className="theme-toggle"
               onClick={() => { setOpenAll(false); setGenKey((k) => k + 1); }}
             >
-              Collapse all
+              Collapse All
             </button>
           </div>
           {visible.map((t, i) => (
@@ -4800,8 +4801,8 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         {popoverNode.totalShallow > 0 && (
           <><span style={{ color: "var(--muted)" }}>Total shallow:</span><span>{fmtExactBytes(popoverNode.totalShallow)}</span></>
         )}
-        <span style={{ color: "var(--muted)" }}>Role:</span><span style={{ textTransform: "capitalize" }}>
-          {popoverNode.side === "C" ? "Focus class" : (popoverNode.side.startsWith("L") ? "Dominates (holds)" : "Dominated (held)")}
+        <span style={{ color: "var(--muted)" }}>Role:</span><span>
+          {popoverNode.side === "C" ? "Focus Class" : (popoverNode.side.startsWith("L") ? "Dominates (Holds)" : "Dominated (Held)")}
         </span>
       </div>
       {popoverNode.side !== "C" && (
@@ -8158,7 +8159,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               <button
                 className={rootViewMode === "classes" ? "btn-active" : "btn-link"}
                 style={{ fontSize: "0.78rem", padding: "1px 7px", borderRadius: 0, borderLeft: "1px solid var(--border, #e2e8f0)" }}
-                onClick={() => setRootViewMode("classes")}>By class</button>
+                onClick={() => setRootViewMode("classes")}>By Class</button>
             </span>
             <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
               <input
@@ -8907,14 +8908,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 title="This child is the dominant retention path (immediate dominator child with highest retained size)"
                                 style={{ background: "var(--ok-bg, #d1fae5)", color: "var(--ok, #065f46)", borderColor: "var(--ok-border, #a7f3d0)" }}
                               >
-                                dom
+                                Dom
                               </span>
                             )}
                             {edge.any_shared && (
-                              <span className="shared-badge" title="Shared: this child's retained heap belongs to another subtree — value is a gross sum">&#8635; shared</span>
+                              <span className="shared-badge" title="Shared: this child's retained heap belongs to another subtree — value is a gross sum">&#8635; Shared</span>
                             )}
                             {breadcrumbIdSet.has(edge.child_idx) && (
-                              <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)" }}>↩ visited</span>
+                              <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)" }}>↩ Visited</span>
                             )}
                           </td>
                         </tr>
@@ -8948,7 +8949,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               <td>
                                 {mShared && <span className="shared-badge" style={{ fontSize: "0.75rem" }}>&#8635;</span>}
                                 {breadcrumbIdSet.has(m.child_idx) && (
-                                  <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)", fontSize: "0.75rem" }}>↩ visited</span>
+                                  <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)", fontSize: "0.75rem" }}>↩ Visited</span>
                                 )}
                               </td>
                             </tr>
@@ -9220,7 +9221,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         <th style={{ textAlign: "right" }}>Shallow</th>
                         <th style={{ textAlign: "right" }}>Retained</th>
                         <th style={{ textAlign: "right" }}>% Heap</th>
-                        <th style={{ textAlign: "right" }}>Objects in subtree</th>
+                        <th style={{ textAlign: "right" }}>Objects in Subtree</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -9491,7 +9492,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {prebuiltTree && (
                 <div style={{ marginTop: "0.75rem" }}>
                   <button className="btn-link" onClick={() => setShowSvg(v => !v)}>
-                    {showSvg ? "Hide SVG tree" : "Show SVG tree"}
+                    {showSvg ? "Hide SVG Tree" : "Show SVG Tree"}
                   </button>
                   {showSvg && <DomSubtreeSvg node={prebuiltTree} onNavigate={(idx) => {
                     (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`);
@@ -9550,9 +9551,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <td>
                   {pathSource?.nodeId === nodeId ? (
                     <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>
-                      ← path source
+                      ← Path Source
                       <button className="btn-link" style={{ marginLeft: "0.4rem", fontSize: "0.78rem" }}
-                        onClick={() => setPathSource(null)}>clear</button>
+                        onClick={() => setPathSource(null)}>Clear</button>
                     </span>
                   ) : pathSource ? (
                     <button className="btn-link" style={{ fontSize: "0.82rem" }}
@@ -9572,7 +9573,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <button className="btn-link" style={{ fontSize: "0.82rem" }}
                       title="Set this object as the source for a path-between search"
                       onClick={() => { setPathSource({ nodeId: nodeId!, label: currentNode.display_class }); setPathBetweenResult(null); setPathBetweenError(null); }}>
-                      Set as path source
+                      Set as Path Source
                     </button>
                   )}
                 </td>
@@ -9839,7 +9840,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {inboundRefs.length > 8 && (
                 <button className="btn-link" style={{ fontSize: "0.74rem", marginTop: "2px" }}
                   onClick={() => setShowAllInbound(v => !v)}>
-                  {showAllInbound ? "Show fewer" : `+${inboundRefs.length - 8} more`}
+                  {showAllInbound ? "Show Fewer" : `+${inboundRefs.length - 8} more`}
                 </button>
               )}
             </div>
@@ -10554,7 +10555,7 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
         <div style={{ marginBottom: "0.4rem" }}>
           <button className="show-more-btn"
             onClick={() => onNavigate({ kind: "instance", idx: slice[0].idx, cls: slice[0].cls })}>
-            Biggest instance ({formatBytes(slice[0].retained)} retained) →
+            Biggest Instance ({formatBytes(slice[0].retained)} retained) →
           </button>
         </div>
       )}
@@ -10945,7 +10946,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
                 )}
                 <button className="trg-link-btn" style={{ fontSize: "0.75rem" }}
                   onClick={() => onNavigate({ kind: "fields", idx: f.dense_idx, cls: f.display_class ?? "?" })}
-                  title="Drill into fields of this object">↳ fields</button>
+                  title="Drill into fields of this object">↳ Fields</button>
               </>
             ) : (
               <span className="trg-edge-stat">
@@ -11292,7 +11293,7 @@ export default function App({ report }: { report: Report }) {
       <ReportHeader report={report} />
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
-          {expandAllTables ? "⊟ Collapse tables" : "⊞ Expand all tables"}
+          {expandAllTables ? "⊟ Collapse Tables" : "⊞ Expand All Tables"}
         </button>
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml((report.overview.source_name || "heap-report").replace(/[^a-z0-9._-]/gi, "_") + ".html")}>⬇ Save HTML</button>
         {(window as any).__wasmSession && (
