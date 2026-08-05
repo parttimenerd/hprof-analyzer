@@ -693,7 +693,10 @@ function LeakScoreDashboard({ report }: { report: Report }) {
   const bc = report.top?.biggest_classes ?? [];
   const idoms = report.dominator_analysis?.immediate_dominators?.rows ?? [];
   const pairs = report.dominator_analysis?.immediate_dominators?.pairs ?? [];
-  const totalHeap = bc.reduce((s, c) => s + c.retained, 0);
+  // Use actual reachable heap, not sum of retained (which double-counts nested dominators)
+  const totalHeap = report.overview.total_shallow > 0
+    ? report.overview.total_shallow
+    : bc.reduce((s, c) => s + c.retained, 0);
   if (bc.length === 0 || totalHeap === 0) return null;
 
   // Hub score: classes that dominate many others (normalised dominated_count)
@@ -727,9 +730,9 @@ function LeakScoreDashboard({ report }: { report: Report }) {
     const bpiSignal = bpi > medBpi * 5 ? 1 : bpi > medBpi * 2 ? 0.5 : 0;
     const hub = hubScore.get(c.pretty_class) ?? 0;
     const depth = depthMap.get(c.pretty_class) ?? maxDepth;
-    // Shallower depth = more likely root cause (closer to GC root)
-    const depthSignal = 1 - Math.min(depth / 4, 1);
-    const score = Math.min(pct * 40 + bpiSignal * 30 + hub * 20 + depthSignal * 10, 0.99) * 100;
+    // Shallower = more likely root cause; scale over 8 hops so mid-depth gets partial credit
+    const depthSignal = 1 - Math.min(depth / 8, 1);
+    const score = Math.min(pct * 40 + bpiSignal * 30 + hub * 20 + depthSignal * 10, 99);
     return { cls: c.pretty_class, score, pct, bpi, hub, depth, instances: c.instances };
   }).filter(r => r.score > 3).sort((a, b) => b.score - a.score).slice(0, 12);
 
@@ -741,7 +744,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
       <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Composite signal: % heap retained + B/instance + dominator hub + depth from GC root.</p>
       <div className="leak-score-grid">
         {rows.map(r => {
-          const conf = r.score >= 60 ? "high" : r.score >= 30 ? "mid" : "low";
+          const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
           const signals: string[] = [];
           if (r.pct > 0.15) signals.push(`${(r.pct * 100).toFixed(0)}% heap`);
           if (r.bpi > medBpi * 5) signals.push("↑ B/inst");
@@ -2837,6 +2840,27 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`);
       }} />}
       {!s.is_single && s.merged_paths && <MergedPathSankey node={s.merged_paths} />}
+      <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", background: "var(--code-bg, #f6f7f8)", borderRadius: 4, fontSize: "0.84rem", lineHeight: "1.5" }}>
+        <strong>Next steps</strong>
+        <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
+          <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to open the Inspector and walk the reference chain from the accumulation point to its GC root.</li>
+          {s.accumulation_class && (
+            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field references the large set of objects.</li>
+          )}
+          {!s.is_single && s.instance_count > 10 && (
+            <li>{fmtCount(s.instance_count)} instances suggests a pool, registry, or cache that grows without bound — look for a static field that is never cleared or a listener list where subscribers are never removed.</li>
+          )}
+          {s.root_type_label === "Java Frame" && (
+            <li>Held via a <strong>thread stack frame</strong> — open the Threads section and find the thread whose stack references this class; a blocked or long-running thread may be pinning the objects.</li>
+          )}
+          {s.root_type_label === "JNI Global" && (
+            <li>Held by a <strong>JNI global reference</strong> — a native library is pinning this object; look for JNI code that registers globals without a matching delete.</li>
+          )}
+          {!s.root_type_label && (
+            <li>No single holding root was identified (multiple roots). Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root is keeping each instance alive.</li>
+          )}
+        </ul>
+      </div>
     </div>
   );
 }
