@@ -188,7 +188,7 @@ pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
         signals.push(signal(
             "collections-not-analyzed",
             TriageSeverity::Info,
-            "Collection waste not analyzed",
+            "Collection Waste Not Analyzed",
             "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
                 .to_string(),
             None,
@@ -260,7 +260,7 @@ impl Rule for HeadlineRetainer {
             Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Critical,
-                "Headline retainer",
+                "Headline Retainer",
                 format!(
                     "`{}` ({}) retains {} ({:.1}% of reachable heap).",
                     s.pretty_class,
@@ -275,7 +275,7 @@ impl Rule for HeadlineRetainer {
             Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Warning,
-                "Headline retainer",
+                "Headline Retainer",
                 format!(
                     "`{}` retains {} ({:.1}% of reachable heap).",
                     o.display_class,
@@ -289,7 +289,7 @@ impl Rule for HeadlineRetainer {
             Some(signal(
                 "headline-retainer",
                 TriageSeverity::Info,
-                "Headline retainer",
+                "Headline Retainer",
                 "No dominant retainer found.".to_string(),
                 None,
             ))
@@ -372,7 +372,7 @@ impl Rule for DominantGcRootType {
         Some(signal(
             "gc-root-type",
             TriageSeverity::Warning,
-            "Dominant GC-root type",
+            "Dominant GC-Root Type",
             format!(
                 "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root class.",
                 pct, top.root_type,
@@ -450,7 +450,7 @@ impl Rule for OneLeakOrMany {
         let mut sig = signal(
             "one-leak-or-many",
             TriageSeverity::Info,
-            "One leak or many",
+            "One Leak or Many",
             detail,
             Some(("top-consumers", "Top Consumers")),
         );
@@ -477,7 +477,7 @@ impl Rule for ClassloaderLeak {
             return Some(signal_cls(
                 "classloader-leak",
                 TriageSeverity::Info,
-                "Class-loader reload (low count)",
+                "Class-Loader Reload (Low Count)",
                 format!(
                     "`{}` is loaded by {} class loaders ({} retained) — possible reload, but count is low; investigate only if count grows.",
                     dup.pretty_class,
@@ -491,7 +491,7 @@ impl Rule for ClassloaderLeak {
         Some(signal_cls(
             "classloader-leak",
             TriageSeverity::Warning,
-            "Class-loader leak",
+            "Class-Loader Leak",
             format!(
                 "`{}` is loaded by {} class loaders ({} retained) — classic reload leak.",
                 dup.pretty_class,
@@ -515,7 +515,7 @@ impl Rule for ThreadLocalLeak {
         Some(signal(
             "threadlocal-leak",
             TriageSeverity::Warning,
-            "ThreadLocal leak",
+            "ThreadLocal Leak",
             format!(
                 "{} ThreadLocalMap entries have a cleared key — abandoned thread-local values that will never be reclaimed.",
                 fmt_count(n),
@@ -545,7 +545,7 @@ impl Rule for ThreadPinning {
         Some(signal(
             "thread-pinning",
             TriageSeverity::Warning,
-            "Thread pinning",
+            "Thread Pinning",
             format!(
                 "thread `{}` retains {} ({:.1}% of heap) and pins {} thread-local roots — a live thread is holding memory alive.",
                 who,
@@ -581,7 +581,7 @@ impl Rule for WeakRefEscape {
         Some(signal(
             "weak-ref-escape",
             TriageSeverity::Info,
-            "Weak-ref escape",
+            "Weak-Ref Escape",
             format!(
                 "{} objects only weakly retained, totaling {} — GC pressure or explicit clear() would reclaim them.",
                 fmt_count(only_weak_objects),
@@ -609,7 +609,7 @@ impl Rule for ProxyLambdaBloat {
         Some(signal(
             "proxy-lambda-bloat",
             TriageSeverity::Info,
-            "Proxy/lambda bloat",
+            "Proxy/Lambda Bloat",
             format!(
                 "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible class-loader churn.",
                 fmt_count(anon),
@@ -632,7 +632,7 @@ impl Rule for OffHeap {
         Some(signal(
             "off-heap",
             TriageSeverity::Warning,
-            "Off-heap (DirectByteBuffer)",
+            "Off-Heap (DirectByteBuffer)",
             format!(
                 "{} of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS.",
                 format_bytes(cap),
@@ -671,7 +671,7 @@ impl Rule for GcWaste {
         Some(signal(
             "gc-waste",
             TriageSeverity::Warning,
-            "GC waste",
+            "GC Waste",
             format!(
                 "{:.1}% of the heap is unreachable garbage ({}){}.",
                 pct,
@@ -705,7 +705,7 @@ impl Rule for OverCapacityCollections {
         Some(signal(
             "over-capacity-collections",
             TriageSeverity::Info,
-            "Over-capacity collections",
+            "Over-Capacity Collections",
             format!(
                 "{} wasted by under-filled collections (<=50% full across {} tracked) — oversized backing arrays.",
                 format_bytes(wasted),
@@ -733,7 +733,7 @@ impl Rule for ConstantValueArrays {
         Some(signal_cls(
             "constant-value-arrays",
             TriageSeverity::Info,
-            "Constant-value arrays",
+            "Constant-Value Arrays",
             format!(
                 "{} in single-value primitive arrays; biggest group `{}` × {} instances — likely zero-filled/uninitialized waste.",
                 format_bytes(sum),
@@ -772,7 +772,7 @@ impl Rule for ObjectSwarm {
         Some(signal_cls(
             "object-swarm",
             TriageSeverity::Warning,
-            "Object swarm",
+            "Object Swarm",
             format!(
                 "{} live `{}` instances ({} shallow, {:.1}% of heap) — typically an unbounded queue, list, or log accumulation.",
                 fmt_count(row.instances),
@@ -822,7 +822,7 @@ impl Rule for BoxedPrimitiveBloat {
         Some(signal(
             "boxed-primitive-bloat",
             TriageSeverity::Info,
-            "Boxed-primitive bloat",
+            "Boxed-Primitive Bloat",
             format!(
                 "{} boxed-primitive objects ({} shallow, led by `{}`) — consider primitive-specialized collections (e.g. Eclipse Collections, Koloboke).",
                 fmt_count(instances),
@@ -847,7 +847,7 @@ impl Rule for ClassloaderExplosion {
         Some(signal(
             "classloader-explosion",
             TriageSeverity::Warning,
-            "Class-loader explosion",
+            "Class-Loader Explosion",
             format!(
                 "{} live class-loader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
                 fmt_count(n),
@@ -874,7 +874,7 @@ impl Rule for ThreadSwarm {
         Some(signal(
             "thread-swarm",
             TriageSeverity::Warning,
-            "Thread swarm",
+            "Thread Swarm",
             format!(
                 "{} live threads retaining {} in aggregate — likely unbounded thread creation or a leaking thread pool.",
                 fmt_count(count as u64),
@@ -905,7 +905,7 @@ impl Rule for DuplicateStrings {
         Some(signal(
             "duplicate-strings",
             TriageSeverity::Info,
-            "Duplicate strings",
+            "Duplicate Strings",
             format!(
                 "~{} wasted by {} duplicated String values ({} total instances){}.",
                 format_bytes(ds.approx_wasted_bytes),
@@ -937,7 +937,7 @@ impl Rule for CharArraySlack {
         Some(signal(
             "char-array-slack",
             TriageSeverity::Info,
-            "Char-array slack",
+            "Char-Array Slack",
             format!(
                 "~{} slack in {} over-allocated char[]/byte[] String backing arrays — possible `substring`/`StringBuilder` waste.",
                 format_bytes(caw.total_wasted_bytes),
@@ -978,7 +978,7 @@ impl Rule for LargeUnboundedCollection {
         Some(signal_cls(
             "large-unbounded-collection",
             TriageSeverity::Warning,
-            "Large unbounded collection",
+            "Large Unbounded Collection",
             format!(
                 "one `{}` holds {} elements{}{}  — likely a static or unbounded cache that never evicts.",
                 row.container_class,
@@ -1011,7 +1011,7 @@ impl Rule for FinalizerQueueBacklog {
         Some(signal(
             "finalizer-queue-backlog",
             TriageSeverity::Warning,
-            "Finalizer queue backlog",
+            "Finalizer Queue Backlog",
             format!(
                 "{} live `java.lang.ref.Finalizer` instances — the finalizer thread is falling behind; finalizeable objects (e.g. `Deflater`, JDBC connections) accumulate until drained.",
                 fmt_count(row.instances),
@@ -1034,7 +1034,7 @@ impl Rule for MetaspacePressure {
         Some(signal(
             "metaspace-pressure",
             TriageSeverity::Warning,
-            "Metaspace pressure",
+            "Metaspace Pressure",
             format!(
                 "{} classes loaded — far above normal; class metadata is likely exhausting Metaspace. Typical cause: CGLIB/Byte Buddy/Groovy proxy generation without caching.",
                 fmt_count(n),
@@ -1068,7 +1068,7 @@ impl Rule for CachedReflectionMetadata {
         Some(signal(
             "cached-reflection-metadata",
             TriageSeverity::Info,
-            "Cached reflection metadata",
+            "Cached Reflection Metadata",
             format!(
                 "{} live `java.lang.reflect.{{Method,Field,Constructor}}` objects — framework reflection caches are unbounded (typically Spring/Hibernate accumulating per scanned class).",
                 fmt_count(total),
@@ -1108,7 +1108,7 @@ impl Rule for JniGlobalRefLeak {
         Some(signal(
             "jni-global-ref-leak",
             TriageSeverity::Warning,
-            "JNI global-reference leak",
+            "JNI Global-Reference Leak",
             format!(
                 "{} JNI Global roots retaining {} ({:.1}% of heap) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
                 fmt_count(count),
@@ -1143,7 +1143,7 @@ impl Rule for HeapCompositionSkew {
         Some(signal(
             "heap-composition-skew",
             TriageSeverity::Info,
-            "Heap composition skew",
+            "Heap Composition Skew",
             format!(
                 "`{}` account for {:.1}% of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
                 dominant.kind, pct,
@@ -1171,7 +1171,7 @@ impl Rule for StaticFieldAnchor {
         Some(signal_cls(
             "static-field-anchor",
             TriageSeverity::Warning,
-            "Static-field anchor",
+            "Static-Field Anchor",
             format!(
                 "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — this object lives for the class-loader lifetime and is never evicted.",
                 s.pretty_class,
@@ -1204,7 +1204,7 @@ impl Rule for SessionScopeLeak {
         Some(signal_cls(
             "session-scope-leak",
             TriageSeverity::Warning,
-            "Session-scope leak",
+            "Session-Scope Leak",
             format!(
                 "{} live `{}` instances — session objects are accumulating; a registry is holding sessions that were never invalidated.",
                 fmt_count(row.instances),
@@ -1239,7 +1239,7 @@ impl Rule for ConnectionLeak {
         Some(signal_cls(
             "connection-leak",
             TriageSeverity::Warning,
-            "Connection / socket leak",
+            "Connection / Socket Leak",
             format!(
                 "{} live `{}` objects — exceeds any reasonable pool or connection limit; connections are likely being acquired without `close()`.",
                 fmt_count(row.instances),
@@ -1273,7 +1273,7 @@ impl Rule for EventListenerAccumulation {
         Some(signal_cls(
             "event-listener-accumulation",
             TriageSeverity::Warning,
-            "Event-listener accumulation",
+            "Event-Listener Accumulation",
             format!(
                 "{} live `{}` instances — listeners are accumulating without removal; the publisher is keeping them alive indefinitely.",
                 fmt_count(row.instances),
@@ -1316,7 +1316,7 @@ impl Rule for ParserOutputAccumulation {
         Some(signal_cls(
             "parser-output-accumulation",
             TriageSeverity::Info,
-            "Parser-output accumulation",
+            "Parser-Output Accumulation",
             format!(
                 "{} live `{}` instances — XML/JSON parse results are accumulating; parsed documents are not being discarded after processing.",
                 fmt_count(row.instances),
@@ -1358,7 +1358,7 @@ impl Rule for InternedStringBloat {
         Some(signal(
             "interned-string-bloat",
             TriageSeverity::Warning,
-            "Interned-string bloat",
+            "Interned-String Bloat",
             format!(
                 "{} live `java.lang.String` instances with {} JNI Global roots — `String.intern()` may be called on dynamic values, causing the intern table to grow without bound.",
                 fmt_count(string_count),
@@ -1394,7 +1394,7 @@ impl Rule for SparseObjectArrays {
         Some(signal(
             "sparse-object-arrays",
             TriageSeverity::Info,
-            "Sparse object arrays",
+            "Sparse Object Arrays",
             format!(
                 "{} object arrays are <={}% full ({} wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory.",
                 fmt_count(sparse_objects),
@@ -1427,7 +1427,7 @@ impl Rule for BigDropConcentration {
         Some(signal_cls(
             "big-drop-concentration",
             TriageSeverity::Critical,
-            "Dominator-tree big drop",
+            "Dominator-Tree Big Drop",
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
                  drops here in the dominator tree — almost all its retained memory \
@@ -1469,7 +1469,7 @@ impl Rule for FixedPerObjectOverhead {
         Some(signal(
             "fixed-per-object-overhead",
             TriageSeverity::Warning,
-            "Fixed per-object header overhead",
+            "Fixed per-Object Header Overhead",
             format!(
                 "{} objects × {} B header = {} ({:.1}% of heap) is consumed by JVM \
                  object headers alone — consider value types, primitive arrays, or \
@@ -1508,7 +1508,7 @@ impl Rule for HashCollisionHotspot {
         Some(signal(
             "hash-collision-hotspot",
             TriageSeverity::Warning,
-            "Hash-map collision hotspot",
+            "Hash-Map Collision Hotspot",
             format!(
                 "{} of {} tracked maps ({:.1}%) have a load factor > {}% — \
                  over-packed hash tables cause long collision chains and degrade \
@@ -1540,7 +1540,7 @@ impl Rule for EmptyCollectionCemetery {
         Some(signal(
             "empty-collection-cemetery",
             TriageSeverity::Info,
-            "Empty-collection cemetery",
+            "Empty-Collection Cemetery",
             format!(
                 "{} of {} tracked collections ({:.1}%) are empty — \
                  pre-allocated but never populated containers waste object-header \
@@ -1577,7 +1577,7 @@ impl Rule for OversizedPrimArray {
         Some(signal_cls(
             "oversized-prim-array",
             TriageSeverity::Warning,
-            "Oversized primitive array",
+            "Oversized Primitive Array",
             format!(
                 "A single `{}` ({} elements, {}){} accounts for {:.1}% of the heap — \
                  consider chunking, memory-mapping, or off-heap storage.",
@@ -1612,7 +1612,7 @@ impl Rule for DuplicatePrimArrays {
         Some(signal(
             "dup-prim-arrays",
             TriageSeverity::Warning,
-            "Duplicate primitive arrays",
+            "Duplicate Primitive Arrays",
             format!(
                 "{} ({:.1}% of heap) wasted by content-identical primitive arrays — \
                  multiple copies of the same byte[]/int[]/etc. payload could be \
@@ -2046,7 +2046,7 @@ mod tests {
         r.overview.total_shallow = 1_000_000;
         r.overview.heap_composition.by_kind = vec![
             crate::report::model::KindStat {
-                kind: "Primitive arrays".into(),
+                kind: "Primitive Arrays".into(),
                 objects: 10_000,
                 shallow_heap: 750_000,
             },
@@ -2059,7 +2059,7 @@ mod tests {
         let s = HeapCompositionSkew
             .eval(&r)
             .expect("75% primitive arrays must fire");
-        assert!(s.detail.contains("Primitive arrays"));
+        assert!(s.detail.contains("Primitive Arrays"));
 
         // Not dominant enough.
         r.overview.heap_composition.by_kind[0].shallow_heap = 500_000; // 50%

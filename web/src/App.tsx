@@ -815,7 +815,7 @@ function WasteSummarySection({ report }: { report: Report }) {
   const max = w.sources.reduce((m, s) => Math.max(m, s.bytes), 0);
   // Anchors the Rust side omits (subsections without a dedicated section id).
   const wasteAnchorFallback: Record<string, string> = {
-    "Duplicate primitive arrays": "duplicate-prim-arrays",
+    "Duplicate Primitive Arrays": "duplicate-prim-arrays",
   };
   type WasteSource = (typeof w.sources)[0];
   const wasteCols: TableColumn<WasteSource>[] = [
@@ -867,7 +867,7 @@ function KpiStrip({ report }: { report: Report }) {
   if (top && pct >= 50) {
     verdict = (
       <>
-        <strong>Likely problem:</strong>{" "}
+        <strong>Likely Problem:</strong>{" "}
         <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /></span>
         — investigate this first.
       </>
@@ -875,13 +875,13 @@ function KpiStrip({ report }: { report: Report }) {
   } else if (top) {
     verdict = (
       <>
-        <strong>Likely problem:</strong> retention is spread across several roots; no single object dominates.
+        <strong>Likely Problem:</strong> retention is spread across several roots; no single object dominates.
       </>
     );
   } else {
     verdict = (
       <>
-        <strong>Likely problem:</strong> no dominant retainer; the heap looks evenly distributed.
+        <strong>Likely Problem:</strong> no dominant retainer; the heap looks evenly distributed.
       </>
     );
   }
@@ -891,7 +891,7 @@ function KpiStrip({ report }: { report: Report }) {
       <div className="kpi-grid">
       <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
         <div className="kpi-value">{fmtB(report.overview.total_shallow)}</div>
-        <div className="kpi-label">Total reachable heap</div>
+        <div className="kpi-label">Total Reachable Heap</div>
       </a>
       <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
         <div className="kpi-value">{fmtCount(report.overview.total_objects)}</div>
@@ -899,21 +899,21 @@ function KpiStrip({ report }: { report: Report }) {
       </a>
       <a className="kpi kpi-link" href="#leak-suspects" title="Jump to Leak Suspects">
         <div className="kpi-value">{fmtCount(suspects.length)}</div>
-        <div className="kpi-label">Leak suspects</div>
+        <div className="kpi-label">Leak Suspects</div>
       </a>
       <a className="kpi kpi-link" href="#leak-suspects" title="Jump to Leak Suspects">
         <div className="kpi-value">{topShare}</div>
-        <div className="kpi-label">Top suspect share</div>
+        <div className="kpi-label">Top Suspect Share</div>
       </a>
       <a className="kpi kpi-link" href="#leak-suspects" title="Jump to Leak Suspects">
         <div className="kpi-value">
           <code title={dominantClass}>{dominantClass}</code>
         </div>
-        <div className="kpi-label">Dominant retainer</div>
+        <div className="kpi-label">Dominant Retainer</div>
       </a>
       <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
         <div className="kpi-value">{fmtCount(report.overview.gc_roots)}</div>
-        <div className="kpi-label">GC roots</div>
+        <div className="kpi-label">GC Roots</div>
       </a>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
@@ -1211,7 +1211,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   return (
     <div>
       <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
-        Next to each class: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> copy OQL · <span title="List all instances">⬡≡</span> list instances · <span title="Copy class name">⎘</span> copy name
+        Next to each class: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances">⬡≡</span> List instances · <span title="Copy class name">⎘</span> Copy name
       </p>
       <div className="tools">
         <input
@@ -1242,7 +1242,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
           </button>
         )}
         {kbBtn}
-        <CopyTsvBtn rows={histTsvRows} label="Copy histogram as TSV" />
+        <CopyTsvBtn rows={histTsvRows} label="Copy as TSV" />
       </div>
       <DataTable
         columns={columns}
@@ -1530,16 +1530,16 @@ function gcRootTagLabel(tag: number): string {
 function RecordCensusSection({ report }: { report: Report }) {
   const c = report.overview.record_census;
   const rows: { label: string; count: number }[] = [
-    { label: "UTF-8 strings", count: c.utf8_records },
-    { label: "Load class", count: c.load_class_records },
-    { label: "Unload class", count: c.unload_class_records },
-    { label: "Stack frames", count: c.stack_frame_records },
-    { label: "Stack traces", count: c.stack_trace_records },
-    { label: "Heap dump segments", count: c.heap_dump_segments },
-    { label: "Instance dumps", count: c.instance_dumps },
-    { label: "Object-array dumps", count: c.obj_array_dumps },
-    { label: "Primitive-array dumps", count: c.prim_array_dumps },
-    { label: "Class dumps", count: c.class_dumps },
+    { label: "UTF-8 Strings", count: c.utf8_records },
+    { label: "Load Class", count: c.load_class_records },
+    { label: "Unload Class", count: c.unload_class_records },
+    { label: "Stack Frames", count: c.stack_frame_records },
+    { label: "Stack Traces", count: c.stack_trace_records },
+    { label: "Heap Dump Segments", count: c.heap_dump_segments },
+    { label: "Instance Dumps", count: c.instance_dumps },
+    { label: "Object Array Dumps", count: c.obj_array_dumps },
+    { label: "Primitive Array Dumps", count: c.prim_array_dumps },
+    { label: "Class Dumps", count: c.class_dumps },
   ];
   const censusCols: TableColumn<{ label: string; count: number }>[] = [
     { id: "label", name: "Record Type", grow: 1, selector: (r) => r.label, sortable: true },
@@ -1572,7 +1572,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
         How retained heap is distributed across {fmtCount(d.count)} top-level dominators — shows whether memory is held by a few giant objects or spread across many small ones.
-        Smallest / largest: {fmtB(d.min)} / {fmtB(d.max)} · median: {fmtB(d.median)} · total: {fmtB(d.total)}.
+        Min / Max: {fmtB(d.min)} / {fmtB(d.max)} · Median: {fmtB(d.median)} · Total: {fmtB(d.total)}.
       </p>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
@@ -1592,7 +1592,7 @@ function TopDuplicatedTable({ rows }: { rows: DupStringSample[] }) {
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count, sortable: true },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "132px" : "100px", cell: byteCell(s => s.wasted_bytes, fmtB, useKB), selector: (s) => s.wasted_bytes, sortable: true },
-    { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Duplicated string value" /> },
+    { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Duplicated String Value" /> },
   ];
   return (
     <>
@@ -1607,7 +1607,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "len", name: "Length", right: true, width: "100px", format: (s) => fmtCount(s.len), selector: (s) => s.len, sortable: true },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count, sortable: true },
-    { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Longest string value" /> },
+    { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Longest String Value" /> },
   ];
   return (
     <>
@@ -1620,7 +1620,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
 function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
   const cols: TableColumn<StringHolder>[] = [
     { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
-    { id: "refs", name: "String refs", right: true, width: "120px", format: (h) => fmtCount(h.string_refs), selector: (h) => h.string_refs, sortable: true },
+    { id: "refs", name: "String Refs", right: true, width: "120px", format: (h) => fmtCount(h.string_refs), selector: (h) => h.string_refs, sortable: true },
   ];
   return (
     <>
@@ -1651,8 +1651,8 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<DupPrimArrayRow>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "type", name: "Array type", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
-    { id: "groups", name: "Dup groups", right: true, width: "125px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
+    { id: "type", name: "Array Type", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+    { id: "groups", name: "Dup Groups", right: true, width: "125px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "132px" : "100px", cell: byteCell(r => r.wasted_bytes, fmtB, useKB), selector: (r) => r.wasted_bytes, sortable: true },
   ];
   return (
@@ -1667,7 +1667,7 @@ function DupArrayHoldersTable({ rows }: { rows: DupArrayHolder[] }) {
   const cols: TableColumn<DupArrayHolder>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
-    { id: "refs", name: "Array refs", right: true, width: "120px", format: (h) => fmtCount(h.array_refs), selector: (h) => h.array_refs, sortable: true },
+    { id: "refs", name: "Array Refs", right: true, width: "120px", format: (h) => fmtCount(h.array_refs), selector: (h) => h.array_refs, sortable: true },
   ];
   return (
     <>
@@ -1726,8 +1726,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
           <>
             <h3>String Length Distribution</h3>
             <p className="subtitle">
-              Distinct-value lengths (bytes): min {fmtCount(d.length_stats.min)}, median {fmtCount(d.length_stats.median)},
-              max {fmtCount(d.length_stats.max)}; total {fmtB(d.length_stats.total)}.
+              Distinct-value lengths (bytes) — Min: {fmtCount(d.length_stats.min)} · Median: {fmtCount(d.length_stats.median)} · Max: {fmtCount(d.length_stats.max)} · Total: {fmtB(d.length_stats.total)}.
             </p>
             <StdTable columns={lenCols} data={d.length_histogram} searchKeys={[]} defaultSortFieldId="upper" />
           </>
@@ -1835,7 +1834,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "class", name: "Class", grow: 1, maxWidth: "312px", cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
-    { id: "hdr", name: "Header per obj", right: true, width: "130px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
+    { id: "hdr", name: "Header / Obj", right: true, width: "130px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
     { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "176px" : "140px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
     { id: "pct", name: "% of Shallow", right: true, width: "134px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp, sortable: true },
     { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "140px" : "105px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
@@ -1930,7 +1929,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
 
       <div className="card">
         <dl className="summary-grid">
-          <dt>Source file</dt>
+          <dt>Source File</dt>
           <dd>
             <code title={o.file_path}>{o.source_name}</code>
             {o.file_path && o.file_path !== o.source_name && (
@@ -1939,19 +1938,19 @@ function SystemOverviewSection({ report }: { report: Report }) {
               </span>
             )}
           </dd>
-          <dt>HPROF format</dt>
+          <dt>HPROF Format</dt>
           <dd>{o.format}</dd>
           {o.jvm_version && (
             <>
-              <dt>JVM version</dt>
+              <dt>JVM Version</dt>
               <dd>
                 <code>{o.jvm_version}</code>
               </dd>
             </>
           )}
-          <dt>File size</dt>
+          <dt>File Size</dt>
           <dd>{fmtB(o.file_size)}</dd>
-          <dt>Identifier size</dt>
+          <dt>Identifier Size</dt>
           <dd>{o.identifier_size_bits}-bit</dd>
           {o.compressed_oops !== null && (
             <>
@@ -1961,23 +1960,23 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {o.dump_creation !== null && (
             <>
-              <dt>Dump created</dt>
+              <dt>Dump Created</dt>
               <dd><span title={formatEpochMs(o.dump_creation)}>{formatDateNice(o.dump_creation)}</span></dd>
             </>
           )}
-          <dt>Total objects</dt>
+          <dt>Total Objects</dt>
           <dd>{fmtCount(o.total_objects)}</dd>
-          <dt>Total reachable heap</dt>
+          <dt>Total Reachable Heap</dt>
           <dd>{fmtB(o.total_shallow)}</dd>
-          <dt>GC roots</dt>
+          <dt>GC Roots</dt>
           <dd>{fmtCount(o.gc_roots)}</dd>
-          <dt>Classes loaded</dt>
+          <dt>Classes Loaded</dt>
           <dd>{fmtCount(o.classes_loaded)}</dd>
-          <dt>Class loaders</dt>
+          <dt>Class Loaders</dt>
           <dd>{fmtCount(o.classloaders_loaded)}</dd>
           {threadCount > 0 && (
             <>
-              <dt>Threads (with call stacks)</dt>
+              <dt>Threads (with Call Stacks)</dt>
               <dd>
                 <a href="#threads">{fmtCount(threadCount)}</a>
               </dd>
@@ -1985,7 +1984,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {o.unreachable_count > 0 && (
             <>
-              <dt>Unreachable (excluded)</dt>
+              <dt>Unreachable (Excluded)</dt>
               <dd>
                 {fmtCount(o.unreachable_count)} ({fmtB(o.unreachable_shallow)})
               </dd>
@@ -1993,13 +1992,13 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
-              <dt>Heap fragmentation (unreachable / heap total)</dt>
+              <dt>Heap Fragmentation (Unreachable / Heap Total)</dt>
               <dd>{fmtPct((o.heap_fragmentation_ratio ?? 0) * 100)}</dd>
             </>
           )}
           {(o.top_class_concentration_bp ?? 0) > 0 && (
             <>
-              <dt>Top-class retained concentration</dt>
+              <dt>Top-Class Retained Concentration</dt>
               <dd>{fmtPct((o.top_class_concentration_bp ?? 0) / 100)}</dd>
             </>
           )}
@@ -2008,7 +2007,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
 
       {o.system_properties.length > 0 ? (
         <details>
-          <summary>System properties ({fmtCount(o.system_properties.length)})</summary>
+          <summary>System Properties ({fmtCount(o.system_properties.length)})</summary>
           <SysPropsTable rows={o.system_properties} />
         </details>
       ) : (
@@ -2017,7 +2016,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
 
       {o.heap_composition.by_kind.length > 0 && (() => {
         const compCols: TableColumn<KindStat>[] = [
-          { id: "kind", name: "Kind", grow: 1, selector: (k) => k.kind, sortable: true },
+          { id: "kind", name: "Kind", grow: 1, cell: (k) => <span style={{ textTransform: "capitalize" }}>{k.kind}</span>, selector: (k) => k.kind, sortable: true },
           { id: "objects", name: "Objects", right: true, width: "120px", format: (k) => fmtCount(k.objects), selector: (k) => k.objects, sortable: true },
           { id: "shallow", name: "Shallow Heap", right: true, width: "138px", format: (k) => fmtB(k.shallow_heap), selector: (k) => k.shallow_heap, sortable: true },
         ];
@@ -2055,7 +2054,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           { id: "pct", name: "% of Roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
-            id: "top_classes", name: "Top retained classes", grow: 1, maxWidth: "408px", wrap: true,
+            id: "top_classes", name: "Top Retained Classes", grow: 1, maxWidth: "408px", wrap: true,
             cell: (r: GcRow) => {
               const top = (r as GcRootRetainedRow).top_classes;
               if (!top || top.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
@@ -2149,7 +2148,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
             Class names loaded by more than one class loader — a classic class-loader-leak signature (the same class
-            re-loaded repeatedly, e.g. per web-app or plugin reload).
+            reloaded repeatedly, e.g. per web-app or plugin reload).
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -2202,7 +2201,7 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
         </span>
       ),
     },
-    { id: "loaders", name: "#Loaders", right: true, width: "112px", format: (d) => fmtCount(d.loader_count), selector: (d) => d.loader_count, sortable: true },
+    { id: "loaders", name: "# Loaders", right: true, width: "112px", format: (d) => fmtCount(d.loader_count), selector: (d) => d.loader_count, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (d) => fmtCount(d.total_instances), selector: (d) => d.total_instances, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(d => d.total_retained, fmtB, useKB), selector: (d) => d.total_retained, sortable: true },
   ];
@@ -2216,7 +2215,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
   if (s.path.length === 0) return null;
   return (
     <details open>
-      <summary>Shortest path to the accumulation point ({s.path.length} steps)</summary>
+      <summary>Shortest Path to Accumulation Point ({s.path.length} steps)</summary>
       <ol className="accum-path">
         {s.path.map((p, i) => (
           <li key={i}>
@@ -2248,7 +2247,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
   ];
   return (
     <details open>
-      <summary>Accumulated objects by class ({rows.length})</summary>
+      <summary>Accumulated Objects by Class ({rows.length})</summary>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
     </details>
   );
@@ -2290,7 +2289,7 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
 
   return (
     <details open className="root-path-chain">
-      <summary>Root path to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
+      <summary>Root Path to GC Root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
       <svg
         viewBox={`0 0 ${VB_W} ${svgH}`}
         width="100%"
@@ -2477,7 +2476,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
 function MergedPathsFallback({ node }: { node: MergedPathNode }) {
   return (
     <details open>
-      <summary>Merged paths to GC roots</summary>
+      <summary>Merged Paths to GC Roots</summary>
       <ul className="dom-subtree">
         <MergedPathsNode node={node} depth={0} />
       </ul>
@@ -2621,7 +2620,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
     <>
     <details open className="merged-path-sankey">
       <summary>
-        Merged retention paths ({chainCount} chain{chainCount === 1 ? "" : "s"} · {fmtB(totalRetained)})
+        Merged Retention Paths ({chainCount} chain{chainCount === 1 ? "" : "s"} · {fmtB(totalRetained)})
         {rawNodes.length > MAX_NODES && (
           <span style={{ color: "var(--muted)", fontSize: "0.78rem", marginLeft: "0.4rem" }}>
             (top {MAX_NODES} of {rawNodes.length} nodes)
@@ -2757,7 +2756,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           <OqlBtn cls={s.pretty_class} />
           <ListObjectsBtn cls={s.pretty_class} />
         </span>{" "}
-        <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
+        <span className="pill">{s.is_single ? "Single Object" : `Class Group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
         Retains <strong title={fmtExactBytes(s.retained)}>{fmtB(s.retained)}</strong>{" "}
@@ -2816,7 +2815,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         return (
           <details>
             <summary>
-              Accumulated objects in dominator tree{" "}
+              Accumulated Objects in Dominator Tree{" "}
               {s.dominated_total_count > s.dominated_shown
                 ? `(directly dominates ${fmtCount(s.dominated_total_count)}, showing top ${fmtCount(s.dominated_shown)})`
                 : `(directly dominates ${fmtCount(s.dominated_total_count)})`}
@@ -2831,7 +2830,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       }} />}
       {!s.is_single && s.merged_paths && <MergedPathSankey node={s.merged_paths} />}
       <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", background: "var(--code-bg, #f6f7f8)", borderRadius: 4, fontSize: "0.84rem", lineHeight: "1.5" }}>
-        <strong>Next steps</strong>
+        <strong>Next Steps</strong>
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
           <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to open the Inspector and walk the reference chain from the accumulation point to its GC root.</li>
           {s.accumulation_class && (
@@ -2860,12 +2859,12 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> list instances</p>
+      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List instances</p>
       {l.suspects.length === 0 ? (
         <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
       ) : (
         <>
-          <h3>Overview — retained-heap share</h3>
+          <h3>Overview — Retained-Heap Share</h3>
           <p className="subtitle">
             How concentrated the leak is: each slice is one suspect&apos;s retained heap; the remainder is everything
             else on the reachable heap.
@@ -3060,7 +3059,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       const cls = text ? text.split("#")[0] : null;
       return text ? (
         <span className="copy-cell">
-          <ExpandableText text={text} label="Held via" />
+          <ExpandableText text={text} label="Held Via" />
           {cls && <PivotBtn cls={cls} />}
           {cls && <OqlBtn cls={cls} />}
           {cls && <ListObjectsBtn cls={cls} />}
@@ -3136,7 +3135,7 @@ function TopConsumersSection({ report }: { report: Report }) {
 
       <h3>Biggest Classes</h3>
       <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
-        extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy biggest classes as TSV" />}
+        extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
       />
 
       {pkgRoot.children.length > 0 && (
@@ -3405,7 +3404,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
         defaultSortFieldId="ret"
         defaultSortAsc={false}
       />
-      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale = null key (GC cleared the ThreadLocal key, value still held).</p>
+      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale — null key (GC cleared the ThreadLocal key; value still held).</p>
     </div>
   );
 }
@@ -3549,7 +3548,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
         Retained heap grouped by class loader (component). Retained sums may exceed total heap — objects owned by the boot loader are counted even when referenced by app code, so totals across components can overlap.
       </p>
       <details open>
-        <summary>Components by retained heap ({fmtCount(components.length)} rows)</summary>
+        <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
         <StdTable columns={cols} data={components} searchKeys={["loader_label"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
       </details>
     </section>
@@ -3647,20 +3646,20 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const hasOwner = individual.some((r) => r.owner != null);
     const totalIndivShallow = individual.reduce((s, r) => s + r.shallow, 0);
     const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
-      { id: "class", name: "Array class", grow: 1, maxWidth: hasOwner ? "337px" : "575px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array Class", grow: 1, maxWidth: hasOwner ? "337px" : "575px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
       ...(hasFill ? [{ id: "fill", name: "Used / Length", right: true, width: "130px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—", sortable: true } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
       ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "337px", cell: (r: import("./types").TopArrayRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
     ];
     const byClassCols: TableColumn<import("./types").TopArrayClassRow>[] = [
-      { id: "class", name: "Array class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
     ];
     return (
       <>
-        <h3>Top Arrays ({kind})</h3>
+        <h3>Top Arrays ({kind.charAt(0).toUpperCase() + kind.slice(1)})</h3>
         <p className="subtitle">
           The largest {kind} arrays by shallow size, individually and aggregated by array class.
         </p>
@@ -3678,7 +3677,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             </div>
           </>
         )}
-        <h4>Top Array Classes ({kind})</h4>
+        <h4>Top Array Classes ({kind.charAt(0).toUpperCase() + kind.slice(1)})</h4>
         {byClass.length === 0 ? (
           <p className="subtitle">None.</p>
         ) : (
@@ -3746,7 +3745,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         <p className="subtitle">None.</p>
       ) : (() => {
         const kindCols: TableColumn<import("./types").CollectionKindStat>[] = [
-          { id: "kind", name: "Kind", grow: 1, selector: (s) => s.kind, sortable: true },
+          { id: "kind", name: "Kind", grow: 1, cell: (s) => <span style={{ textTransform: "capitalize" }}>{s.kind}</span>, selector: (s) => s.kind, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count, sortable: true },
           { id: "total_el", name: "Total Elements", right: true, width: "148px", format: (s) => fmtCount(s.total_elements), selector: (s) => s.total_elements, sortable: true },
           { id: "max_el", name: "Max Elements", right: true, width: "140px", format: (s) => fmtCount(s.max_elements), selector: (s) => s.max_elements, sortable: true },
@@ -3768,7 +3767,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
-        What fraction of their capacity collections are using. Bucketed by fill %; low-fill collections waste allocated backing-array memory.
+        What fraction of their capacity each collection is using. Bucketed by fill %; low-fill collections waste allocated backing-array memory.
         {cfr && <>{" "}{fmtCount(cfr.tracked)} of {fmtCount(cfr.total)} collections tracked.</>}
       </p>
       {cfrBuckets.length === 0 ? (
@@ -3848,7 +3847,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         <p className="subtitle">None.</p>
       ) : (() => {
         const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
-          { id: "class", name: "Array class", grow: 1, maxWidth: cpaHasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+          { id: "class", name: "Array Class", grow: 1, maxWidth: cpaHasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
           { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
           { id: "value", name: "Value", right: true, width: "90px", format: (r) => String(r.value), selector: (r) => r.value, sortable: true },
           { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
@@ -3907,7 +3906,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     const objCount = dp.rows.reduce((s, r) => s + r.duplicated_groups, 0);
     rows.push({
       id: rows.length,
-      type: "Duplicate primitive arrays",
+      type: "Duplicate Primitive Arrays",
       wasted: dp.total_wasted_bytes,
       objects: objCount,
       fix: "Deduplicate or use shared constants",
@@ -3920,7 +3919,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     const totalObjs = bn.reduce((s, r) => s + r.instances, 0);
     rows.push({
       id: rows.length,
-      type: "Boxed primitives (footprint)*",
+      type: "Boxed Primitives (footprint)*",
       wasted: totalWasted,
       objects: totalObjs,
       fix: "Use primitive arrays or Eclipse Collections",
@@ -3932,7 +3931,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       if (row.overhead_bytes > 0) {
         rows.push({
           id: rows.length,
-          type: `Empty/singleton ${row.container_kind} (${row.holder_class}#${row.field})`,
+          type: `Empty/Singleton ${row.container_kind.charAt(0).toUpperCase() + row.container_kind.slice(1)} (${row.holder_class}#${row.field})`,
           wasted: row.overhead_bytes,
           objects: row.empty_count + row.singleton_count,
           fix: "Use null or Collections.emptyList()",
@@ -4004,7 +4003,7 @@ function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionR
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<import("./types").TinyCollectionRow>[] = [
     { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-    { id: "kind", name: "Kind", width: "130px", selector: (r) => r.container_kind, sortable: true },
+    { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
     { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count, sortable: true },
     { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count, sortable: true },
     { id: "overhead", name: useKB ? "Overhead (KB)" : "Overhead Bytes", right: true, width: useKB ? "150px" : "138px", cell: byteCell(r => r.overhead_bytes, fmtB, useKB), selector: (r) => r.overhead_bytes, sortable: true },
@@ -4030,7 +4029,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-          { id: "kind", name: "Kind", width: "130px", selector: (r) => r.container_kind, sortable: true },
+          { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
           { id: "containers", name: "Containers", right: true, width: "110px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count, sortable: true },
           { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.total_elements), selector: (r) => r.total_elements, sortable: true },
@@ -4047,7 +4046,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
           { id: "container", name: "Container Class", grow: 1, maxWidth: "280px", cell: (r) => <span className="copy-cell"><code>{r.container_class}</code><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
-          { id: "kind", name: "Kind", width: "130px", selector: (r) => r.container_kind, sortable: true },
+          { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
           { id: "capacity", name: "Capacity", right: true, width: "96px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -4109,7 +4108,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
   }
 
   const cols: TableColumn<CoalescedRow>[] = [
-    { id: "kind", name: "Kind", width: "130px", selector: ({ row: r }) => r.kind, sortable: true },
+    { id: "kind", name: "Kind", width: "130px", cell: ({ row: r }) => <span style={{ textTransform: "capitalize" }}>{r.kind}</span>, selector: ({ row: r }) => r.kind, sortable: true },
     {
       id: "class", name: "Container Class", grow: 1, maxWidth: "240px",
       cell: ({ row: r, count }) => (
@@ -4165,7 +4164,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
         {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns are only populated with <code>--collections</code> — re-run with that flag to see which fields hold these collections.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
-      {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind}`} />)}
+      {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
       {data.truncated && (
         <p className="subtitle">Collection value tally was truncated; ranking is a bounded sample.</p>
       )}
@@ -4221,9 +4220,9 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const cols: TableColumn<FBSRow>[] = [
     { id: "field", name: "Class#field", grow: 2, minWidth: "160px", maxWidth: "280px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
     { id: "pointee", name: "Pointee Type", grow: 2, minWidth: "140px", maxWidth: "260px", cell: (r) => <span className="copy-cell"><code>{r.pointee_type}</code><PivotBtn cls={r.pointee_type} /><OqlBtn cls={r.pointee_type} /><ListObjectsBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
-    { id: "category", name: "Kind", width: "82px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—", sortable: true },
+    { id: "category", name: "Kind", width: "82px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.category ?? "—"}</span>, selector: (r) => r.category ?? "", sortable: true },
     { id: "pointees", name: "Pointees", right: true, width: "96px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
-    ...(hasElements ? [{ id: "elements", name: "Elems", right: true, width: "80px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
+    ...(hasElements ? [{ id: "elements", name: "Elements", right: true, width: "90px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
     { id: "holders", name: "Holders", right: true, width: "96px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
   ];
@@ -4236,7 +4235,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       </p>
       {data.truncated && (
         <p className="subtitle">
-          &#9888; Results are a bounded sample — some field groups were cut off to stay within analysis limits.
+          ⚠ Results are a bounded sample — some field groups were cut off to stay within analysis limits.
           Values represent the groups that were captured, not the full heap.
         </p>
       )}
@@ -4318,10 +4317,10 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
                 )}
               </p>
             )}
-            <h4>Referent classes</h4>
+            <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
-            <h4>Only weakly retained (approximate)</h4>
-            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them.</p>
+            <h4>Only Weakly Retained</h4>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them. (Approximate: transitive weak-only detection may miss multi-hop chains.)</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
@@ -5564,7 +5563,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       <h3>Big Drops</h3>
       <p className="subtitle">
         Dominators where retained heap greatly exceeds their largest child's retained heap — the "drop" is memory held directly or spread across many small children. Threshold{" "}
-        {thresholdMb} MB (1% of reachable shallow).
+        {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
         <p className="subtitle">No significant drops.</p>
@@ -5609,8 +5608,8 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       ) : (() => {
         const idomCols: TableColumn<import("./types").ImmediateDominatorRow>[] = [
           { id: "dominator_class", name: "Dominator Class", grow: 1, maxWidth: "360px", cell: (r) => <span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /><PivotBtn cls={r.dominator_class} /><OqlBtn cls={r.dominator_class} /><ListObjectsBtn cls={r.dominator_class} /></span>, selector: (r) => r.dominator_class, sortable: true },
-          { id: "dominator_count", name: "#Dominators", right: true, width: "132px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count, sortable: true },
-          { id: "dominated_count", name: "#Dominated", right: true, width: "128px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count, sortable: true },
+          { id: "dominator_count", name: "# Dominators", right: true, width: "132px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count, sortable: true },
+          { id: "dominated_count", name: "# Dominated", right: true, width: "128px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count, sortable: true },
           { id: "dominator_shallow", name: useKB ? "Dominator Shallow (KB)" : "Dominator Shallow", right: true, width: useKB ? "205px" : "195px", cell: byteCell(r => r.dominator_shallow, fmtB, useKB), selector: (r) => r.dominator_shallow, sortable: true },
           { id: "dominated_shallow", name: useKB ? "Dominated Shallow (KB)" : "Dominated Shallow", right: true, width: useKB ? "210px" : "195px", cell: byteCell(r => r.dominated_shallow, fmtB, useKB), selector: (r) => r.dominated_shallow, sortable: true },
         ];
@@ -5626,7 +5625,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               onRowClicked={hasPairs ? (r) => pivotToClass(r.dominator_class) : undefined}
               onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.dominator_class }); } : undefined}
               rowClickTitle={hasPairs ? "Click to view in Navigator" : undefined}
-              extraBtns={<CopyTsvBtn rows={[["Dominator Class","#Dominators","#Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...idoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
+              extraBtns={<CopyTsvBtn rows={[["Dominator Class","# Dominators","# Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...idoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
             />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
@@ -5684,7 +5683,7 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
   const chartKinds: KindStat[] = React.useMemo(() => {
     if (!comp.prim_array_by_type?.length) return comp.by_kind;
     return comp.by_kind.flatMap((k) =>
-      k.kind === "Primitive arrays" ? comp.prim_array_by_type! : [k]
+      k.kind === "Primitive Arrays" ? comp.prim_array_by_type! : [k]
     );
   }, [comp]);
   return (
@@ -5697,13 +5696,13 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
         type CompRow = { kind: string; objects: number; shallow_heap: number; indent?: boolean };
         const flatRows: CompRow[] = comp.by_kind.flatMap((k) => {
           const main: CompRow = { kind: k.kind, objects: k.objects, shallow_heap: k.shallow_heap };
-          if (k.kind === "Primitive arrays" && comp.prim_array_by_type?.length) {
+          if (k.kind === "Primitive Arrays" && comp.prim_array_by_type?.length) {
             return [main, ...comp.prim_array_by_type.map((p) => ({ kind: p.kind, objects: p.objects, shallow_heap: p.shallow_heap, indent: true }))];
           }
           return [main];
         });
         const compCols: TableColumn<CompRow>[] = [
-          { id: "kind", name: "Kind", grow: 1, cell: (r) => <span style={r.indent ? { paddingLeft: "1.5rem", fontSize: "0.88em", color: "var(--muted)" } : undefined}>{r.kind}</span>, selector: (r) => r.kind, sortable: true },
+          { id: "kind", name: "Kind", grow: 1, cell: (r) => <span style={{ textTransform: "capitalize", ...(r.indent ? { paddingLeft: "1.5rem", fontSize: "0.88em", color: "var(--muted)" } : {}) }}>{r.kind}</span>, selector: (r) => r.kind, sortable: true },
           { id: "objects", name: "Objects", right: true, minWidth: "110px", cell: (r) => <span style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtCount(r.objects)}</span>, selector: (r) => r.objects, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, minWidth: useKB ? "130px" : "110px", cell: (r) => <span title={useKB ? fmtExactBytes(r.shallow_heap) : undefined} style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtB(r.shallow_heap)}</span>, selector: (r) => r.shallow_heap, sortable: true },
         ];
@@ -5734,8 +5733,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of heap total this is elevated — likely the dump was taken before a GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
-              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of heap total) is normal between GC cycles."}
+              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — likely the dump was taken before a GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
+              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of total heap) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
@@ -5754,7 +5753,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             </>
           )}
           <details open>
-            <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
+            <summary>Unreachable Objects by Class ({fmtCount(rows.length)} rows)</summary>
             {(() => {
               const unreachCols: TableColumn<UnreachableClassRow>[] = [
                 { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
@@ -5801,7 +5800,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} DirectByteBuffer objects`}
         </p>
         <p>
-          This memory is committed from native (OS) memory — it does <em>not</em> appear in the JVM heap totals above.
+          This memory is allocated from native (OS) memory — it does <em>not</em> appear in the JVM heap totals above.
         </p>
         <p>
           Check for NIO buffer pools or caches that are not releasing buffers. Common causes: Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
@@ -6058,11 +6057,11 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        How far objects sit from a GC root in the dominator tree. Shallow = objects held close to roots; deep = long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
+        How far objects sit from a GC root in the dominator tree. Shallow — objects held close to roots; Deep — long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
-        <summary>Full depth table ({fmtCount(hist.length)} buckets)</summary>
+        <summary>Full Depth Table ({fmtCount(hist.length)} buckets)</summary>
         <StdTable columns={depthCols} data={rows} searchKeys={[]} defaultSortFieldId="objects" defaultSortAsc={false} />
       </details>
     </section>
@@ -6082,7 +6081,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
   type LeakRow = { indicator: React.ReactNode; value: string; hint: React.ReactNode };
   const leakRows: LeakRow[] = [
     ...(anonymous_class_count > 0 ? [{
-      indicator: "Anonymous/generated classes",
+      indicator: "Anonymous/Generated Classes",
       value: fmtCount(anonymous_class_count),
       hint: "High counts can indicate class-loader leaks (e.g. dynamic proxies accumulating per request). Navigate to Top Consumers and filter by \"$\" to find the biggest offenders.",
     }] : []),
@@ -6102,7 +6101,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
   const leakCols: TableColumn<LeakRow>[] = [
     { id: "indicator", name: "Indicator", grow: 1, maxWidth: "300px", cell: (r) => <span>{r.indicator}</span> },
     { id: "value", name: "Value", right: true, width: "120px", selector: (r) => r.value, sortable: true },
-    { id: "hint", name: "What to check", grow: 2, maxWidth: "620px", wrap: true, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)", whiteSpace: "normal" }}>{r.hint}</span> },
+    { id: "hint", name: "What to Check", grow: 2, maxWidth: "620px", wrap: true, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)", whiteSpace: "normal" }}>{r.hint}</span> },
   ];
   return (
     <section id="leak-indicators">
@@ -6806,7 +6805,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
           {!selected ? (
             <div className="trg-sidebar-empty">
               <p>Click a class node to preview its stats and connections here.</p>
-              <p className="trg-sidebar-hint">Double-click or use "Full details →" to open the in-depth view in the Inspector panel.</p>
+              <p className="trg-sidebar-hint">Double-click or use "Full Details →" to open the in-depth view in the Inspector panel.</p>
             </div>
           ) : (
             <div className="trg-sidebar-content">
@@ -6823,16 +6822,16 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                     <tr><th>Retained</th><td><strong>{fmtB(selInfo.hist.retained)}</strong></td></tr>
                     {parentClass && histMap.has(parentClass) && histMap.get(parentClass)!.retained > 0 && (
                       <>
-                        <tr><th>Parent dom.</th><td><button className="trg-link-btn" onClick={() => setSelected(parentClass)} title={parentClass}>{tpfgShortName(parentClass)}</button></td></tr>
-                        <tr><th>% of parent</th><td>{Math.round(selInfo.hist.retained / histMap.get(parentClass)!.retained * 100)}%</td></tr>
+                        <tr><th>Parent Dom.</th><td><button className="trg-link-btn" onClick={() => setSelected(parentClass)} title={parentClass}>{tpfgShortName(parentClass)}</button></td></tr>
+                        <tr><th>% of Parent</th><td>{Math.round(selInfo.hist.retained / histMap.get(parentClass)!.retained * 100)}%</td></tr>
                       </>
                     )}
-                    <tr><th>Max instance</th><td>{fmtB(selInfo.hist.max_instance_shallow)}</td></tr>
+                    <tr><th>Max Instance</th><td>{fmtB(selInfo.hist.max_instance_shallow)}</td></tr>
                     {selInfo.hist.instances > 0 && (
-                      <tr><th>Avg instance</th><td>{fmtB(Math.round(selInfo.hist.shallow / selInfo.hist.instances))}</td></tr>
+                      <tr><th>Avg Instance</th><td>{fmtB(Math.round(selInfo.hist.shallow / selInfo.hist.instances))}</td></tr>
                     )}
                     {selInfo.hist.incoming_ref_count != null && (
-                      <tr><th>Incoming refs</th><td>{fmtCount(selInfo.hist.incoming_ref_count)}</td></tr>
+                      <tr><th>Incoming Refs</th><td>{fmtCount(selInfo.hist.incoming_ref_count)}</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -6858,7 +6857,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 if (fieldRows.length === 0) return null;
                 return (
                   <>
-                    <p className="trg-sidebar-section-label">⊟ Top fields</p>
+                    <p className="trg-sidebar-section-label">⊟ Top Fields</p>
                     <ul className="trg-edge-list trg-field-dist">
                       {fieldRows.map(([field, info], i) => (
                         <li key={i}>
@@ -6873,7 +6872,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               })()}
               {selInfo.hist.root_path && selInfo.hist.root_path.length > 0 && (
                 <div className="trg-gcpath-section">
-                  <p className="trg-sidebar-section-label">⊘ GC root path</p>
+                  <p className="trg-sidebar-section-label">⊘ GC Root Path</p>
                   <RootPathChain steps={selInfo.hist.root_path} />
                 </div>
               )}
@@ -6938,7 +6937,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               )}
               <div className="trg-sidebar-actions">
                 <button className="show-more-btn" onClick={() => fireInspect({ kind: "class", cls: selected })}>
-                  Full details →
+                  Full Details →
                 </button>
                 <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
                   Instances →
@@ -7568,7 +7567,7 @@ function OGEGraphView({ data, onNavigate }: {
                 </ul>
                 <button className="show-more-btn" style={{ marginTop: "0.3rem" }}
                   onClick={() => fireInspect({ kind: "fields", idx: graphSelected!, cls: selectedNodeData!.display_class })}>
-                  All fields →
+                  All Fields →
                 </button>
               </>
             )}
@@ -8468,7 +8467,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   goToRoot();
                 }
               }}>
-              {breadcrumb.length > 0 ? `← back` : "⌂ Roots"}
+              {breadcrumb.length > 0 ? `← Back` : "⌂ Roots"}
             </button>
           </div>
           {!wasmBelowInfo ? (
@@ -8527,8 +8526,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           );
           return (
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0.75rem", marginTop:"0.75rem" }}>
-              {([["Outbound refs", (wasmBelowOutbound??[]).map((r,i)=>mkRow(r.dst_idx,r.field_name,r.display_class,r.retained,i)), "No outbound refs."],
-                 ["Inbound refs", (wasmBelowInbound??[]).map((r,i)=>mkRow(r.src_idx,r.field_name,r.display_class,r.retained,i)), "No inbound refs."]] as const).map(([title,rows,empty]) => (
+              {([["Outbound Refs", (wasmBelowOutbound??[]).map((r,i)=>mkRow(r.dst_idx,r.field_name,r.display_class,r.retained,i)), "No outbound refs."],
+                 ["Inbound Refs", (wasmBelowInbound??[]).map((r,i)=>mkRow(r.src_idx,r.field_name,r.display_class,r.retained,i)), "No inbound refs."]] as const).map(([title,rows,empty]) => (
                 <div key={String(title)} style={{ background:"var(--card-bg,var(--bg))", border:"1px solid var(--border)", borderRadius:6, padding:"0.6rem 0.75rem" }}>
                   <div style={{ fontWeight:600, fontSize:"0.85rem", marginBottom:"0.35rem" }}>{title}</div>
                   {rows.length===0 ? <p className="subtitle">{empty}</p> : (
@@ -8780,10 +8779,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <>
               {currentNode.edges_unknown && !wasmOutboundEdges && (
                 <p className="subtitle" style={{ color: "var(--warn-border)" }}>
-                  &#9888; Outbound refs not captured for this object (not in top-10,000 by shallow heap).{" "}
+                  ⚠ Outbound refs not captured for this object (not in top-10,000 by shallow heap).{" "}
                   <button className="btn-link" style={{ fontSize: "inherit" }}
                     onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
-                    View dominator tree →
+                    View Dominator Tree →
                   </button>
                 </p>
               )}
@@ -8827,7 +8826,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <thead>
                     <tr>
                       <th>Field</th>
-                      <th>Child class</th>
+                      <th>Child Class</th>
                       <th style={{ textAlign: "right" }}>Retained</th>
                       <th></th>
                     </tr>
@@ -9134,7 +9133,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <thead>
                       <tr>
                         {wasmCollEntries.type === "map" ? (
-                          <th>Entry object</th>
+                          <th>Entry Object</th>
                         ) : (
                           <th>Element</th>
                         )}
@@ -9319,7 +9318,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           setDomViewMode(mode);
                         }
                       }}>
-                      {mode === "flat" ? "Immediate" : mode === "grouped" ? "By class" : "All objects (up to 1000)"}
+                      {mode === "flat" ? "Immediate" : mode === "grouped" ? "By Class" : "All Objects (up to 1000)"}
                     </button>
                   ))}
                 </div>
@@ -9624,7 +9623,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (dominatorChain.length <= 1) {
                   return (
                     <tr>
-                      <th>Why alive?</th>
+                      <th>Why Alive?</th>
                       <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
                         Held directly by GC roots — no single dominating object
                       </td>
@@ -9640,7 +9639,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 const hopPhrase = hops === 1 ? "directly" : `via ${hops} hops`;
                 return (
                   <tr>
-                    <th>Why alive?</th>
+                    <th>Why Alive?</th>
                     <td style={{ fontSize: "0.82rem" }}>
                       <button
                         className="btn-link"
@@ -9697,7 +9696,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </tr>
               ))}
               <tr>
-                <th>Immediate dominator</th>
+                <th>Immediate Dominator</th>
                 <td>
                   {currentNode.idom != null ? (
                     <span className="copy-cell">
@@ -9941,7 +9940,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }}>{fmtCount(row.instance_count)}</div>
                       <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }} title={`${row.total_shallow} B`}>{fmtB(row.total_shallow)}</div>
                       <div style={{ textAlign: "right", padding: "1px 4px", color: "var(--muted)", fontSize: "0.78rem" }}>
-                        {pct >= 0.001 ? `${(pct * 100).toFixed(pct >= 0.01 ? 0 : 1)}%` : "<0.1%"}
+                        {pct >= 0.001 ? `${(pct * 100).toFixed(pct >= 0.01 ? 0 : 1)}%` : "< 0.1%"}
                       </div>
                     </React.Fragment>
                   );
@@ -9958,18 +9957,18 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
-    ["Shallow size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
-    ["Retained heap (retained size)", <>the total memory that would be freed if this object were garbage-collected: its own shallow size plus everything reachable <em>only</em> through it. This is the basis for every percentage in this report. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
-    ["Reachable heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can still reach from a GC root. Anything unreachable is already collectible and is excluded from the totals here.</>],
-    ["GC root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
+    ["Shallow Size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
+    ["Retained Heap (Retained Size)", <>the total memory that would be freed if this object were garbage-collected: its own shallow size plus everything reachable <em>only</em> through it. This is the basis for every percentage in this report. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can still reach from a GC root. Anything unreachable is already collectible and is excluded from the totals here.</>],
+    ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
-    ["Dominator tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
-    ["Top-level dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Biggest Objects" and "Retention Concentration" views rank these.</>],
-    ["Dominator depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects are held close to a root; high depth means retention flows through long chains.</>],
-    ["Accumulation point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class, meaning where a <a href="https://en.wikipedia.org/wiki/Memory_leak" target="_blank" rel="noreferrer">memory leak</a> accumulates.</>],
-    ["Class loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
+    ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
+    ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Biggest Objects" and "Retention Concentration" views rank these.</>],
+    ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects are held close to a root; high depth means retention flows through long chains.</>],
+    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class, meaning where a <a href="https://en.wikipedia.org/wiki/Memory_leak" target="_blank" rel="noreferrer">memory leak</a> accumulates.</>],
+    ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
-    ["Instance vs. class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
+    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
   ];
   return (
     <section id="glossary">
@@ -10248,9 +10247,9 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <p><strong>Verdict:</strong> {diffVerdict(diff, fmtB)}</p>
         <ul>
           <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
-          <li><strong>Δ Shallow heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow, fmtB)}</li>
+          <li><strong>Δ Shallow Heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow, fmtB)}</li>
           <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained, fmtB)}</li>
-          <li><strong>Gross Retained churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(diff.gross_shrink_retained)} reclaimed</li>
+          <li><strong>Gross Retained Churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(diff.gross_shrink_retained)} reclaimed</li>
         </ul>
       </section>
 
@@ -10260,7 +10259,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         </section>
       )}
       <DiffSection
-        title="Growth Leaders (by Δ retained)"
+        title="Growth Leaders (by Δ Retained)"
         nameLabel="Class"
         labels={labels}
         rows={diff.growth_leaders}
@@ -10268,7 +10267,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       />
       {diff.spike_leaders.length > 0 ? (
         <section className="diff-section">
-          <h2>Transient Spikes (peak above baseline)</h2>
+          <h2>Transient Spikes (Peak Above Baseline)</h2>
           <p>
             Classes that climbed well above their baseline mid-series then fell back — a
             first→last Δ alone would miss them. Ranked by peak-over-baseline; the peak may be
@@ -10307,7 +10306,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         emptyNote="No leak suspect shrank in the current dump."
       />
       <section className="diff-section">
-        <h2>Disappeared Leak Suspects (resolved)</h2>
+        <h2>Disappeared Leak Suspects (Resolved)</h2>
         <p>
           Informational: these were flagged in an earlier dump but are gone from the current
           one — a fixed or transient issue, not a current problem. Listed last for that reason.
@@ -10376,8 +10375,8 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         <table className="trg-stat-table">
           <tbody>
             <tr><th>Instances</th><td>{fmtCount(hist.instances)}</td></tr>
-            <tr><th>Shallow heap</th><td>{formatBytes(hist.shallow)}</td></tr>
-            <tr><th>Retained heap</th><td>{formatBytes(hist.retained)}</td></tr>
+            <tr><th>Shallow Heap</th><td>{formatBytes(hist.shallow)}</td></tr>
+            <tr><th>Retained Heap</th><td>{formatBytes(hist.retained)}</td></tr>
           </tbody>
         </table>
       )}
@@ -10429,7 +10428,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         </button>
         {biggestIdx != null && (
           <button className="show-more-btn" onClick={() => onNavigate({ kind: "instance", idx: biggestIdx, cls })}>
-            Biggest instance →
+            Biggest Instance →
           </button>
         )}
         <button className="show-more-btn"
@@ -10451,14 +10450,14 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         return (
           <details style={{ marginTop: "0.5rem" }}>
             <summary style={{ fontSize: "0.82rem", cursor: "pointer" }}>
-              Field statistics ({cfs.ref_fields.length} ref field{cfs.ref_fields.length !== 1 ? "s" : ""})
+              Field Statistics ({cfs.ref_fields.length} ref field{cfs.ref_fields.length !== 1 ? "s" : ""})
             </summary>
             <table style={{ fontSize: "0.78rem", width: "100%", borderCollapse: "collapse", marginTop: "0.3rem" }}>
               <thead>
                 <tr>
                   <th style={{ textAlign: "left" }}>Field</th>
-                  <th style={{ textAlign: "right" }}>Non-null refs</th>
-                  <th style={{ textAlign: "right" }}>Total retained</th>
+                  <th style={{ textAlign: "right" }}>Non-Null Refs</th>
+                  <th style={{ textAlign: "right" }}>Total Retained</th>
                 </tr>
               </thead>
               <tbody>
@@ -10729,7 +10728,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
             <tr><th>Retained</th><td>{formatBytes(node.retained)}</td></tr>
             {idomNode && (
               <tr>
-                <th>Dominated by</th>
+                <th>Dominated By</th>
                 <td>
                   <button className="trg-link-btn"
                     onClick={() => onNavigate({ kind: "instance", idx: idomIdx!, cls: idomNode.display_class })}>
@@ -10743,8 +10742,8 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
       )}
       {topFields.length > 0 && (
         <div className="inspector-top-fields">
-          <h4>Top fields by retained <button className="show-more-btn" style={{ float: "right", fontSize: "0.74rem" }}
-            onClick={() => onNavigate({ kind: "fields", idx, cls })}>all fields →</button></h4>
+          <h4>Top Fields by Retained <button className="show-more-btn" style={{ float: "right", fontSize: "0.74rem" }}
+            onClick={() => onNavigate({ kind: "fields", idx, cls })}>All Fields →</button></h4>
           <ul className="inspector-field-bars">
             {topFields.map((f, i) => (
               <li key={i}>
@@ -10822,10 +10821,10 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
       )}
       <div className="trg-page-actions">
         <button className="show-more-btn" onClick={() => onNavigate({ kind: "class", cls })}>
-          ← Class view
+          ← Class View
         </button>
         <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
-          All instances →
+          All Instances →
         </button>
         <button className="show-more-btn" onClick={() => onNavigate({ kind: "fields", idx, cls })}>
           Fields →
@@ -10968,11 +10967,11 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
         {cls && (
           <button className="show-more-btn"
             onClick={() => onNavigate({ kind: "field-scan", cls, fieldName: "" })}>
-            Scan all instances →
+            Scan All Instances →
           </button>
         )}
         <button className="show-more-btn" onClick={() => onNavigate({ kind: "instance", idx, cls })}>
-          ← Instance view
+          ← Instance View
         </button>
       </div>
     </div>
@@ -11033,7 +11032,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
           <thead>
             <tr>
               <th>#</th>
-              <th>idx</th>
+              <th>Idx</th>
               {fieldName && <th>{fieldName}</th>}
               <th>Retained</th>
             </tr>
@@ -11060,7 +11059,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
       )}
       <div className="trg-page-actions">
         <button className="show-more-btn" onClick={() => onNavigate({ kind: "class", cls })}>
-          ← Class view
+          ← Class View
         </button>
       </div>
     </div>
