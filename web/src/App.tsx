@@ -1777,7 +1777,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
     <section id="duplicate-prim-arrays">
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
-        Primitive arrays with identical content and element type — content-identical copies that could be deduplicated.
+        Primitive arrays with identical content — duplicate copies that could be deduplicated to one.
         Approx wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
@@ -2859,7 +2859,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Objects holding the most retained heap — the most likely root cause of a leak. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
+      <p className="subtitle">Objects holding the most retained heap — most likely causes of excess retention. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
         <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
       ) : (
@@ -3127,8 +3127,8 @@ function TopConsumersSection({ report }: { report: Report }) {
       <h3>Biggest Objects</h3>
       {objHasOwner && (
         <p className="subtitle">
-          The <strong>Held via</strong> column names the dominant incoming <code>Class#field</code>{" "}
-          reference that holds each object (the primary referrer; an object may have several).
+          <strong>Held via</strong> is the primary incoming <code>Class#field</code>{" "}
+          reference holding each object — an object may have several referrers.
         </p>
       )}
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
@@ -3601,7 +3601,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
       <p className="subtitle">
-        Array-length distribution bucketed by powers of two; the "Max Length" column is the inclusive upper bound of each bucket.
+        Array length distribution, bucketed by powers of two. Max Length is the inclusive upper bound of each bucket.
       </p>
       {empty ? (
         <p className="subtitle">No arrays found.</p>
@@ -3976,7 +3976,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     <section id="collection-waste-budget">
       <h2>Collection Waste Budget</h2>
       <p className="subtitle">
-        All heap waste sources aggregated and ranked by wasted bytes.
+        Collection waste categories ranked by wasted bytes.
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
@@ -4021,7 +4021,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
     <section id="container-attribution-classfield">
       <h2>Container Attribution</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> holds the most collection memory — helps identify which specific field is accumulating data in large maps or lists.
+        Which <code>Class#field</code> holds the most collection memory — identifies which field is accumulating data in large maps or lists.
       </p>
 
       <h3>Top by Total Memory</h3>
@@ -4231,8 +4231,8 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> retains the most heap across all its instances — useful for pinpointing which specific field is accumulating data.
-        Pointee type is the most common concrete class stored in that field.
+        Which <code>Class#field</code> retains the most heap across all its instances — useful for pinpointing which field is accumulating data.
+        Pointee Type is the most common concrete class stored in that field.
       </p>
       {data.truncated && (
         <p className="subtitle">
@@ -6125,11 +6125,9 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
     <section id="top-retainers">
       <h2>Top Retainers</h2>
       <p className="subtitle">
-        Merged ranking of <code>Class#field</code> references and stack-frame locals by total
-        retained heap. Fields come from collection attribution; stack frames from thread-local
-        analysis (<code>--thread-locals</code>).
-        {" "}Totals may exceed heap size for fields in linked structures (e.g. <code>List#next</code>),
-        where each node's retained heap includes its entire tail — treat as a relative ranking, not an absolute measure.
+        Combined ranking of <code>Class#field</code> references and stack-frame locals by retained heap.
+        {" "}Totals can exceed heap size for linked structures (e.g. <code>List#next</code>),
+        where each node's retained heap includes its entire tail — use as a relative ranking.
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
@@ -11353,7 +11351,7 @@ export default function App({ report }: { report: Report }) {
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
           <p className="subtitle">
-            Explore the object reference graph and dominator tree interactively.
+            Browse the object reference graph and dominator tree.
             Click a class to list its instances; click an instance to walk its fields and inbound references.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
