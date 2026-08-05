@@ -6879,7 +6879,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               )}
               {selAllOutEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">→ References ({selAllOutEdges.length} total)</p>
+                  <p className="trg-sidebar-section-label">→ References to ({selAllOutEdges.length} total)</p>
                   <ul className="trg-edge-list">
                     {selOutEdges.map((e, i) => (
                       <li key={i}>
@@ -9964,7 +9964,7 @@ function GlossarySection() {
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
-    ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Biggest Objects" and "Retention Concentration" views rank these.</>],
+    ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Top Consumers" and "Retention Concentration" sections rank these.</>],
     ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects are held close to a root; high depth means retention flows through long chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class, meaning where a <a href="https://en.wikipedia.org/wiki/Memory_leak" target="_blank" rel="noreferrer">memory leak</a> accumulates.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
