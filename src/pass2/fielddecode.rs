@@ -1340,10 +1340,9 @@ impl FieldDecodeState {
         }
 
         if self.array_owner_by_addr.len() < ARRAY_OWNER_CAP {
-            if !self.light_field_layout.contains_key(&class_id) {
-                let layout = enumerate_object_fields(class_id, class_map, obj_ref_width);
-                self.light_field_layout.insert(class_id, layout);
-            }
+            self.light_field_layout
+                .entry(class_id)
+                .or_insert_with(|| enumerate_object_fields(class_id, class_map, obj_ref_width));
             let layout: Vec<(u64, u32)> = self.light_field_layout[&class_id].clone();
             let holder_name = if let Some(n) = self.pretty_name_cache.get(&class_id) {
                 n.clone()
@@ -1369,7 +1368,7 @@ impl FieldDecodeState {
         }
 
         if collect_attribution && self.node_kv_raw.len() < self.caps.node_kv_cap {
-            if !self.node_kv_layout.contains_key(&class_id) {
+            self.node_kv_layout.entry(class_id).or_insert_with(|| {
                 let raw_name = class_map
                     .get(&class_id)
                     .and_then(|ci| strings.get(&ci.name_id))
@@ -1380,46 +1379,43 @@ impl FieldDecodeState {
                     || raw_name.ends_with("$MapEntry")
                     || raw_name.ends_with("$HashEntry")
                     || raw_name.ends_with("$KeyValueHolder");
-                let kv = if !is_wrapper {
-                    None
-                } else {
-                    let mut key_off: Option<u32> = None;
-                    let mut val_off: Option<u32> = None;
-                    let mut byte_offset: u32 = 0;
-                    let mut cur = class_id;
-                    'outer: while let Some(ci) = class_map.get(&cur) {
-                        for &(fname_id, ftype) in &ci.fields {
-                            let fsize = if ftype == crate::types::HprofType::Object {
-                                obj_ref_width as u32
-                            } else {
-                                ftype.byte_size() as u32
-                            };
-                            if ftype == crate::types::HprofType::Object {
-                                let fname =
-                                    strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
-                                if fname == "key" {
-                                    key_off = Some(byte_offset);
-                                } else if fname == "value" || fname == "val" {
-                                    val_off = Some(byte_offset);
-                                }
-                            }
-                            byte_offset += fsize;
-                            if key_off.is_some() && val_off.is_some() {
-                                break 'outer;
+                if !is_wrapper {
+                    return None;
+                }
+                let mut key_off: Option<u32> = None;
+                let mut val_off: Option<u32> = None;
+                let mut byte_offset: u32 = 0;
+                let mut cur = class_id;
+                'outer: while let Some(ci) = class_map.get(&cur) {
+                    for &(fname_id, ftype) in &ci.fields {
+                        let fsize = if ftype == crate::types::HprofType::Object {
+                            obj_ref_width as u32
+                        } else {
+                            ftype.byte_size() as u32
+                        };
+                        if ftype == crate::types::HprofType::Object {
+                            let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+                            if fname == "key" {
+                                key_off = Some(byte_offset);
+                            } else if fname == "value" || fname == "val" {
+                                val_off = Some(byte_offset);
                             }
                         }
-                        if ci.super_id == 0 {
-                            break;
+                        byte_offset += fsize;
+                        if key_off.is_some() && val_off.is_some() {
+                            break 'outer;
                         }
-                        cur = ci.super_id;
                     }
-                    match (key_off, val_off) {
-                        (Some(k), Some(v)) => Some((k, v)),
-                        _ => None,
+                    if ci.super_id == 0 {
+                        break;
                     }
-                };
-                self.node_kv_layout.insert(class_id, kv);
-            }
+                    cur = ci.super_id;
+                }
+                match (key_off, val_off) {
+                    (Some(k), Some(v)) => Some((k, v)),
+                    _ => None,
+                }
+            });
             if let Some((key_off, val_off)) = self.node_kv_layout[&class_id] {
                 if let Some(self_idx) = self.ic.index_of(&p1.id_map, addr) {
                     let ko = key_off as usize;

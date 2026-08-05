@@ -3,11 +3,15 @@
 #![allow(dead_code)]
 
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     io::{self, ErrorKind},
 };
 
 use crate::{reader::HprofReader, types::tags, vbyte};
+
+/// Per class-pair edge: top-3 field names (name, occurrence count), sorted desc.
+type PairFieldTally = HashMap<(u32, u32), Vec<(String, u32)>>;
 
 use super::Pass2;
 
@@ -476,11 +480,11 @@ pub struct Graph {
     /// fwd-CSR is consumed. `(src_class_idx, dst_class_idx) → edge_count`.
     /// Carried on Graph so `build_type_ref_graph` can consume it without
     /// iterating the per-object capture (which is now sparse / bounded).
-    pub type_ref_pairs: Option<std::collections::HashMap<(u32, u32), u64>>,
+    pub type_ref_pairs: Option<HashMap<(u32, u32), u64>>,
     /// Top field names per class-pair edge, parallel to `type_ref_pairs`.
     /// `(src_ci, dst_ci) → [(field_name, count)]` sorted by count desc (up to 3).
     /// Optional: only populated when `fwd_field_name_idx` is present.
-    pub type_ref_pair_fields: Option<std::collections::HashMap<(u32, u32), Vec<(String, u32)>>>,
+    pub type_ref_pair_fields: Option<PairFieldTally>,
     /// Per-class ordered reference-field names, indexed by class histogram row index.
     /// `class_ref_field_names[ci][k]` = name of the k-th reference field of class ci.
     /// Empty when `opts.field_stats` is false.
@@ -584,30 +588,19 @@ fn name_idx_for(
 ///
 /// Also returns a per-pair field-name tally (top-3 field names by occurrence)
 /// when `fwd_field_name_idx` is present.
-pub fn capture_type_ref_graph(
-    g: &Graph,
-) -> (
-    std::collections::HashMap<(u32, u32), u64>,
-    std::collections::HashMap<(u32, u32), Vec<(String, u32)>>,
-) {
+pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairFieldTally) {
     let n = if g.shallow.is_empty() {
         g.n
     } else {
         g.shallow.len()
     };
     if n == 0 || g.fwd_offsets.is_empty() || g.class_idx.is_empty() {
-        return (
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-        );
+        return (HashMap::new(), HashMap::new());
     }
     let has_names = g.fwd_field_name_idx.is_some() && g.field_name_pool.is_some();
-    let mut pair_map: std::collections::HashMap<(u32, u32), u64> = std::collections::HashMap::new();
+    let mut pair_map: HashMap<(u32, u32), u64> = HashMap::new();
     // Per-pair field-name tally: (src_ci, dst_ci) → HashMap<name_idx, count>
-    let mut field_tally: std::collections::HashMap<
-        (u32, u32),
-        std::collections::HashMap<u16, u32>,
-    > = std::collections::HashMap::new();
+    let mut field_tally: HashMap<(u32, u32), HashMap<u16, u32>> = HashMap::new();
 
     for src_idx in 0..n {
         let start = g.fwd_offsets[src_idx] as usize;
@@ -636,7 +629,7 @@ pub fn capture_type_ref_graph(
                     if name_idx != 0 {
                         *field_tally
                             .entry((src_ci, dst_ci))
-                            .or_insert_with(std::collections::HashMap::new)
+                            .or_default()
                             .entry(name_idx)
                             .or_insert(0) += 1;
                     }
@@ -660,7 +653,7 @@ pub fn capture_type_ref_graph(
                     Some((name.clone(), cnt))
                 })
                 .collect();
-            sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            sorted.sort_unstable_by_key(|a: &(String, u32)| Reverse(a.1));
             sorted.truncate(3);
             (key, sorted)
         })
