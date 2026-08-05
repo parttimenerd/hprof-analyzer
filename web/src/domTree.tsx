@@ -207,7 +207,7 @@ function garbageRootToGen(r: UnreachableGarbageRoot): GenNode {
   return {
     label: r.pretty_class,
     retained: r.retained,
-    sublabel: `${fmtCount(r.objects)} objects`,
+    sublabel: `${fmtCount(r.objects)} ${r.objects === 1 ? "object" : "objects"}`,
     children: r.children.map(garbageRootToGen),
   };
 }
@@ -259,7 +259,7 @@ export function UnreachableDomTreeSection({ roots }: { roots: UnreachableGarbage
         <details key={i} open={i < 3}>
           <summary>
             <strong>{root.pretty_class}</strong>
-            {" — "}{formatBytes(root.retained)} retained, {fmtCount(root.objects)} objects
+            {" — "}{formatBytes(root.retained)} retained, {fmtCount(root.objects)} {root.objects === 1 ? "object" : "objects"}
           </summary>
           <div style={{ overflowX: "auto", margin: "8px 0" }}>
             <TreeSvg
