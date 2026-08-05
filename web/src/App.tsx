@@ -875,7 +875,7 @@ function KpiStrip({ report }: { report: Report }) {
   } else if (top) {
     verdict = (
       <>
-        <strong>Likely Problem:</strong> retention is spread across several roots; no single object dominates.
+        <strong>Likely Problem:</strong> retention is spread — top suspect holds only {fmtPct(pct)}, so no single class dominates.
       </>
     );
   } else {
