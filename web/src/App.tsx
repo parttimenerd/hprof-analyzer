@@ -747,7 +747,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
           const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
           const signals: string[] = [];
           if (r.pct > 0.15) signals.push(`${(r.pct * 100).toFixed(0)}% heap`);
-          if (r.bpi > medBpi * 5) signals.push("↑ B/inst");
+          if (r.bpi > medBpi * 5) signals.push("↑ bytes/inst");
           if (r.hub > 0.4) signals.push("↑ hub");
           if (r.depth <= 1) signals.push("shallow");
           return (
@@ -3215,7 +3215,7 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   return (
     <div className="thread-locals-inline">
       <p className="thread-locals-label">Local Root Objects ({objs.length < totalCount
-        ? `showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`
+        ? `showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; retained sizes overlap — totals exceed thread retained`
         : fmtCount(objs.length)})</p>
       <StdTable columns={cols} data={objs} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
     </div>
@@ -5960,7 +5960,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
             {frameTree.retained > 0 && (
               <>
                 <h3>Retained Heap by Call Path</h3>
-                <p className="subtitle">Flamegraph sized by retained bytes. Click a frame to zoom in; the chart has a Treemap / Flame toggle.</p>
+                <p className="subtitle">Retained heap by call path — sized by retained bytes. Click a frame to drill in; toggle Treemap / Flame view.</p>
                 <ZoomableTreemap<FrameTreeNode>
                   root={frameTree}
                   getChildren={(n) => n.children}
