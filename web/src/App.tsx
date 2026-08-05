@@ -1778,7 +1778,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
         Primitive arrays with identical content and element type — content-identical copies that could be deduplicated.
-        Approx wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Hashed to 64 bits; collisions accepted as approximation.
+        Approx wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
         <DupPrimArrayRowsTable rows={d.rows} />
@@ -1843,7 +1843,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers consume a large share of shallow heap — candidates for value-type or record optimization.
+        Classes where object headers consume a large share of shallow heap — candidates for packing multiple instances into an array or replacing with primitives.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -2859,12 +2859,12 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Ranked accumulation points holding the most retained heap. Icons next to class names: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
+      <p className="subtitle">Objects holding the most retained heap — the most likely root cause of a leak. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
         <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
       ) : (
         <>
-          <h3>Overview — Retained-Heap Share</h3>
+          <h3>Retained-Heap Share</h3>
           <p className="subtitle">
             How concentrated the leak is: each slice is one suspect&apos;s retained heap; the remainder is everything
             else on the reachable heap.
@@ -3269,7 +3269,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
           <>
-            <p className="subtitle"><em>Frame percentages are of this thread's {fmtB(t.retained)} retained heap.</em></p>
+            <p className="subtitle"><em>Frame percentages are relative to this thread's {fmtB(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => {
               const frameCls = frameToClass(sf.frame);
@@ -3738,7 +3738,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     <section id="collections">
       <h2>Collections</h2>
       <p className="subtitle">
-        Collection and array occupancy: how full collections are, how big they get, and constant primitive arrays.
+        Collection fill ratios, map collision rates, and constant-value primitive array groups.
       </p>
 
       <h3>Collections by Kind</h3>
@@ -4024,7 +4024,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         Which <code>Class#field</code> holds the most collection memory — helps identify which specific field is accumulating data in large maps or lists.
       </p>
 
-      <h3>Most Overall</h3>
+      <h3>Top by Total Memory</h3>
       {mostOverall.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (() => {
@@ -4040,7 +4040,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         return <StdTable columns={overallCols} data={mostOverall} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />;
       })()}
 
-      <h3>Biggest Single</h3>
+      <h3>Largest Single Container</h3>
       {biggestSingle.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (() => {
@@ -4191,7 +4191,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
     <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
-        What runtime element/value types your collections hold, aggregated per collection class.
+        What element types your collections hold, aggregated per collection class.
         Requires <code>--collections</code>.
       </p>
       {rows.length === 0 ? (
@@ -4232,7 +4232,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
         Which <code>Class#field</code> retains the most heap across all its instances — useful for pinpointing which specific field is accumulating data.
-        Runtime pointee type is the dominant concrete class reached through the field.
+        Pointee type is the most common concrete class stored in that field.
       </p>
       {data.truncated && (
         <p className="subtitle">
@@ -5799,7 +5799,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
       <div className="card">
         <p>
           <strong>{formatBytes(capacity)}</strong>
-          {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} DirectByteBuffer objects`}
+          {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
         </p>
         <p>
           This memory is allocated from native (OS) memory — it does <em>not</em> appear in the JVM heap totals above.
@@ -11354,7 +11354,7 @@ export default function App({ report }: { report: Report }) {
           <h2>Object Graph Explorer</h2>
           <p className="subtitle">
             Explore the object reference graph and dominator tree interactively.
-            Click a class name to explore its outbound references.
+            Click a class to list its instances; click an instance to walk its fields and inbound references.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
         </section>
@@ -11362,7 +11362,7 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow. <em>Note: Retained Flow sums the retained size of referenced objects across all instances — values may exceed total heap size when objects are shared (referenced by multiple sources).</em></p>
+          <p className="subtitle">Class-level reference topology: each edge is one class type referencing another, sized by retained heap flow. Retained Flow sums referenced-object retained sizes across all instances — can exceed total heap when objects are shared.</p>
           <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}
