@@ -1581,7 +1581,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
         <span style={{ width: useKB ? "140px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
         <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(d.count)}</span>
-        <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100.0%</span>
+        <span style={{ width: "155px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100.0%</span>
         <span style={{ flex: 1 }} />
       </div>
     </section>
@@ -3597,8 +3597,8 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalObjects)}</span>
-              <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalBytes)}</span>
-              <span style={{ width: "90px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</span>
+              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalBytes)}</span>
+              <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</span>
               <span style={{ flex: 1 }} />
             </div>
           </>
@@ -3684,7 +3684,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>
               {hasFill && <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>}
-              <span style={{ width: useKBArr ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBArr(totalIndivShallow)}</span>
+              <span style={{ width: useKBArr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBArr(totalIndivShallow)}</span>
               {hasOwner && <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>}
             </div>
           </>
@@ -3698,7 +3698,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(byClass.reduce((s, r) => s + r.objects, 0))}</span>
-              <span style={{ width: useKBArr ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBArr(byClass.reduce((s, r) => s + r.shallow, 0))}</span>
+              <span style={{ width: useKBArr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBArr(byClass.reduce((s, r) => s + r.shallow, 0))}</span>
             </div>
           </>
         )}
@@ -3729,8 +3729,8 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
           <span style={{ width: "130px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
           <span style={{ width: "124px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalItems)}</span>
-          <span style={{ width: useKBFill ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBFill(totalShallowFill)}</span>
-          <span style={{ width: useKBFill ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBFill(totalWasted)}</span>
+          <span style={{ width: useKBFill ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBFill(totalShallowFill)}</span>
+          <span style={{ width: useKBFill ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBFill(totalWasted)}</span>
           <span style={{ flex: 1 }} />
         </div>
       </>
@@ -3769,9 +3769,9 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.count, 0))}</span>
-              <span style={{ width: "130px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.total_elements, 0))}</span>
-              <span style={{ width: "130px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>
-              <span style={{ width: useKB ? "150px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(kindRows.reduce((s, r) => s + r.total_shallow, 0))}</span>
+              <span style={{ width: "148px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.total_elements, 0))}</span>
+              <span style={{ width: "140px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>
+              <span style={{ width: useKB ? "172px" : "136px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(kindRows.reduce((s, r) => s + r.total_shallow, 0))}</span>
             </div>
           </>
         );
@@ -3804,7 +3804,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <StdTable columns={cbsCols} data={cbsBuckets} searchKeys={[]} fmtBtn={kbBtnCbs} defaultSortFieldId="shallow" defaultSortAsc={false} />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
-              <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</span>
+              <span style={{ width: "142px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</span>
               <span style={{ width: useKBcbs ? "140px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBcbs(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
               <span style={{ flex: 1 }} />
             </div>
@@ -3839,7 +3839,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "130px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(mcrBuckets.reduce((s, b) => s + b.objects, 0))}</span>
-              <span style={{ width: useKBmcr ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBmcr(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
+              <span style={{ width: useKBmcr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBmcr(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
               <span style={{ flex: 1 }} />
             </div>
           </>
@@ -4011,7 +4011,7 @@ function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionR
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<import("./types").TinyCollectionRow>[] = [
     { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-    { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
+    { id: "kind", name: "Kind", width: "130px", selector: (r) => r.container_kind, sortable: true },
     { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count, sortable: true },
     { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count, sortable: true },
     { id: "overhead", name: useKB ? "Overhead (KB)" : "Overhead Bytes", right: true, width: useKB ? "150px" : "138px", cell: byteCell(r => r.overhead_bytes, fmtB, useKB), selector: (r) => r.overhead_bytes, sortable: true },
@@ -4037,7 +4037,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-          { id: "kind", name: "Kind", width: "80px", selector: (r) => r.container_kind, sortable: true },
+          { id: "kind", name: "Kind", width: "130px", selector: (r) => r.container_kind, sortable: true },
           { id: "containers", name: "Containers", right: true, width: "110px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count, sortable: true },
           { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.total_elements), selector: (r) => r.total_elements, sortable: true },
@@ -4054,9 +4054,9 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
           { id: "container", name: "Container Class", grow: 1, maxWidth: "280px", cell: (r) => <span className="copy-cell"><code>{r.container_class}</code><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
-          { id: "kind", name: "Kind", width: "80px", selector: (r) => r.container_kind, sortable: true },
-          { id: "elements", name: "Elements", right: true, width: "90px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
-          { id: "capacity", name: "Capacity", right: true, width: "90px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
+          { id: "kind", name: "Kind", width: "130px", selector: (r) => r.container_kind, sortable: true },
+          { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
+          { id: "capacity", name: "Capacity", right: true, width: "96px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
         ];
         return <StdTable columns={singleCols} data={biggestSingle} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />;
@@ -4116,7 +4116,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
   }
 
   const cols: TableColumn<CoalescedRow>[] = [
-    { id: "kind", name: "Kind", width: "80px", selector: ({ row: r }) => r.kind, sortable: true },
+    { id: "kind", name: "Kind", width: "130px", selector: ({ row: r }) => r.kind, sortable: true },
     {
       id: "class", name: "Container Class", grow: 1, maxWidth: "600px",
       cell: ({ row: r, count }) => (
@@ -4137,10 +4137,10 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
     { id: "elements", name: "Elements", right: true, width: "100px", format: ({ row: r, count }) => count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements), selector: ({ row: r }) => r.elements, sortable: true },
     ...(hasValue ? [{ id: "value", name: "Value Type", grow: 1, cell: ({ row: r }: CoalescedRow) => r.dominant_value_type ? <span className="copy-cell"><code>{r.dominant_value_type}</code><PivotBtn cls={r.dominant_value_type} /><OqlBtn cls={r.dominant_value_type} /><ListObjectsBtn cls={r.dominant_value_type} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasBreakdown ? [{
-      id: "breakdown", name: "Value Types (top)", grow: 2,
+      id: "breakdown", name: "Value Types (top)", grow: 2, maxWidth: "380px",
       cell: ({ row: r }: CoalescedRow) => !r.value_type_breakdown || r.value_type_breakdown.length === 0
         ? <span>—</span>
-        : <>{r.value_type_breakdown.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{s.type_name}</code><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span> ×{fmtCount(s.count)}</span>)}</>,
+        : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", minWidth: 0, overflow: "hidden" }}>{r.value_type_breakdown.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%", overflow: "hidden" }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", overflow: "hidden", maxWidth: "calc(100% - 40px)" }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.type_name}</code><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span><span style={{ flexShrink: 0 }}> ×{fmtCount(s.count)}</span></span>)}</div>,
     } as TableColumn<CoalescedRow>] : []),
     ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "400px", cell: ({ row: r }: CoalescedRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? (useKB ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : fmtB(r.retained)) : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0, sortable: true } as TableColumn<CoalescedRow>] : []),
@@ -4229,9 +4229,9 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     { id: "field", name: "Class#field", grow: 2, minWidth: "160px", maxWidth: "280px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
     { id: "pointee", name: "Pointee Type", grow: 2, minWidth: "140px", maxWidth: "260px", cell: (r) => <span className="copy-cell"><code>{r.pointee_type}</code><PivotBtn cls={r.pointee_type} /><OqlBtn cls={r.pointee_type} /><ListObjectsBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
     { id: "category", name: "Kind", width: "82px", selector: (r) => r.category ?? "", format: (r) => r.category ?? "—", sortable: true },
-    { id: "pointees", name: "Pointees", right: true, width: "88px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
+    { id: "pointees", name: "Pointees", right: true, width: "96px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
     ...(hasElements ? [{ id: "elements", name: "Elems", right: true, width: "80px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
-    { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
+    { id: "holders", name: "Holders", right: true, width: "96px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
   ];
   return (
@@ -4255,10 +4255,10 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
           <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
             <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
             <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>
-            <span style={{ width: "72px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
-            <span style={{ width: "88px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalPointees)}</span>
+            <span style={{ width: "82px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
+            <span style={{ width: "96px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalPointees)}</span>
             {hasElements && <span style={{ width: "80px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + (r.elements ?? 0), 0))}</span>}
-            <span style={{ width: "80px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
+            <span style={{ width: "96px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
             <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
           </div>
         </>
@@ -4284,8 +4284,8 @@ function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
         <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
         <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</span>
-        <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + r.shallow, 0))}</span>
-        <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</span>
+        <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + r.shallow, 0))}</span>
+        <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</span>
       </div>
     </>
   );
@@ -5597,9 +5597,9 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
             />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
-              <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropRetained)}</span>
+              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropRetained)}</span>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>
-              <span style={{ width: useKB ? "140px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalChildRetained)}</span>
+              <span style={{ width: useKB ? "150px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalChildRetained)}</span>
               <span style={{ width: useKB ? "120px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropBytes)}</span>
             </div>
           </>
@@ -5776,8 +5776,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                   <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
                     <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
                     <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(data?.unreachable_count ?? 0)}</span>
-                    <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(data?.unreachable_shallow ?? 0)}</span>
-                    <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(data?.unreachable_retained ?? 0)}</span>
+                    <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(data?.unreachable_shallow ?? 0)}</span>
+                    <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(data?.unreachable_retained ?? 0)}</span>
                   </div>
                 </>
               );
@@ -5982,7 +5982,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalObjects)}</span>
-              <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalShallow)}</span>
+              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalShallow)}</span>
             </div>
           </>
         );
