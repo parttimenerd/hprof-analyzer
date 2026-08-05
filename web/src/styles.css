@@ -799,6 +799,23 @@ kbd {
 .inspector-field-tags { display: inline-flex; gap: 3px; flex-wrap: wrap; margin-left: 4px; }
 .inspector-field-tag { font-family: var(--mono); font-size: 0.72rem; background: var(--code-bg, rgba(0,0,0,0.06)); color: var(--muted); padding: 0px 3px; border-radius: 3px; }
 .trg-gcpath-section { margin: 0.5rem 0 0; padding: 0.4rem 0.5rem; border-top: 1px solid var(--border); }
+.inspector-idom-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 6px 8px; background: var(--code-bg, rgba(0,0,0,0.04)); border-radius: 6px; font-size: 0.78rem; }
+.inspector-idom-label { color: var(--muted); font-size: 0.74rem; margin-right: 4px; white-space: nowrap; }
+.inspector-idom-item { background: none; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 2px 4px; border-radius: 4px; }
+.inspector-idom-item:hover { background: var(--border); }
+.inspector-idom-cls { font-family: var(--mono); font-size: 0.76rem; color: var(--fg); }
+.inspector-idom-size { font-size: 0.68rem; color: var(--muted); }
+.inspector-idom-arrow { color: var(--muted); padding: 0 1px; }
+.inspector-idom-this { font-size: 0.76rem; color: var(--muted); font-weight: 600; padding: 2px 4px; }
 
 /* Cytoscape graph canvas containers */
 .cy-graph-container { width: 100%; height: 440px; border: 1px solid var(--border); border-radius: 6px; background: var(--card, #f7f7f8); display: block; }
+
+/* GC Root Heatmap */
+.gc-heatmap-table { border-collapse: collapse; font-size: 0.78rem; max-width: 100%; }
+.gc-heatmap-table th, .gc-heatmap-table td { padding: 4px 6px; border: 1px solid var(--border); }
+.gc-heatmap-colhead { font-family: var(--mono); font-size: 0.72rem; text-align: center; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-heatmap-rowlabel { text-align: left; white-space: nowrap; color: var(--muted); font-size: 0.75rem; }
+.gc-heatmap-cell { text-align: center; cursor: pointer; font-size: 0.72rem; min-width: 58px; white-space: nowrap; transition: filter 0.1s; }
+.gc-heatmap-cell:hover { filter: brightness(1.1); }
+.gc-heatmap-empty { background: var(--code-bg, rgba(0,0,0,0.03)); }

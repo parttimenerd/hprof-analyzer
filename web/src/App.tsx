@@ -1774,6 +1774,75 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     </section>
   );
 }
+function GcRootHeatmap({ rows }: { rows: GcRootRetainedRow[] }) {
+  const fmtB = formatBytes;
+
+  // Derive top-8 classes across all rows by total retained
+  const classTotals = new Map<string, number>();
+  for (const row of rows) {
+    for (const cc of row.top_classes ?? []) {
+      classTotals.set(cc.class_name, (classTotals.get(cc.class_name) ?? 0) + cc.retained);
+    }
+  }
+  const topCols = [...classTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([cls]) => cls);
+
+  if (topCols.length === 0) return null;
+
+  // Build matrix
+  const matrix: (number | null)[][] = rows.map(row =>
+    topCols.map(cls => {
+      const found = row.top_classes?.find(c => c.class_name === cls);
+      return found ? found.retained : null;
+    })
+  );
+
+  const maxCell = Math.max(...matrix.flatMap(r => r.map(v => v ?? 0)), 1);
+
+  return (
+    <div style={{ overflowX: "auto", marginTop: "0.75rem" }}>
+      <table className="gc-heatmap-table">
+        <thead>
+          <tr>
+            <th className="gc-heatmap-rowlabel" />
+            {topCols.map(cls => (
+              <th key={cls} className="gc-heatmap-colhead" title={cls}>
+                {cls.split(".").pop()}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={row.root_type}>
+              <td className="gc-heatmap-rowlabel">{row.root_type.replace(/_/g, " ")}</td>
+              {topCols.map((cls, ci) => {
+                const val = matrix[ri][ci];
+                if (val == null) {
+                  return <td key={cls} className="gc-heatmap-cell gc-heatmap-empty" />;
+                }
+                const t = val / maxCell;
+                const bg = heatColor(t);
+                const textColor = t > 0.5 ? "#fff" : "var(--fg)";
+                return (
+                  <td key={cls} className="gc-heatmap-cell"
+                    style={{ background: bg, color: textColor }}
+                    title={`${row.root_type} → ${cls}: ${fmtB(val)}`}
+                    onClick={() => fireInspect({ kind: "class", cls })}>
+                    {fmtB(val)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SystemOverviewSection({ report }: { report: Report }) {
   const fmtB = formatBytes;
   const o = report.overview;
@@ -1943,6 +2012,13 @@ function SystemOverviewSection({ report }: { report: Report }) {
             </div>
             {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
               <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — likely a native code reference leak.</p>
+            )}
+            {o.gc_roots_retained_by_type?.some(r => (r.top_classes?.length ?? 0) > 0) && (
+              <>
+                <h4 style={{ marginBottom: "0.25rem" }}>Root Type × Top Classes</h4>
+                <p className="subtitle" style={{ marginTop: 0 }}>Cells show retained bytes per root-type/class pair. Click a cell to inspect the class.</p>
+                <GcRootHeatmap rows={o.gc_roots_retained_by_type!} />
+              </>
             )}
           </>
         );
@@ -2901,12 +2977,34 @@ function TopConsumersSection({ report }: { report: Report }) {
     [t.biggest_classes],
   );
 
+  // Median retained-per-instance — used to flag outlier classes with ⚠
+  const medianBpi = React.useMemo(() => {
+    const bpis = t.biggest_classes
+      .filter(c => c.instances > 0)
+      .map(c => c.retained / c.instances)
+      .sort((a, b) => a - b);
+    return bpis[Math.floor(bpis.length / 2)] ?? 1;
+  }, [t.biggest_classes]);
+
   const clsTableCols: TableColumn<ClassRow>[] = [
     { id: "class", name: "Class", grow: 1, maxWidth: "340px", cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /><OqlBtn cls={c.pretty_class} /><ListObjectsBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
     { id: "bar", name: "", width: "80px", cell: (c) => <span className="bar-bg"><span className="bar-fill" style={{ width: `${maxClsRetained > 0 ? (c.retained / maxClsRetained) * 100 : 0}%` }} /></span> },
     { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "135px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
+    { id: "bpi", name: "B/obj", right: true, width: "90px", sortable: true, selector: c => c.instances > 0 ? c.retained / c.instances : 0,
+      cell: c => {
+        if (c.instances === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
+        const bpi = c.retained / c.instances;
+        const isHigh = bpi > medianBpi * 10;
+        return (
+          <span title={`${fmtBcls(Math.round(bpi))} retained per instance (median: ${fmtBcls(Math.round(medianBpi))})`}
+                style={isHigh ? { color: "#c87533", fontWeight: 600 } : {}}>
+            {fmtBcls(Math.round(bpi))}{isHigh ? " ⚠" : ""}
+          </span>
+        );
+      }
+    },
   ];
 
   const [topView, setTopView] = React.useState<"tables" | "treemap">("tables");
@@ -4656,6 +4754,7 @@ function DomGraphView({ pairs, idoms }: {
   const [layoutMode, setLayoutMode] = React.useState<"force" | "tree">("force");
   const [showPct, setShowPct] = React.useState(false);
   const [showEdgeLabels, setShowEdgeLabels] = React.useState(false);
+  const [colorMode, setColorMode] = React.useState<"package" | "pct" | "bpi" | "depth">("package");
   const [search, setSearch] = React.useState("");
   // Extra nodes injected by "Expand context" for isolated nodes
   const [extraClasses, setExtraClasses] = React.useState<Set<string>>(new Set());
@@ -4708,6 +4807,68 @@ function DomGraphView({ pairs, idoms }: {
     }
     return { parentsOf, childrenOf };
   }, [fdEdges]);
+
+  // Instance count per class (from idoms rows, for B/instance overlay)
+  const instanceCountMap = React.useMemo(
+    () => new Map(idoms.map(r => [r.dominator_class, r.dominator_count])),
+    [idoms]
+  );
+
+  // BFS depth from graph roots (nodes with no incoming edge) — for depth overlay
+  const depthMap = React.useMemo(() => {
+    const hasDst = new Set(fdEdges.map(e => e.dst));
+    const roots = fdNodes.map(n => n.id).filter(id => !hasDst.has(id));
+    const dm = new Map<string, number>();
+    const queue: Array<{ id: string; d: number }> = roots.map(id => ({ id, d: 0 }));
+    for (const { id, d } of queue) {
+      if (dm.has(id)) continue;
+      dm.set(id, d);
+      for (const e of fdEdges) {
+        if (e.src === id && !dm.has(e.dst)) queue.push({ id: e.dst, d: d + 1 });
+      }
+    }
+    return dm;
+  }, [fdEdges, fdNodes]);
+
+  // Blame path: greedy max-retained-child walk from each root
+  const blamePath = React.useMemo((): Set<string> => {
+    const hasDst = new Set(fdEdges.map(e => e.dst));
+    const roots = fdNodes.map(n => n.id).filter(id => !hasDst.has(id));
+    const visited = new Set<string>();
+    for (const root of roots) {
+      visited.add(root);
+      let cur = root;
+      for (let i = 0; i < 30; i++) {
+        const children = fdEdges.filter(e => e.src === cur);
+        if (!children.length) break;
+        const best = children.reduce((a, b) => b.retained > a.retained ? b : a);
+        if (visited.has(best.dst)) break;
+        visited.add(best.dst);
+        cur = best.dst;
+      }
+    }
+    return visited;
+  }, [fdEdges, fdNodes]);
+
+  // Compute node color based on colorMode
+  const computeNodeColor = React.useCallback((id: string, ret: number): string => {
+    if (colorMode === "pct") return heatColor(totalHeap > 0 ? (ret / totalHeap) / 0.25 : 0);
+    if (colorMode === "bpi") {
+      const count = instanceCountMap.get(id) ?? 1;
+      const bpi = count > 0 ? ret / count : 0;
+      const bpis = fdNodes.map(n => {
+        const c = instanceCountMap.get(n.id) ?? 1;
+        return c > 0 ? n.ret / c : 0;
+      }).sort((a, b) => a - b);
+      const p95 = bpis[Math.floor(bpis.length * 0.95)] ?? 1;
+      return heatColor(p95 > 0 ? bpi / p95 : 0);
+    }
+    if (colorMode === "depth") {
+      const maxDepth = Math.max(...[...depthMap.values()], 1);
+      return heatColor((depthMap.get(id) ?? 0) / maxDepth);
+    }
+    return tpfgColor(id);
+  }, [colorMode, totalHeap, instanceCountMap, depthMap, fdNodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Walk ancestors (BFS upward) from a node
   const getAncestors = React.useCallback((id: string): Set<string> => {
@@ -4770,7 +4931,7 @@ function DomGraphView({ pairs, idoms }: {
           label: n.id.split(".").pop() ?? n.id,
           pctLabel: totalHeap > 0 ? `${(n.ret / totalHeap * 100).toFixed(1)}%` : "",
           size: n.r * 2,
-          color: tpfgColor(n.id),
+          color: computeNodeColor(n.id, n.ret),
           retained: n.ret,
         },
       })),
@@ -4829,7 +4990,16 @@ function DomGraphView({ pairs, idoms }: {
     cyRef.current?.destroy();
     cyRef.current = cy;
     return () => { cy.destroy(); cyRef.current = null; };
-  }, [fdNodes, fdEdges, layoutKey, layoutMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fdNodes, fdEdges, layoutKey, layoutMode, computeNodeColor]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live recolor nodes when colorMode changes (without remounting graph)
+  React.useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.nodes().forEach(n => {
+      n.style("background-color", computeNodeColor(n.data("id") as string, n.data("retained") as number));
+    });
+  }, [colorMode, computeNodeColor]);
 
   // Toggle % labels on nodes
   React.useEffect(() => {
@@ -4851,11 +5021,22 @@ function DomGraphView({ pairs, idoms }: {
     });
   }, [showEdgeLabels]);
 
-  // Apply focus mode: dim nodes outside ancestors/subtree of selected
+  // Apply focus mode: dim nodes outside ancestors/subtree of selected, or outside blame path
   React.useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
     cy.elements().removeStyle("opacity");
+    if (focusMode === "blame") {
+      cy.nodes().forEach(n => {
+        if (!blamePath.has(n.data("id") as string)) n.style("opacity", 0.08);
+      });
+      cy.edges().forEach(e => {
+        const src = e.source().data("id") as string;
+        const dst = e.target().data("id") as string;
+        if (!blamePath.has(src) || !blamePath.has(dst)) e.style("opacity", 0.04);
+      });
+      return;
+    }
     if (!selected || focusMode === "all") return;
     const related = focusMode === "up" ? getAncestors(selected) : getSubtree(selected);
     related.add(selected);
@@ -4867,7 +5048,7 @@ function DomGraphView({ pairs, idoms }: {
       const dst = e.target().data("id") as string;
       if (!related.has(src) || !related.has(dst)) e.style("opacity", 0.04);
     });
-  }, [selected, focusMode, getAncestors, getSubtree]);
+  }, [selected, focusMode, blamePath, getAncestors, getSubtree]);
 
   if (pairs.length === 0) {
     return <p className="subtitle">No dominator pair data available.</p>;
@@ -4898,7 +5079,7 @@ function DomGraphView({ pairs, idoms }: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      {/* Toolbar row 1: layout controls */}
+      {/* Toolbar row 1: layout + focus + label controls */}
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
         <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
           style={btnStyle(false)} title="Re-run layout">↺</button>
@@ -4911,9 +5092,21 @@ function DomGraphView({ pairs, idoms }: {
         <button onClick={() => setFocusMode("all")} style={btnStyle(focusMode === "all")} title="Show all nodes">All</button>
         <button onClick={() => setFocusMode("up")} style={btnStyle(focusMode === "up")} title="Show only ancestors of selected node (what retains it)">▲ Retained by</button>
         <button onClick={() => setFocusMode("down")} style={btnStyle(focusMode === "down")} title="Show only subtree of selected node (what it retains)">▼ Retains</button>
+        <button onClick={() => setFocusMode(m => m === "blame" ? "all" : "blame")} style={btnStyle(focusMode === "blame")} title="Show only the critical max-retained path from each GC root">📌 Blame</button>
         {divider}
         <button onClick={() => setShowPct(v => !v)} style={btnStyle(showPct)} title="Overlay % of total heap on each node">% Labels</button>
         <button onClick={() => setShowEdgeLabels(v => !v)} style={btnStyle(showEdgeLabels)} title="Show retained bytes on each edge">Edge Labels</button>
+        {divider}
+        <label style={{ fontSize: "0.82rem", color: "var(--muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+          Color:
+          <select value={colorMode} onChange={e => setColorMode(e.target.value as typeof colorMode)}
+            style={{ fontSize: "0.82rem", padding: "0.1rem 0.3rem", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--fg)", cursor: "pointer" }}>
+            <option value="package">Package</option>
+            <option value="pct">% Heap</option>
+            <option value="bpi">B/instance</option>
+            <option value="depth">Depth</option>
+          </select>
+        </label>
         <span style={{ fontSize: "0.82rem", color: "var(--muted)", marginLeft: "auto" }}>
           {fdNodes.length} classes · {fdEdges.length} edges
         </span>
@@ -4934,6 +5127,30 @@ function DomGraphView({ pairs, idoms }: {
 
       {/* Graph canvas */}
       <div className="cy-graph-container" ref={cyContainerRef} />
+
+      {/* Heat legend */}
+      {colorMode !== "package" && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.78rem", color: "var(--muted)" }}>
+          <span style={{ width: 12, height: 12, borderRadius: 2, background: heatColor(0), display: "inline-block" }} /> low
+          <span style={{ width: 12, height: 12, borderRadius: 2, background: heatColor(0.5), display: "inline-block" }} /> mid
+          <span style={{ width: 12, height: 12, borderRadius: 2, background: heatColor(1), display: "inline-block" }} /> high
+          <span style={{ color: "var(--muted)", marginLeft: 4 }}>
+            {colorMode === "pct" && "— % of total heap"}
+            {colorMode === "bpi" && "— retained ÷ instance count"}
+            {colorMode === "depth" && "— hops from GC root"}
+          </span>
+        </div>
+      )}
+
+      {/* Blame mode annotation */}
+      {focusMode === "blame" && blamePath.size > 0 && (
+        <div style={{ fontSize: "0.78rem", color: "var(--muted)", padding: "0.2rem 0" }}>
+          📌 Critical retention path · {blamePath.size} classes ·{" "}
+          {totalHeap > 0
+            ? `${([...blamePath].reduce((s, id) => s + (retMap.get(id) ?? 0), 0) / totalHeap * 100).toFixed(1)}% of heap`
+            : ""}
+        </div>
+      )}
 
       {/* Ancestry breadcrumb */}
       {selected && ancestorChain.length > 1 && (
@@ -5734,6 +5951,15 @@ function CustomQueriesSection({ report }: { report: Report }) {
 }
 
 // ── Shared Cytoscape helpers ──────────────────────────────────────────────────
+
+// Blue→orange→red gradient for 0–1 heat value.
+function heatColor(t: number): string {
+  const c = Math.max(0, Math.min(1, t));
+  const r = Math.round(30 + 225 * c);
+  const g = Math.round(144 - 100 * c);
+  const b = Math.round(255 - 230 * c);
+  return `rgb(${r},${g},${b})`;
+}
 
 function buildDomGraphStyle(): cytoscape.Stylesheet[] {
   return [
@@ -10041,6 +10267,24 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
   );
 }
 
+function buildIdomChain(
+  nodes: Record<string, ObjGraphFlatNode>,
+  startId: number,
+  maxHops = 5
+): Array<{ id: number; display_class: string; retained: number }> {
+  const chain: Array<{ id: number; display_class: string; retained: number }> = [];
+  const seen = new Set<number>();
+  let cur: number | undefined = nodes[String(startId)]?.idom;
+  while (cur != null && !seen.has(cur) && chain.length < maxHops) {
+    const n = nodes[String(cur)];
+    if (!n) break;
+    seen.add(cur);
+    chain.unshift({ id: cur, display_class: n.display_class, retained: n.retained });
+    cur = n.idom;
+  }
+  return chain;
+}
+
 function InspectorInstancePage({ idx, cls, onNavigate }: {
   idx: number;
   cls: string;
@@ -10122,6 +10366,11 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
     ? (ogCtx[String(idomIdx)] ?? null)
     : null;
 
+  const idomChain = React.useMemo(() => {
+    if (!ogCtx) return [];
+    return buildIdomChain(ogCtx, idx);
+  }, [ogCtx, idx]);
+
   if (!node && !loading) {
     return <p className="trg-no-data">Object #{idx} not available. WASM or --obj-graph required.</p>;
   }
@@ -10130,6 +10379,23 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
 
   return (
     <div className="inspector-page">
+      {idomChain.length > 0 && (
+        <div className="inspector-idom-chain">
+          <span className="inspector-idom-label">Retained via:</span>
+          {idomChain.map((item, i) => (
+            <React.Fragment key={item.id}>
+              <button className="trg-link-btn inspector-idom-item"
+                title={`${item.display_class} — retains ${formatBytes(item.retained)}`}
+                onClick={() => onNavigate({ kind: "instance", idx: item.id, cls: item.display_class })}>
+                <span className="inspector-idom-cls">{item.display_class.split(".").pop()}</span>
+                <span className="inspector-idom-size">{formatBytes(item.retained)}</span>
+              </button>
+              <span className="inspector-idom-arrow">→</span>
+            </React.Fragment>
+          ))}
+          <span className="inspector-idom-this">▶ this</span>
+        </div>
+      )}
       <h3 className="inspector-page-title">
         <code>{cls.split(".").pop()}</code>
         <span className="trg-page-subtitle"> #{idx}</span>
