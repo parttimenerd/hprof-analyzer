@@ -3546,7 +3546,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component). Retained sums may exceed total heap — objects owned by the boot loader are counted even when referenced by app code, so totals across components can overlap.
+        Retained heap grouped by class loader (component). Totals can exceed the heap total — boot-loader objects are counted even when referenced by app-code components, so component sums overlap.
       </p>
       <details open>
         <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
@@ -3768,7 +3768,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
-        What fraction of their capacity each collection is using. Bucketed by fill %; low-fill collections waste allocated backing-array memory.
+        Fraction of each collection's capacity that is filled. Bucketed by fill %; low-fill collections waste backing-array memory.
         {cfr && <>{" "}{fmtCount(cfr.tracked)} of {fmtCount(cfr.total)} collections tracked.</>}
       </p>
       {cfrBuckets.length === 0 ? (
@@ -3805,7 +3805,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Array Fill Ratio</h3>
       <p className="subtitle">
-        Non-null element ratio of object arrays — low fill means most slots are empty, wasting heap.
+        Non-null element fraction of object arrays — low fill means most slots are empty, wasting heap.
         {afr && <>{" "}{fmtCount(afr.tracked)} tracked.</>}
       </p>
       {afrBuckets.length === 0 ? (
@@ -5564,7 +5564,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Dominators where retained heap greatly exceeds their largest child's retained heap — the "drop" is memory held directly or spread across many small children. Threshold{" "}
+        Objects whose retained heap greatly exceeds their largest direct child's — the "drop" is memory held directly or spread across many small children. Threshold{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -6059,7 +6059,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        How far objects sit from a GC root in the dominator tree. Shallow — objects held close to roots; Deep — long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
+        How far objects sit from a GC root in the dominator tree. Low depth = held close to roots; high depth = long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
