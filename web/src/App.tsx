@@ -197,7 +197,7 @@ function ShowMoreRow({ extra, cols, showAll, setShowAll }: { extra: number; cols
         {showAll ? (
           <button className="show-more-btn" onClick={() => setShowAll(false)}>Collapse</button>
         ) : (
-          <button className="show-more-btn" onClick={() => setShowAll(true)}>Show {fmtCount(extra)} more</button>
+          <button className="show-more-btn" onClick={() => setShowAll(true)}>Show {fmtCount(extra)} More</button>
         )}
       </td>
     </tr>
@@ -290,7 +290,7 @@ function StdTable<T extends object>({
       </div>
       {extra > 0 && (
         <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
-          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} More`}
         </button>
       )}
     </>
@@ -1201,7 +1201,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
     return (
       <div style={{ padding: "0.5rem 1rem 0.5rem 2rem", background: "var(--bg2, #f8f8f8)" }}>
         <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0 0 0.25rem" }}>
-          GC root path for highest-retained instance ({data.root_path.length} hops):
+          GC Root Path for Highest-Retained Instance ({data.root_path.length} hops):
         </p>
         <RootPathChain steps={data.root_path} />
       </div>
@@ -1233,12 +1233,12 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         </button>
         {hiddenSmall > 0 && (
           <button className="show-more-btn" onClick={() => setShowAll(true)}>
-            + {fmtCount(hiddenSmall)} rows &lt; 0.1%
+            + {fmtCount(hiddenSmall)} Rows &lt; 0.1%
           </button>
         )}
         {showAll && !filter && (
           <button className="show-more-btn" onClick={() => setShowAll(false)}>
-            Hide &lt; 0.1% rows
+            Hide &lt; 0.1% Rows
           </button>
         )}
         {kbBtn}
@@ -3263,7 +3263,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
             <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code>{fmtLoader(t.context_class_loader)}</code></span>
           )}
           {t.thread_state && (
-            <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "")}</span>
+            <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "").split(",").map(s => s.trim()).filter(Boolean).map(s => s.replace(/\b\w/g, c => c.toUpperCase())).join(", ")}</span>
           )}
         </div>
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
@@ -3498,7 +3498,7 @@ function ThreadsSection({ report }: { report: Report }) {
               style={{ marginTop: "0.5rem" }}
               onClick={() => setShowAll(true)}
             >
-              Show {fmtCount(view.length - CAP)} more threads
+              Show {fmtCount(view.length - CAP)} More Threads
             </button>
           )}
         </>
@@ -5398,7 +5398,7 @@ function DomGraphView({ pairs, idoms }: {
                   }
                   setExtraClasses(prev => new Set([...prev, ...related]));
                 }}>
-                Expand context
+                Expand Context
               </button>
             );
           })()}
@@ -9170,7 +9170,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     style={{ fontSize: "0.85rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.3rem" }}
                     onClick={() => setShowAllPaths(v => !v)}
                   >
-                    {showAllPaths ? "▼" : "▶"} Additional retention paths ({wasmAllPaths.paths.length})
+                    {showAllPaths ? "▼" : "▶"} Additional Retention Paths ({wasmAllPaths.paths.length})
                   </button>
                   {showAllPaths && (
                     <div style={{ marginTop: "0.4rem" }}>
@@ -9807,7 +9807,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 {hasMore && (
                   <button className="btn-link" style={{ fontSize: "0.74rem", marginTop: "2px" }}
                     onClick={() => setPathDepth(d => d + 20)}>
-                    ↑ … show more
+                    ↑ … Show More
                   </button>
                 )}
               </div>
@@ -9840,7 +9840,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {inboundRefs.length > 8 && (
                 <button className="btn-link" style={{ fontSize: "0.74rem", marginTop: "2px" }}
                   onClick={() => setShowAllInbound(v => !v)}>
-                  {showAllInbound ? "Show Fewer" : `+${inboundRefs.length - 8} more`}
+                  {showAllInbound ? "Show Fewer" : `+${inboundRefs.length - 8} More`}
                 </button>
               )}
             </div>
@@ -10477,7 +10477,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
       {hist?.root_path && hist.root_path.length > 0 && (
         <div className="inspector-gcpath">
           <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0 0 0.25rem" }}>
-            GC root path for highest-retained instance:
+            GC Root Path for Highest-Retained Instance:
           </p>
           <RootPathChain steps={hist.root_path} />
         </div>
