@@ -2063,7 +2063,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           },
           { id: "type", name: "Root Type", grow: 1, selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
-          { id: "pct", name: "% of roots", right: true, width: "90px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
+          { id: "pct", name: "% of roots", right: true, width: "96px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
             id: "top_classes", name: "Top retained classes", grow: 2,
@@ -4014,7 +4014,7 @@ function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionR
     { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind, sortable: true },
     { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count, sortable: true },
     { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count, sortable: true },
-    { id: "overhead", name: useKB ? "Overhead (KB)" : "Overhead Bytes", right: true, width: useKB ? "150px" : "130px", cell: byteCell(r => r.overhead_bytes, fmtB, useKB), selector: (r) => r.overhead_bytes, sortable: true },
+    { id: "overhead", name: useKB ? "Overhead (KB)" : "Overhead Bytes", right: true, width: useKB ? "150px" : "138px", cell: byteCell(r => r.overhead_bytes, fmtB, useKB), selector: (r) => r.overhead_bytes, sortable: true },
   ];
   return <StdTable columns={cols} data={rows} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="overhead" defaultSortAsc={false} />;
 }
