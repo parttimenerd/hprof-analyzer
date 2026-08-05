@@ -1099,7 +1099,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
       {
         id: "instances",
         name: "Instances",
-        width: "96px",
+        width: "104px",
         grow: 0,
         right: true,
         selector: (r) => r.instances,
