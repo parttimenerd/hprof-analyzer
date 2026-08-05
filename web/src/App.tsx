@@ -314,7 +314,6 @@ function Nav({ report }: { report: Report }) {
   }
   items.push(
     ["system-overview", "System Overview"],
-    ["hprof-record-census", "HPROF Record Census"],
   );
 
   // ── Analysis group ──
@@ -367,6 +366,7 @@ function Nav({ report }: { report: Report }) {
   const rc = report.overview.retention_concentration;
   if (rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0) addDist("retention-concentration", "Retention Concentration");
   if (report.overview.dominator_depth_histogram.length > 0) addDist("dominator-depth-distribution", "Dominator-Depth Distribution");
+  addDist("hprof-record-census", "Dump Completeness");
   const li = report.leak_indicators;
   if (li && (li.anonymous_class_count > 0 || li.thread_local_null_key_count > 0 || li.direct_byte_buffer_capacity_sum > 0)) {
     addDist("leak-indicators", "Leak Indicators");
@@ -689,12 +689,95 @@ const SIGNAL_DETAIL_OVERRIDES: Record<string, string> = {
   "collections-not-analyzed": "_Collection waste not analyzed — run Full Analysis to check for wasted capacity._",
 };
 
+function LeakScoreDashboard({ report }: { report: Report }) {
+  const bc = report.top?.biggest_classes ?? [];
+  const idoms = report.dominator_analysis?.immediate_dominators?.rows ?? [];
+  const pairs = report.dominator_analysis?.immediate_dominators?.pairs ?? [];
+  const totalHeap = bc.reduce((s, c) => s + c.retained, 0);
+  if (bc.length === 0 || totalHeap === 0) return null;
+
+  // Hub score: classes that dominate many others (normalised dominated_count)
+  const maxDominated = Math.max(...idoms.map(r => r.dominated_count), 1);
+  const hubScore = new Map(idoms.map(r => [r.dominator_class, r.dominated_count / maxDominated]));
+
+  // Median bpi across biggest_classes
+  const bpis = bc.filter(c => c.instances > 0).map(c => c.retained / c.instances).sort((a, b) => a - b);
+  const medBpi = bpis[Math.floor(bpis.length / 2)] ?? 1;
+
+  // Depth: BFS over pairs from classes that aren't dominated
+  const hasDominated = new Set(pairs.map(p => p.dominated_class));
+  const depthMap = new Map<string, number>();
+  const queue: Array<{ cls: string; d: number }> = bc.map(c => c.pretty_class)
+    .filter(cls => !hasDominated.has(cls)).map(cls => ({ cls, d: 0 }));
+  while (queue.length) {
+    const { cls, d } = queue.shift()!;
+    if (depthMap.has(cls)) continue;
+    depthMap.set(cls, d);
+    for (const p of pairs) {
+      if (p.dominator_class === cls && !depthMap.has(p.dominated_class))
+        queue.push({ cls: p.dominated_class, d: d + 1 });
+    }
+  }
+  const maxDepth = Math.max(...depthMap.values(), 1);
+
+  type ScoreRow = { cls: string; score: number; pct: number; bpi: number; hub: number; depth: number; instances: number };
+  const rows: ScoreRow[] = bc.slice(0, 50).map(c => {
+    const pct = c.retained / totalHeap;
+    const bpi = c.instances > 0 ? c.retained / c.instances : 0;
+    const bpiSignal = bpi > medBpi * 5 ? 1 : bpi > medBpi * 2 ? 0.5 : 0;
+    const hub = hubScore.get(c.pretty_class) ?? 0;
+    const depth = depthMap.get(c.pretty_class) ?? maxDepth;
+    // Shallower depth = more likely root cause (closer to GC root)
+    const depthSignal = 1 - Math.min(depth / 4, 1);
+    const score = Math.min(pct * 40 + bpiSignal * 30 + hub * 20 + depthSignal * 10, 0.99) * 100;
+    return { cls: c.pretty_class, score, pct, bpi, hub, depth, instances: c.instances };
+  }).filter(r => r.score > 3).sort((a, b) => b.score - a.score).slice(0, 12);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <h3 style={{ marginBottom: "0.1rem" }}>Leak Score</h3>
+      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Composite signal: % heap retained + B/instance + dominator hub + depth from GC root.</p>
+      <div className="leak-score-grid">
+        {rows.map(r => {
+          const conf = r.score >= 60 ? "high" : r.score >= 30 ? "mid" : "low";
+          const signals: string[] = [];
+          if (r.pct > 0.15) signals.push(`${(r.pct * 100).toFixed(0)}% heap`);
+          if (r.bpi > medBpi * 5) signals.push("↑ B/inst");
+          if (r.hub > 0.4) signals.push("↑ hub");
+          if (r.depth <= 1) signals.push("shallow");
+          return (
+            <div key={r.cls} className={`leak-score-card leak-score-${conf}`}
+              title={`Score: ${r.score.toFixed(0)} | depth: ${r.depth} | ${(r.pct*100).toFixed(1)}% heap | ${r.instances} instances`}>
+              <div className="leak-score-bar" style={{ width: `${r.score}%` }} />
+              <div className="leak-score-body">
+                <button className="trg-link-btn leak-score-cls" onClick={() => fireInspect({ kind: "class", cls: r.cls })}>
+                  <code>{r.cls.split(".").pop()}</code>
+                </button>
+                <span className="leak-score-num">{r.score.toFixed(0)}</span>
+              </div>
+              <div className="leak-score-tags">
+                {signals.map(s => <span key={s} className="leak-score-tag">{s}</span>)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function OomTriage({ report }: { report: Report }) {
   const signals = report.triage ?? [];
+  const totalHeap = report.overview.total_shallow;
   return (
     <div className="oom" id="memory-triage" tabIndex={-1}>
       <h2>Memory Triage</h2>
-      <p className="subtitle">Where the reachable heap is concentrated, at a glance.</p>
+      <p className="subtitle">
+        Where the reachable heap is concentrated, at a glance.
+        {totalHeap > 0 && <> Total reachable heap: <strong>{formatBytes(totalHeap)}</strong>.</>}
+      </p>
       <ul>
         {signals.map((s, i) => {
           const detail = SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail;
@@ -712,6 +795,7 @@ function OomTriage({ report }: { report: Report }) {
           );
         })}
       </ul>
+      <LeakScoreDashboard report={report} />
     </div>
   );
 }
@@ -1458,9 +1542,9 @@ function RecordCensusSection({ report }: { report: Report }) {
   ];
   return (
     <section id="hprof-record-census">
-      <h2>HPROF Record Census</h2>
+      <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Raw HPROF record-type breakdown — useful for verifying that the dump is complete and that allocation sites were recorded.
+        Raw HPROF record-type breakdown — verify the dump is complete and that allocation-site frames were captured (<code>java -agentlib:hprof=heap=dump,depth=8</code>).
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -1480,9 +1564,9 @@ function SizeDistributionSection({ report }: { report: Report }) {
   ];
   return (
     <section id="size-distribution">
-      <h2>Top-Dominator Size Distribution</h2>
+      <h2>Retained Size Distribution</h2>
       <p className="subtitle">
-        Retained-size spread across all {fmtCount(d.count)} top-level dominators (the biggest memory contributors).
+        How retained heap is distributed across {fmtCount(d.count)} top-level dominators — shows whether memory is held by a few giant objects or spread across many small ones.
       </p>
       <ul>
         <li>Dominators: {fmtCount(d.count)}</li>
@@ -3087,7 +3171,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               ];
               return (
                 <div style={{ marginTop: "0.75rem" }}>
-                  <h3 style={{ margin: "0 0 0.4rem" }}>Classes in <code>{pkgPrefix || "(default)"}</code></h3>
+                  <h3 style={{ margin: "0 0 0.4rem" }}>Classes in <code>{pkgPrefix || "(default package)"}</code></h3>
                   <StdTable columns={leafCols} data={leafRows} searchKeys={["short"]} defaultSortFieldId="retained" />
                 </div>
               );
@@ -3917,10 +4001,9 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
   const biggestSingle = data.biggest_single ?? [];
   return (
     <section id="container-attribution-classfield">
-      <h2>Container Attribution (Class#field)</h2>
+      <h2>Container Attribution</h2>
       <p className="subtitle">
-        Which holder <code>Class#field</code> points at the most container memory. Two rankings: total across
-        all containers reached through a field, and the single largest container per field.
+        Which <code>Class#field</code> holds the most collection memory — helps identify which specific field is accumulating data in large maps or lists.
       </p>
 
       <h3>Most Overall</h3>
@@ -4756,6 +4839,10 @@ function DomGraphView({ pairs, idoms }: {
   const [showEdgeLabels, setShowEdgeLabels] = React.useState(false);
   const [colorMode, setColorMode] = React.useState<"package" | "pct" | "bpi" | "depth">("package");
   const [search, setSearch] = React.useState("");
+  const [pathFrom, setPathFrom] = React.useState("");
+  const [pathTo, setPathTo] = React.useState("");
+  const [pathResult, setPathResult] = React.useState<string[] | null>(null);
+  const [pathOpen, setPathOpen] = React.useState(false);
   // Extra nodes injected by "Expand context" for isolated nodes
   const [extraClasses, setExtraClasses] = React.useState<Set<string>>(new Set());
   const cyContainerRef = React.useRef<HTMLDivElement>(null);
@@ -5123,7 +5210,93 @@ function DomGraphView({ pairs, idoms }: {
         {search && (
           <button onClick={() => handleSearch("")} style={btnStyle(false)} title="Clear search">✕</button>
         )}
+        <button
+          style={{ ...btnStyle(pathOpen), marginLeft: "auto", fontSize: "0.78rem" }}
+          onClick={() => setPathOpen(v => !v)}
+          title="Find shortest retention path between two classes">
+          🔍 Find Path
+        </button>
       </div>
+
+      {/* Find Path panel */}
+      {pathOpen && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", alignItems: "center", padding: "0.5rem", background: "var(--code-bg, rgba(0,0,0,0.04))", borderRadius: 6, fontSize: "0.82rem" }}>
+          <input
+            list="path-from-list"
+            placeholder="From class…"
+            value={pathFrom}
+            onChange={e => setPathFrom(e.target.value)}
+            style={{ flex: "1 1 160px", fontSize: "0.82rem", padding: "0.15rem 0.4rem", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--fg)" }}
+          />
+          <datalist id="path-from-list">
+            {fdNodes.slice(0, 50).map(n => <option key={n.id} value={n.id} />)}
+          </datalist>
+          <span style={{ color: "var(--muted)" }}>→</span>
+          <input
+            list="path-to-list"
+            placeholder="To class…"
+            value={pathTo}
+            onChange={e => setPathTo(e.target.value)}
+            style={{ flex: "1 1 160px", fontSize: "0.82rem", padding: "0.15rem 0.4rem", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--fg)" }}
+          />
+          <datalist id="path-to-list">
+            {fdNodes.slice(0, 50).map(n => <option key={n.id} value={n.id} />)}
+          </datalist>
+          <button style={btnStyle(false)} onClick={() => {
+            // BFS over fdEdges from pathFrom to pathTo
+            if (!pathFrom || !pathTo) return;
+            const prev = new Map<string, string | null>();
+            prev.set(pathFrom, null);
+            const queue = [pathFrom];
+            let found = false;
+            outer: while (queue.length) {
+              const cur = queue.shift()!;
+              for (const e of fdEdges) {
+                if (e.src === cur && !prev.has(e.dst)) {
+                  prev.set(e.dst, cur);
+                  if (e.dst === pathTo) { found = true; break outer; }
+                  queue.push(e.dst);
+                }
+              }
+            }
+            if (!found) { setPathResult([]); return; }
+            const path: string[] = [];
+            let cur: string | null = pathTo;
+            while (cur != null) { path.unshift(cur); cur = prev.get(cur) ?? null; }
+            setPathResult(path);
+            // Highlight path in graph
+            const cy = cyRef.current;
+            if (cy) {
+              cy.elements().removeClass("path-highlight");
+              for (let i = 0; i < path.length; i++) {
+                cy.getElementById(path[i]).addClass("path-highlight");
+                if (i > 0) {
+                  cy.edges(`[source="${path[i-1]}"][target="${path[i]}"]`).addClass("path-highlight");
+                }
+              }
+            }
+          }}>Find</button>
+          {pathResult !== null && pathResult.length === 0 && (
+            <span style={{ color: "var(--muted)" }}>No path found</span>
+          )}
+          {pathResult && pathResult.length > 0 && (
+            <div style={{ width: "100%", display: "flex", flexWrap: "wrap", gap: "2px 4px", alignItems: "center", paddingTop: "0.25rem" }}>
+              <span style={{ color: "var(--muted)", fontSize: "0.75rem" }}>{pathResult.length - 1} hops:</span>
+              {pathResult.map((cls, i) => (
+                <React.Fragment key={cls}>
+                  {i > 0 && <span style={{ color: "var(--muted)" }}>→</span>}
+                  <button className="trg-link-btn" style={{ fontSize: "0.78rem" }}
+                    title={cls}
+                    onClick={() => { setSelected(cls); const cy = cyRef.current; if (cy) applyCyHighlight(cy, cls); }}>
+                    <code>{cls.split(".").pop()}</code>
+                  </button>
+                  {retMap.has(cls) && <span style={{ color: "var(--muted)", fontSize: "0.70rem" }}>{fmtB(retMap.get(cls)!)}</span>}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Graph canvas */}
       <div className="cy-graph-container" ref={cyContainerRef} />
@@ -5225,6 +5398,83 @@ function DomGraphView({ pairs, idoms }: {
   );
 }
 
+function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[] }) {
+  const fmtB = formatBytes;
+  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data — run Full Analysis.</p>;
+
+  // Top-N dominator rows (by total dominated_retained)
+  const domRetained = new Map<string, number>();
+  const deeRetained = new Map<string, number>();
+  for (const p of pairs) {
+    domRetained.set(p.dominator_class, (domRetained.get(p.dominator_class) ?? 0) + p.dominated_retained);
+    deeRetained.set(p.dominated_class, (deeRetained.get(p.dominated_class) ?? 0) + p.dominated_retained);
+  }
+  const topRows = [...domRetained.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([cls]) => cls);
+  const topCols = [...deeRetained.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([cls]) => cls);
+
+  // Build matrix
+  const cellMap = new Map<string, number>();
+  for (const p of pairs) cellMap.set(`${p.dominator_class}|${p.dominated_class}`, p.dominated_retained);
+  const maxCell = Math.max(...pairs.map(p => p.dominated_retained), 1);
+
+  return (
+    <div>
+      <p className="subtitle" style={{ marginTop: 0 }}>
+        Rows = dominator class · Columns = dominated class · Cell = retained bytes flowing through that pair.
+        Click a cell to inspect the dominated class.
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table className="gc-heatmap-table ret-heatmap-table">
+          <thead>
+            <tr>
+              <th className="gc-heatmap-rowlabel" style={{ minWidth: 140 }}>Dominator ↓</th>
+              {topCols.map(cls => (
+                <th key={cls} className="gc-heatmap-colhead" title={cls}>
+                  {cls.split(".").pop()}
+                </th>
+              ))}
+              <th className="gc-heatmap-colhead" style={{ color: "var(--muted)", fontStyle: "italic" }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topRows.map(rowCls => {
+              const rowTotal = domRetained.get(rowCls) ?? 0;
+              return (
+                <tr key={rowCls}>
+                  <td className="gc-heatmap-rowlabel" title={rowCls}>
+                    <button className="trg-link-btn" style={{ fontSize: "0.75rem", textAlign: "left" }}
+                      onClick={() => fireInspect({ kind: "class", cls: rowCls })}>
+                      {rowCls.split(".").pop()}
+                    </button>
+                  </td>
+                  {topCols.map(colCls => {
+                    const val = cellMap.get(`${rowCls}|${colCls}`) ?? null;
+                    if (!val) return <td key={colCls} className="gc-heatmap-cell gc-heatmap-empty" />;
+                    const t = val / maxCell;
+                    const bg = heatColor(t);
+                    const textColor = t > 0.45 ? "#fff" : "var(--fg)";
+                    return (
+                      <td key={colCls} className="gc-heatmap-cell"
+                        style={{ background: bg, color: textColor }}
+                        title={`${rowCls.split(".").pop()} → ${colCls.split(".").pop()}: ${fmtB(val)}`}
+                        onClick={() => fireInspect({ kind: "class", cls: colCls })}>
+                        {fmtB(val)}
+                      </td>
+                    );
+                  })}
+                  <td className="gc-heatmap-cell" style={{ color: "var(--muted)", fontSize: "0.7rem", background: "var(--code-bg, rgba(0,0,0,0.03))" }}>
+                    {fmtB(rowTotal)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
@@ -5232,7 +5482,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
   const idoms = data?.immediate_dominators?.rows ?? [];
   const pairs = data?.immediate_dominators?.pairs ?? [];
-  const [domView, setDomView] = React.useState<"tables" | "graph">("tables");
+  const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap">("tables");
 
   // Navigator state lifted so tables can drive it.
   const [navTarget, setNavTarget] = React.useState<string | null>(null);
@@ -5270,15 +5520,16 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
+      <p className="subtitle">Which classes own what: who is the dominator (last thing keeping objects alive) and how much retained heap flows through them.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        {(["tables", "graph"] as const).map(v => (
+        {(["tables", "graph", "heatmap"] as const).map(v => (
           <button key={v} onClick={() => setDomView(v)} style={{
             padding: "0.25rem 0.85rem", fontSize: "0.88rem",
             border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
             background: domView === v ? "var(--accent)" : "transparent",
             color: domView === v ? "#fff" : "var(--fg)",
-          }}>{v === "tables" ? "⊞ Tables" : "⬡ Graph"}</button>
+          }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : "▦ Heatmap"}</button>
         ))}
       </div>
 
@@ -5393,6 +5644,10 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       {domView === "graph" && (
         <DomGraphView pairs={pairs} idoms={idoms} />
+      )}
+
+      {domView === "heatmap" && (
+        <RetentionHeatmapView pairs={pairs} />
       )}
     </section>
   );
@@ -5605,8 +5860,19 @@ function frameToClass(frame: string): string | null {
   return cls.includes(".") ? cls : null;
 }
 
-function AllocSitesSection({ data }: { data: AllocSites }) {
+function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggestClasses: import("./types").ClassRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
+
+  // Build a map from class name to retained bytes from biggest_classes
+  const retainedByClass = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of biggestClasses) m.set(c.pretty_class, c.retained);
+    return m;
+  }, [biggestClasses]);
+  const medRetained = React.useMemo(() => {
+    const vals = biggestClasses.filter(c => c.retained > 0).map(c => c.retained).sort((a,b) => a-b);
+    return vals[Math.floor(vals.length / 2)] ?? 1;
+  }, [biggestClasses]);
 
   const frameTree: FrameTreeNode = React.useMemo(() => {
     return trieToTree(buildFrameTrie(data.sites));
@@ -5654,6 +5920,24 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
           }},
           { id: "objects", name: "Objects", right: true, width: "110px", format: (s) => fmtCount(s.object_count), selector: (s) => s.object_count, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(s => s.shallow_total, fmtB, useKB), selector: (s) => s.shallow_total, sortable: true },
+          { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", sortable: true,
+            selector: (s) => {
+              const cls = s.frames.length > 0 ? frameToClass(s.frames[0]) : null;
+              return cls ? (retainedByClass.get(cls) ?? 0) : 0;
+            },
+            cell: (s) => {
+              const cls = s.frames.length > 0 ? frameToClass(s.frames[0]) : null;
+              const retained = cls ? (retainedByClass.get(cls) ?? null) : null;
+              if (retained == null) return <span style={{ color: "var(--muted)" }}>—</span>;
+              const isHigh = retained > medRetained * 5;
+              return (
+                <span title={`${cls} retains ${fmtB(retained)} currently in heap`}
+                  style={isHigh ? { color: "#c87533", fontWeight: 600 } : {}}>
+                  {fmtB(retained)}{isHigh ? " ⚠" : ""}
+                </span>
+              );
+            },
+          },
         ];
         const totalObjects = data.sites.reduce((s, r) => s + r.object_count, 0);
         const totalShallow = data.sites.reduce((s, r) => s + r.shallow_total, 0);
@@ -5776,39 +6060,45 @@ function DominatorDepthSection({ report }: { report: Report }) {
 // ── Leak Indicators ─────────────────────────────────────────────────────────
 // Scalar signals for common Java leak patterns. Only rendered when at least
 // one indicator is non-zero. Mirrors render_md.rs::render_leak_indicators.
-function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
+function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators; totalHeap?: number }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (!data) return null;
   const { anonymous_class_count, thread_local_null_key_count, direct_byte_buffer_capacity_sum } = data;
   if (anonymous_class_count === 0 && thread_local_null_key_count === 0 && direct_byte_buffer_capacity_sum === 0) {
     return null;
   }
+  type LeakRow = { indicator: React.ReactNode; value: string; hint: React.ReactNode };
+  const leakRows: LeakRow[] = [
+    ...(anonymous_class_count > 0 ? [{
+      indicator: "Anonymous/generated classes",
+      value: fmtCount(anonymous_class_count),
+      hint: "High counts can indicate class-loader leaks (e.g. dynamic proxies accumulating per request). Navigate to Top Consumers and filter by \"$\" to find the biggest offenders.",
+    }] : []),
+    ...(thread_local_null_key_count > 0 ? [{
+      indicator: <><code>ThreadLocal</code> null-key entries</>,
+      value: fmtCount(thread_local_null_key_count),
+      hint: "A null key means the referent thread was GC'd but the value was not removed — classic ThreadLocal leak. Check ThreadLocal usage in thread-pool code.",
+    }] : []),
+    ...(direct_byte_buffer_capacity_sum > 0 ? [{
+      indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
+      value: fmtB(direct_byte_buffer_capacity_sum),
+      hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
+        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See Off-Heap NIO section.</strong>
+        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that don't release on close, or Netty/gRPC allocators misconfigured with no max.",
+    }] : []),
+  ];
+  const leakCols: TableColumn<LeakRow>[] = [
+    { id: "indicator", name: "Indicator", grow: 1, cell: (r) => <span>{r.indicator}</span> },
+    { id: "value", name: "Value", right: true, width: "120px", selector: (r) => r.value, sortable: true },
+    { id: "hint", name: "What to check", grow: 2, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>{r.hint}</span> },
+  ];
   return (
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Scalar signals for common Java leak patterns. Non-zero values here are worth investigating.
+        Scalar signals for common Java leak patterns — non-zero values here are worth investigating.
       </p>
-      {(() => {
-        type LeakRow = { indicator: React.ReactNode; value: string };
-        const leakRows: LeakRow[] = [
-          ...(anonymous_class_count > 0 ? [{ indicator: "Anonymous/generated classes", value: fmtCount(anonymous_class_count) }] : []),
-          ...(thread_local_null_key_count > 0 ? [{ indicator: <><code>ThreadLocal</code> null-key entries (cleared referent)</>, value: fmtCount(thread_local_null_key_count) }] : []),
-          ...(direct_byte_buffer_capacity_sum > 0 ? [{ indicator: <><code>DirectByteBuffer</code> total capacity</>, value: fmtB(direct_byte_buffer_capacity_sum) }] : []),
-        ];
-        const leakCols: TableColumn<LeakRow>[] = [
-          { id: "indicator", name: "Indicator", grow: 1, cell: (r) => <span>{r.indicator}</span> },
-          { id: "value", name: "Value", right: true, width: "140px", selector: (r) => r.value, sortable: true },
-        ];
-        return <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />;
-      })()}
-      {/* V26: Contextual NIO buffer triage hint when capacity exceeds 256 MB */}
-      {direct_byte_buffer_capacity_sum > 256 * 1024 * 1024 && (
-        <p className="subtitle" style={{ marginTop: "0.5rem" }}>
-          ⚠ NIO buffers exceed 256 MB — this is native memory not tracked by the JVM heap.
-          Check for pools not releasing buffers.
-        </p>
-      )}
+      <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
   );
 }
@@ -5974,6 +6264,8 @@ function buildDomGraphStyle(): cytoscape.Stylesheet[] {
         width: "data(weight)", "line-color": "#888", "target-arrow-color": "#888",
         "target-arrow-shape": "triangle", "curve-style": "bezier", opacity: 0.5,
       } as any },
+    { selector: "node.path-highlight", style: { "border-width": 3, "border-color": "#f90", "border-opacity": 1, opacity: 1 } as any },
+    { selector: "edge.path-highlight", style: { "line-color": "#f90", "target-arrow-color": "#f90", opacity: 1, width: 3 } as any },
   ];
 }
 
@@ -11026,7 +11318,7 @@ export default function App({ report }: { report: Report }) {
       <ReferencesSection data={report.references} />
       <DirectByteBufferCard indicators={report.leak_indicators} />
       <UnreachableObjectsSection data={report.overview} />
-      {report.alloc_sites?.traces_present && report.alloc_sites.sites.some(s => s.frames.length > 0) && <AllocSitesSection data={report.alloc_sites} />}
+      {report.alloc_sites?.traces_present && report.alloc_sites.sites.some(s => s.frames.length > 0) && <AllocSitesSection data={report.alloc_sites} biggestClasses={report.top?.biggest_classes ?? []} />}
       {report.obj_graph_flat && (
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
@@ -11046,7 +11338,7 @@ export default function App({ report }: { report: Report }) {
       )}
       <RetentionConcentrationSection report={report} />
       <DominatorDepthSection report={report} />
-      <LeakIndicatorsSection data={report.leak_indicators} />
+      <LeakIndicatorsSection data={report.leak_indicators} totalHeap={report.overview.total_shallow} />
       <CustomQueriesSection report={report} />
       <GlossarySection />
       <BackToTop />
