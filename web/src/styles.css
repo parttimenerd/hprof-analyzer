@@ -295,6 +295,8 @@ details > table thead, details > table tbody, details > table tfoot,
 }
 /* react-data-table-component: allow horizontal scroll when content overflows */
 .rdt_TableWrapper { overflow-x: auto; }
+/* Override rdt's min-width: fit-content so tables don't expand past their container */
+.rdt_wrapper { min-width: unset !important; }
 /* Class and loader cells: truncate with ellipsis + title tooltip.
    Width is controlled by TanStack (table-layout:fixed + col width), not max-width. */
 td.cls-cell, td.loader-cell, th.cls-th, th.loader-th {

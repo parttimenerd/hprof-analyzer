@@ -1055,7 +1055,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   }, [filtered, groupLambdas]);
 
   const columns: TableColumn<HistRow>[] = React.useMemo(() => {
-    const fixedW = 630 + (showLoader ? 130 : 0) + (hasIncomingRefCount ? 116 : 0);
+    const fixedW = 644 + (showLoader ? 130 : 0) + (hasIncomingRefCount ? 116 : 0);
     const classMaxW = `${Math.max(160, 1040 - fixedW)}px`;
     const cols: TableColumn<HistRow>[] = [
       {
@@ -1273,7 +1273,7 @@ const histogramTableStyles = {
   headCells: { style: { paddingLeft: "5px", paddingRight: "5px", whiteSpace: "nowrap" as const } },
   rows: { style: { fontSize: "0.86rem", borderBottomColor: "var(--border)", background: "transparent", minHeight: "unset" }, highlightOnHoverStyle: { background: "var(--hover-bg, var(--card))" } },
   cells: { style: { paddingTop: "3px", paddingBottom: "3px", paddingLeft: "5px", paddingRight: "5px", whiteSpace: "nowrap" as const, overflow: "hidden", fontVariantNumeric: "tabular-nums" } },
-  table: { style: { background: "transparent" } },
+  table: { style: { background: "transparent", minWidth: "unset" } },
   tableWrapper: { style: { overflow: "auto" } },
 };
 
@@ -2063,12 +2063,12 @@ function SystemOverviewSection({ report }: { report: Report }) {
               </span>
             ),
           },
-          { id: "type", name: "Root Type", grow: 1, maxWidth: "260px", selector: (r) => r.root_type, sortable: true },
+          { id: "type", name: "Root Type", width: "210px", selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
           { id: "pct", name: "% of roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
           {
-            id: "top_classes", name: "Top retained classes", grow: 2, maxWidth: "360px",
+            id: "top_classes", name: "Top retained classes", grow: 1, maxWidth: "408px", wrap: true,
             cell: (r: GcRow) => {
               const top = (r as GcRootRetainedRow).top_classes;
               if (!top || top.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
@@ -2094,11 +2094,11 @@ function SystemOverviewSection({ report }: { report: Report }) {
             <StdTable columns={gcCols} data={gcRows} searchKeys={["root_type"]} defaultSortFieldId="retained" defaultSortAsc={false} />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "90px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }} />
-              <span style={{ flex: 1, maxWidth: "260px", paddingLeft: 5, paddingRight: 5 }}>Total</span>
+              <span style={{ width: "210px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalCount)}</span>
               <span style={{ width: "104px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100%</span>
               <span style={{ width: "128px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
-              <span style={{ flex: 2, maxWidth: "360px", paddingLeft: 5, paddingRight: 5 }} />
+              <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }} />
             </div>
             {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
               <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — likely a native code reference leak.</p>
@@ -3379,11 +3379,11 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (threads.length === 0) return null;
   const cols: TableColumn<ThreadInfo>[] = [
-    { id: "name", name: "Name", grow: 1, width: "120px", cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a>, selector: (t) => t.name ?? "", sortable: true },
+    { id: "name", name: "Name", grow: 1, maxWidth: "140px", cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a>, selector: (t) => t.name ?? "", sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "118px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained, sortable: true },
     { id: "max_local", name: useKB ? "Max. Locals' Retained (KB)" : "Max. Locals' Retained", right: true, width: useKB ? "225px" : "190px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained, sortable: true },
-    { id: "loader", name: "Context Class Loader", grow: 1, width: "188px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
+    { id: "loader", name: "Context Class Loader", grow: 1, maxWidth: "142px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
     { id: "daemon", name: "Daemon", width: "100px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "yes" : "no", sortable: true },
     { id: "priority", name: "Priority", right: true, width: "95px", format: (t) => String(t.priority), selector: (t) => t.priority, sortable: true },
     { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state?.replace(/[\[\]]/g, "") || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state ? threadStateLabel(t.thread_state) : "—"}</span>, sortable: true },
@@ -3541,7 +3541,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: "140px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
-      id: "top_classes", name: "Top classes", grow: 2,
+      id: "top_classes", name: "Top classes", grow: 2, maxWidth: "400px",
       wrap: true,
       cell: (c) => (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", padding: "2px 0" }}>
@@ -3958,7 +3958,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   const totalObjects = rows.reduce((s, r) => s + r.objects, 0);
 
   const cols: TableColumn<WasteRow>[] = [
-    { id: "type", name: "Waste type", grow: 2, selector: (r) => r.type, cell: (r) => <span>{r.type}</span>, sortable: true },
+    { id: "type", name: "Waste type", grow: 2, maxWidth: "400px", selector: (r) => r.type, cell: (r) => <span>{r.type}</span>, sortable: true },
     {
       id: "wasted",
       name: useKB ? "Wasted (KB)" : "Wasted",
@@ -3977,7 +3977,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       selector: (r) => r.objects,
       sortable: true,
     },
-    { id: "fix", name: "Fix suggestion", grow: 2, selector: (r) => r.fix, sortable: true },
+    { id: "fix", name: "Fix suggestion", grow: 2, maxWidth: "400px", selector: (r) => r.fix, sortable: true },
   ];
 
   const showCollectionsNote = !ca && (hasDs || hasDp);
@@ -4191,7 +4191,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "values", name: "Total Values", right: true, width: "120px", format: (r) => fmtCount(r.total_values), selector: (r) => r.total_values, sortable: true },
     {
-      id: "types", name: "Top Value Types", grow: 2,
+      id: "types", name: "Top Value Types", grow: 2, maxWidth: "400px",
       cell: (r) => r.top_value_types.length === 0
         ? <span>—</span>
         : <>{r.top_value_types.map((s, j) => <span key={j} className="copy-cell" style={{ marginRight: j < r.top_value_types.length - 1 ? "0.5rem" : 0 }}>{j > 0 ? "" : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}<PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span>)}</>,
@@ -6113,9 +6113,9 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
-    { id: "indicator", name: "Indicator", grow: 1, cell: (r) => <span>{r.indicator}</span> },
+    { id: "indicator", name: "Indicator", grow: 1, maxWidth: "300px", cell: (r) => <span>{r.indicator}</span> },
     { id: "value", name: "Value", right: true, width: "120px", selector: (r) => r.value, sortable: true },
-    { id: "hint", name: "What to check", grow: 2, wrap: true, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)", whiteSpace: "normal" }}>{r.hint}</span> },
+    { id: "hint", name: "What to check", grow: 2, maxWidth: "620px", wrap: true, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)", whiteSpace: "normal" }}>{r.hint}</span> },
   ];
   return (
     <section id="leak-indicators">
@@ -6680,8 +6680,8 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   }, [selected]);
 
   const tableCols: TableColumn<TypeEdge>[] = [
-    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
-    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
+    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, maxWidth: "405px", cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
+    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, maxWidth: "405px", cell: r => <span className="copy-cell"><code>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
     { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, width: "110px", format: r => fmtCount(r.edge_count) },
     { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, width: "120px", format: r => fmtB(r.retained_weight) },
   ];
@@ -10108,8 +10108,8 @@ function TpfgDiffTable({ rows, fmtB }: { rows: TypeEdgeDiff[]; fmtB: (n: number)
   const dc = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : ""}{n.toLocaleString()}</span>;
   const dw = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : n < 0 ? "−" : ""}{fmtB(Math.abs(n))}{n < 0 ? " ▼" : n > 0 ? " ▲" : ""}</span>;
   const cols: TableColumn<TypeEdgeDiff>[] = [
-    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <span className="copy-cell"><code>{r.src_class}</code><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span>, grow: 2 },
-    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span>, grow: 2 },
+    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <span className="copy-cell"><code>{r.src_class}</code><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span>, grow: 2, maxWidth: "320px" },
+    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <span className="copy-cell"><code>{r.dst_class}</code><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span>, grow: 2, maxWidth: "320px" },
     { id: "cf", name: "Edges (first)", selector: r => r.count_first, sortable: true, right: true, cell: r => r.count_first.toLocaleString() },
     { id: "cl", name: "Edges (last)", selector: r => r.count_last, sortable: true, right: true, cell: r => r.count_last.toLocaleString() },
     { id: "dc", name: "Δ Edges", selector: r => r.delta_count, sortable: true, right: true, cell: r => dc(r.delta_count) },
