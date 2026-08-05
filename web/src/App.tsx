@@ -2815,7 +2815,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         return (
           <details>
             <summary>
-              Accumulated Objects in Dominator Tree{" "}
+              Directly Dominated Objects{" "}
               {s.dominated_total_count > s.dominated_shown
                 ? `(directly dominates ${fmtCount(s.dominated_total_count)}, showing top ${fmtCount(s.dominated_shown)})`
                 : `(directly dominates ${fmtCount(s.dominated_total_count)})`}
@@ -2866,7 +2866,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
         <>
           <h3>Retained-Heap Share</h3>
           <p className="subtitle">
-            How concentrated the leak is: each slice is one suspect&apos;s retained heap; the remainder is everything
+            How concentrated retention is: each slice is one suspect&apos;s retained heap; the remainder is everything
             else on the reachable heap.
           </p>
           <ChartOrNote hasData={l.suspects.length > 0 && l.total_shallow > 0} note="No leak suspects to chart.">
@@ -4322,7 +4322,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them. (Approximate: transitive weak-only detection may miss multi-hop chains.)</p>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — any GC cycle may reclaim them. (Approximate: transitive weak-only detection may miss multi-hop chains.)</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
@@ -6109,7 +6109,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Scalar signals for common Java leak patterns — non-zero values here are worth investigating.
+        Counts for common Java leak patterns — any non-zero value warrants investigation.
       </p>
       <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
