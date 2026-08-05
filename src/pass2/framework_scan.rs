@@ -20,8 +20,7 @@ static SENTINELS: &[(&str, &str)] = &[
 pub fn scan_frameworks(g: &Graph) -> Vec<FrameworkAnalysis> {
     // Build a map from class index → sentinel slot so we do a single O(n) pass
     // over g.class_idx instead of one pass per sentinel.
-    let mut ci_to_slot: std::collections::HashMap<u32, usize> =
-        std::collections::HashMap::new();
+    let mut ci_to_slot: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     for (slot, &(sentinel, _)) in SENTINELS.iter().enumerate() {
         for (i, name) in g.class_names.iter().enumerate() {
             if name.as_str() == sentinel {

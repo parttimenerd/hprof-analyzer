@@ -7,78 +7,78 @@
 /// at the cost of more RSS and wall time during the analysis.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum ReportSize {
-    Small,   // obj-graph: edge_cap=100; collections: minimum-RSS caps
+    Small, // obj-graph: edge_cap=100; collections: minimum-RSS caps
     #[default]
     Default, // obj-graph: edge_cap=150; collections: balanced caps (default)
-    Large,   // obj-graph: edge_cap=300; collections: 2× balanced caps
-    Max,     // obj-graph: edge_cap=500; collections: original caps (most detail)
+    Large, // obj-graph: edge_cap=300; collections: 2× balanced caps
+    Max,   // obj-graph: edge_cap=500; collections: original caps (most detail)
 }
 
 impl ReportSize {
     pub fn edge_cap(self) -> usize {
         match self {
-            ReportSize::Small   => 100,
+            ReportSize::Small => 100,
             ReportSize::Default => 150,
-            ReportSize::Large   => 300,
-            ReportSize::Max     => 500,
+            ReportSize::Large => 300,
+            ReportSize::Max => 500,
         }
     }
     pub fn tier_name(self) -> &'static str {
         match self {
-            ReportSize::Small   => "small",
+            ReportSize::Small => "small",
             ReportSize::Default => "default",
-            ReportSize::Large   => "large",
-            ReportSize::Max     => "max",
+            ReportSize::Large => "large",
+            ReportSize::Max => "max",
         }
     }
 
     /// Max holder→pointee edges collected under --collections (16 B each).
     pub fn field_ref_cap(self) -> usize {
         match self {
-            ReportSize::Small   =>  1_000_000, //  16 MB
-            ReportSize::Default =>  2_500_000, //  40 MB
-            ReportSize::Large   =>  5_000_000, //  80 MB
-            ReportSize::Max     => 10_000_000, // 160 MB (original)
+            ReportSize::Small => 1_000_000,   //  16 MB
+            ReportSize::Default => 2_500_000, //  40 MB
+            ReportSize::Large => 5_000_000,   //  80 MB
+            ReportSize::Max => 10_000_000,    // 160 MB (original)
         }
     }
 
     /// Max container records collected under --collections.
     pub fn container_cap(self) -> usize {
         match self {
-            ReportSize::Small   =>   150_000,
-            ReportSize::Default =>   375_000,
-            ReportSize::Large   =>   750_000,
-            ReportSize::Max     => 1_500_000, // original
+            ReportSize::Small => 150_000,
+            ReportSize::Default => 375_000,
+            ReportSize::Large => 750_000,
+            ReportSize::Max => 1_500_000, // original
         }
     }
 
     /// Max node/entry wrapper objects stored in the node-KV map.
     pub fn node_kv_cap(self) -> usize {
         match self {
-            ReportSize::Small   =>   500_000,
+            ReportSize::Small => 500_000,
             ReportSize::Default => 1_250_000,
-            ReportSize::Large   => 2_500_000,
-            ReportSize::Max     => 5_000_000, // original
+            ReportSize::Large => 2_500_000,
+            ReportSize::Max => 5_000_000, // original
         }
     }
 
     /// Max element slots sampled per collection for the value-type breakdown.
     pub fn coll_values_per_collection(self) -> usize {
         match self {
-            ReportSize::Small   =>  64,
+            ReportSize::Small => 64,
             ReportSize::Default => 256,
-            ReportSize::Large   => 512,
-            ReportSize::Max     => 4_096, // original
+            ReportSize::Large => 512,
+            ReportSize::Max => 4_096, // original
         }
     }
 
     /// Max distinct collections whose element types are tallied.
     pub fn coll_values_group_cap(self) -> usize {
         match self {
-            ReportSize::Small   =>  10_000,
-            ReportSize::Default =>  50_000,
-            ReportSize::Large   => 100_000,
-            ReportSize::Max     => 200_000, // original
+            ReportSize::Small => 10_000,
+            ReportSize::Default => 50_000,
+            ReportSize::Large => 100_000,
+            ReportSize::Max => 200_000, // original
         }
     }
 }

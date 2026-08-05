@@ -754,7 +754,9 @@ fn main() {
                 mat_binary,
             } => {
                 if !input_is_hprof(&input) {
-                    fail(format!("'{input}' does not look like a .hprof[.gz/.zip/.tar.gz] file"));
+                    fail(format!(
+                        "'{input}' does not look like a .hprof[.gz/.zip/.tar.gz] file"
+                    ));
                 }
                 progress::set_enabled(std::io::stderr().is_terminal());
                 let mat_dir = dir.as_deref().unwrap_or_else(|| {
@@ -871,10 +873,10 @@ fn run_default(cli: Cli) {
         };
         // --size overrides the collection-detail caps (independent of --obj-graph tier).
         opts.report_size = match cli.size.to_ascii_lowercase().as_str() {
-            "small"   => crate::opts::ReportSize::Small,
+            "small" => crate::opts::ReportSize::Small,
             "default" => crate::opts::ReportSize::Default,
-            "large"   => crate::opts::ReportSize::Large,
-            "max"     => crate::opts::ReportSize::Max,
+            "large" => crate::opts::ReportSize::Large,
+            "max" => crate::opts::ReportSize::Max,
             other => {
                 eprintln!(
                     "error: unknown --size tier '{other}' (expected: small, default, large, max)"

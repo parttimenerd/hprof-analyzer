@@ -531,13 +531,19 @@ impl ObjGraphCapture {
     /// Outbound edge slice for object `i`.
     #[inline]
     pub fn edges_of(&self, i: usize) -> &[(u32, u16)] {
-        self.edges.get(&(i as u32)).map(|b| b.as_ref()).unwrap_or(&[])
+        self.edges
+            .get(&(i as u32))
+            .map(|b| b.as_ref())
+            .unwrap_or(&[])
     }
 
     /// Inbound edge slice for object `i`.
     #[inline]
     pub fn inbound_of(&self, i: usize) -> &[(u32, u16)] {
-        self.inbound.get(&(i as u32)).map(|b| b.as_ref()).unwrap_or(&[])
+        self.inbound
+            .get(&(i as u32))
+            .map(|b| b.as_ref())
+            .unwrap_or(&[])
     }
 }
 
@@ -584,16 +590,24 @@ pub fn capture_type_ref_graph(
     std::collections::HashMap<(u32, u32), u64>,
     std::collections::HashMap<(u32, u32), Vec<(String, u32)>>,
 ) {
-    let n = if g.shallow.is_empty() { g.n } else { g.shallow.len() };
+    let n = if g.shallow.is_empty() {
+        g.n
+    } else {
+        g.shallow.len()
+    };
     if n == 0 || g.fwd_offsets.is_empty() || g.class_idx.is_empty() {
-        return (std::collections::HashMap::new(), std::collections::HashMap::new());
+        return (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
     }
     let has_names = g.fwd_field_name_idx.is_some() && g.field_name_pool.is_some();
-    let mut pair_map: std::collections::HashMap<(u32, u32), u64> =
-        std::collections::HashMap::new();
+    let mut pair_map: std::collections::HashMap<(u32, u32), u64> = std::collections::HashMap::new();
     // Per-pair field-name tally: (src_ci, dst_ci) → HashMap<name_idx, count>
-    let mut field_tally: std::collections::HashMap<(u32, u32), std::collections::HashMap<u16, u32>> =
-        std::collections::HashMap::new();
+    let mut field_tally: std::collections::HashMap<
+        (u32, u32),
+        std::collections::HashMap<u16, u32>,
+    > = std::collections::HashMap::new();
 
     for src_idx in 0..n {
         let start = g.fwd_offsets[src_idx] as usize;
@@ -613,7 +627,12 @@ pub fn capture_type_ref_graph(
             let dst_ci = g.class_idx[dst_idx];
             *pair_map.entry((src_ci, dst_ci)).or_insert(0) += 1;
             if has_names {
-                if let Some(name_idx) = g.fwd_field_name_idx.as_ref().and_then(|v| v.get(pos)).copied() {
+                if let Some(name_idx) = g
+                    .fwd_field_name_idx
+                    .as_ref()
+                    .and_then(|v| v.get(pos))
+                    .copied()
+                {
                     if name_idx != 0 {
                         *field_tally
                             .entry((src_ci, dst_ci))
@@ -635,7 +654,9 @@ pub fn capture_type_ref_graph(
                 .into_iter()
                 .filter_map(|(idx, cnt)| {
                     let name = name_pool.get(idx as usize)?;
-                    if name.is_empty() { return None; }
+                    if name.is_empty() {
+                        return None;
+                    }
                     Some((name.clone(), cnt))
                 })
                 .collect();
@@ -698,10 +719,14 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
         let mut sample: Vec<u32> = g.shallow.iter().step_by(sample_step).copied().collect();
         // Sort descending, pick the top_n-th value as the threshold.
         sample.sort_unstable_by(|a, b| b.cmp(a));
-        let threshold = sample.get(top_n.min(sample.len()).saturating_sub(1)).copied().unwrap_or(0);
+        let threshold = sample
+            .get(top_n.min(sample.len()).saturating_sub(1))
+            .copied()
+            .unwrap_or(0);
         drop(sample);
         // Step 2: collect objects above threshold (may include more than top_n).
-        let mut nodes: Vec<u32> = g.shallow
+        let mut nodes: Vec<u32> = g
+            .shallow
             .iter()
             .enumerate()
             .filter_map(|(i, &s)| if s >= threshold { Some(i as u32) } else { None })
@@ -744,7 +769,13 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
             let mut edges: Vec<(u32, u16)> = Vec::with_capacity(take);
             for pos in fwd_start..fwd_start + take {
                 let dst = g.fwd_targets.get(pos);
-                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+                let name_idx = name_idx_for(
+                    fwd_names,
+                    name_pool,
+                    pos,
+                    &mut name_map,
+                    &mut cap.field_name_pool,
+                );
                 edges.push((dst, name_idx));
             }
             cap.edges.insert(src, edges.into_boxed_slice());
@@ -768,7 +799,13 @@ pub fn capture_obj_graph_edges(g: &Graph, top_n: usize, edge_cap: usize) -> ObjG
             }
             let bucket = inbound_acc.entry(dst as u32).or_default();
             if bucket.len() < edge_cap {
-                let name_idx = name_idx_for(fwd_names, name_pool, pos, &mut name_map, &mut cap.field_name_pool);
+                let name_idx = name_idx_for(
+                    fwd_names,
+                    name_pool,
+                    pos,
+                    &mut name_map,
+                    &mut cap.field_name_pool,
+                );
                 bucket.push((src, name_idx));
             } else {
                 cap.inbound_truncated.set(dst);
@@ -887,7 +924,9 @@ impl InboundBuilder {
         crate::trace::probe("inbound fwd-transpose: after drop(id_map_c blob)");
         drop(class_addr_to_hist);
         drop(field_plans_dense);
-        crate::trace::probe("inbound fwd-transpose: after drop(class_addr_to_hist+field_plans_dense)");
+        crate::trace::probe(
+            "inbound fwd-transpose: after drop(class_addr_to_hist+field_plans_dense)",
+        );
         // Return freed heap pages to OS before the large inb_flat alloc, so
         // RSS reflects actual live data rather than glibc's dirty brk heap.
         crate::trace::trim();
@@ -1360,7 +1399,12 @@ impl InboundBuilder {
 
             match sub_tag {
                 // Root sub-records: skip (no edges to/from these for our purposes)
-                heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
+                heap::ROOT_SYSTEM_CLASS
+                | heap::ROOT_UNKNOWN
+                | heap::ROOT_MONITOR_USED
+                | heap::ROOT_INTERNED_STRING
+                | heap::ROOT_DEBUGGER
+                | heap::ROOT_VM_INTERNAL => {
                     r.skip(ids)?;
                     checked_sub!(remaining, ids);
                 }
@@ -1475,7 +1519,8 @@ impl InboundBuilder {
                         }
                     }
                     on_outbound(src_idx, fwd)?;
-                }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                }
+                heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
                     r.skip(ids + 4 + 4 + 1)?;
                     checked_sub!(remaining, ids + 4 + 4 + 1);
@@ -1646,7 +1691,12 @@ fn scan_fwd_segment(
         checked_sub!(remaining, 1u64);
 
         match sub_tag {
-            heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
+            heap::ROOT_SYSTEM_CLASS
+            | heap::ROOT_UNKNOWN
+            | heap::ROOT_MONITOR_USED
+            | heap::ROOT_INTERNED_STRING
+            | heap::ROOT_DEBUGGER
+            | heap::ROOT_VM_INTERNAL => {
                 r.skip(ids)?;
                 checked_sub!(remaining, ids);
             }
@@ -1735,11 +1785,12 @@ fn scan_fwd_segment(
                         }
                     }
                 }
-            }                heap::PRIM_ARRAY_NODATA_DUMP => {
-                    // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
-                    r.skip(ids + 4 + 4 + 1)?;
-                    checked_sub!(remaining, ids + 4 + 4 + 1);
-                }
+            }
+            heap::PRIM_ARRAY_NODATA_DUMP => {
+                // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
+                r.skip(ids + 4 + 4 + 1)?;
+                checked_sub!(remaining, ids + 4 + 4 + 1);
+            }
 
             heap::PRIM_ARRAY_DUMP => {
                 let addr = r.id()?;

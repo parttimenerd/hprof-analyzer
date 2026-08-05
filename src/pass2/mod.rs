@@ -499,20 +499,21 @@ impl Pass2 {
         // For --ref-paths: used during the forward-CSR fill to annotate each edge with its field name.
         // For --field-stats: used to populate class_ref_field_names on the Graph.
         // Gated: the extra allocations are acceptable only under these explicit flags.
-        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths || opts.field_stats || opts.obj_graph {
-            let named = build_field_plans_named(&p1.class_map, &p1.strings, id_size as usize);
-            let mut dense: Vec<FieldPlanNamed> = vec![Vec::new(); n_dense_classes];
-            for (&class_addr, &hidx) in &class_addr_to_hist {
-                if let Some(plan) = named.get(&class_addr) {
-                    if !plan.is_empty() {
-                        dense[hidx as usize] = plan.clone();
+        let field_plans_named_dense: Vec<FieldPlanNamed> =
+            if opts.ref_paths || opts.field_stats || opts.obj_graph {
+                let named = build_field_plans_named(&p1.class_map, &p1.strings, id_size as usize);
+                let mut dense: Vec<FieldPlanNamed> = vec![Vec::new(); n_dense_classes];
+                for (&class_addr, &hidx) in &class_addr_to_hist {
+                    if let Some(plan) = named.get(&class_addr) {
+                        if !plan.is_empty() {
+                            dense[hidx as usize] = plan.clone();
+                        }
                     }
                 }
-            }
-            dense
-        } else {
-            Vec::new()
-        };
+                dense
+            } else {
+                Vec::new()
+            };
 
         // Collect thread object addresses for capture during 2a scan.
         let capture_thread_addrs: std::collections::HashSet<u64> =
@@ -1103,8 +1104,8 @@ impl Pass2 {
         // For --obj-graph: skip on large dumps (>100M edges) since Vec<u16> at that
         // scale costs ~15 GB on a 34G dump, negating the RSS savings.
         const FIELD_NAME_EDGE_CAP: usize = 100_000_000;
-        let want_field_names = opts.ref_paths
-            || (opts.obj_graph && total_edges <= FIELD_NAME_EDGE_CAP);
+        let want_field_names =
+            opts.ref_paths || (opts.obj_graph && total_edges <= FIELD_NAME_EDGE_CAP);
         let mut fwd_field_name_idx_opt: Option<Vec<u16>> = if want_field_names {
             Some(vec![0u16; total_edges])
         } else {
@@ -1408,7 +1409,12 @@ impl Pass2 {
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
-                heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
+                heap::ROOT_SYSTEM_CLASS
+                | heap::ROOT_UNKNOWN
+                | heap::ROOT_MONITOR_USED
+                | heap::ROOT_INTERNED_STRING
+                | heap::ROOT_DEBUGGER
+                | heap::ROOT_VM_INTERNAL => {
                     r.skip(ids)?;
                     checked_sub!(remaining, ids);
                 }
@@ -1560,7 +1566,8 @@ impl Pass2 {
                             }
                         }
                     }
-                }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                }
+                heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
                     r.skip(ids + 4 + 4 + 1)?;
                     checked_sub!(remaining, ids + 4 + 4 + 1);
@@ -1684,7 +1691,12 @@ impl Pass2 {
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
-                heap::ROOT_SYSTEM_CLASS | heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
+                heap::ROOT_SYSTEM_CLASS
+                | heap::ROOT_UNKNOWN
+                | heap::ROOT_MONITOR_USED
+                | heap::ROOT_INTERNED_STRING
+                | heap::ROOT_DEBUGGER
+                | heap::ROOT_VM_INTERNAL => {
                     r.skip(ids)?;
                     checked_sub!(remaining, ids);
                 }
@@ -1807,7 +1819,8 @@ impl Pass2 {
                         let ref_val = read_id(chunk, id_size);
                         add_edge!(src_idx, ref_val, false, 0u16);
                     }
-                }                heap::PRIM_ARRAY_NODATA_DUMP => {
+                }
+                heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
                     r.skip(ids + 4 + 4 + 1)?;
                     checked_sub!(remaining, ids + 4 + 4 + 1);

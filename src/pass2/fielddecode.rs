@@ -1033,11 +1033,7 @@ pub(crate) struct FieldDecodeState {
 }
 
 impl FieldDecodeState {
-    pub(crate) fn new(
-        id_size: u8,
-        collect_attribution: bool,
-        caps: CollCaps,
-    ) -> Self {
+    pub(crate) fn new(id_size: u8, collect_attribution: bool, caps: CollCaps) -> Self {
         let obj_ref_width = id_size as usize;
 
         Self {
@@ -1272,9 +1268,7 @@ impl FieldDecodeState {
                                     if vo + obj_ref_width <= blob.len() {
                                         let val_addr = read_ref(&blob[vo..], obj_ref_width);
                                         if val_addr != 0 {
-                                            self.ic
-                                                .index_of(&p1.id_map, val_addr)
-                                                .map(|i| i as u32)
+                                            self.ic.index_of(&p1.id_map, val_addr).map(|i| i as u32)
                                         } else {
                                             None
                                         }
@@ -1456,7 +1450,8 @@ impl FieldDecodeState {
                     } else {
                         u32::MAX
                     };
-                    self.node_kv_raw.insert(self_idx as u32, (key_dense, val_dense));
+                    self.node_kv_raw
+                        .insert(self_idx as u32, (key_dense, val_dense));
                 }
             }
         }
@@ -1477,7 +1472,8 @@ impl FieldDecodeState {
             None => (u32::MAX, 0),
         };
         if idx != u32::MAX {
-            self.top_prim.add(idx, elem_type as u64, count, sh, u64::MAX);
+            self.top_prim
+                .add(idx, elem_type as u64, count, sh, u64::MAX);
         }
         if collect_attribution && idx != u32::MAX {
             if self.container_records.len() < CONTAINER_CAP {
@@ -1556,7 +1552,8 @@ impl FieldDecodeState {
         let mut slot_targets: Option<Vec<u32>> = None;
         let in_wanted = collect_attribution && self.wanted_arrays.contains_key(&addr);
         let slots_cap = self.obj_array_wanted_slots.len() + self.obj_array_deferred_slots.len();
-        let capture_slots = collect_attribution && (in_wanted || slots_cap < self.caps.coll_values_group_cap);
+        let capture_slots =
+            collect_attribution && (in_wanted || slots_cap < self.caps.coll_values_group_cap);
         for slot in 0..count as usize {
             let off = slot * obj_ref_width;
             if off + obj_ref_width > elem_ref_bytes.len() {
@@ -1582,7 +1579,8 @@ impl FieldDecodeState {
         let arr_wasted = count
             .saturating_sub(non_null)
             .saturating_mul(obj_ref_width as u64);
-        self.array_fill.add(non_null, count, arr_shallow, arr_wasted);
+        self.array_fill
+            .add(non_null, count, arr_shallow, arr_wasted);
         if arr_idx != u32::MAX {
             self.top_obj
                 .add(arr_idx, array_class_id, count, arr_shallow, non_null);
@@ -1829,7 +1827,6 @@ impl FieldDecodeState {
         ))
     }
 }
-
 
 // ── Main entry point ─────────────────────────────────────────────────────────
 

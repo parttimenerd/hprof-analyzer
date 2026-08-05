@@ -648,9 +648,7 @@ fn scan_heap_segment(
                 *prim_array_count += 1;
             }
             // Android ART roots: id-only wire format, treated as plain GC roots.
-            heap::ROOT_INTERNED_STRING
-            | heap::ROOT_DEBUGGER
-            | heap::ROOT_VM_INTERNAL => {
+            heap::ROOT_INTERNED_STRING | heap::ROOT_DEBUGGER | heap::ROOT_VM_INTERNAL => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);

@@ -203,7 +203,9 @@ fn build_obj_graph_flat(
         // Start from vroot's children.
         let vroot_usize = vroot as usize;
         if vroot_usize + 1 < dc_offsets.len() {
-            for &child in &dc_targets[dc_offsets[vroot_usize] as usize..dc_offsets[vroot_usize + 1] as usize] {
+            for &child in
+                &dc_targets[dc_offsets[vroot_usize] as usize..dc_offsets[vroot_usize + 1] as usize]
+            {
                 bfs.push_back(child);
             }
         }
@@ -212,8 +214,16 @@ fn build_obj_graph_flat(
             // Determine nearest_sig for this node.
             let parent_sig = if node_usize + 1 < dc_offsets.len() {
                 // Find parent via idom (g.idom[node] is the immediate dominator).
-                let par = if node_usize < g.idom.len() { g.idom[node_usize] } else { vroot };
-                if par as usize <= n { nearest_sig[par as usize] } else { NO_SIG }
+                let par = if node_usize < g.idom.len() {
+                    g.idom[node_usize]
+                } else {
+                    vroot
+                };
+                if par as usize <= n {
+                    nearest_sig[par as usize]
+                } else {
+                    NO_SIG
+                }
             } else {
                 NO_SIG
             };
@@ -224,7 +234,9 @@ fn build_obj_graph_flat(
             };
             // Enqueue children.
             if node_usize + 1 < dc_offsets.len() {
-                for &child in &dc_targets[dc_offsets[node_usize] as usize..dc_offsets[node_usize + 1] as usize] {
+                for &child in &dc_targets
+                    [dc_offsets[node_usize] as usize..dc_offsets[node_usize + 1] as usize]
+                {
                     bfs.push_back(child);
                 }
             }
@@ -456,13 +468,12 @@ fn build_type_ref_graph(g: &Graph) -> Vec<TypeEdge> {
                 format!("cls#{}", dci)
             };
             let sci_usize = sci as usize;
-            let avg_retained = if sci_usize < class_instance_count.len()
-                && class_instance_count[sci_usize] > 0
-            {
-                class_total_retained[sci_usize] / class_instance_count[sci_usize]
-            } else {
-                0
-            };
+            let avg_retained =
+                if sci_usize < class_instance_count.len() && class_instance_count[sci_usize] > 0 {
+                    class_total_retained[sci_usize] / class_instance_count[sci_usize]
+                } else {
+                    0
+                };
             let retained_weight = edge_count.saturating_mul(avg_retained);
             let top_field_names = pair_fields
                 .and_then(|m| m.get(&(sci, dci)))
@@ -506,7 +517,8 @@ pub fn build_model(
 ) -> Report {
     let generated = now_iso8601();
     crate::trace::probe("build_model: before system_overview aggregates");
-    let overview = build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
+    let overview =
+        build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
     crate::trace::probe("build_model: after system_overview aggregates");
     let leaks = build_leak_suspects(
         g,
@@ -2154,7 +2166,12 @@ fn compute_top_class_concentration_bp(
 /// histogram, retention concentration, loader rollup, duplicate classes) in a
 /// bounded set of passes over the graph. Injects MAT's synthetic
 /// `<system class loader>` object where MAT counts it, so totals match bit-exactly.
-fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize, hist_root_path_top: usize) -> SystemOverview {
+fn build_system_overview(
+    g: &Graph,
+    depth_counts: &[u64],
+    top_n: usize,
+    hist_root_path_top: usize,
+) -> SystemOverview {
     let n = g.n;
 
     // Count reachable objects and total shallow; track unreachable in the same loop.
@@ -2511,8 +2528,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize, hist_roo
         }
 
         // Build GC-root type map.
-        let mut root_type_of: std::collections::HashMap<u32, u8> =
-            std::collections::HashMap::new();
+        let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
         for (idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
             root_type_of
                 .entry(*idx)

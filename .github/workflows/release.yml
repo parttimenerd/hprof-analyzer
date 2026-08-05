@@ -77,6 +77,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Add cross-compilation target
+        run: rustup target add ${{ matrix.target }}
+
       # build.rs bundles web/ (esbuild) into the git-ignored web/dist/bundle.js
       # that src/html.rs embeds, so node/npm are required to compile the crate.
       - name: Setup Node

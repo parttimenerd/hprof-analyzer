@@ -87,14 +87,10 @@ impl HprofReader {
         // only resource is the file handle, which is consumed by reading the
         // entry stream; the small archive wrapper struct (<1 KB) is the only
         // memory that is permanently leaked per call.
-        let archive: &'static mut tar::Archive<_> =
-            Box::leak(Box::new(tar::Archive::new(gz)));
+        let archive: &'static mut tar::Archive<_> = Box::leak(Box::new(tar::Archive::new(gz)));
         for entry in archive.entries()? {
             let entry = entry?;
-            let ends_with_hprof = entry
-                .path_bytes()
-                .to_ascii_lowercase()
-                .ends_with(b".hprof");
+            let ends_with_hprof = entry.path_bytes().to_ascii_lowercase().ends_with(b".hprof");
             if ends_with_hprof {
                 let inner: Box<dyn Read> = Box::new(entry);
                 let mut r = HprofReader {
