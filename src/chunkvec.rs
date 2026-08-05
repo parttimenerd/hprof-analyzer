@@ -71,23 +71,28 @@ impl ChunkU32 {
     /// Free every chunk whose slots are entirely below `boundary` (exclusive).
     /// Idempotent: already-freed chunks stay empty. Call as the Phase-4 read
     /// cursor advances so consumed backing memory is returned promptly.
-    /// Uses MADV_DONTNEED to immediately return pages to the OS.
+    /// Uses MADV_FREE (after drop) to hint the OS to reclaim pages.
     pub fn free_below(&mut self, boundary: usize) {
         let last_chunk = boundary >> CHUNK_LOG; // chunks strictly before this are fully consumed
         for c in 0..last_chunk {
             if !self.chunks[c].is_empty() {
                 #[cfg(target_os = "linux")]
-                {
+                let (ptr, len) = {
                     let chunk = &self.chunks[c];
-                    let ptr = chunk.as_ptr() as *mut libc::c_void;
-                    let len = chunk.len() * std::mem::size_of::<u32>();
-                    // MADV_DONTNEED: immediately returns pages to OS, reducing RSS
-                    // before glibc's free list delays the reclaim.
-                    unsafe {
-                        libc::madvise(ptr, len, libc::MADV_DONTNEED);
-                    }
-                }
+                    (
+                        chunk.as_ptr() as *mut libc::c_void,
+                        chunk.len() * std::mem::size_of::<u32>(),
+                    )
+                };
                 self.chunks[c] = Vec::new();
+                // MADV_FREE after drop: pages are now in glibc's free-list;
+                // the hint tells the kernel it can reclaim them under pressure
+                // without corrupting glibc's bookkeeping (unlike MADV_DONTNEED
+                // which zero-fills immediately and can corrupt free-list metadata).
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::madvise(ptr, len, 8 /* MADV_FREE */);
+                }
             }
         }
     }
