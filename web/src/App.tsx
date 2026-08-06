@@ -3401,7 +3401,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
         defaultSortFieldId="ret"
         defaultSortAsc={false}
       />
-      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale entries have a null key — the GC cleared the <code>ThreadLocal</code> key but the value remains.</p>
+      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale entries have a null key — GC cleared the <code>ThreadLocal</code> key but the value remains.</p>
     </div>
   );
 }
@@ -3455,7 +3455,7 @@ function ThreadsSection({ report }: { report: Report }) {
       <h2>Threads</h2>
       <p className="subtitle">Per-thread call stacks recorded in the dump.</p>
       {threads.length === 0 ? (
-        <p className="subtitle">No thread call stacks were recorded in this dump.</p>
+        <p className="subtitle">No thread call stacks in this dump.</p>
       ) : (
         <>
           <ThreadsByRetainedTable threads={threads} />
