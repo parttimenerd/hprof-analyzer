@@ -4022,7 +4022,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
     <section id="container-attribution-classfield">
       <h2>Container Attribution</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> holds the most collection memory — the primary field backing maps or lists.
+        Which <code>Class#field</code> holds the most collection memory — two rankings: total across all containers reached through a field, and the single largest container per field. To reduce waste: shrink the collection's initial capacity, evict unused entries, or null out the field when the holder is done.
       </p>
 
       <h3>Top by Total Memory</h3>
@@ -4231,8 +4231,8 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> retains the most heap across all instances.
-        Pointee Type: the most common concrete class referenced by that field.
+        Which <code>Class#field</code> retains the most memory, summed over every object the field points at.
+        Pointee Type is the dominant concrete class reached through the field. A field retaining unexpectedly large memory is a good candidate to null after use or replace with a lazy-initialized reference.
       </p>
       {data.truncated && (
         <p className="subtitle">
@@ -4292,7 +4292,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
     switch (kind) {
       case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals an oversized cache; cap it with a max-entries limit or switch to an explicit bounded cache (e.g. Caffeine).";
       case "Weak": return "Weak references let GC claim referents — reachable only via weak chains, reclaimed at any collection. Large counts are usually benign, but a growing count can indicate ThreadLocal leaks or listener registries not deregistering.";
-      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or indicates native resources not being released.";
+      case "Phantom": return "Phantom references track objects in cleanup pipelines for native resource release. A large backlog signals a stalled or overloaded ReferenceQueue processor, or indicates native resources (file handles, off-heap buffers) not being released promptly.";
       default: return "";
     }
   };
@@ -4326,7 +4326,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
                 ? "Referents reachable only through soft references — no strong path. GC clears these under memory pressure."
                 : stats.kind === "Weak"
                   ? "Referents reachable only through weak references — no strong or soft path. GC can reclaim them at any collection."
-                  : "Referents reachable only through phantom references — queued for post-finalization cleanup."
+                  : "Referents reachable only through phantom references — queued for post-cleanup resource release."
             }</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />

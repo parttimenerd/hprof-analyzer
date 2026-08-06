@@ -62,8 +62,9 @@ pub(crate) fn render_duplicate_strings(
         Some(d) => d,
     };
     out.push_str(
-        "_Opt-in (`--find-duplicates`): each `java.lang.String` value hashed to \
-         64 bits; collisions accepted as approximation._\n\n",
+        "_String values seen more than once — reclaim by normalizing at parse time, \
+using `-XX:+UseStringDeduplication` (G1 GC), or sharing a canonical instance per value. \
+Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     );
     out.push_str(&format!(
         "- Total String instances: {}\n",
@@ -615,7 +616,7 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
 /// `Report.triage`). This renderer is a dumb formatter over that list.
 pub(crate) fn render_oom_triage(r: &Report, out: &mut String) {
     out.push_str("## Memory Triage\n\n");
-    out.push_str("_Where the reachable heap is concentrated, at a glance._\n\n");
+    out.push_str("_Automated signals pointing to where memory concentrates and what to investigate first._\n\n");
     for s in &r.triage {
         out.push_str(&format_signal_md(s));
     }
@@ -1471,7 +1472,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     out.push('\n');
 
     out.push_str("### Biggest Classes by Retained Heap\n\n");
-    out.push_str("_Classes whose instances together retain the most heap._\n\n");
+    out.push_str("_Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._\n\n");
     let mut classes = Table::new(
         &["#", "Class", "Instances", "Retained Heap"],
         &[Align::Right, Align::Left, Align::Right, Align::Right],
@@ -1493,8 +1494,9 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
         let d = &t.size_distribution;
         out.push_str("### Top-Dominator Size Distribution\n\n");
         out.push_str(&format!(
-            "_Retained-size spread across all {} top-level dominators (the biggest memory contributors)._\n\n",
-            d.count
+            "_Retained heap distributed across all {} top-level dominators. The shape reveals whether \
+a handful of large objects dominate the heap or memory is scattered across many small ones._\n\n",
+            fmt_count(d.count)
         ));
         out.push_str(&format!("- Dominators: {}\n", fmt_count(d.count)));
         out.push_str(&format!(
@@ -3064,18 +3066,19 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
         out.push_str(&format!("### {} References\n\n", stats.kind));
         let kind_caption = match stats.kind.as_str() {
             "Soft" => {
-                "_Soft references keep objects alive until the JVM needs memory — they are \
-cleared under GC pressure. A large soft-referenced heap is often a cache that grows \
-unbounded; consider bounding the cache size._"
+                "_Soft references keep objects alive until the JVM needs memory — cleared \
+under GC pressure. A large soft-referenced heap signals an oversized cache; cap it with a \
+max-entries limit or switch to an explicit bounded cache (e.g. Caffeine)._"
             }
             "Weak" => {
-                "_Weak references do not prevent GC. Objects listed here are reachable only \
-via weak chains — under any GC they may be reclaimed. Large counts are usually benign._"
+                "_Weak references let GC claim referents — reachable only via weak chains, \
+reclaimed at any collection. Large counts are usually benign, but a growing count can \
+indicate ThreadLocal leaks or listener registries not deregistering._"
             }
             "Phantom" => {
-                "_Phantom references mark objects in finalization or cleanup pipelines. \
-A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, \
-or that native resources (file handles, native buffers) are not being released promptly._"
+                "_Phantom references track objects in cleanup pipelines for native resource \
+release. A large backlog signals a stalled or overloaded ReferenceQueue processor, or \
+indicates native resources (file handles, off-heap buffers) not being released promptly._"
             }
             _ => "",
         };
@@ -3288,6 +3291,11 @@ fn render_garbage_root_node(
 pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out: &mut String) {
     use crate::md::{Align, Table, bar};
     out.push_str("## Dominator Analysis\n\n");
+    out.push_str(
+        "_Instances ranked by retained heap. An object _dominates_ another if every path \
+from a GC root to that object passes through it — releasing the dominator reclaims \
+everything it dominates._\n\n",
+    );
 
     // ---- Big Drops ----
     out.push_str("### Big Drops\n\n");
@@ -3655,11 +3663,10 @@ fn render_merged_paths_plain(root: &MergedPathNode, out: &mut String) {
 pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String) {
     out.push_str("## Allocation Sites\n\n");
     out.push_str(
-        "_Objects grouped by the stack trace that allocated them — each site is a candidate \
-to allocate less by pooling, caching, or deferring construction. \
-Shallow heap is additive; retained heap is not shown because summing per-object retained \
-values over-counts shared subgraphs (a subtree retained by multiple sites is counted once \
-per allocator, not once total)._\n\n",
+        "_Objects grouped by the stack trace that allocated them — shows where heap was \
+created, not necessarily what is keeping it alive. Only available when the dump was \
+captured with the HPROF agent (JDK 8 and earlier). Each site is a candidate to \
+allocate less by pooling, caching, or deferring construction._\n\n",
     );
     if !a.traces_present {
         out.push_str(
@@ -3675,8 +3682,8 @@ per allocator, not once total)._\n\n",
     if !any_frames {
         out.push_str(
             "_Allocation-site records are present but contain no per-frame data. \
-To capture method-level allocation stacks, run with JFR (`-XX:StartFlightRecording`) \
-or attach a profiler before taking the heap dump._\n\n",
+The HPROF agent must be invoked with `depth=8` or higher to record method-level \
+allocation stacks: `-agentlib:hprof=heap=dump,depth=8`._\n\n",
         );
         return;
     }
@@ -3733,8 +3740,8 @@ pub(crate) fn render_duplicate_prim_arrays(
         Some(d) => d,
     };
     out.push_str(
-        "_Opt-in (`--find-duplicates`): each primitive array hashed to 64 bits by content and \
-         element type; collisions accepted as approximation._\n\n",
+        "_Primitive arrays with identical content — each group could share a single \
+instance. Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     );
     out.push_str(&format!(
         "- Approx wasted bytes: {}\n\n",
