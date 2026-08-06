@@ -2834,7 +2834,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field retains the large set of objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
-            <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — look for a static field that is never cleared or a listener list where subscribers are never removed.</li>
+            <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — look for a static field never cleared or a listener list where subscribers are never removed.</li>
           )}
           {s.root_type_label === "Java Frame" && (
             <li>Held via a <strong>thread stack frame</strong> — open the Threads section and find the thread whose stack references this class; a blocked or long-running thread keeps these objects alive until the frame returns.</li>
@@ -3765,7 +3765,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
-        Fraction of each collection's capacity that is filled — low fill means wasted backing-array memory.
+        Fraction of each collection's capacity in use — low fill means wasted backing-array memory.
         {cfr && <>{" "}{fmtCount(cfr.total)} collections analyzed ({fmtCount(cfr.tracked)} non-empty shown).</>}
       </p>
       {cfrBuckets.length === 0 ? (
@@ -5802,7 +5802,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
         </p>
         {isLarge && (
           <p className="subtitle">
-            ⚠ Over 256 MB of off-heap NIO memory detected — invisible to GC and can cause OS-level memory pressure.
+            ⚠ Over 256 MB of off-heap NIO memory detected — invisible to GC and pressures OS memory.
           </p>
         )}
       </div>
@@ -9955,9 +9955,9 @@ function GlossarySection() {
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can still reach from a GC root. Anything unreachable is already collectible and is excluded from the totals here.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
-    ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
+    ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Top Consumers" and "Retention Concentration" sections rank these.</>],
-    ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means retention flows through long chains.</>],
+    ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means objects are retained through long dominator chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
