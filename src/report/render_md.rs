@@ -902,8 +902,8 @@ _Definitions for the terms used above._
   the collection is full.
 - **Map Load Factor**: for hash maps, the fraction of backing-array
   slots occupied — `occupied_slots / capacity`. A low load factor means many
-  empty buckets (wasted memory); a very high load factor increases hash collision
-  probability and lookup cost.
+  empty buckets (wasted memory); a high load factor (≥ 90%) increases hash
+  collision chains and lookup cost.
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
   reachable only through one or more `WeakReference`, `SoftReference`, or
   `PhantomReference` chains. Weak-only referents are collected at the next GC cycle;
