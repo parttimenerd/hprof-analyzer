@@ -2843,7 +2843,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check for JNI code that registers globals without a matching <code>DeleteGlobalRef</code>.</li>
           )}
           {!s.root_type_label && (
-            <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root keeps each instance alive.</li>
+            <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root retains each instance.</li>
           )}
         </ul>
       </div>
@@ -3401,7 +3401,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
         defaultSortFieldId="ret"
         defaultSortAsc={false}
       />
-      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale entries have a null key — the GC cleared the <code>ThreadLocal</code> key but the value is still held.</p>
+      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale entries have a null key — the GC cleared the <code>ThreadLocal</code> key but the value remains.</p>
     </div>
   );
 }
