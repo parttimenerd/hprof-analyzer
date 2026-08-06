@@ -450,10 +450,10 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
     out.push_str(
         "_Share of the reachable heap retained by the few largest top-level dominators \
          (a dominator's retained size is everything it keeps alive). Read it as a \
-         concentration curve: if **Top 1** is already high, one object is the leak and \
-         releasing it reclaims most of the heap; if the share only climbs as you widen to \
-         **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache \
-         or collection of similar objects) and no single release helps much._\n\n",
+         concentration curve: if **Top 1** is already high, one object is the accumulation \
+         point — making it unreachable reclaims most of the heap; if the share only climbs as you widen to \
+         **Top 10** / **Top 100**, retention is spread across many peers (e.g. a big cache \
+         or collection of similar objects) and no single fix helps much._\n\n",
     );
     let mut t = Table::new(
         &["Scope", "Retained Share", ""],
@@ -594,6 +594,14 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
                 s.pretty_class,
                 format_bytes(s.shallow),
             ));
+            if s.pretty_class == "java.lang.Class" {
+                out.push_str(
+                    "_Note: `java.lang.Class` objects are normal — every loaded class has one. \
+This suspect reflects class-metadata memory, not a leak in application code. \
+Investigate only if the instance count is unexpectedly high \
+(e.g. due to class-loader leaks)._\n\n",
+                );
+            }
         } else {
             out.push_str(&format!(
                 "{} instances of `{}` together retain this heap (combined shallow {}).\n\n",

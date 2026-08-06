@@ -1372,7 +1372,7 @@ The path to GC root is shown for each suspect below._\n\n",
                 out.push_str(
                     "_Note: `java.lang.Class` objects are normal — every loaded class has one. \
 This suspect reflects class-metadata memory, not a leak in application code. \
-It is worth investigating only if the instance count is unexpectedly high \
+Investigate only if the instance count is unexpectedly high \
 (e.g. due to class-loader leaks)._\n\n",
                 );
             }
