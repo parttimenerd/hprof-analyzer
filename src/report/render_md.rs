@@ -3280,10 +3280,11 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
     out.push_str("### Big Drops\n\n");
     let threshold_mb = d.big_drops.threshold as f64 / (1024.0 * 1024.0);
     out.push_str(&format!(
-        "_Dominators where retained heap does not flow into a single child — \
-the gap between an object's retained size and its largest child's retained size. \
-A large drop means this object directly owns a lot of memory spread across many children \
-(e.g. an array or collection). Threshold {:.1} MB (1% of reachable shallow). \
+        "_Objects retaining far more than their largest single child — memory held directly \
+in the object or spread across many small dominated children. \
+Drop = object retained − largest child retained (memory reclaimed by releasing this object, \
+net of what the biggest child already accounts for). \
+Threshold {:.1} MB (1% of reachable heap). \
 Multiple rows with the same class are distinct objects._\n\n",
         threshold_mb,
     ));
@@ -3380,8 +3381,10 @@ Multiple rows with the same class are distinct objects._\n\n",
     // ---- Immediate Dominators ----
     out.push_str("### Immediate Dominators\n\n");
     out.push_str(
-        "_Objects immediately dominated, rolled up by the dominator's class; \
-         a heavy dominated shallow heap under one class flags a retention hub._\n\n",
+        "_One row per dominator class: how many other objects it immediately dominates \
+         and the total shallow heap of those dominated objects. A large dominated-shallow \
+         figure means instances of that class are collectively gating large portions of \
+         the live heap — releasing them would allow that memory to be reclaimed._\n\n",
     );
     if d.immediate_dominators.rows.is_empty() {
         out.push_str("_No immediate dominators._\n\n");
