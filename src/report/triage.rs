@@ -1593,7 +1593,7 @@ impl Rule for OversizedPrimArray {
                 owner_clause,
                 pct,
             ),
-            Some(("arrays", "Arrays")),
+            Some(("arrays-by-size", "Arrays by Size")),
             &row.array_class,
         ))
     }
