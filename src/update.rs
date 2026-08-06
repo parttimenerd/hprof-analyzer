@@ -182,9 +182,8 @@ fn do_update(channel: Channel) -> Result<(), String> {
     }
 
     eprintln!("Smoke-testing downloaded binary …");
-    smoke_test(&tmp).map_err(|e| {
+    smoke_test(&tmp).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
-        e
     })?;
 
     eprintln!("Replacing {} …", exe.display());

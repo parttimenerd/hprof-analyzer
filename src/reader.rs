@@ -13,6 +13,13 @@ use std::{
     },
 };
 
+/// A sentinel `io::Error` kind used to signal `HEAP_DUMP_END` through the
+/// record-body closure in the pass1/pass2 scan loops without breaking the
+/// outer loop via a `break` that cannot cross a closure boundary.
+///
+/// Callers match on `e.kind() == HEAP_DUMP_END_KIND` and `break` the outer loop.
+pub const HEAP_DUMP_END_KIND: io::ErrorKind = io::ErrorKind::ConnectionAborted;
+
 const BUF_CAP: usize = 8 << 20; // 8 MiB refill chunk
 
 /// Streaming HPROF reader with a large internal buffer.
@@ -387,6 +394,26 @@ impl HprofReader {
         }
         self.bytes_consumed += skipped_total;
         Ok(())
+    }
+
+    /// Read the next top-level HPROF record header (tag + timestamp + length).
+    /// Returns `Ok(None)` on clean EOF (including truncated gzip streams).
+    /// Any mid-header EOF is also treated as clean EOF rather than an error,
+    /// since a truncated dump can cut off in the middle of a header.
+    pub fn next_record(&mut self) -> io::Result<Option<(u8, u64)>> {
+        let tag = match self.u1() {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            other => other?,
+        };
+        let _ts = match self.u4() {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            other => other?,
+        };
+        let length = match self.u4() {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            other => other?,
+        };
+        Ok(Some((tag, length as u64)))
     }
 
     /// Read exactly `n` bytes into a freshly allocated `Vec`.

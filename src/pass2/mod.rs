@@ -19,7 +19,7 @@ use std::{
 
 use crate::{
     pass1::Pass1,
-    reader::HprofReader,
+    reader::{HEAP_DUMP_END_KIND, HprofReader},
     types::{HprofType, heap, tags},
 };
 
@@ -560,50 +560,49 @@ impl Pass2 {
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
 
             loop {
-                let tag = match r.u1() {
-                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-                    other => other?,
+                let (tag, length) = match r.next_record()? {
+                    None => break,
+                    Some(h) => h,
                 };
-                let _ts = r.u4()?;
-                let length = r.u4()? as u64;
-
-                match tag {
-                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                        Self::scan_heap_2a(
-                            &mut r,
-                            id_size,
-                            length,
-                            &p1.id_map,
-                            &class_addr_to_hist,
-                            &field_plans_dense,
-                            &mut out_degree,
-                            &mut in_degree,
-                            &mut scratch,
-                            if scan_driver.is_empty() {
-                                None
-                            } else {
-                                Some(&mut scan_driver as &mut dyn crate::query::ObjectVisitor)
-                            },
-                            scan_wants_arrays,
-                            &p1.class_map,
-                            &p1.strings,
-                            &capture_thread_addrs,
-                            &mut captured_thread_blobs,
-                            &std::collections::HashSet::new(),
-                            &mut HashMap::new(),
-                            system_class_addr,
-                            props_name_id,
-                            &mut captured_props_addr,
-                            Some(&mut fd_state),
-                            &p1,
-                            &shallow,
-                            &opts.coll_descs,
-                        )?;
-                    }
-                    tags::HEAP_DUMP_END => break,
-                    _ => {
-                        r.skip(length)?;
-                    }
+                let result: io::Result<()> = (|| match tag {
+                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => Self::scan_heap_2a(
+                        &mut r,
+                        id_size,
+                        length,
+                        &p1.id_map,
+                        &class_addr_to_hist,
+                        &field_plans_dense,
+                        &mut out_degree,
+                        &mut in_degree,
+                        &mut scratch,
+                        if scan_driver.is_empty() {
+                            None
+                        } else {
+                            Some(&mut scan_driver as &mut dyn crate::query::ObjectVisitor)
+                        },
+                        scan_wants_arrays,
+                        &p1.class_map,
+                        &p1.strings,
+                        &capture_thread_addrs,
+                        &mut captured_thread_blobs,
+                        &std::collections::HashSet::new(),
+                        &mut HashMap::new(),
+                        system_class_addr,
+                        props_name_id,
+                        &mut captured_props_addr,
+                        Some(&mut fd_state),
+                        &p1,
+                        &shallow,
+                        &opts.coll_descs,
+                    ),
+                    tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+                    _ => r.skip(length),
+                })();
+                match result {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -1130,38 +1129,38 @@ impl Pass2 {
             let mut inb_flat_stub = crate::chunkvec::ChunkU32::zeroed(0);
             let mut in_degree_stub: Vec<u32> = Vec::new();
             loop {
-                let tag = match r.u1() {
-                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-                    other => other?,
+                let (tag, length) = match r.next_record()? {
+                    None => break,
+                    Some(h) => h,
                 };
-                let _ts = r.u4()?;
-                let length = r.u4()? as u64;
-                match tag {
-                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                        Self::fill_heap_2b(
-                            &mut r,
-                            id_size,
-                            length,
-                            &p1.id_map,
-                            &class_addr_to_hist,
-                            &field_plans_dense,
-                            &field_plans_named_dense,
-                            true,
-                            false,
-                            &mut fwd_targets,
-                            &mut fwd_offsets,
-                            &mut fwd_field_name_idx_opt,
-                            &mut field_name_pool,
-                            &mut field_name_pool_idx,
-                            &mut inb_flat_stub,
-                            &mut in_degree_stub,
-                            &mut scratch,
-                        )?;
-                    }
-                    tags::HEAP_DUMP_END => break,
-                    _ => {
-                        r.skip(length)?;
-                    }
+                let result: io::Result<()> = (|| match tag {
+                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => Self::fill_heap_2b(
+                        &mut r,
+                        id_size,
+                        length,
+                        &p1.id_map,
+                        &class_addr_to_hist,
+                        &field_plans_dense,
+                        &field_plans_named_dense,
+                        true,
+                        false,
+                        &mut fwd_targets,
+                        &mut fwd_offsets,
+                        &mut fwd_field_name_idx_opt,
+                        &mut field_name_pool,
+                        &mut field_name_pool_idx,
+                        &mut inb_flat_stub,
+                        &mut in_degree_stub,
+                        &mut scratch,
+                    ),
+                    tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+                    _ => r.skip(length),
+                })();
+                match result {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(e),
                 }
             }
         }

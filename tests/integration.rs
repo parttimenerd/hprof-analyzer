@@ -6,6 +6,64 @@
 mod md_test;
 use md_test::Md;
 
+// ---------------------------------------------------------------------------
+// Helpers shared by the broken-file resilience tests
+// ---------------------------------------------------------------------------
+
+fn hprof_header() -> Vec<u8> {
+    let mut h = b"JAVA PROFILE 1.0.2\0".to_vec();
+    h.extend_from_slice(&8u32.to_be_bytes()); // id_size = 8
+    h.extend_from_slice(&0u64.to_be_bytes()); // timestamp = 0
+    h
+}
+
+/// Build a STRING_IN_UTF8 (tag 0x01) record with the given payload bytes.
+fn string_record(id: u64, text: &[u8]) -> Vec<u8> {
+    let body_len = 8 + text.len() as u32; // id(8) + text
+    let mut rec = vec![0x01u8]; // tag
+    rec.extend_from_slice(&0u32.to_be_bytes()); // ts_delta
+    rec.extend_from_slice(&body_len.to_be_bytes());
+    rec.extend_from_slice(&id.to_be_bytes());
+    rec.extend_from_slice(text);
+    rec
+}
+
+/// Build a LOAD_CLASS (tag 0x02) record.
+fn load_class_record(serial: u32, class_addr: u64, name_id: u64) -> Vec<u8> {
+    let body_len: u32 = 4 + 8 + 4 + 8; // serial + addr + stack_serial + name_id
+    let mut rec = vec![0x02u8]; // tag
+    rec.extend_from_slice(&0u32.to_be_bytes());
+    rec.extend_from_slice(&body_len.to_be_bytes());
+    rec.extend_from_slice(&serial.to_be_bytes());
+    rec.extend_from_slice(&class_addr.to_be_bytes());
+    rec.extend_from_slice(&0u32.to_be_bytes()); // stack_serial
+    rec.extend_from_slice(&name_id.to_be_bytes());
+    rec
+}
+
+/// Run `hprof-analyzer report <file>` and return (exit_success, combined output).
+fn run_report(path: &std::path::Path) -> (bool, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg("report")
+        .arg(path)
+        .output()
+        .expect("failed to spawn hprof-analyzer");
+    let combined = format!(
+        "STDOUT:\n{}\nSTDERR:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), combined)
+}
+
+/// Assert the process did not panic (no "panicked at" in output).
+fn assert_no_panic(combined: &str) {
+    assert!(
+        !combined.contains("panicked at"),
+        "tool panicked!\n{combined}"
+    );
+}
+
 #[test]
 fn end_to_end_dump0() {
     let path = concat!(
@@ -410,4 +468,123 @@ fn parity_field_stats_golden() {
         ./target/release/hprof-analyzer tests/fixtures/dump_4_philosophers.hprof \
         tests/fixtures/dump_4_philosophers_field_stats.json --field-stats --format json"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Broken / truncated file resilience tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_empty_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.hprof");
+    std::fs::write(&path, b"").unwrap();
+    let (ok, out) = run_report(&path);
+    assert_no_panic(&out);
+    assert!(!ok, "empty file should not succeed\n{out}");
+}
+
+#[test]
+fn broken_garbage_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("garbage.hprof");
+    std::fs::write(&path, [0xDE, 0xAD, 0xBE, 0xEF].repeat(128)).unwrap();
+    let (ok, out) = run_report(&path);
+    assert_no_panic(&out);
+    assert!(!ok, "garbage file should not succeed\n{out}");
+}
+
+#[test]
+fn broken_header_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("header_only.hprof");
+    std::fs::write(&path, hprof_header()).unwrap();
+    let (_ok, out) = run_report(&path);
+    assert_no_panic(&out);
+    // No objects → may succeed with empty report or fail; either is fine.
+}
+
+#[test]
+fn broken_truncated_mid_record_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mid_header.hprof");
+    let mut data = hprof_header();
+    data.push(0x01u8); // start of a STRING record tag byte only, then EOF
+    std::fs::write(&path, data).unwrap();
+    let (_ok, out) = run_report(&path);
+    assert_no_panic(&out);
+}
+
+#[test]
+fn broken_truncated_mid_record_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mid_body.hprof");
+    let mut data = hprof_header();
+    // STRING record claiming 108-byte body (8-byte id + 100 bytes text)
+    data.push(0x01u8); // tag
+    data.extend_from_slice(&0u32.to_be_bytes()); // ts_delta
+    data.extend_from_slice(&108u32.to_be_bytes()); // length = 108
+    data.extend_from_slice(&1u64.to_be_bytes()); // id = 1
+    data.extend_from_slice(&[b'x'; 10]); // only 10 bytes instead of 100
+    std::fs::write(&path, data).unwrap();
+    let (_ok, out) = run_report(&path);
+    assert_no_panic(&out);
+}
+
+#[test]
+fn broken_truncated_heap_dump_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("truncated_heap.hprof");
+    let mut data = hprof_header();
+    data.extend(string_record(1, b"java.lang.Object"));
+    data.extend(load_class_record(1, 0x1000, 1));
+    // HEAP_DUMP_SEGMENT (tag 0x1C) claiming 200 bytes but only 40 written
+    data.push(0x1Cu8); // tag
+    data.extend_from_slice(&0u32.to_be_bytes()); // ts_delta
+    data.extend_from_slice(&200u32.to_be_bytes()); // claimed length
+    data.extend_from_slice(&[0u8; 40]); // truncated body
+    std::fs::write(&path, data).unwrap();
+    let (_ok, out) = run_report(&path);
+    assert_no_panic(&out);
+}
+
+#[test]
+fn broken_heap_dump_with_valid_prefix() {
+    // Header + STRING + LOAD_CLASS + full HEAP_DUMP_END, then garbage appended.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("valid_then_garbage.hprof");
+    let mut data = hprof_header();
+    data.extend(string_record(1, b"java.lang.Object"));
+    data.extend(load_class_record(1, 0x1000, 1));
+    // HEAP_DUMP_END (tag 0x2C, length 0)
+    data.push(0x2Cu8);
+    data.extend_from_slice(&0u32.to_be_bytes());
+    data.extend_from_slice(&0u32.to_be_bytes());
+    // Append garbage after a valid terminator
+    data.extend_from_slice(&[0xFFu8; 64]);
+    std::fs::write(&path, data).unwrap();
+    let (_ok, out) = run_report(&path);
+    assert_no_panic(&out);
+}
+
+#[test]
+fn broken_truncated_gz() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("truncated.hprof.gz");
+    // Build a real gzip of the header+string+load_class bytes, then truncate it.
+    let hprof = {
+        let mut d = hprof_header();
+        d.extend(string_record(1, b"java.lang.Object"));
+        d.extend(load_class_record(1, 0x1000, 1));
+        d
+    };
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&hprof).unwrap();
+    let full_gz = encoder.finish().unwrap();
+    // Keep only the first 60% of the gzip stream.
+    let truncated = &full_gz[..full_gz.len() * 60 / 100];
+    std::fs::write(&path, truncated).unwrap();
+    let (_ok, out) = run_report(&path);
+    assert_no_panic(&out);
 }

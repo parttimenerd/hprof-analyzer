@@ -71,7 +71,7 @@ regex = "1"
 libc = "0.2"
 
 [dev-dependencies]
-cargo-husky = { version = "1.5.0", features = ["precommit-hook", "run-cargo-fmt"] }
+cargo-husky = { version = "1.5.0", features = ["precommit-hook", "run-cargo-fmt", "user-hooks"] }
 jsonschema = "0.47.0"
 proptest = "1"
 tempfile = "3"
@@ -96,6 +96,7 @@ needless_range_loop = "allow"
 ptr_arg = "allow"
 collapsible_if = "allow"
 too_many_arguments = "allow"
+redundant_closure_call = "allow"
 
 [profile.release]
 lto = true

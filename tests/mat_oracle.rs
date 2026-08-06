@@ -129,7 +129,7 @@ fn group_by_count_matches_manual_count() {
 
 #[cfg(feature = "mat-oracle")]
 mod mat_oracle {
-    use super::{philosophers_hprof, run_ours_args};
+    use super::run_ours_args;
     use std::collections::BTreeSet;
 
     fn mat_home() -> Option<String> {

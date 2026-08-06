@@ -1548,7 +1548,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file. Allocation-site frames require the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
+        Record-type counts from the raw HPROF file — shows which kinds of data were captured. Missing allocation frames means the HPROF agent ran without stack tracking; enable it with <code>java -agentlib:hprof=heap=dump,depth=8</code>.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -1657,6 +1657,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
   return (
     <>
       <h3>Waste by Array Element Type</h3>
+      <p className="subtitle">Reclaimable bytes grouped by array element type — focus on the highest-waste type first.</p>
       <StdTable columns={cols} data={rows} searchKeys={["array_class"]} fmtBtn={kbBtn} defaultSortFieldId="wasted" defaultSortAsc={false} />
     </>
   );
@@ -1810,7 +1811,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Boxed wrapper types — replacing with primitive fields eliminates allocation and header overhead.
+        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs a 16-byte object header on top of its payload — replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates that overhead.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -1840,7 +1841,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers dominate shallow heap — pack into arrays or replace with primitives.
+        Classes where JVM object headers (typically 16 bytes each) dominate shallow heap relative to payload. High header fraction means many small instances — consider replacing with primitive arrays, value types, or a flyweight pool.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -2072,6 +2073,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>GC Roots by Type</h3>
+            <p className="subtitle">Objects directly anchored to GC roots keep their entire transitive reference graph alive. JVM locals, JNI globals, system classes, and monitor-held objects are the main root types.</p>
             {totalRetained > 0
               ? <GcRootsRetainedChart data={gcRows} />
               : <GcRootsChart data={gcRows} />}
@@ -3357,6 +3359,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   return (
     <>
       <h3>Threads by Retained Heap</h3>
+      <p className="subtitle">Click a thread name to jump to its full stack trace below. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory via local variables.</p>
       <StdTable columns={cols} data={sorted} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
     </>
   );
@@ -3843,7 +3846,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Constant Primitive Arrays</h3>
       <p className="subtitle">
-        Primitive arrays whose every element is identical.
+        Primitive arrays where every element is the same value — often zero-initialized buffers or sentinel arrays. Deduplicate them with a shared singleton or intern pool to reclaim the backing storage.
       </p>
       {cpa?.truncated && (
         <p className="subtitle">List truncated — remaining groups folded into one row.</p>
@@ -6135,7 +6138,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Counts for common Java leak patterns — any non-zero count warrants investigation.
+        Scalar signals for known Java leak patterns. Non-zero counts are not always bugs — check the "What to Check" column for how to triage each one.
       </p>
       <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
@@ -7012,7 +7015,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                   onClick={() => fireInspect({ kind: "class", cls: selected })}>
                   Full Details →
                 </button>
-                <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
+                <button className="show-more-btn" title="List all instances of this class in the floating Inspector panel" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
                   Instances →
                 </button>
                 <button className="show-more-btn" title="Open class in Object Graph Explorer" onClick={() => {
@@ -7029,7 +7032,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                   </button>
                 )}
                 {biggestIdx != null && (
-                  <button className="show-more-btn"
+                  <button className="show-more-btn" title="Open the largest instance of this class by retained heap in the floating Inspector panel"
                     onClick={() => fireInspect({ kind: "instance", idx: biggestIdx, cls: selected! })}>
                     Biggest Instance →
                   </button>
@@ -10532,11 +10535,11 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         </div>
       </div>
       <div className="trg-page-actions">
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
+        <button className="show-more-btn" title="List all instances of this class" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
           Instances →
         </button>
         {biggestIdx != null && (
-          <button className="show-more-btn" onClick={() => onNavigate({ kind: "instance", idx: biggestIdx, cls })}>
+          <button className="show-more-btn" title="Open the largest instance of this class by retained heap" onClick={() => onNavigate({ kind: "instance", idx: biggestIdx, cls })}>
             Biggest Instance →
           </button>
         )}
@@ -10942,23 +10945,23 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
         </div>
       )}
       <div className="trg-page-actions">
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "class", cls })}>
+        <button className="show-more-btn" title="Back to the class overview" onClick={() => onNavigate({ kind: "class", cls })}>
           ← Class View
         </button>
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
+        <button className="show-more-btn" title="List all instances of this class" onClick={() => onNavigate({ kind: "instances", cls, page: 0 })}>
           All Instances →
         </button>
-        <button className="show-more-btn" onClick={() => onNavigate({ kind: "fields", idx, cls })}>
+        <button className="show-more-btn" title="Show field values of this object" onClick={() => onNavigate({ kind: "fields", idx, cls })}>
           Fields →
         </button>
-        <button className="show-more-btn" onClick={() => {
+        <button className="show-more-btn" title="Open in Object Graph Explorer to follow reference chains" onClick={() => {
           (window as any).__explorerNavigate?.("explore", idx);
           history.replaceState(null, "", `#explore/${idx}`);
           window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Loaded in Object Graph Explorer", sectionId: "object-graph" } }));
         }}>
           Object Explorer →
         </button>
-        <button className="show-more-btn" onClick={() => {
+        <button className="show-more-btn" title="Open in the dominator tree view of Object Graph Explorer" onClick={() => {
           (window as any).__explorerNavigate?.("domtree", idx);
           history.replaceState(null, "", `#domtree/${idx}`);
           window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Loaded in Object Graph Explorer", sectionId: "object-graph" } }));
@@ -10966,7 +10969,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
           Dominator Tree →
         </button>
         {hasDomData && (
-          <button className="show-more-btn" onClick={() => pivotClass(cls)}>
+          <button className="show-more-btn" title="Open this class in the WhoHolds Dominator Sankey" onClick={() => pivotClass(cls)}>
             In Dominator →
           </button>
         )}

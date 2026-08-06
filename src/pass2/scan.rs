@@ -5,7 +5,7 @@
 use std::io::{self, ErrorKind};
 
 use crate::{
-    reader::HprofReader,
+    reader::{HEAP_DUMP_END_KIND, HprofReader},
     types::{HprofType, heap, tags},
 };
 
@@ -41,13 +41,11 @@ where
     let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
-        let tag = match r.u1() {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            other => other?,
+        let (tag, length) = match r.next_record()? {
+            None => break,
+            Some(h) => h,
         };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
-        match tag {
+        let result: io::Result<()> = (|| match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 let mut remaining = length;
                 while remaining > 0 {
@@ -133,9 +131,16 @@ where
                         }
                     }
                 }
+                Ok(())
             }
-            tags::HEAP_DUMP_END => break,
-            _ => r.skip(length)?,
+            tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+            _ => r.skip(length),
+        })();
+        match result {
+            Ok(()) => {}
+            Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
         }
     }
     Ok(())
@@ -184,13 +189,11 @@ where
     let mut prim_scratch: Vec<u8> = Vec::with_capacity(256);
     let mut obj_scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
-        let tag = match r.u1() {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            other => other?,
+        let (tag, length) = match r.next_record()? {
+            None => break,
+            Some(h) => h,
         };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
-        match tag {
+        let result: io::Result<()> = (|| match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 let mut remaining = length;
                 while remaining > 0 {
@@ -276,9 +279,16 @@ where
                         }
                     }
                 }
+                Ok(())
             }
-            tags::HEAP_DUMP_END => break,
-            _ => r.skip(length)?,
+            tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+            _ => r.skip(length),
+        })();
+        match result {
+            Ok(()) => {}
+            Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
         }
     }
     Ok(())
@@ -300,13 +310,11 @@ where
     let mut statics: Vec<(u64, u8, u64)> = Vec::new();
     let mut vbuf: Vec<u8> = Vec::with_capacity(8);
     loop {
-        let tag = match r.u1() {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            other => other?,
+        let (tag, length) = match r.next_record()? {
+            None => break,
+            Some(h) => h,
         };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
-        match tag {
+        let result: io::Result<()> = (|| match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 let mut remaining = length;
                 while remaining > 0 {
@@ -436,9 +444,16 @@ where
                         }
                     }
                 }
+                Ok(())
             }
-            tags::HEAP_DUMP_END => break,
-            _ => r.skip(length)?,
+            tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+            _ => r.skip(length),
+        })();
+        match result {
+            Ok(()) => {}
+            Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
         }
     }
     Ok(())
@@ -579,13 +594,11 @@ where
     let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
-        let tag = match r.u1() {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            other => other?,
+        let (tag, length) = match r.next_record()? {
+            None => break,
+            Some(h) => h,
         };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
-        match tag {
+        let result: io::Result<()> = (|| match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 let mut remaining = length;
                 while remaining > 0 {
@@ -683,9 +696,16 @@ where
                         }
                     }
                 }
+                Ok(())
             }
-            tags::HEAP_DUMP_END => break,
-            _ => r.skip(length)?,
+            tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+            _ => r.skip(length),
+        })();
+        match result {
+            Ok(()) => {}
+            Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
         }
     }
     Ok((inst_blobs, prim_blobs, obj_blobs))

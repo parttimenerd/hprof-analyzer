@@ -16,7 +16,7 @@ use std::{
 use crate::{
     id_map::IdMap,
     pass2::sub_remaining,
-    reader::HprofReader,
+    reader::{HEAP_DUMP_END_KIND, HprofReader},
     types::{HprofType, heap, tags},
 };
 
@@ -201,14 +201,12 @@ impl Pass1 {
             std::collections::HashMap::new();
 
         loop {
-            let tag = match r.u1() {
-                Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-                other => other?,
+            let (tag, length) = match r.next_record()? {
+                None => break,
+                Some(h) => h,
             };
-            let _timestamp = r.u4()?;
-            let length = r.u4()? as u64;
-
-            match tag {
+            // Wrap the record body so any mid-record EOF breaks gracefully.
+            let result: io::Result<()> = match tag {
                 tags::STRING_IN_UTF8 => {
                     utf8_records += 1;
                     let str_id = r.id()?;
@@ -224,6 +222,7 @@ impl Pass1 {
                     })?;
                     let bytes = r.read_bytes(payload_len as usize)?;
                     strings.insert(str_id, String::from_utf8_lossy(&bytes).into_owned());
+                    Ok(())
                 }
                 tags::LOAD_CLASS => {
                     load_class_records += 1;
@@ -234,6 +233,7 @@ impl Pass1 {
                     let name_id = r.id()?;
                     class_serial_to_addr.insert(serial, class_addr);
                     class_map.entry(class_addr).or_default().name_id = name_id;
+                    Ok(())
                 }
                 tags::STACK_FRAME => {
                     stack_frame_records += 1;
@@ -254,6 +254,7 @@ impl Pass1 {
                             line_number,
                         },
                     );
+                    Ok(())
                 }
                 tags::STACK_TRACE => {
                     stack_trace_records += 1;
@@ -268,6 +269,7 @@ impl Pass1 {
                     }
                     stack_traces.insert(stack_serial, frames);
                     stack_trace_thread.insert(stack_serial, thread_serial);
+                    Ok(())
                 }
                 tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                     heap_dump_segments += 1;
@@ -294,16 +296,20 @@ impl Pass1 {
                         &mut prim_array_count,
                         &mut class_dump_count,
                         &mut gc_root_tag_counts,
-                    )?;
+                    )
                 }
-                tags::HEAP_DUMP_END => break,
+                tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
                 tags::UNLOAD_CLASS => {
                     unload_class_records += 1;
-                    r.skip(length)?;
+                    r.skip(length)
                 }
-                _ => {
-                    r.skip(length)?;
-                }
+                _ => r.skip(length),
+            };
+            match result {
+                Ok(()) => {}
+                Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(e),
             }
         }
 

@@ -226,6 +226,14 @@ fn html_escape(s: &str) -> String {
 /// `window.hprofDecodeText(b64) -> Promise<String>` used by both the bootstrap
 /// (for the bundle) and the app (for the report data), then boots the bundle.
 const BOOTSTRAP_JS: &str = r#"
+// Patch localStorage to a silent no-op if the browser blocks access (e.g. strict
+// Content-Security-Policy, sandboxed iframes, or Playwright headless mode).
+(function () {
+  try { localStorage.getItem("_"); } catch (_) {
+    var _store = {};
+    window.localStorage = { getItem: function(k){ return _store[k]??null; }, setItem: function(k,v){ _store[k]=String(v); }, removeItem: function(k){ delete _store[k]; }, clear: function(){ _store={}; }, key: function(i){ return Object.keys(_store)[i]??null; }, get length(){ return Object.keys(_store).length; } };
+  }
+})();
 (function () {
   function b64ToBytes(b64) {
     var bin = atob(b64);
@@ -330,6 +338,12 @@ const BOOTSTRAP_JS: &str = r#"
 /// the inline bundle script runs. Omits the bundle-loading portion of the
 /// normal bootstrap (bundle is already in the page as a `<script>` tag).
 const DEV_PRELUDE_JS: &str = r#"
+(function () {
+  try { localStorage.getItem("_"); } catch (_) {
+    var _store = {};
+    window.localStorage = { getItem: function(k){ return _store[k]??null; }, setItem: function(k,v){ _store[k]=String(v); }, removeItem: function(k){ delete _store[k]; }, clear: function(){ _store={}; }, key: function(i){ return Object.keys(_store)[i]??null; }, get length(){ return Object.keys(_store).length; } };
+  }
+})();
 (function () {
   function b64ToBytes(b64) {
     var bin = atob(b64);
