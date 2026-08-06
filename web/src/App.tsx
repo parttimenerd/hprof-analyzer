@@ -3403,7 +3403,6 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
         defaultSortFieldId="ret"
         defaultSortAsc={false}
       />
-      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale entries have a null key — GC cleared the <code>ThreadLocal</code> key but the value remains.</p>
     </div>
   );
 }
@@ -10164,7 +10163,7 @@ function GlossarySection() {
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type.</>],
     ["Collection Fill Ratio", <>fraction of a collection's backing-array capacity occupied by elements — <code>elements ÷ capacity</code>. Near 0 means mostly empty (wasted memory); near 1 means the collection is full.</>],
     ["Map Load Factor", <>for hash maps, the fraction of backing-array slots occupied — <code>occupied_slots ÷ capacity</code>. Low load factor = many empty buckets (wasted memory); high load factor (≥ 90%) increases hash-collision chains and lookup cost.</>],
-    ["Compressed OOPs", <>a JVM optimisation storing object references as 32-bit integers instead of 64-bit pointers, halving reference-field overhead on heaps ≤ ~32 GB. Shown in Heap Summary as "Compressed OOPs: yes".</>],
+    ["Compressed OOPs", <>a JVM optimization storing object references as 32-bit integers instead of 64-bit pointers, halving reference-field overhead on heaps ≤ ~32 GB. Shown in Heap Summary as "Compressed OOPs: yes".</>],
     ["Class#field Notation", <>used throughout this report to identify a specific field: <code>HolderClass#fieldName</code> (e.g. <code>java.util.HashMap#table</code>). Indicates the dominant incoming reference path, not a guaranteed allocation site.</>],
   ];
   return (
