@@ -1317,7 +1317,6 @@ function PivotBtn({ cls }: { cls: string }) {
       aria-label="Open in Inspector"
       onClick={(e) => {
         e.stopPropagation();
-        window.dispatchEvent(new CustomEvent("pivot-class", { detail: cls }));
         fireInspect({ kind: "class", cls });
       }}
       style={{ opacity: 0.6 }}
@@ -5406,6 +5405,8 @@ function DomGraphView({ pairs, idoms }: {
             onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>Instances →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
             onClick={() => { window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: selected })); window.location.hash = "type-ref-graph"; }}>Type Graph →</button>
+          <button className="show-more-btn" style={{ flexShrink: 0 }}
+            onClick={() => pivotClass(selected)}>WhoHolds →</button>
         </div>
       )}
     </div>
@@ -6580,10 +6581,11 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   const [biggestWasmIdx, setBiggestWasmIdx] = React.useState<number | null>(null);
   React.useEffect(() => {
     setBiggestWasmIdx(null);
-    if (!selected || !(wasm as any)?.find_instances) return;
+    const wasmEx = (window as any).__wasmExploration;
+    if (!selected || !wasmEx?.find_instances) return;
     try {
-      const r = JSON.parse((wasm as any).find_instances(selected, 1)) as Array<{ idx: number; cls: string }>;
-      if (r.length > 0) setBiggestWasmIdx(r[0].idx);
+      const r = JSON.parse(wasmEx.find_instances(selected, 1));
+      if (r.ok && r.matches?.length > 0) setBiggestWasmIdx(r.matches[0].dense_idx);
     } catch { /* ignore */ }
   }, [selected]);
   const biggestStaticIdx = React.useMemo(() => {
