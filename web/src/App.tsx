@@ -1624,7 +1624,7 @@ function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
     <>
       <h3>Classes Holding the Most Strings</h3>
       <p className="subtitle">
-        <code>java.lang.String</code> instances referenced by each class.
+        Which classes hold the most <code>java.lang.String</code> references — likely candidates to benefit from deduplication or interning.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["class_name"]} defaultSortFieldId="refs" defaultSortAsc={false} />
     </>
@@ -1724,7 +1724,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
           <>
             <h3>String Length Distribution</h3>
             <p className="subtitle">
-              Distinct-value lengths (bytes) — Min: {fmtCount(d.length_stats.min)} · Median: {fmtCount(d.length_stats.median)} · Max: {fmtCount(d.length_stats.max)} · Total: {fmtB(d.length_stats.total)}.
+              Length distribution of distinct string values (in chars/bytes) — a peak at short lengths is normal; a peak at unexpectedly long lengths may signal log buffers or URL strings worth truncating. Min: {fmtCount(d.length_stats.min)} · Median: {fmtCount(d.length_stats.median)} · Max: {fmtCount(d.length_stats.max)} · Total: {fmtB(d.length_stats.total)}.
             </p>
             <StdTable columns={lenCols} data={d.length_histogram} searchKeys={[]} defaultSortFieldId="upper" />
           </>
@@ -1840,7 +1840,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers (12 bytes with compressed OOPs, 16 without) consume a large share of shallow heap. The fix is to reduce object <em>count</em>: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields. Value types (Project Valhalla) eliminate headers entirely.
+        Classes where object headers (12 bytes with compressed OOPs, 16 without) consume a large share of shallow heap. The practical action is to reduce object <em>count</em>: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields. Value types (Project Valhalla) eliminate headers entirely.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -2860,7 +2860,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Objects and class groups retaining the most heap — the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference keeping it alive. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
+      <p className="subtitle">Objects and class groups retaining the most heap, ranked by retained size — the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference that keeps it alive. The path to each GC root is shown below. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
       {l.suspects.length === 0 ? (
         <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in <a href="#dominator-analysis" onClick={(e) => { e.preventDefault(); document.getElementById("dominator-analysis")?.scrollIntoView({ behavior: "smooth" }); }}>Dominator Analysis</a>.</p>
       ) : (
@@ -3127,7 +3127,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects</h3>
-      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
+      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when a suspect didn&apos;t cross the leak-suspects threshold. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
@@ -4161,8 +4161,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
       <p className="subtitle">
-        The largest individual collection instances. <strong>Owner</strong> is the primary incoming <code>Class#field</code>; <strong>Value Type</strong> is the dominant runtime element type of the backing array — for a <code>Map&lt;K,V&gt;</code> this is often <code>Entry</code> or <code>Object</code>, not <code>V</code>. Oversized collections often signal unbounded growth, missing eviction, or data that should be paginated or right-sized.
-        {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag for field attribution.</>}
+        The largest individual collection instances. <strong>Owner</strong> is the primary incoming <code>Class#field</code>; <strong>Value Type</strong> is the dominant runtime element type of the backing array (the direct element, not the logical key/value — for a <code>Map&lt;K,V&gt;</code> this is often <code>Entry</code> or <code>Object</code>, not <code>V</code>). Oversized collections often signal unbounded growth, missing eviction, or data that should be paginated or right-sized. Owner, retained, and value-type columns require <code>--collections</code>.
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
@@ -4191,7 +4190,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
     <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
-        Element types stored in each collection class, summed across all instances. Spot unexpected or boxed value types that could be replaced with primitive arrays or more specific collections.
+        Element types stored in each collection class, summed across all instances. Spot unexpected or boxed value types that could be replaced with primitive arrays or more specific collections. Requires <code>--collections</code>.
       </p>
       {rows.length === 0 ? (
         <p className="subtitle">None found in this dump.</p>
@@ -4231,7 +4230,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
         Which <code>Class#field</code> retains the most memory, summed over every object the field points at.
-        Pointee Type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field retaining unexpectedly large memory is a good candidate to null after use or replace with a lazy-initialized reference.
+        Runtime pointee type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field retaining unexpectedly large memory is a good candidate to null after use or replace with a lazy-initialized reference.
       </p>
       {data.truncated && (
         <p className="subtitle">
