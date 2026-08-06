@@ -1248,6 +1248,15 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
              re-copy the .hprof dump and retry"
         );
     }
+    // A file with a .hprof extension that lacks the HPROF magic is almost certainly
+    // a saved report JSON misnamed as a dump.
+    if input != "-" && std::fs::metadata(input).is_ok() && !looks_like_hprof(input) {
+        return format!(
+            "{msg}\n(hint: '{input}' does not start with the HPROF magic; \
+             if it is a saved report JSON, rename it without the .hprof \
+             extension to re-render it)"
+        );
+    }
     msg
 }
 
