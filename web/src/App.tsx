@@ -2860,7 +2860,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Objects and class groups retaining the most heap, ranked by retained size — the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference that keeps it alive. The path to each GC root is shown below. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
+      <p className="subtitle">Objects and class groups retaining the most heap, ranked by retained size — the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference that keeps it alive. GC root paths are shown for each suspect. Class-name icons: <span title="Copy class name">⎘</span> copy name · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL query · <span title="List all instances in Object Graph Explorer">⬡≡</span> list instances</p>
       {l.suspects.length === 0 ? (
         <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in <a href="#dominator-analysis" onClick={(e) => { e.preventDefault(); document.getElementById("dominator-analysis")?.scrollIntoView({ behavior: "smooth" }); }}>Dominator Analysis</a>.</p>
       ) : (
@@ -5806,11 +5806,11 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             {fmtB(data?.unreachable_shallow ?? 0)} shallow heap.
             Showing top {fmtCount(rows.length)} classes by shallow size.
           </p>
-          <p className="subtitle">
-            {unreachablePct >= 5
-              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of heap total, this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was pre-GC garbage.</>
-              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5%) is normal between GC cycles."}
-          </p>
+          {unreachablePct >= 5 && (
+            <p className="subtitle">
+              At {fmtPct(unreachablePct)} of heap total, this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if the count drops sharply, it was pre-GC garbage.
+            </p>
+          )}
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
           )}
