@@ -5887,7 +5887,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is summed per trace; retained heap is excluded — per-trace sums double-count shared subgraphs.</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap sums per trace; retained heap excluded — per-trace sums double-count shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           This dump has no allocation tracking data.
@@ -6082,7 +6082,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries</>,
       value: fmtCount(thread_local_null_key_count),
-      hint: "A null key means the referent thread was GC'd but the value was not removed — classic ThreadLocal leak. Check ThreadLocal usage in thread-pool code.",
+      hint: "A null key means the referent thread was GC'd but the value remained — classic ThreadLocal leak. Check ThreadLocal usage in thread-pool code.",
     }] : []),
     ...(direct_byte_buffer_capacity_sum > 0 ? [{
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
