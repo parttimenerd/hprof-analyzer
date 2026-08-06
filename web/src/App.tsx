@@ -1549,7 +1549,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file. Allocation-site frames are recorded only with the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
+        Record-type counts from the raw HPROF file. Allocation-site frames require the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -6077,7 +6077,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(anonymous_class_count > 0 ? [{
       indicator: "Anonymous/Generated Classes",
       value: fmtCount(anonymous_class_count),
-      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). Navigate to Top Consumers and filter by \"$\" to find the biggest offenders.",
+      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" to find the biggest.",
     }] : []),
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries</>,
