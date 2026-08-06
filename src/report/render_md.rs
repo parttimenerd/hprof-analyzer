@@ -290,6 +290,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_collection_attribution(&r.collection_attribution, false, &mut out);
     render_fields_by_size(&r.fields_by_size, false, &mut out);
     render_biggest_collections(&r.biggest_collections, false, &mut out);
+    render_top_retainers(&r.top_retainers, &mut out);
     render_collection_contents(&r.collection_contents, false, &mut out);
     render_references(&r.references, false, &mut out);
     render_unreachable_histogram(&r.overview, false, &mut out);
@@ -319,6 +320,10 @@ pub(crate) fn render_custom_queries(
         return;
     }
     let _ = writeln!(out, "\n## Custom Queries\n");
+    let _ = writeln!(
+        out,
+        "_OQL queries embedded in this report at generation time._\n"
+    );
     for q in queries {
         let _ = writeln!(out, "### {}\n", q.name);
         let _ = writeln!(out, "```\n{}\n```\n", q.oql);
@@ -3992,6 +3997,37 @@ pub(crate) fn render_header_overhead(
             format_bytes(row.total_header_bytes),
             fmt_pct(row.header_pct_of_shallow_bp as f64 / 100.0),
             format_bytes(row.avg_shallow),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+pub(crate) fn render_top_retainers(rows: &[crate::report::model::RetainerRow], out: &mut String) {
+    use crate::md::{Align, Table};
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str("## Top Retainers\n\n");
+    out.push_str(
+        "_Combined ranking of `Class#field` references and stack-frame locals by retained heap. \
+Retained totals can exceed heap size for linked structures (e.g. `List#next`) where each node \
+retains its entire tail — treat as relative, not additive._\n\n",
+    );
+    let mut t = Table::new(
+        &["Name", "Kind", "Retained"],
+        &[Align::Left, Align::Left, Align::Right],
+    );
+    for row in rows {
+        let kind = match row.kind.as_str() {
+            "stack-frame" => "Stack Frame",
+            "field" => "Field",
+            other => other,
+        };
+        t.row([
+            row.name.clone(),
+            kind.to_string(),
+            format_bytes(row.retained),
         ]);
     }
     t.render(out);
