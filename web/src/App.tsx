@@ -10080,6 +10080,10 @@ function GlossarySection() {
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type.</>],
+    ["Collection Fill Ratio", <>fraction of a collection's backing-array capacity occupied by elements — <code>elements ÷ capacity</code>. Near 0 means mostly empty (wasted memory); near 1 means the collection is full.</>],
+    ["Map Load Factor", <>for hash maps, the fraction of backing-array slots occupied — <code>occupied_slots ÷ capacity</code>. Low load factor = many empty buckets (wasted memory); high load factor (≥ 90%) increases hash-collision chains and lookup cost.</>],
+    ["Compressed OOPs", <>a JVM optimisation storing object references as 32-bit integers instead of 64-bit pointers, halving reference-field overhead on heaps ≤ ~32 GB. Shown in Heap Summary as "Compressed OOPs: yes".</>],
+    ["Class#field Notation", <>used throughout this report to identify a specific field: <code>HolderClass#fieldName</code> (e.g. <code>java.util.HashMap#table</code>). Indicates the dominant incoming reference path, not a guaranteed allocation site.</>],
   ];
   return (
     <section id="glossary">
@@ -11554,7 +11558,7 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Reference topology between class types — each directed edge shows references from one class to another, weighted by retained heap. <strong>Retained Flow</strong> aggregates referenced-object retained sizes across all instances; it can exceed total heap when objects are shared.</p>
+          <p className="subtitle">Reference topology between class types — each directed edge shows references from one class to another, weighted by retained heap. <strong>Retained Flow</strong> is the sum of referenced-object retained sizes across all instances of the source class; node size reflects relative memory pressure.</p>
           <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}

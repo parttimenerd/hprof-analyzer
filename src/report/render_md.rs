@@ -1025,6 +1025,11 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     if o.gc_roots_by_type.len() > 1 {
         use crate::md::bar;
         out.push_str("### GC Roots by Type\n\n");
+        out.push_str(
+            "_GC roots are the entry points where the JVM starts reachability scanning — \
+anything reachable from a root stays alive. Common root types: thread-stack locals, \
+JNI global references, static fields of loaded classes, and synchronized lock objects._\n\n",
+        );
         let max_count = o
             .gc_roots_by_type
             .iter()
@@ -2469,7 +2474,7 @@ pub(crate) fn render_collection_attribution(
         return;
     };
 
-    out.push_str("## Container Attribution (Class#field)\n\n");
+    out.push_str("## Container Attribution\n\n");
     out.push_str(
         "_Which holder `Class#field` points at the most container memory. Two rankings: total \
          across all containers reached through a field, and the single largest container per \
@@ -2478,7 +2483,7 @@ pub(crate) fn render_collection_attribution(
     );
 
     // ── Most Overall ─────────────────────────────────────────────────────────
-    out.push_str("### Most Overall\n\n");
+    out.push_str("### Top by Total Memory\n\n");
     if a.most_overall.is_empty() {
         out.push_str("_No collections exceeded the size threshold._\n\n");
     } else {
@@ -2532,7 +2537,7 @@ pub(crate) fn render_collection_attribution(
     }
 
     // ── Biggest Single ───────────────────────────────────────────────────────
-    out.push_str("### Biggest Single\n\n");
+    out.push_str("### Largest Single Container\n\n");
     if a.biggest_single.is_empty() {
         out.push_str("_No single-element collections found._\n\n");
     } else {
@@ -2584,8 +2589,9 @@ pub(crate) fn render_collection_attribution(
     // ── Tiny Collection Overhead ─────────────────────────────────────────────
     out.push_str("### Tiny Collection Overhead\n\n");
     out.push_str(
-        "_Size-0 and size-1 collections have near-total wrapper overhead. \
-         Replace with `Map.of()`, `List.of()`, or lazy initialization._\n\n",
+        "_Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary. \
+         Replace with `null` or a direct field reference; wrapper overhead per collection is \
+         one object header plus backing-array pointer._\n\n",
     );
     if a.tiny_overhead.is_empty() {
         out.push_str("_None._\n\n");
@@ -2648,7 +2654,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         return;
     };
 
-    out.push_str("## Fields by Retained Size (Class#field)\n\n");
+    out.push_str("## Fields by Retained Size\n\n");
     out.push_str(
         "_Which holder `Class#field` retains the most memory, summed over every object the \
          field points at. Runtime pointee type is the dominant concrete class reached through \
@@ -2953,8 +2959,9 @@ pub(crate) fn render_collection_contents(
     };
     out.push_str("## Collection Contents by Type\n\n");
     out.push_str(
-        "_What runtime element/value types your collections hold, aggregated per collection \
-         class. Requires `--collections`._\n\n",
+        "_Element types stored in each collection class, summed across all instances. \
+         Spot unexpected or boxed value types that could be replaced with primitive arrays \
+         or more specific collections. Requires `--collections`._\n\n",
     );
     if c.rows.is_empty() {
         out.push_str("_No collection-contents data found._\n\n");
@@ -3000,7 +3007,7 @@ pub(crate) fn render_collection_contents(
 pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut String) {
     use crate::md::{Align, Table, bar};
     out.push_str("## References\n\n");
-    out.push_str("_Soft/weak/phantom reference referents (what they point at)._\n\n");
+    out.push_str("_Soft, weak, and phantom references — referents, retention status, and null-referent counts._\n\n");
 
     if rf.soft.is_none() && rf.weak.is_none() && rf.phantom.is_none() {
         out.push_str("_No soft, weak, or phantom references found._\n\n");
@@ -3075,10 +3082,10 @@ or that native resources (file handles, native buffers) are not being released p
             "_{} reference instances._\n\n",
             fmt_count(stats.reference_instances),
         ));
-        out.push_str("#### Referent classes\n\n");
+        out.push_str("#### Referent Classes\n\n");
         render_class_table(&stats.referent_histogram, out);
-        out.push_str("#### Only-weakly retained _(approximate)_\n\n");
-        out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would reclaim them._\n\n");
+        out.push_str("#### Only Weakly Retained\n\n");
+        out.push_str("_Objects with no incoming strong reference other than this reference chain — reachable only via this reference kind._\n\n");
         if stats.only_weakly_retained.is_empty() {
             out.push_str(
                 "_None found — no objects are exclusively reachable via this reference kind._\n\n",
@@ -3101,9 +3108,8 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
         return;
     }
     out.push_str(&format!(
-        "_{} unreachable objects, {} shallow heap \
-         (within the unreachable forest retained = shallow since all paths stay in-forest; \
-         top {} classes by shallow)._\n\n",
+        "_{} unreachable objects, {} shallow heap. \
+         Top {} classes by shallow heap._\n\n",
         fmt_count(o.unreachable_count),
         format_bytes(o.unreachable_shallow),
         UNREACHABLE_HISTOGRAM_CAP,
@@ -3118,8 +3124,10 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
     if unreachable_pct >= 5.0 {
         out.push_str(&format!(
             "_Unreachable objects are eligible for collection but have not yet been reclaimed. \
-At {} of heap total (reachable + unreachable) this is elevated — the JVM may not have had \
-time to GC before the dump was taken, or finalization may be backed up._\n\n",
+At {} of heap total (reachable + unreachable) this is elevated — the dump was likely taken \
+before a full GC cycle completed. GC reclaims this memory automatically; it is not a leak. \
+Confirm: trigger a full GC (`jcmd <pid> GC.run`) then re-dump; if the count drops, \
+it was pre-GC garbage._\n\n",
             fmt_pct(unreachable_pct)
         ));
     } else {
@@ -3650,10 +3658,9 @@ per allocator, not once total)._\n\n",
     );
     if !a.traces_present {
         out.push_str(
-            "_No per-frame allocation data is available in this dump (`stack_trace_serial = 0`). \
-To capture allocation stacks, restart the JVM with JFR (`-XX:StartFlightRecording`) \
-or take the heap dump while a profiler is attached. Without allocation stacks only \
-the aggregate totals below are available._\n\n",
+            "_Allocation tracking not captured. This requires the HPROF agent \
+(`-agentlib:hprof=heap=dump,depth=8`), which was removed in JDK 9. Standard \
+`jmap`/`jcmd` dumps do not include per-site allocation stacks._\n\n",
         );
         return;
     }
