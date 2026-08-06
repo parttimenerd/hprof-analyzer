@@ -160,5 +160,35 @@ jobs:
           prerelease: true
           files: artifacts/*
           body: |
-            Rolling nightly build — updated on every push to main.
+            Rolling nightly build — updated on every push to `main`.
             Commit: ${{ github.sha }}
+
+            ## Install / Update
+
+            Re-run the same command to update to the latest nightly — the URL never changes.
+
+            **Linux x86_64 (glibc)**
+            ```sh
+            curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            sudo mv hprof-analyzer-x86_64-unknown-linux-gnu/hprof-analyzer /usr/local/bin/
+            ```
+
+            **Linux x86_64 (static musl — minimal containers, older distros)**
+            ```sh
+            curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-musl.tar.gz | tar xz
+            sudo mv hprof-analyzer-x86_64-unknown-linux-musl/hprof-analyzer /usr/local/bin/
+            ```
+
+            **Linux aarch64 (glibc)**
+            ```sh
+            curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz | tar xz
+            sudo mv hprof-analyzer-aarch64-unknown-linux-gnu/hprof-analyzer /usr/local/bin/
+            ```
+
+            **macOS (Apple Silicon)**
+            ```sh
+            curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-apple-darwin.tar.gz | tar xz
+            sudo mv hprof-analyzer-aarch64-apple-darwin/hprof-analyzer /usr/local/bin/
+            ```
+
+            **Windows x86_64** — download [`hprof-analyzer-x86_64-pc-windows-msvc.zip`](https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-pc-windows-msvc.zip) and place `hprof-analyzer.exe` on your `PATH`.
