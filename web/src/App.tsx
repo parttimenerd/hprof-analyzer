@@ -1571,7 +1571,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
     <section id="size-distribution">
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
-        How retained heap is distributed across {fmtCount(d.count)} top-level dominators — shows whether memory is held by a few giant objects or spread across many small ones.
+        How retained heap is distributed across {fmtCount(d.count)} top-level dominators — shows whether a few large objects dominate or many small ones share the heap.
         Min / Max: {fmtB(d.min)} / {fmtB(d.max)} · Median: {fmtB(d.median)} · Total: {fmtB(d.total)}.
       </p>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
@@ -4310,7 +4310,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
               {stats.null_referent_count != null && stats.null_referent_count > 0 && (
                 <> {fmtCount(stats.null_referent_count)} have a null referent (GC'd but not yet cleaned up).
                   {stats.null_referent_count / stats.reference_instances > 0.5 && (
-                    <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue may not be drained.</span>
+                    <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor may be stalled.</span>
                   )}
                 </>
               )}
@@ -10216,7 +10216,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
     <div className="app">
       <h1>Heap Dump Comparison ({labels.length} reports)</h1>
       <p className="subtitle">
-        Compares retained heap across a time series; the first dump is the baseline, the last is the current state.
+        Tracks retained-heap changes across a time series — the first dump is baseline, the last is current.
       </p>
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml("heap-comparison.html")}>⬇ Save HTML</button>
