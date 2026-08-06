@@ -3839,8 +3839,10 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       <h3>Constant Primitive Arrays</h3>
       <p className="subtitle">
         Primitive arrays whose every element is identical.
-        {cpa?.truncated ? " (list truncated; remaining groups folded into one row)." : ""}
       </p>
+      {cpa?.truncated && (
+        <p className="subtitle">List truncated — remaining groups folded into one row.</p>
+      )}
       {cpaRows.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (() => {
@@ -4163,7 +4165,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
       {data.truncated && (
-        <p className="subtitle">Collection value tally was truncated; shown results are a bounded sample.</p>
+        <p className="subtitle">Collection value tally was truncated; some value groups were cut off.</p>
       )}
     </section>
   );
@@ -4195,7 +4197,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
         <StdTable columns={cols} data={rows} searchKeys={["collection_class"]} defaultSortFieldId="values" defaultSortAsc={false} />
       )}
       {data.truncated && (
-        <p className="subtitle">Results are truncated; only a bounded sample of collection classes is shown.</p>
+        <p className="subtitle">Results are truncated; some collection classes were cut off.</p>
       )}
     </section>
   );
@@ -4231,8 +4233,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       </p>
       {data.truncated && (
         <p className="subtitle">
-          ⚠ Results are a bounded sample — some field groups were cut off to stay within analysis limits.
-          Values represent the groups that were captured, not the full heap.
+          ⚠ Field group results were truncated — captured values may undercount the full heap.
         </p>
       )}
       {rows.length === 0 ? (
@@ -5597,7 +5598,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        How many objects each class directly dominates, and how much shallow heap those dominated objects occupy. A dominator class with high dominated-shallow heap holds a large portion of the live heap.
+        How many objects each class directly dominates, and how much shallow heap those dominated objects occupy. High dominated-shallow values mean that class pins a large fraction of live memory.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
       </p>
       {idoms.length === 0 ? (
@@ -6249,7 +6250,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
               <p className="subtitle">
                 {fmtCount(q.row_count)} {q.row_count === 1 ? "row" : "rows"}{q.truncated ? " (truncated)" : ""}
               </p>
-              {q.note && <p className="subtitle">Note: {q.note}</p>}
+              {q.note && <p className="subtitle">{q.note}</p>}
               <QueryViz query={q} />
             </>
           )}
@@ -10300,7 +10301,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       <section className="diff-section">
         <h2>Disappeared Leak Suspects (Resolved)</h2>
         <p className="subtitle">
-          These suspects were flagged in an earlier dump but are absent from the current one — the issue may be resolved or was transient. Listed for completeness.
+          These suspects were flagged in an earlier dump but are absent from the current one — the issue may be resolved or was transient.
         </p>
         {diff.gone_suspects.length === 0 ? (
           <p className="subtitle">No suspects disappeared in the current dump.</p>
