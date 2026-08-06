@@ -1570,7 +1570,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
     <section id="size-distribution">
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
-        Retained heap distributed across {fmtCount(d.count)} top-level dominators — concentrated in a few large objects, or scattered across many small ones.
+        Retained heap distributed across {fmtCount(d.count)} top-level dominators. The shape reveals whether a handful of large objects dominate the heap or memory is scattered across many small ones.
         Min / Max: {fmtB(d.min)} / {fmtB(d.max)} · Median: {fmtB(d.median)} · Total: {fmtB(d.total)}.
       </p>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
@@ -2834,7 +2834,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", background: "var(--code-bg, #f6f7f8)", borderRadius: 4, fontSize: "0.84rem", lineHeight: "1.5" }}>
         <strong>Next Steps</strong>
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
-          <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to trace the reference chain to its GC root.</li>
+          <li>Click <span title="Open in Inspector">⬡</span> (Inspector) next to the class name above to browse field values, inbound references, and the path to the GC root.</li>
           {s.accumulation_class && (
             <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to find which field retains these objects.</li>
           )}
@@ -3977,7 +3977,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     <section id="collection-waste-budget">
       <h2>Collection Waste Budget</h2>
       <p className="subtitle">
-        Memory wasted by redundant objects — duplicate strings, duplicate primitive arrays, boxed numbers, and unnecessary collection wrappers. Fix the biggest category first for the highest impact.
+        Memory wasted by redundant objects — duplicate strings, duplicate primitive arrays, boxed numbers, and over-allocated collection backing arrays. Fix the biggest category first for the highest impact.
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
@@ -4290,8 +4290,8 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 
   const kindCaption = (kind: string) => {
     switch (kind) {
-      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals an oversized cache; cap the cache size.";
-      case "Weak": return "Weak references let GC claim referents — reachable only via weak chains, reclaimed at any collection. Large counts are benign.";
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals an oversized cache; cap it with a max-entries limit or switch to an explicit bounded cache (e.g. Caffeine).";
+      case "Weak": return "Weak references let GC claim referents — reachable only via weak chains, reclaimed at any collection. Large counts are usually benign, but a growing count can indicate ThreadLocal leaks or listener registries not deregistering.";
       case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources leaking.";
       default: return "";
     }
@@ -4321,7 +4321,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects reachable only through this reference kind — they hold no strong or soft reference path, so GC can reclaim them at the next collection. Multi-hop chains may not be detected.</p>
+            <p className="subtitle">Objects reachable only through this reference kind — they hold no strong or soft reference path, so GC can reclaim them at the next collection.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None detected.</em></p>
@@ -5827,7 +5827,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
         </p>
         <p>
-          Check Netty's PooledByteBufAllocator, FileChannel mappings, and custom ByteBuffer pools for buffer leaks.
+          Check for unclosed <code>DirectByteBuffer</code> allocations — common sources include Netty's <code>PooledByteBufAllocator</code>, <code>FileChannel</code> mappings, and custom buffer pools. Use <code>-XX:MaxDirectMemorySize</code> to cap native allocation.
         </p>
         {isLarge && (
           <p className="subtitle">
@@ -6132,7 +6132,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Scalar signals for known Java leak patterns. Non-zero counts are not always bugs — check the "What to Check" column for how to triage each one.
+        Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — check the "What to Check" column for how to triage each one.
       </p>
       <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
