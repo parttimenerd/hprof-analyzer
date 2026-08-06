@@ -39,6 +39,10 @@ hprof-analyzer app.hprof report.html
 
 Open `report.html` in any browser. No server required — the file is fully self-contained.
 
+The tool accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.hprof.tar.gz`, `.tar.gz`, and `.tgz` directly — no manual decompression needed.
+
+**Truncated dumps work.** If the JVM was killed mid-dump or the file was copied incompletely, the analyzer recovers whatever was written and produces a partial report. A warning is printed to stderr; the report covers the objects that were successfully parsed.
+
 ## What the report shows
 
 | Section | What it answers |

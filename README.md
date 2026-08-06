@@ -142,6 +142,8 @@ Compressed dumps are read transparently — no manual decompression needed:
 | `.hprof.zip` | ZIP archive containing the dump |
 | `.hprof.tar.gz`, `.tar.gz`, `.tgz` | Gzip-compressed tar archive; the first `.hprof` entry is used |
 
+**Truncated and corrupt files are handled gracefully.** If the JVM was killed mid-dump, the file was copied incompletely, or the gzip stream ends early, the analyzer recovers whatever data was successfully written and produces a partial report rather than aborting with an error. A warning is printed to stderr when truncation is detected.
+
 Analysis time scales with the dump — seconds for small dumps, minutes for
 multi-gigabyte ones (see [Performance](#performance)).
 
@@ -154,6 +156,10 @@ multi-gigabyte ones (see [Performance](#performance)).
   Android ART. Handles all standard and JVM-specific HPROF sub-tags, including
   `ROOT_SYSTEM_CLASS` (IBM J9) and the five Android ART-specific root and array
   tags.
+- **Resilient against bad files.** Truncated dumps (killed JVM, incomplete copy,
+  short-read over a network mount), corrupt gzip streams, and malformed records
+  all produce a partial report with a warning rather than a crash. OOM-inducing
+  corrupt length fields are capped before allocation.
 - **Scriptable and CI-friendly.** Never prompts, never opens a window. Emit
   JSON, diff two dumps to catch memory growth in a pipeline, or gate a build on
   retained-size regressions.
