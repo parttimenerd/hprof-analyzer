@@ -1482,7 +1482,7 @@ impl Rule for FixedPerObjectOverhead {
                 fmt_count(r.overview.total_objects),
                 header_bytes,
             ),
-            Some(("object-header-overhead", "Header Overhead")),
+            Some(("object-header-overhead", "Object Header Overhead")),
         ))
     }
 }
