@@ -1571,7 +1571,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
     <section id="size-distribution">
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
-        How retained heap is distributed across {fmtCount(d.count)} top-level dominators — shows whether a few large objects dominate or many small ones share the heap.
+        Retained heap distributed across {fmtCount(d.count)} top-level dominators — concentrated in a few large objects, or spread across many small ones.
         Min / Max: {fmtB(d.min)} / {fmtB(d.max)} · Median: {fmtB(d.median)} · Total: {fmtB(d.total)}.
       </p>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
@@ -9956,7 +9956,7 @@ function GlossarySection() {
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root — sits at the top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
-    ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means objects are retained through long dominator chains.</>],
+    ["Dominator Depth", <>the number of dominator-tree hops from an object to its GC root. Low depth means objects sit close to roots; high depth means long retention chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
