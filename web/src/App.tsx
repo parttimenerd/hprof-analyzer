@@ -6089,7 +6089,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
         ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
-        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators misconfigured without a buffer cap.",
+        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.",
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
