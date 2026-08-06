@@ -10312,8 +10312,8 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Type Reference Graph Diff</h2>
           <p className="subtitle">
-            Directed edges between class types that grew between the first and last dumps.
-            A high Δ retained weight indicates one class accumulates more references to another.
+            Directed edges between class types that grew from first to last dump.
+            A large Δ means one class accumulated more references to another.
             Sorted by absolute change in retained weight.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
@@ -11352,7 +11352,7 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Class-level reference topology: each edge represents one class type referencing another, weighted by retained heap flow. Retained Flow sums referenced-object retained sizes across all instances — can exceed total heap when objects are shared.</p>
+          <p className="subtitle">Class-level reference topology: each edge represents one class referencing another, weighted by retained heap. Retained Flow sums referenced-object retained sizes across all instances — can exceed total heap when objects are shared.</p>
           <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}
