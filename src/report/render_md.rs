@@ -895,7 +895,8 @@ _Definitions for the terms used above._
   probability and lookup cost.
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
   reachable only through one or more `WeakReference` or `SoftReference` chains.
-  Under GC pressure these objects are candidates for collection.
+  Weak-only referents are collected at the next GC cycle; soft-only referents are
+  collected under memory pressure.
 - **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimisation
   where object references are stored as 32-bit integers instead of 64-bit pointers,
   halving reference-field overhead on heaps <= ~32 GB. Visible in the Heap Summary
