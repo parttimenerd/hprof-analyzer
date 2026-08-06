@@ -251,6 +251,14 @@ struct Cli {
     #[arg(long)]
     dev: bool,
 
+    /// Read the React app bundle from PATH instead of the compile-time embedded
+    /// bytes. Use together with --dev to iterate on JS/CSS without rebuilding
+    /// the binary: run `node esbuild.config.mjs` in web/, then re-run this
+    /// command with --dev --bundle-path web/dist/bundle.js.
+    /// Implies --dev.
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+    bundle_path: Option<std::path::PathBuf>,
+
     /// Emit Eclipse MAT-compatible binary index files into DIR while running
     /// the normal analysis (the report output is unaffected). The files are
     /// named `<dump>.<kind>.index` using the input basename as the prefix.
@@ -841,7 +849,7 @@ fn run_default(cli: Cli) {
         };
         progress::set_enabled(show_progress);
         trace::set_enabled(cli.trace_rss);
-        let fmt = if cli.dev {
+        let fmt = if cli.dev || cli.bundle_path.is_some() {
             // --dev implies HTML unless an explicit format or .html extension already means HTML.
             let base = resolve_format(cli.format, cli.output.as_deref());
             if base != OutputFormat::Html {
@@ -868,7 +876,8 @@ fn run_default(cli: Cli) {
             ref_paths: cli.ref_paths,
             field_stats: cli.field_stats,
             obj_graph: cli.obj_graph.is_some() || cli.full_analysis,
-            dev_report: cli.dev,
+            dev_report: cli.dev || cli.bundle_path.is_some(),
+            bundle_path: cli.bundle_path.clone(),
             ..opts
         };
         if let Some(n) = cli.hist_root_path_top {
@@ -2095,7 +2104,17 @@ fn run(
         ));
     }
 
-    // Collect + parse + plan any OQL queries before pass2, so a bad query fails
+    // A valid HPROF header with zero objects means the file was truncated
+    // before any heap data, or is otherwise unusable. Warn and bail rather
+    // than silently emitting an empty report that looks like a real analysis.
+    if p1.class_ids.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "dump contains no heap objects — the file appears truncated before \
+             the heap dump segment; re-copy the file and retry",
+        ));
+    }
+
     // fast (before the expensive graph build) with a message naming the query.
     let collected = collect_query_texts(&opts)?;
     let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
@@ -3342,7 +3361,7 @@ fn run(
         }
         OutputFormat::Html => {
             let h = if opts.dev_report {
-                html::render_html_dev(&report)
+                html::render_html_dev(&report, opts.bundle_path.as_deref())
             } else {
                 html::render_html(&report)
             };

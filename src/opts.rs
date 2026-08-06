@@ -146,6 +146,10 @@ pub struct AnalyzeOptions {
     /// report so it is human-readable and editable in DevTools. Output is much
     /// larger but easier to inspect/modify. Implies HTML output format.
     pub dev_report: bool,
+    /// Read the React bundle from this path at runtime instead of using the
+    /// compile-time embedded bytes. Lets JS/CSS changes take effect without
+    /// rebuilding the binary. Only meaningful with dev_report=true.
+    pub bundle_path: Option<std::path::PathBuf>,
     /// Skip build_model + render. Used by `mat caches` which discards the report.
     pub skip_report: bool,
     /// Compute per-class reference-field statistics (null/non-null counts, total
@@ -199,6 +203,7 @@ impl DetailLevel {
             obj_graph: false,
             report_size: ReportSize::Default,
             dev_report: false,
+            bundle_path: None,
             skip_report: false,
             field_stats: false,
         }

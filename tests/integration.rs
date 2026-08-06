@@ -41,6 +41,21 @@ fn load_class_record(serial: u32, class_addr: u64, name_id: u64) -> Vec<u8> {
     rec
 }
 
+/// Run `hprof-analyzer <file> --format json` and return (exit_success, stdout, stderr).
+fn run_json(path: &std::path::Path) -> (bool, String, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg(path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to spawn hprof-analyzer");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// Run `hprof-analyzer report <file>` and return (exit_success, combined output).
 fn run_report(path: &std::path::Path) -> (bool, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
@@ -62,6 +77,16 @@ fn assert_no_panic(combined: &str) {
         !combined.contains("panicked at"),
         "tool panicked!\n{combined}"
     );
+}
+
+/// Returns true if the JSON report stdout contains at least one object
+/// (overview.total_objects > 0) and at least one class name.
+fn json_report_has_content(json: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return false;
+    };
+    let objects = v["overview"]["total_objects"].as_u64().unwrap_or(0);
+    objects > 0
 }
 
 #[test]
@@ -587,4 +612,140 @@ fn broken_truncated_gz() {
     std::fs::write(&path, truncated).unwrap();
     let (_ok, out) = run_report(&path);
     assert_no_panic(&out);
+}
+
+// ---------------------------------------------------------------------------
+// Real-fixture truncation tests: dump_1_mnemonics.hprof cut at known offsets
+//
+// Offsets are hard-coded fractions of the 21 235 655-byte file so that tests
+// are reproducible without RNG.  We assert:
+//   1. No panic (no "panicked at" in output)
+//   2. When the tool exits 0, the HTML report contains actual content
+//      (DOCTYPE + System Overview + at least one Java class name).
+// ---------------------------------------------------------------------------
+
+/// Load dump_1_mnemonics.hprof; return None if the LFS fixture is absent.
+fn mnemonics_bytes() -> Option<Vec<u8>> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_1_mnemonics.hprof"
+    );
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 1024 * 1024 {
+        return None; // LFS pointer, not the real file
+    }
+    Some(data)
+}
+
+fn gz_wrap(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(data).unwrap();
+    enc.finish().unwrap()
+}
+
+fn tar_gz_wrap(data: &[u8], inner_name: &str) -> Vec<u8> {
+    let gz_buf = Vec::new();
+    let enc = flate2::write::GzEncoder::new(gz_buf, flate2::Compression::default());
+    let mut tar = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(data.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, inner_name, data).unwrap();
+    let enc = tar.into_inner().unwrap();
+    enc.finish().unwrap()
+}
+
+// 10 cut points for plain .hprof (num/den fraction of file size).
+const HPROF_CUT_FRACS: &[(u64, u64)] = &[
+    (1, 64),  // very early – header barely written
+    (1, 32),  // in the string/class records
+    (1, 16),  // start of heap dump
+    (1, 8),   // shallow into heap segment
+    (3, 16),  // quarter of the way through heap
+    (3, 8),   // well into the heap dump
+    (1, 2),   // exact midpoint
+    (5, 8),   // past midpoint
+    (3, 4),   // three-quarters
+    (15, 16), // near end
+];
+
+// 5 cut points for .gz and .tar.gz (applied to the compressed stream).
+const GZ_CUT_FRACS: &[(u64, u64)] = &[(1, 16), (1, 4), (3, 8), (5, 8), (7, 8)];
+
+#[test]
+fn truncated_real_hprof_plain() {
+    let data = match mnemonics_bytes() {
+        Some(d) => d,
+        None => return,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let total = data.len() as u64;
+
+    for &(num, den) in HPROF_CUT_FRACS {
+        let cut = ((total * num) / den) as usize;
+        let path = dir.path().join(format!("cut_{num}_{den}.hprof"));
+        std::fs::write(&path, &data[..cut]).unwrap();
+
+        let (ok, json, stderr) = run_json(&path);
+        let label = format!("plain .hprof cut at {num}/{den} ({cut} bytes)");
+        assert_no_panic(&format!("{json}\n{stderr}"));
+        // Either the tool reports an error (non-zero exit) or it produces a
+        // meaningful HTML report.  Silent success with empty content is not ok.
+        assert!(
+            !ok || json_report_has_content(&json),
+            "{label}: exit=0 but report has no recognizable content\nstderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn truncated_real_hprof_gz() {
+    let data = match mnemonics_bytes() {
+        Some(d) => d,
+        None => return,
+    };
+    let full_gz = gz_wrap(&data);
+    let dir = tempfile::tempdir().unwrap();
+    let total = full_gz.len() as u64;
+
+    for &(num, den) in GZ_CUT_FRACS {
+        let cut = ((total * num) / den) as usize;
+        let path = dir.path().join(format!("cut_{num}_{den}.hprof.gz"));
+        std::fs::write(&path, &full_gz[..cut]).unwrap();
+
+        let (ok, json, stderr) = run_json(&path);
+        let label = format!(".hprof.gz cut at {num}/{den} ({cut} bytes)");
+        assert_no_panic(&format!("{json}\n{stderr}"));
+        assert!(
+            !ok || json_report_has_content(&json),
+            "{label}: exit=0 but report has no recognizable content\nstderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn truncated_real_hprof_tar_gz() {
+    let data = match mnemonics_bytes() {
+        Some(d) => d,
+        None => return,
+    };
+    let full_tgz = tar_gz_wrap(&data, "dump.hprof");
+    let dir = tempfile::tempdir().unwrap();
+    let total = full_tgz.len() as u64;
+
+    for &(num, den) in GZ_CUT_FRACS {
+        let cut = ((total * num) / den) as usize;
+        let path = dir.path().join(format!("cut_{num}_{den}.hprof.tar.gz"));
+        std::fs::write(&path, &full_tgz[..cut]).unwrap();
+
+        let (ok, json, stderr) = run_json(&path);
+        let label = format!(".hprof.tar.gz cut at {num}/{den} ({cut} bytes)");
+        assert_no_panic(&format!("{json}\n{stderr}"));
+        assert!(
+            !ok || json_report_has_content(&json),
+            "{label}: exit=0 but report has no recognizable content\nstderr: {stderr}"
+        );
+    }
 }

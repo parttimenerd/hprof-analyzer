@@ -54,32 +54,36 @@ fn deflate_b64(bytes: &[u8]) -> String {
 /// runs (serde_json preserves field order, the model carries only sorted
 /// vectors, and deflate/base64 are pure functions of their input).
 pub fn render_html(r: &Report) -> String {
-    render_html_inner(r, false)
+    render_html_inner(r)
 }
 
 /// Like `render_html` but embeds the React bundle as a plain `<script>` tag
 /// (no deflate/base64 wrapping) so it's human-readable in DevTools.
 /// The JSON report data is still deflated. Output is much larger (~750 KB extra).
-pub fn render_html_dev(r: &Report) -> String {
-    render_html_inner(r, true)
+///
+/// If `bundle_path` is `Some`, the bundle is read from that file at runtime
+/// instead of using the compile-time embedded bytes, so JS/CSS changes take
+/// effect without rebuilding the binary.
+pub fn render_html_dev(r: &Report, bundle_path: Option<&std::path::Path>) -> String {
+    let bundle_src: std::borrow::Cow<str> = match bundle_path {
+        Some(p) => std::borrow::Cow::Owned(
+            std::fs::read_to_string(p)
+                .unwrap_or_else(|e| panic!("--bundle-path {}: {e}", p.display())),
+        ),
+        None => std::borrow::Cow::Borrowed(BUNDLE_RAW),
+    };
+    render_html_dev_inner(r, &bundle_src)
 }
 
-fn render_html_inner(r: &Report, dev: bool) -> String {
-    // Report JSON: same shape as `--format json` (compact here; the client
-    // JSON.parses it — pretty-printing would only bloat the compressed blob).
+fn render_html_dev_inner(r: &Report, bundle_raw: &str) -> String {
     let json = serde_json::to_string(r).expect("Report serializes to JSON");
     let data_b64 = deflate_b64(json.as_bytes());
-
-    let title = format!("Heap Dump Analysis: {}", r.overview.source_name);
-    let title = html_escape(&title);
-
-    if dev {
-        // Dev mode: embed the raw bundle as an inline <script> so browsers show
-        // real source in DevTools. Report data is still deflated. The globals
-        // (hprofInflate, __HPROF_DATA_B64__) must be set up BEFORE the bundle
-        // script runs, so we emit a mini bootstrap first.
-        return format!(
-            r#"<!DOCTYPE html>
+    let title = html_escape(&format!("Heap Dump Analysis: {}", r.overview.source_name));
+    // Dev mode: embed the raw bundle as an inline <script> so browsers show
+    // real source in DevTools. The globals (hprofInflate, __HPROF_DATA_B64__)
+    // must be set up BEFORE the bundle script runs, so we emit DEV_PRELUDE_JS first.
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -102,13 +106,17 @@ html, body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemF
 </body>
 </html>
 "#,
-            title = title,
-            data_b64 = data_b64,
-            dev_prelude = DEV_PRELUDE_JS,
-            bundle_raw = BUNDLE_RAW,
-        );
-    }
+        title = title,
+        data_b64 = data_b64,
+        dev_prelude = DEV_PRELUDE_JS,
+        bundle_raw = bundle_raw,
+    )
+}
 
+fn render_html_inner(r: &Report) -> String {
+    let json = serde_json::to_string(r).expect("Report serializes to JSON");
+    let data_b64 = deflate_b64(json.as_bytes());
+    let title = html_escape(&format!("Heap Dump Analysis: {}", r.overview.source_name));
     let bundle_b64 = bundle_b64();
     // The bootstrap is the ONLY uncompressed JS. It reads the two base64 blobs
     // from the DOM, inflates the bundle blob (deflate-raw) to JS text, and

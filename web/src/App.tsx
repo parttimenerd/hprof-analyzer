@@ -1740,7 +1740,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <>
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
-            {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
+            Over-allocated backing arrays — strings whose <code>char[]</code> is larger than the actual character data (pre-Java-9 substring sharing). {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
             {fmtB(w.total_wasted_bytes)} total wasted.
           </p>
           {w.top.length > 0 && (
@@ -2148,7 +2148,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Classes loaded by multiple class loaders — typical in hot-reload environments (web-app containers, OSGi).
+            Classes loaded by multiple class loaders — typical in hot-reload environments (web containers, OSGi) but can cause ClassCastException and hidden memory overhead when the same class exists in multiple loaders.
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -3128,12 +3128,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects</h3>
-      <p className="subtitle">Individual objects with the highest retained heap. Click a row to jump to it in the Object Graph Explorer.</p>
-      {objHasOwner && (
-        <p className="subtitle">
-          <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object. Objects can have multiple referrers.
-        </p>
-      )}
+      <p className="subtitle">Individual objects with the highest retained heap. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
@@ -3146,8 +3141,7 @@ function TopConsumersSection({ report }: { report: Report }) {
         <>
           <h3>Biggest Packages</h3>
           <p className="subtitle">
-            Expand a package to see its sub-packages. Totals roll up through the subtree. Only top-level
-            dominators retaining ≥{fmtPct(t.threshold_bp / 100)} of the heap — smaller classes omitted.
+            Expand a package to see its sub-packages. Totals roll up through the subtree. Only classes retaining ≥{fmtPct(t.threshold_bp / 100)} of the heap are shown — smaller classes are omitted.
           </p>
           <ZoomableTreemap
             root={pkgRoot}
@@ -3743,7 +3737,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     <section id="collections">
       <h2>Collections</h2>
       <p className="subtitle">
-        Collection fill ratios, map collision rates, and constant-value primitive array groups.
+        Collection fill ratios, map collision rates, and constant-value primitive array groups. Low fill ratios waste backing-array memory; high collision rates degrade lookup performance.
       </p>
 
       <h3>Collections by Kind</h3>
@@ -4327,7 +4321,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects reachable only via this reference kind — GC can reclaim them at any collection. Multi-hop chains may not be detected.</p>
+            <p className="subtitle">Objects reachable only through this reference kind — they hold no strong or soft reference path, so GC can reclaim them at the next collection. Multi-hop chains may not be detected.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None detected.</em></p>
