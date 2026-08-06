@@ -637,12 +637,11 @@ impl Rule for OffHeap {
                 "{} of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM.",
                 format_bytes(cap),
             ),
-            Some(("leak-indicators", "Leak Indicators")),
+            Some(("off-heap-nio", "Off-Heap NIO")),
         ))
     }
 }
 
-/// GC waste. Reads `overview.heap_fragmentation_ratio`, `unreachable_shallow`,
 /// `unreachable_retained`, `unreachable_garbage_roots`.
 struct GcWaste;
 impl Rule for GcWaste {
@@ -1679,7 +1678,7 @@ mod tests {
         r.leak_indicators.direct_byte_buffer_capacity_sum = 128 * 1024 * 1024;
         let s = OffHeap.eval(&r).expect("128 MiB must fire off-heap");
         assert_eq!(s.id, "off-heap");
-        assert_eq!(s.anchor.as_deref(), Some("leak-indicators"));
+        assert_eq!(s.anchor.as_deref(), Some("off-heap-nio"));
     }
 
     #[test]
