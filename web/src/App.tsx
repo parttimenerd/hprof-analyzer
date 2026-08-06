@@ -8679,9 +8679,10 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         </button>
         <button
           className={tab === "graph" ? "btn-active" : "btn-link"}
+          title="Interactive force-directed graph — drag nodes, scroll to zoom. Best for visualising small clusters of 20–200 objects."
           onClick={() => setTab("graph")}
         >
-          Graph
+          Force Graph
         </button>
         <button className="btn-link" style={{ marginLeft: "auto" }}
           title="Go back (Esc or Alt+←)"
@@ -9367,7 +9368,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 );
               })()}
               {currentDomChildren.length > 0 && (
-                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.4rem", fontSize: "0.82rem", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.4rem", fontSize: "0.82rem", alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ color: "var(--muted)" }}>View:</span>
                   {(["flat", "grouped", "expanded"] as const).map(mode => (
                     <button key={mode} className={domViewMode === mode ? "btn-active" : "btn-link"}
@@ -9382,6 +9383,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       {mode === "flat" ? "Immediate" : mode === "grouped" ? "By Class" : "All Objects (up to 1000)"}
                     </button>
                   ))}
+                  {hasDomData && (
+                    <button className="btn-link" style={{ fontSize: "0.82rem", marginLeft: "auto" }}
+                      title={`Open ${currentNode.display_class} in the Dominator Analysis Sankey chart`}
+                      onClick={() => pivotClass(currentNode.display_class)}>
+                      Dominator Analysis →
+                    </button>
+                  )}
                 </div>
               )}
               {currentDomChildren.length > 5 && (domViewMode === "flat" || domViewMode === "grouped") && (
