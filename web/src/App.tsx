@@ -2860,7 +2860,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
       <h2>Leak Suspects</h2>
       <p className="subtitle">Classes retaining the most heap — prime candidates for memory investigation. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
-        <p>No suspect exceeds the retention threshold — heap is spread across many roots.</p>
+        <p className="subtitle">No suspect exceeds the retention threshold — heap is spread across many roots.</p>
       ) : (
         <>
           <h3>Retained-Heap Share</h3>
@@ -3458,7 +3458,7 @@ function ThreadsSection({ report }: { report: Report }) {
       <h2>Threads</h2>
       <p className="subtitle">Per-thread call stacks recorded in the dump.</p>
       {threads.length === 0 ? (
-        <p>No thread call stacks were recorded in this dump.</p>
+        <p className="subtitle">No thread call stacks were recorded in this dump.</p>
       ) : (
         <>
           <ThreadsByRetainedTable threads={threads} />
@@ -3608,7 +3608,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
         <>
           {bucketTable("Object Arrays", obj)}
           {bucketTable("Primitive Arrays", prim)}
-          <p>Zero-length arrays: {fmtCount(zero)}</p>
+          <p className="subtitle">Zero-length arrays: {fmtCount(zero)}</p>
         </>
       )}
     </section>
@@ -5414,7 +5414,7 @@ function DomGraphView({ pairs, idoms }: {
 
 function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[] }) {
   const fmtB = formatBytes;
-  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data — re-run with full analysis flags.</p>;
+  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data available for the heatmap.</p>;
 
   // Top-N dominator rows (by total dominated_retained)
   const domRetained = new Map<string, number>();
@@ -9724,7 +9724,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {pathBetweenError && (
             <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.4rem 0 0" }}>
               {pathBetweenError === "requires .hprof loaded in browser"
-                ? "Path search requires the .hprof loaded in browser (see banner above)."
+                ? "Path search requires the .hprof loaded in the browser (see banner above)."
                 : `No reference path found (${pathBetweenError}). Objects may not be connected through outbound references.`}
             </p>
           )}
@@ -10120,7 +10120,7 @@ function DiffSection({
     <section className="diff-section">
       <h2>{title}</h2>
       {rows.length === 0 ? (
-        <p>{emptyNote}</p>
+        <p className="subtitle">{emptyNote}</p>
       ) : (
         <SeriesTable nameLabel={nameLabel} labels={labels} rows={rows} showNew={showNew} />
       )}
@@ -10264,7 +10264,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       {diff.spike_leaders.length > 0 ? (
         <section className="diff-section">
           <h2>Transient Spikes (Peak Above Baseline)</h2>
-          <p>
+          <p className="subtitle">
             Classes that climbed well above their baseline mid-series then fell back — a
             first-to-last delta alone would miss them. Ranked by peak-over-baseline; the peak may be
             at any intermediate dump.
@@ -10303,12 +10303,11 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       />
       <section className="diff-section">
         <h2>Disappeared Leak Suspects (Resolved)</h2>
-        <p>
-          Informational: these were flagged in an earlier dump but are gone from the current
-          one — a fixed or transient issue, not a current problem. Listed last for that reason.
+        <p className="subtitle">
+          These suspects were flagged in an earlier dump but are absent from the current one — the issue may be resolved or was transient. Listed for completeness.
         </p>
         {diff.gone_suspects.length === 0 ? (
-          <p>No leak suspect disappeared in the current dump.</p>
+          <p className="subtitle">No suspects disappeared in the current dump.</p>
         ) : (
           <SeriesTable nameLabel="Suspect" labels={labels} rows={diff.gone_suspects} />
         )}
@@ -10534,7 +10533,7 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
       <div className="inspector-page">
         <h3 className="inspector-page-title">Instances of <code>{cls}</code></h3>
         <p className="trg-no-data">
-          Instance list requires loading the .hprof in the browser or re-running with <code>--obj-graph</code>.
+          Load the .hprof in the browser, or re-run with <code>--obj-graph</code>, to browse instances.
         </p>
       </div>
     );
@@ -10849,7 +10848,7 @@ function InspectorGCRootPage({ idx, cls, onNavigate }: {
   return (
     <div className="inspector-page">
       <h3 className="inspector-page-title">GC Root Path — <code>{cls.split(".").pop()}</code></h3>
-      {!wasm?.gc_root_path && <p className="trg-no-data">Requires loading the .hprof in the browser.</p>}
+      {!wasm?.gc_root_path && <p className="trg-no-data">Load the .hprof in the browser to see the path to GC root.</p>}
       {wasm?.gc_root_path && !path && <p className="trg-no-data">Loading…</p>}
       {path && (
         <ol className="inspector-dom-path">
@@ -10902,7 +10901,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
     return (
       <div className="inspector-page">
         <h3 className="inspector-page-title">Fields — <code>{cls.split(".").pop()}</code></h3>
-        <p className="trg-no-data">Field drill-down requires loading the .hprof in the browser.</p>
+        <p className="trg-no-data">Load the .hprof in the browser to browse field values.</p>
       </div>
     );
   }
@@ -11020,7 +11019,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
         {fieldName && <> · field <code>{fieldName}</code></>}
       </h3>
       <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "0 0 0.5rem" }}>
-        Top 50 by retained heap.{!wasm && " Requires loading the .hprof in the browser."}
+        Top 50 by retained heap.{!wasm && " Load the .hprof in the browser to enable this view."}
       </p>
       {loading && <p className="trg-no-data">Scanning…</p>}
       {rows && rows.length === 0 && <p className="trg-no-data">No instances found.</p>}
