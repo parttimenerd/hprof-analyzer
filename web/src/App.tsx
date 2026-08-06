@@ -5639,7 +5639,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class to see which classes dominate it (left) and which it dominates (right). Click any node or table row to re-focus.
+            Select a class to see which classes dominate it (left) and which it dominates (right). Click any node or row to refocus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -10310,9 +10310,9 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Type Reference Graph Diff</h2>
           <p className="subtitle">
-            Directed edges between class types that grew from first to last dump.
+            Directed edges between class types that grew between the first and last dump.
             A large Δ means one class accumulated more references to another.
-            Sorted by absolute change in retained weight.
+            Sorted by absolute change in retained heap.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
         </section>
