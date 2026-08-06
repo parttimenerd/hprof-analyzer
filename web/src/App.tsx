@@ -875,7 +875,7 @@ function KpiStrip({ report }: { report: Report }) {
   } else if (top) {
     verdict = (
       <>
-        <strong>Retention Pattern:</strong> spread — top class holds only {fmtPct(pct)}, so no single class dominates.
+        <strong>Retention Pattern:</strong> spread — the top class holds only {fmtPct(pct)}, so no single class dominates.
       </>
     );
   } else {
@@ -3214,7 +3214,7 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   return (
     <div className="thread-locals-inline">
       <p className="thread-locals-label">Local Root Objects ({objs.length < totalCount
-        ? `showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; retained sizes overlap — totals exceed thread retained`
+        ? `showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; retained sizes overlap, so totals may exceed thread retained`
         : fmtCount(objs.length)})</p>
       <StdTable columns={cols} data={objs} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
     </div>
@@ -4067,7 +4067,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 
       {data.truncated && (
         <p className="subtitle">
-          Attribution data was truncated (holder-edge or container-record cap hit); rankings are a
+          Attribution data was truncated — some holder or container records were capped; rankings are a
           bounded sample.
         </p>
       )}
@@ -6777,7 +6777,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
         <div className="trg-graph-layout">
         <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
           {nodeInfos.length === 0 && (
-            <p className="subtitle">No type reference data — run with <code>--obj-graph</code>.</p>
+            <p className="subtitle">No type reference data — re-run with <code>--obj-graph</code>.</p>
           )}
           {nodeInfos.length > 0 && (
             <>
@@ -8789,7 +8789,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
                 <p className="subtitle">Showing first 100 outbound references.{" "}
-                  {(window as any).__wasmSession?.outbound_refs && "Enable exploration for the full list."}
+                  {(window as any).__wasmSession?.outbound_refs && "Re-run with live heap loaded to browse all references."}
                 </p>
               )}
               {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
