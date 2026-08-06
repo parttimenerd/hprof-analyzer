@@ -778,7 +778,7 @@ function OomTriage({ report }: { report: Report }) {
     <div className="oom" id="memory-triage" tabIndex={-1}>
       <h2>Memory Triage</h2>
       <p className="subtitle">
-        Where the reachable heap is concentrated.
+        Where retention concentrates.
         {totalHeap > 0 && <> Total reachable heap: <strong>{formatBytes(totalHeap)}</strong>.</>}
       </p>
       <ul>
@@ -1923,7 +1923,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
   return (
     <section id="system-overview">
       <h2>System Overview</h2>
-      <p className="subtitle">Reachable heap totals and the largest classes by retained heap.</p>
+      <p className="subtitle">Reachable heap totals and top classes by retained heap.</p>
 
       <div className="card">
         <dl className="summary-grid">
