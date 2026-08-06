@@ -1291,12 +1291,12 @@ function LoaderCell({ label }: { label?: string | null }) {
 }
 
 // ── Global class pivot helper ─────────────────────────────────────────────────
-// Fires a CustomEvent that DominatorAnalysisSection listens for, then scrolls
-// to the Dominator Analysis section so the WhoHolds navigator highlights the class.
+// Fires a CustomEvent that DominatorAnalysisSection listens for.
+// Does NOT scroll — shows a nav-toast instead so the user stays in place.
 function pivotClass(cls: string) {
   window.dispatchEvent(new CustomEvent("pivot-class", { detail: cls }));
-  // Navigate to the section — let hashchange scrolling handle it.
-  window.location.hash = "dominator-analysis";
+  history.replaceState(null, "", "#dominator-analysis");
+  window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Dominator Analysis", sectionId: "dominator-analysis" } }));
 }
 
 // Small "⬡" button shown next to class names in any table that triggers the pivot.
@@ -5409,7 +5409,7 @@ function DomGraphView({ pairs, idoms }: {
           <button className="show-more-btn" style={{ flexShrink: 0 }}
             onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>Instances →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
-            onClick={() => { window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: selected })); window.location.hash = "type-ref-graph"; }}>Type Graph →</button>
+            onClick={() => { window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: selected })); history.replaceState(null, "", "#type-ref-graph"); window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } })); }}>Type Graph →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
             onClick={() => pivotClass(selected)}>WhoHolds →</button>
         </div>
@@ -5510,8 +5510,15 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
   const pivotToClass = React.useCallback((cls: string) => {
     setNavTarget(cls);
-    // Scroll the navigator into view after state update.
-    setTimeout(() => navigatorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    // Only scroll the navigator into view if the dominator section is already visible.
+    setTimeout(() => {
+      const section = document.getElementById("dominator-analysis");
+      if (!section) return;
+      const rect = section.getBoundingClientRect();
+      if (rect.top < window.innerHeight && rect.bottom > 0) {
+        navigatorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
   }, []);
 
   // Listen for cross-section pivot events dispatched by PivotBtn.
@@ -6990,15 +6997,16 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
                   Instances →
                 </button>
-                <button className="show-more-btn" title="Jump to Object Graph section and filter by class" onClick={() => {
+                <button className="show-more-btn" title="Open class in Object Graph Explorer" onClick={() => {
                   window.dispatchEvent(new CustomEvent("explore-class", { detail: selected }));
-                  window.location.hash = "object-graph";
+                  history.replaceState(null, "", "#object-graph");
+                  window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Object Graph Explorer", sectionId: "object-graph" } }));
                 }}>
                   Explorer →
                 </button>
                 {hasDomData && (
                   <button className="show-more-btn" title="Open in WhoHolds Dominator Sankey"
-                    onClick={() => { window.dispatchEvent(new CustomEvent("pivot-class", { detail: selected })); window.location.hash = "dominator-analysis"; }}>
+                    onClick={() => pivotClass(selected!)}>
                     In Dominator →
                   </button>
                 )}
@@ -9666,7 +9674,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     title={`Open ${currentNode.display_class} in Type Reference Graph`}
                     onClick={() => {
                       window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: currentNode.display_class }));
-                      window.location.hash = "type-ref-graph";
+                      history.replaceState(null, "", "#type-ref-graph");
+                      window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } }));
                     }}>
                     Open in Type Graph →
                   </button>
@@ -10514,7 +10523,8 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         <button className="show-more-btn"
           onClick={() => {
             window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: cls }));
-            window.location.hash = "type-ref-graph";
+            history.replaceState(null, "", "#type-ref-graph");
+            window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } }));
           }}>
           Type Graph →
         </button>
@@ -10921,13 +10931,15 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
         </button>
         <button className="show-more-btn" onClick={() => {
           (window as any).__explorerNavigate?.("explore", idx);
-          document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+          history.replaceState(null, "", `#explore/${idx}`);
+          window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Loaded in Object Graph Explorer", sectionId: "object-graph" } }));
         }}>
           Object Explorer →
         </button>
         <button className="show-more-btn" onClick={() => {
           (window as any).__explorerNavigate?.("domtree", idx);
-          document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+          history.replaceState(null, "", `#domtree/${idx}`);
+          window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Loaded in Object Graph Explorer", sectionId: "object-graph" } }));
         }}>
           Dominator Tree →
         </button>
@@ -11299,6 +11311,20 @@ export default function App({ report }: { report: Report }) {
   const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
   const objGraphNodes = report.obj_graph_flat?.nodes ?? null;
 
+  // ── Nav-toast: shown when a cross-section button fires without page scroll ──
+  const [navToast, setNavToast] = React.useState<{ label: string; sectionId: string } | null>(null);
+  const navToastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const { label, sectionId } = (e as CustomEvent<{ label: string; sectionId: string }>).detail;
+      setNavToast({ label, sectionId });
+      if (navToastTimer.current) clearTimeout(navToastTimer.current);
+      navToastTimer.current = setTimeout(() => setNavToast(null), 4500);
+    };
+    window.addEventListener("nav-toast", handler);
+    return () => window.removeEventListener("nav-toast", handler);
+  }, []);
+
   // ── Offline-save state (WASM/online mode only) ────────────────────────────
   type SaveState = "idle" | "saving" | "done" | "error";
   const [saveState, setSaveState] = React.useState<SaveState>("idle");
@@ -11440,6 +11466,16 @@ export default function App({ report }: { report: Report }) {
           {saveState === "saving" && "Generating offline report…"}
           {saveState === "done"   && "✓ Saved as offline HTML"}
           {saveState === "error"  && "✗ Failed to generate offline report"}
+        </div>
+      )}
+      {navToast && (
+        <div className="nav-toast">
+          <span>✓ {navToast.label}</span>
+          <button className="nav-toast-link"
+            onClick={() => { document.getElementById(navToast.sectionId)?.scrollIntoView({ behavior: "smooth" }); setNavToast(null); }}>
+            Jump there ↓
+          </button>
+          <button className="nav-toast-close" onClick={() => setNavToast(null)}>✕</button>
         </div>
       )}
       <HeapInspector report={report} histogram={report.overview?.histogram ?? []} />
