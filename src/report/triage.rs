@@ -330,7 +330,7 @@ impl Rule for Concentration {
                     TriageSeverity::Critical,
                     "Concentration",
                     format!(
-                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap, so releasing it would reclaim most memory.",
+                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap; making it unreachable would reclaim most memory.",
                         s.pretty_class,
                         kind,
                         held_by,
@@ -374,7 +374,7 @@ impl Rule for DominantGcRootType {
             TriageSeverity::Warning,
             "Dominant GC-Root Type",
             format!(
-                "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root class.",
+                "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root type; investigate why this root category holds so much.",
                 pct, top.root_type,
             ),
             Some(("system-overview", "System Overview")),
@@ -404,7 +404,7 @@ impl Rule for Shape {
         let shape = if p90 <= 3 {
             "shallow (most objects are held within a few hops of a GC root)"
         } else {
-            "deep — long dominator chains (often nested collections or linked structures)"
+            "deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root"
         };
         Some(signal(
             "shape",
@@ -611,7 +611,7 @@ impl Rule for ProxyLambdaBloat {
             TriageSeverity::Info,
             "Proxy/Lambda Bloat",
             format!(
-                "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible class-loader churn.",
+                "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible class-loader churn; cache generated proxies or upgrade to newer Java where lambdas are method handles.",
                 fmt_count(anon),
                 fmt_count(loaded),
                 share,
@@ -678,7 +678,7 @@ impl Rule for GcWaste {
             TriageSeverity::Warning,
             "GC Waste",
             format!(
-                "{:.1}% of the heap is unreachable garbage ({}){}.",
+                "{:.1}% of the heap is unreachable ({}){}; the GC has not yet collected it. Trigger a full GC or investigate why these objects are promoted without being reclaimed.",
                 pct, size_desc, cluster,
             ),
             Some(("unreachable-objects", "Unreachable Objects")),
@@ -710,7 +710,7 @@ impl Rule for OverCapacityCollections {
             TriageSeverity::Info,
             "Over-Capacity Collections",
             format!(
-                "{} wasted by under-filled collections (<=50% full across {} tracked) — oversized backing arrays.",
+                "{} wasted by under-filled collections (<=50% full across {} tracked) — call `trimToSize()` after bulk loads, or right-size initial capacity to reduce backing-array slack.",
                 format_bytes(wasted),
                 fmt_count(cfr.tracked),
             ),
@@ -738,7 +738,7 @@ impl Rule for ConstantValueArrays {
             TriageSeverity::Info,
             "Constant-Value Arrays",
             format!(
-                "{} in single-value primitive arrays; biggest group `{}` × {} instances — likely zero-filled/uninitialized waste.",
+                "{} in single-value primitive arrays; biggest group `{}` × {} instances — replace duplicates with a shared constant (e.g. `static final byte[] EMPTY = new byte[0]`).",
                 format_bytes(sum),
                 big.array_class,
                 fmt_count(big.objects),
@@ -852,7 +852,7 @@ impl Rule for ClassloaderExplosion {
             TriageSeverity::Warning,
             "Class-Loader Explosion",
             format!(
-                "{} live class-loader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
+                "{} live class-loader instances — abnormally high; typical apps use tens. Likely dynamic-class or redeploy leak: check for Groovy/JSP script-engine leaks, CGLIB proxy caching, or undischarged application-server contexts.",
                 fmt_count(n),
             ),
             Some(("system-overview", "System Overview")),
@@ -1016,7 +1016,7 @@ impl Rule for FinalizerQueueBacklog {
             TriageSeverity::Warning,
             "Finalizer Queue Backlog",
             format!(
-                "{} live `java.lang.ref.Finalizer` instances — the finalizer thread is falling behind; finalizeable objects (e.g. `Deflater`, JDBC connections) accumulate until drained.",
+                "{} live `java.lang.ref.Finalizer` instances — the finalizer thread is falling behind; objects with `finalize()` (e.g. `Deflater`, JDBC connections) accumulate faster than they are drained. Prefer explicit `close()` over relying on `finalize()`.",
                 fmt_count(row.instances),
             ),
             Some(("system-overview", "System Overview")),
@@ -1148,7 +1148,7 @@ impl Rule for HeapCompositionSkew {
             TriageSeverity::Info,
             "Heap Composition Skew",
             format!(
-                "`{}` account for {:.1}% of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
+                "`{}` account for {:.1}% of reachable heap — unusual concentration in one category; check the Heap Composition breakdown for the dominant type.",
                 dominant.kind, pct,
             ),
             Some(("system-overview", "System Overview")),
@@ -1176,7 +1176,7 @@ impl Rule for StaticFieldAnchor {
             TriageSeverity::Warning,
             "Static-Field Anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — this object lives for the class-loader lifetime and is never evicted.",
+                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — the object lives for the class-loader lifetime; add eviction, null the field after use, or replace with a `WeakReference` if the data should be reclaimable.",
                 s.pretty_class,
                 format_bytes(s.retained),
                 pct,
@@ -1475,8 +1475,8 @@ impl Rule for FixedPerObjectOverhead {
             "Fixed per-Object Header Overhead",
             format!(
                 "{} ({:.1}% of heap) consumed by JVM object headers alone \
-                 ({} objects × {} B each) — consider value types, primitive arrays, or \
-                 fewer wrapper objects.",
+                 ({} objects × {} B each) — consider replacing wrapper objects with \
+                 primitive arrays, off-heap buffers, or primitive-specialized collections.",
                 format_bytes(overhead),
                 pct,
                 fmt_count(r.overview.total_objects),
