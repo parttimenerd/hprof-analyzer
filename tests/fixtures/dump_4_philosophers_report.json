@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-04T06:58:44.123716000Z",
+  "generated": "2026-08-06T12:00:33.702656000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -34,17 +34,17 @@
           "shallow_heap": 4247480
         },
         {
-          "kind": "Object arrays",
+          "kind": "Object Arrays",
           "objects": 5834,
           "shallow_heap": 3110880
         },
         {
-          "kind": "Primitive arrays",
+          "kind": "Primitive Arrays",
           "objects": 25851,
           "shallow_heap": 4794280
         },
         {
-          "kind": "Class objects",
+          "kind": "Class Objects",
           "objects": 2784,
           "shallow_heap": 34432
         }
@@ -187,17 +187,17 @@
           "shallow_heap": 55824
         },
         {
-          "kind": "Object arrays",
+          "kind": "Object Arrays",
           "objects": 309,
           "shallow_heap": 12624
         },
         {
-          "kind": "Primitive arrays",
+          "kind": "Primitive Arrays",
           "objects": 3579,
           "shallow_heap": 766496
         },
         {
-          "kind": "Class objects",
+          "kind": "Class Objects",
           "objects": 287,
           "shallow_heap": 1448
         }
@@ -105271,10 +105271,10 @@
           "retained": 3072
         },
         {
-          "pretty_class": "[Ljava.lang.Object;",
+          "pretty_class": "java.lang.Object[]",
           "objects": 2,
           "shallow": 64,
-          "retained": 0
+          "retained": 64
         },
         {
           "pretty_class": "java.util.ArrayList",
@@ -105540,12 +105540,12 @@
     "total_bytes": 4754568,
     "sources": [
       {
-        "label": "Under-filled object arrays",
+        "label": "Under-filled Object Arrays",
         "bytes": 4563728,
         "anchor": "collections"
       },
       {
-        "label": "Under-filled collections",
+        "label": "Under-filled Collections",
         "bytes": 190840,
         "anchor": "collections"
       }
@@ -105555,7 +105555,7 @@
     {
       "id": "headline-retainer",
       "severity": "critical",
-      "title": "Headline retainer",
+      "title": "Headline Retainer",
       "detail": "`scala.concurrent.stm.ccstm.InTxnImpl` (a class group) retains 2.7 MB (22.9% of reachable heap).",
       "anchor": "leak-suspects",
       "anchor_label": "Leak Suspects",
@@ -105580,8 +105580,8 @@
     {
       "id": "one-leak-or-many",
       "severity": "info",
-      "title": "One leak or many",
-      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%.",
+      "title": "One Leak or Many",
+      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 objects each hold ≥1%.",
       "anchor": "top-consumers",
       "anchor_label": "Top Consumers",
       "nav_class": "scala.runtime.LazyVals$"
@@ -105589,15 +105589,15 @@
     {
       "id": "off-heap",
       "severity": "warning",
-      "title": "Off-heap (DirectByteBuffer)",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+      "title": "Off-Heap (DirectByteBuffer)",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS.",
       "anchor": "leak-indicators",
       "anchor_label": "Leak Indicators"
     },
     {
       "id": "fixed-per-object-overhead",
       "severity": "warning",
-      "title": "Fixed per-object header overhead",
+      "title": "Fixed per-Object Header Overhead",
       "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
       "anchor": "object-header-overhead",
       "anchor_label": "Header Overhead"
@@ -105605,15 +105605,15 @@
     {
       "id": "empty-collection-cemetery",
       "severity": "info",
-      "title": "Empty-collection cemetery",
-      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null.",
+      "title": "Empty-Collection Cemetery",
+      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead; consider lazy initialization or null.",
       "anchor": "collections",
       "anchor_label": "Collections"
     },
     {
       "id": "collections-not-analyzed",
       "severity": "info",
-      "title": "Collection waste not analyzed",
+      "title": "Collection Waste Not Analyzed",
       "detail": "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
     }
   ],
