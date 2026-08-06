@@ -1739,7 +1739,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <>
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
-            Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>substring()</code> retaining a full backing array (Java 6/7 shared-buffer semantics) or repeated <code>StringBuilder.toString()</code> allocations. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
+            Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>substring()</code> retaining a full backing array (Java 6/7 shared-buffer semantics) or repeated <code>StringBuilder.toString()</code> allocations. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
             {fmtB(w.total_wasted_bytes)} total wasted.
           </p>
           {w.top.length > 0 && (
@@ -11549,7 +11549,7 @@ export default function App({ report }: { report: Report }) {
       <ReferencesSection data={report.references} />
       <DirectByteBufferCard indicators={report.leak_indicators} />
       <UnreachableObjectsSection data={report.overview} />
-      {report.alloc_sites?.traces_present && report.alloc_sites.sites.some(s => s.frames.length > 0) && <AllocSitesSection data={report.alloc_sites} biggestClasses={report.top?.biggest_classes ?? []} />}
+      {report.alloc_sites?.traces_present && <AllocSitesSection data={report.alloc_sites} biggestClasses={report.top?.biggest_classes ?? []} />}
       {report.obj_graph_flat && (
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
