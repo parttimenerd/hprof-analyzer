@@ -5888,10 +5888,10 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is summed per trace; retained is omitted because per-trace sums double-count shared subgraphs.</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is summed per trace; retained heap is excluded — per-trace sums double-count shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
-          Allocation tracking was off when this dump was taken; no stack-trace data is available.
+          This dump was captured without allocation tracking; no stack-trace data is available.
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
@@ -6078,7 +6078,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(anonymous_class_count > 0 ? [{
       indicator: "Anonymous/Generated Classes",
       value: fmtCount(anonymous_class_count),
-      hint: "High counts can indicate class-loader leaks (e.g. dynamic proxies accumulating per request). Navigate to Top Consumers and filter by \"$\" to find the biggest offenders.",
+      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). Navigate to Top Consumers and filter by \"$\" to find the biggest offenders.",
     }] : []),
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries</>,
@@ -8224,7 +8224,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           if (pct < 50) return null;
           return (
             <div style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.75rem", background: "var(--warn-bg, #fef3c7)", border: "1px solid var(--warn-border, #fde68a)", borderRadius: 5, fontSize: "0.82rem", color: "var(--warn, #92400e)" }}>
-              ⚠ Top 3 objects hold <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(top3total)}) — a small number of large retainers dominate. Investigate these first.
+              ⚠ Top 3 objects hold <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(top3total)}) — a few large retainers dominate. Investigate these first.
             </div>
           );
         })()}
