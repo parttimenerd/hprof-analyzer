@@ -53,14 +53,14 @@ _At-a-glance digest; see the sections below for full detail._
 
 _Where the reachable heap is concentrated, at a glance._
 
-- **Headline retainer:** `java.util.zip.ZipFile$Source` (a class group) retains 12.3 MB (37.3% of reachable heap). See [Leak Suspects](#leak-suspects).
+- **Headline Retainer:** `java.util.zip.ZipFile$Source` (a class group) retains 12.3 MB (37.3% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).
 - **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 967. See [Dominator-Depth Distribution](#dominator-depth-distribution).
-- **One leak or many:** the single biggest object, `java.util.zip.ZipFile$Source`, retains 8.1% and the top 10 retain 43.5% of the heap; 15 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
-- **Off-heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
-- **GC waste:** 11.6% of the heap is unreachable garbage (4.3 MB shallow, 4.3 MB retained) — largest garbage cluster rooted at `int[]` (512.0 KB). See [Unreachable Objects](#unreachable-objects).
-- **Empty-collection cemetery:** 6,686 of 9,466 tracked collections (70.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
-- **Collection waste not analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
+- **One Leak or Many:** the single biggest object, `java.util.zip.ZipFile$Source`, retains 8.1% and the top 10 retain 43.5% of the heap; 15 objects each hold ≥1%. See [Top Consumers](#top-consumers).
+- **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS. See [Leak Indicators](#leak-indicators).
+- **GC Waste:** 11.6% of the heap is unreachable garbage (4.3 MB) — largest garbage cluster rooted at `int[]` (512.0 KB). See [Unreachable Objects](#unreachable-objects).
+- **Empty-Collection Cemetery:** 6,686 of 9,466 tracked collections (70.6%) are empty — pre-allocated but never populated containers waste object-header overhead; consider lazy initialization or null. See [Collections](#collections).
+- **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
 ## Waste Summary
 
@@ -68,8 +68,8 @@ _Approximately **3.8 MB** looks reclaimable across the sources below. Figures ar
 
 | Source                                     | Reclaimable |
 | ------------------------------------------ | ----------: |
-| [Under-filled object arrays](#collections) |      3.0 MB |
-| [Under-filled collections](#collections)   |    851.3 KB |
+| [Under-filled Object Arrays](#collections) |      3.0 MB |
+| [Under-filled Collections](#collections)   |    851.3 KB |
 
 ## System Overview
 
@@ -109,9 +109,9 @@ _Reachable-heap totals and the largest classes by retained heap._
 | Kind             | Objects | Shallow Heap |                  |
 | ---------------- | ------: | -----------: | ---------------- |
 | Instances        | 442,261 |      11.1 MB | █████████▍       |
-| Object arrays    |  23,090 |       3.1 MB | ██▌              |
-| Primitive arrays |  84,550 |      18.8 MB | ████████████████ |
-| Class objects    |  12,484 |     139.8 KB | ▏                |
+| Object Arrays    |  23,090 |       3.1 MB | ██▌              |
+| Primitive Arrays |  84,550 |      18.8 MB | ████████████████ |
+| Class Objects    |  12,484 |     139.8 KB | ▏                |
 
 ### HPROF Record Census
 
@@ -259,7 +259,7 @@ _… 12,886 more classes, 3.7 MB shallow / 20.7 MB retained (full list in JSON).
 
 ### Class Loaders
 
-_Classes grouped by the loader that defined them. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a classloader leak. The **Address** column distinguishes them._
+_Classes grouped by the loader that defined them. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak. The **Address** column distinguishes them._
 
 | Loader                                               | Address    | Classes | Instances | Shallow Heap | Retained Heap |
 | ---------------------------------------------------- | ---------- | ------: | --------: | -----------: | ------------: |
@@ -286,7 +286,7 @@ _Classes grouped by the loader that defined them. The **Loader** column shows th
 
 ### Duplicate Classes
 
-_Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — a typical symptom of classloader leaks (e.g. each web-app reload or plugin load creates a new loader that never gets GC'd). Check the per-loader breakdown: if one loader holds almost all the instances the others are likely leaked copies._
+_Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — a typical symptom of class-loader leaks (e.g. each web-app reload or plugin load creates a new loader that never gets GC'd). Check the per-loader breakdown: if one loader holds almost all the instances the others are likely leaked copies._
 
 | Class                                       | #Loaders | Instances | Retained Heap |
 | ------------------------------------------- | -------: | --------: | ------------: |
@@ -468,7 +468,7 @@ _Objects and class groups retaining the most heap, ranked by retained size. Thes
 
 5,007 instances of `java.lang.Class` together retain this heap (combined shallow 63.3 KB).
 
-_Note: `java.lang.Class` objects are normal — every loaded class has one. This suspect reflects class-metadata memory, not a leak in application code. It is worth investigating only if the instance count is unexpectedly high (e.g. due to classloader leaks)._
+_Note: `java.lang.Class` objects are normal — every loaded class has one. This suspect reflects class-metadata memory, not a leak in application code. It is worth investigating only if the instance count is unexpectedly high (e.g. due to class-loader leaks)._
 
 #### Merged Paths to GC Roots
 
@@ -12951,9 +12951,9 @@ _4,759 reference instances._
 | `java.lang.invoke.DirectMethodHandle`                                          |      90 |  3.5 KB |   3.5 KB |
 | `java.util.concurrent.ConcurrentHashMap`                                       |      74 |  4.6 KB |  35.7 KB |
 | `java.util.jar.Manifest`                                                       |      63 |  1.5 KB |   1.3 MB |
-| `[Ljava.lang.Object;`                                                          |       2 |    64 B |      0 B |
-| `[Ljava.lang.String;`                                                          |       2 |    64 B |      0 B |
+| `java.lang.Object[]`                                                           |       2 |    64 B |     64 B |
 | `java.lang.String`                                                             |       2 |    48 B |    704 B |
+| `java.lang.String[]`                                                           |       2 |    64 B |     64 B |
 | `java.util.ArrayList`                                                          |       2 |    48 B |    160 B |
 | `java.util.PropertyResourceBundle`                                             |       2 |    80 B |   3.1 KB |
 | `org.apache.hadoop.shaded.com.ctc.wstx.io.BufferRecycler`                      |       2 |    64 B |  25.5 KB |
@@ -13005,7 +13005,7 @@ _6,039 reference instances._
 | `java.util.logging.Level`                                              |       9 |    288 B |    288 B |
 | `sun.management.MemoryPoolImpl`                                        |       9 |    456 B |   3.0 KB |
 | `sun.net.www.protocol.jar.URLJarFile`                                  |       8 |    640 B |   2.6 KB |
-_… 166 more classes (314 objects, 32.6 KB shallow, 5.6 MB retained)._
+_… 167 more classes (314 objects, 32.6 KB shallow, 5.7 MB retained)._
 
 #### Only-weakly retained _(approximate)_
 
@@ -13049,9 +13049,9 @@ _Unreachable objects are eligible for collection but have not yet been reclaimed
 | Kind             | Objects |  Shallow |
 | ---------------- | ------: | -------: |
 | Instances        |  32,655 |   1.3 MB |
-| Object arrays    |   7,526 | 267.5 KB |
-| Primitive arrays |  20,267 |   2.7 MB |
-| Class objects    |     452 |    552 B |
+| Object Arrays    |   7,526 | 267.5 KB |
+| Primitive Arrays |  20,267 |   2.7 MB |
+| Class Objects    |     452 |    552 B |
 
 _Shallow heap is additive; Retained sets overlap (nested subtrees are counted once per ancestor)._
 

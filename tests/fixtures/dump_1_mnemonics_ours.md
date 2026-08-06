@@ -53,15 +53,15 @@ _At-a-glance digest; see the sections below for full detail._
 
 _Where the reachable heap is concentrated, at a glance._
 
-- **Headline retainer:** `java.lang.Thread` (a single object) retains 5.5 MB (48.8% of reachable heap). See [Leak Suspects](#leak-suspects).
+- **Headline Retainer:** `java.lang.Thread` (a single object) retains 5.5 MB (48.8% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).
 - **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 8, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
-- **One leak or many:** the single biggest object, `java.lang.Thread`, retains 48.8% and the top 10 retain 84.3% of the heap; 6 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
-- **Thread pinning:** thread `main` retains 5.5 MB (48.8% of heap) and pins 329 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
-- **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
-- **Fixed per-object header overhead:** 334,875 objects × 12 B header = 3.8 MB (34.1% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#object-header-overhead).
-- **Empty-collection cemetery:** 2,943 of 3,891 tracked collections (75.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
-- **Collection waste not analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
+- **One Leak or Many:** the single biggest object, `java.lang.Thread`, retains 48.8% and the top 10 retain 84.3% of the heap; 6 objects each hold ≥1%. See [Top Consumers](#top-consumers).
+- **Thread Pinning:** thread `main` retains 5.5 MB (48.8% of heap) and pins 329 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS. See [Leak Indicators](#leak-indicators).
+- **Fixed per-Object Header Overhead:** 334,875 objects × 12 B header = 3.8 MB (34.1% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#object-header-overhead).
+- **Empty-Collection Cemetery:** 2,943 of 3,891 tracked collections (75.6%) are empty — pre-allocated but never populated containers waste object-header overhead; consider lazy initialization or null. See [Collections](#collections).
+- **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
 ## Waste Summary
 
@@ -69,8 +69,8 @@ _Approximately **1.2 MB** looks reclaimable across the sources below. Figures ar
 
 | Source                                     | Reclaimable |
 | ------------------------------------------ | ----------: |
-| [Under-filled object arrays](#collections) |    736.7 KB |
-| [Under-filled collections](#collections)   |    485.2 KB |
+| [Under-filled Object Arrays](#collections) |    736.7 KB |
+| [Under-filled Collections](#collections)   |    485.2 KB |
 
 ## System Overview
 
@@ -110,9 +110,9 @@ _Reachable-heap totals and the largest classes by retained heap._
 | Kind             | Objects | Shallow Heap |                  |
 | ---------------- | ------: | -----------: | ---------------- |
 | Instances        | 266,242 |       5.7 MB | ████████████████ |
-| Object arrays    |   4,667 |       1.2 MB | ███▍             |
-| Primitive arrays |  61,681 |       4.3 MB | ████████████     |
-| Class objects    |   2,285 |      29.4 KB | ▏                |
+| Object Arrays    |   4,667 |       1.2 MB | ███▍             |
+| Primitive Arrays |  61,681 |       4.3 MB | ████████████     |
+| Class Objects    |   2,285 |      29.4 KB | ▏                |
 
 ### HPROF Record Census
 
@@ -260,7 +260,7 @@ _… 2,336 more classes, 365.3 KB shallow / 1.4 MB retained (full list in JSON).
 
 ### Class Loaders
 
-_Classes grouped by the loader that defined them. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a classloader leak. The **Address** column distinguishes them._
+_Classes grouped by the loader that defined them. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak. The **Address** column distinguishes them._
 
 | Loader                                               | Address    | Classes | Instances | Shallow Heap | Retained Heap |
 | ---------------------------------------------------- | ---------- | ------: | --------: | -----------: | ------------: |
@@ -1004,7 +1004,7 @@ _218 reference instances._
 | `java.util.Locale`                       |      10 |   320 B |    320 B |
 | `java.util.jar.Manifest`                 |       6 |   144 B | 590.2 KB |
 | `java.util.concurrent.ConcurrentHashMap` |       4 |   256 B |   1.7 KB |
-| `[Ljava.lang.Object;`                    |       2 |    64 B |      0 B |
+| `java.lang.Object[]`                     |       2 |    64 B |     64 B |
 | `java.util.ArrayList`                    |       1 |    24 B |     80 B |
 | `sun.text.resources.cldr.FormatData`     |       1 |    40 B |  28.3 KB |
 | `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |  20.0 KB |
@@ -1089,9 +1089,9 @@ _Unreachable objects are eligible for collection but have not yet been reclaimed
 | Kind             | Objects |  Shallow |
 | ---------------- | ------: | -------: |
 | Instances        |   1,098 |  31.7 KB |
-| Object arrays    |      40 |   1.6 KB |
-| Primitive arrays |   2,477 | 626.4 KB |
-| Class objects    |     101 |      0 B |
+| Object Arrays    |      40 |   1.6 KB |
+| Primitive Arrays |   2,477 | 626.4 KB |
+| Class Objects    |     101 |      0 B |
 
 _Shallow heap is additive; Retained sets overlap (nested subtrees are counted once per ancestor)._
 
