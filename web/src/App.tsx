@@ -3763,7 +3763,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
-        Fraction of each collection's capacity in use — low fill means wasted backing-array memory.
+        Fraction of each collection's capacity in use — low fill wastes backing-array memory.
         {cfr && <>{" "}{fmtCount(cfr.total)} collections analyzed ({fmtCount(cfr.tracked)} non-empty shown).</>}
       </p>
       {cfrBuckets.length === 0 ? (
@@ -3800,7 +3800,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Array Fill Ratio</h3>
       <p className="subtitle">
-        Non-null element fraction of object arrays — low fill means most slots are empty, wasting heap.
+        Non-null element fraction of object arrays — low fill leaves most slots empty.
         {afr && <>{" "}{fmtCount(afr.tracked)} tracked.</>}
       </p>
       {afrBuckets.length === 0 ? (
@@ -8793,7 +8793,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </p>
               )}
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
-                <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references — this is a leaf object or all its fields point to primitive values."}</p>
+                <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound references — leaf object or all fields are primitives."}</p>
               )}
               {groupedEdges.length > 1 && (
                 <input
@@ -9720,7 +9720,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.4rem 0 0" }}>
               {pathBetweenError === "requires .hprof loaded in browser"
                 ? "Path search requires the .hprof loaded in the browser."
-                : `No reference path found (${pathBetweenError}). Objects are not connected through outbound references.`}
+                : `No reference path found (${pathBetweenError}). No outbound path connects them.`}
             </p>
           )}
           {pathBetweenResult && pathBetweenResult.length > 0 && (
@@ -9964,7 +9964,7 @@ function GlossarySection() {
   return (
     <section id="glossary">
       <h2>Glossary</h2>
-      <p className="subtitle">Key terms used in this report.</p>
+      <p className="subtitle">Key terms.</p>
       <dl className="summary-grid">
         {entries.map(([term, def]) => (
           <React.Fragment key={term}>
@@ -10297,10 +10297,10 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       <section className="diff-section">
         <h2>Disappeared Leak Suspects (Resolved)</h2>
         <p className="subtitle">
-          Suspects that appeared in an earlier dump but are absent now — issue resolved between dumps or was transient.
+          Suspects present in an earlier dump but absent now — resolved or transient.
         </p>
         {diff.gone_suspects.length === 0 ? (
-          <p className="subtitle">No suspects disappeared in the current dump.</p>
+          <p className="subtitle">No resolved suspects.</p>
         ) : (
           <SeriesTable nameLabel="Suspect" labels={labels} rows={diff.gone_suspects} />
         )}
