@@ -493,7 +493,7 @@ impl Rule for ClassloaderLeak {
             TriageSeverity::Warning,
             "Class-Loader Leak",
             format!(
-                "`{}` is loaded by {} class loaders ({} retained) — classic reload leak.",
+                "`{}` is loaded by {} class loaders ({} retained) — classic redeploy/hot-reload leak; the old loader is still live. Check for static fields, ThreadLocals, or JNI globals referencing the old class.",
                 dup.pretty_class,
                 dup.loader_count,
                 format_bytes(dup.total_retained),
@@ -517,7 +517,7 @@ impl Rule for ThreadLocalLeak {
             TriageSeverity::Warning,
             "ThreadLocal Leak",
             format!(
-                "{} ThreadLocalMap entries have a cleared key — abandoned thread-local values that will never be reclaimed.",
+                "{} ThreadLocalMap entries have a cleared key — the referent thread was GC'd but the value was never removed. Values leak until the thread terminates or `ThreadLocal.remove()` is called. Common in thread-pooled servers.",
                 fmt_count(n),
             ),
             Some(("leak-indicators", "Leak Indicators")),
@@ -547,7 +547,7 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread Pinning",
             format!(
-                "thread `{}` retains {} ({:.1}% of heap) and pins {} thread-local roots — a live thread is holding memory alive.",
+                "thread `{}` retains {} ({:.1}% of heap) and pins {} thread-local roots — a live thread is holding a disproportionate amount of memory alive. Inspect the thread's stack frames and ThreadLocal values in the Threads section.",
                 who,
                 format_bytes(t.retained),
                 share,
@@ -583,7 +583,7 @@ impl Rule for WeakRefEscape {
             TriageSeverity::Info,
             "Weak-Ref Escape",
             format!(
-                "{} objects only weakly retained, totaling {} — GC pressure or explicit clear() would reclaim them.",
+                "{} objects only weakly retained, totaling {} — the next GC cycle will reclaim them. If they are not being reclaimed in practice, check that you are not also holding a strong reference elsewhere.",
                 fmt_count(only_weak_objects),
                 format_bytes(only_weak_retained),
             ),
@@ -634,7 +634,7 @@ impl Rule for OffHeap {
             TriageSeverity::Warning,
             "Off-Heap (DirectByteBuffer)",
             format!(
-                "{} of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS.",
+                "{} of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM.",
                 format_bytes(cap),
             ),
             Some(("leak-indicators", "Leak Indicators")),
@@ -879,7 +879,7 @@ impl Rule for ThreadSwarm {
             TriageSeverity::Warning,
             "Thread Swarm",
             format!(
-                "{} live threads retaining {} in aggregate — likely unbounded thread creation or a leaking thread pool.",
+                "{} live threads retaining {} in aggregate — likely unbounded thread creation or a leaking thread pool. Ensure ExecutorServices are shut down when no longer needed; on Java 21+ prefer virtual threads for I/O-bound workloads.",
                 fmt_count(count as u64),
                 format_bytes(aggregate_retained),
             ),
@@ -910,7 +910,7 @@ impl Rule for DuplicateStrings {
             TriageSeverity::Info,
             "Duplicate Strings",
             format!(
-                "~{} wasted by {} duplicated String values ({} total instances){}.",
+                "~{} wasted by {} duplicated String values ({} total instances){}. Enable JVM string deduplication (`-XX:+UseStringDeduplication` with G1GC), or intern/pool strings at creation time.",
                 format_bytes(ds.approx_wasted_bytes),
                 fmt_count(ds.duplicated_values),
                 fmt_count(ds.total_string_instances),
@@ -942,7 +942,7 @@ impl Rule for CharArraySlack {
             TriageSeverity::Info,
             "Char-Array Slack",
             format!(
-                "~{} slack in {} over-allocated char[]/byte[] String backing arrays — possible `substring`/`StringBuilder` waste.",
+                "~{} slack in {} over-allocated char[]/byte[] String backing arrays — likely from `substring()` retaining a full backing array or repeated `StringBuilder.toString()` allocations. Use `new String(str)` to copy-compact, or rewrite to avoid creating large intermediate strings.",
                 format_bytes(caw.total_wasted_bytes),
                 fmt_count(caw.wasteful_arrays),
             ),
@@ -983,7 +983,7 @@ impl Rule for LargeUnboundedCollection {
             TriageSeverity::Warning,
             "Large Unbounded Collection",
             format!(
-                "one `{}` holds {} elements{}{} — likely a static or unbounded cache that never evicts.",
+                "one `{}` holds {} elements{}{} — likely a static or unbounded cache that never evicts. Add a maximum-size eviction policy (e.g. Caffeine/Guava `maximumSize`, `LinkedHashMap` LRU override, or `removeEldestEntry`).",
                 row.container_class,
                 fmt_count(row.elements),
                 retained_str,
@@ -1039,7 +1039,7 @@ impl Rule for MetaspacePressure {
             TriageSeverity::Warning,
             "Metaspace Pressure",
             format!(
-                "{} classes loaded — far above normal; class metadata is likely exhausting Metaspace. Typical cause: CGLIB/Byte Buddy/Groovy proxy generation without caching.",
+                "{} classes loaded — far above normal; class metadata is likely exhausting Metaspace. Typical cause: CGLIB/Byte Buddy/Groovy proxy generation without caching. Add `-XX:MaxMetaspaceSize` to cap growth, enable proxy caching, and look for repeated `defineClass` call sites.",
                 fmt_count(n),
             ),
             Some(("system-overview", "System Overview")),
@@ -1073,7 +1073,7 @@ impl Rule for CachedReflectionMetadata {
             TriageSeverity::Info,
             "Cached Reflection Metadata",
             format!(
-                "{} live `java.lang.reflect.{{Method,Field,Constructor}}` objects — framework reflection caches are unbounded (typically Spring/Hibernate accumulating per scanned class).",
+                "{} live `java.lang.reflect.{{Method,Field,Constructor}}` objects — framework reflection caches are unbounded (typically Spring/Hibernate accumulating per scanned class). Check for uncapped `ReflectionUtils` caches or scanner loops calling `getDeclaredMethods()` without caching the result.",
                 fmt_count(total),
             ),
             Some(("system-overview", "System Overview")),
@@ -1209,7 +1209,7 @@ impl Rule for SessionScopeLeak {
             TriageSeverity::Warning,
             "Session-Scope Leak",
             format!(
-                "{} live `{}` instances — session objects are accumulating; a registry is holding sessions that were never invalidated.",
+                "{} live `{}` instances — session objects accumulating without invalidation; check that sessions are expired/invalidated on logout and that an idle-timeout is configured.",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
@@ -1244,7 +1244,7 @@ impl Rule for ConnectionLeak {
             TriageSeverity::Warning,
             "Connection / Socket Leak",
             format!(
-                "{} live `{}` objects — exceeds any reasonable pool or connection limit; connections are likely being acquired without `close()`.",
+                "{} live `{}` objects — exceeds any reasonable pool or connection limit. Wrap acquisitions in try-with-resources, or enable connection-pool leak detection (e.g. HikariCP `leakDetectionThreshold`, c3p0 `unreturnedConnectionTimeout`).",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
@@ -1278,7 +1278,7 @@ impl Rule for EventListenerAccumulation {
             TriageSeverity::Warning,
             "Event-Listener Accumulation",
             format!(
-                "{} live `{}` instances — listeners are accumulating without removal; the publisher is keeping them alive indefinitely.",
+                "{} live `{}` instances — listeners accumulating without removal; call `removeListener()` / `unsubscribe()` when the component is disposed, or use weak-reference listener registries.",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
@@ -1321,7 +1321,7 @@ impl Rule for ParserOutputAccumulation {
             TriageSeverity::Info,
             "Parser-Output Accumulation",
             format!(
-                "{} live `{}` instances — XML/JSON parse results are accumulating; parsed documents are not being discarded after processing.",
+                "{} live `{}` instances — XML/JSON parse results are accumulating. Parsed documents are not being discarded after processing; process and discard immediately, or use a streaming parser (SAX/StAX/Jackson streaming) instead of building a full in-memory tree.",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
@@ -1363,7 +1363,7 @@ impl Rule for InternedStringBloat {
             TriageSeverity::Warning,
             "Interned-String Bloat",
             format!(
-                "{} live `java.lang.String` instances with {} JNI Global roots — `String.intern()` may be called on dynamic values, causing the intern table to grow without bound.",
+                "{} live `java.lang.String` instances with {} JNI Global roots — `String.intern()` may be called on dynamic values, causing the intern table to grow without bound. Avoid `String.intern()` on user-supplied or generated strings; use a bounded cache (e.g. `Interner` from Guava) instead.",
                 fmt_count(string_count),
                 fmt_count(jni_global_count),
             ),
@@ -1399,7 +1399,7 @@ impl Rule for SparseObjectArrays {
             TriageSeverity::Info,
             "Sparse Object Arrays",
             format!(
-                "{} object arrays are <={}% full ({} wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory.",
+                "{} object arrays are <={}% full ({} wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. Replace with a `HashMap`/`SparseArray`, a `List` that grows on demand, or a dedicated sparse-matrix library.",
                 fmt_count(sparse_objects),
                 SPARSE_ARRAY_FILL_BP / 100,
                 format_bytes(wasted),
@@ -1434,7 +1434,8 @@ impl Rule for BigDropConcentration {
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
                  drops here in the dominator tree — almost all its retained memory \
-                 is not shared with any other top-level subtree.",
+                 is not shared with any other top-level subtree. Navigate to Dominator Analysis \
+                 and trace the retaining chain to find the root cause.",
                 row.display_class,
                 pct,
                 format_bytes(row.drop_bytes),
@@ -1515,7 +1516,8 @@ impl Rule for HashCollisionHotspot {
             format!(
                 "{} of {} tracked maps ({:.1}%) have a load factor > {}% — \
                  over-packed hash tables cause long collision chains and degrade \
-                 lookup performance.",
+                 lookup performance. Increase initial capacity or lower the load factor \
+                 (pass `initialCapacity` and `loadFactor` to the constructor, default is 0.75).",
                 fmt_count(hot),
                 fmt_count(mcr.tracked),
                 pct,
@@ -1547,7 +1549,8 @@ impl Rule for EmptyCollectionCemetery {
             format!(
                 "{} of {} tracked collections ({:.1}%) are empty — \
                  pre-allocated but never populated containers waste object-header \
-                 overhead; consider lazy initialization or null.",
+                 overhead. Consider lazy initialization, returning `Collections.emptyList()` \
+                 sentinels, or using `null` until the collection is first written.",
                 fmt_count(cbs.empty_count),
                 fmt_count(cbs.tracked),
                 share_pct,
