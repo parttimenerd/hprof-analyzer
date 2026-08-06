@@ -3658,7 +3658,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       <>
         <h3>Top Arrays ({kind.charAt(0).toUpperCase() + kind.slice(1)})</h3>
         <p className="subtitle">
-          The largest {kind} arrays by shallow size, individually and aggregated by array class.
+          Largest {kind} arrays by shallow size — individual instances and class totals.
         </p>
         {individual.length === 0 ? (
           <p className="subtitle">None.</p>
@@ -4158,7 +4158,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
       <p className="subtitle">
-        The largest individual collection instances by element count.
+        Largest collection instances by element count.
         {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag to see which fields hold these collections.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
