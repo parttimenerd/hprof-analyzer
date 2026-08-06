@@ -8775,7 +8775,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <>
               {currentNode.edges_unknown && !wasmOutboundEdges && (
                 <p className="subtitle" style={{ color: "var(--warn-border)" }}>
-                  ⚠ Outbound references not captured for this object (not in top-10,000 by shallow heap).{" "}
+                  ⚠ Outbound references were not captured for this object — it fell below the top-10,000 threshold by shallow heap.{" "}
                   <button className="btn-link" style={{ fontSize: "inherit" }}
                     onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
                     View Dominator Tree →
@@ -8798,7 +8798,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </p>
               )}
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
-                <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references (leaf object or all references are to primitives)."}</p>
+                <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references — this is a leaf object or all its fields point to primitive values."}</p>
               )}
               {groupedEdges.length > 1 && (
                 <input
@@ -9041,7 +9041,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (currentNode?.edges_unknown) {
                   return (
                     <p className="subtitle">
-                      Inbound references not available in this report. Load the .hprof in the browser for the full inbound graph.
+                      Inbound references not available in this report. Load the .hprof file in the browser for the full inbound graph.
                     </p>
                   );
                 }
