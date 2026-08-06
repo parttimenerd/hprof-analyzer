@@ -6023,7 +6023,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       <h2>Retention Concentration</h2>
       <p className="subtitle">
         Share of the reachable heap retained by the few largest top-level dominators (a dominator&apos;s retained size is everything it keeps alive). Read it as a concentration curve: if{" "}
-        <strong>Top 1</strong> is already high, one object is the leak — making it unreachable reclaims most of the heap; if the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
+        <strong>Top 1</strong> is already high, one object is the accumulation point — making it unreachable reclaims most of the heap; if the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
         retention spans many peers (e.g. a large cache or collection) and no single fix helps much.
       </p>
       <ConcentrationChart rc={rc} />
