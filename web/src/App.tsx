@@ -1701,7 +1701,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        String values seen more than once — reclaim by normalizing at parse time, using <code>-XX:+UseStringDeduplication</code> (G1 GC), or sharing a canonical instance per value.
+        String values seen more than once — reclaim by normalizing at parse time, using <code>-XX:+UseStringDeduplication</code> (G1 GC), or sharing a canonical instance per value. Deduplication is approximate (64-bit hash; rare collisions possible).{" "}
         Approximate wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
@@ -3544,7 +3544,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component). Totals can exceed heap size because boot-loader classes are counted in every component that retains them.
+        Retained heap grouped by class loader (component). <strong>% Heap</strong> is the share of total reachable heap. Totals can exceed heap size because boot-loader classes are counted in every component that retains them.
       </p>
       <details open>
         <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
@@ -4161,7 +4161,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
       <p className="subtitle">
-        Largest collection instances by element count — oversized collections often signal unbounded growth, missing eviction, or data that should be paginated.
+        The largest individual collection instances. <strong>Owner</strong> is the primary incoming <code>Class#field</code>; <strong>Value Type</strong> is the dominant runtime element type of the backing array — for a <code>Map&lt;K,V&gt;</code> this is often <code>Entry</code> or <code>Object</code>, not <code>V</code>. Oversized collections often signal unbounded growth, missing eviction, or data that should be paginated or right-sized.
         {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag for field attribution.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
@@ -4231,7 +4231,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
         Which <code>Class#field</code> retains the most memory, summed over every object the field points at.
-        Pointee Type is the dominant concrete class reached through the field. A field retaining unexpectedly large memory is a good candidate to null after use or replace with a lazy-initialized reference.
+        Pointee Type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field retaining unexpectedly large memory is a good candidate to null after use or replace with a lazy-initialized reference.
       </p>
       {data.truncated && (
         <p className="subtitle">
