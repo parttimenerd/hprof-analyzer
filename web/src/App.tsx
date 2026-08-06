@@ -11125,7 +11125,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
         Top 50 by retained heap.{!wasm && " Load the .hprof in the browser for this view."}
       </p>
       {loading && <p className="trg-no-data">Scanning…</p>}
-      {rows && rows.length === 0 && <p className="trg-no-data">No instances found.</p>}
+      {rows && rows.length === 0 && <p className="trg-no-data">No instances found for this class in the loaded heap.</p>}
       {rows && rows.length > 0 && (
         <table className="trg-inst-table">
           <thead>
@@ -11246,7 +11246,21 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
       <div className="inspector-header">
         <button className="inspector-nav-btn" disabled={stack.length <= 1} onClick={goBack}>←</button>
         <button className="inspector-nav-btn" disabled={fwd.length === 0} onClick={goFwd}>→</button>
-        <span className="inspector-title">Heap Inspector</span>
+        <span className="inspector-title" title={
+          current?.kind === "class" ? current.cls :
+          current?.kind === "instance" ? `${current.cls} #${current.idx}` :
+          current?.kind === "instances" ? `${current.cls} — instances` :
+          current?.kind === "fields" ? `${current.cls} #${current.idx} — fields` :
+          current?.kind === "field-scan" ? `${current.cls} — field scan` :
+          "Heap Inspector"
+        }>
+          {current?.kind === "class" ? current.cls.split(".").pop() :
+           current?.kind === "instance" ? `${current.cls.split(".").pop()} #${current.idx}` :
+           current?.kind === "instances" ? `${current.cls.split(".").pop()} (instances)` :
+           current?.kind === "fields" ? `Fields — #${current.idx}` :
+           current?.kind === "field-scan" ? `Scan — ${current.cls.split(".").pop()}` :
+           "Heap Inspector"}
+        </span>
         <button className="inspector-close-btn" onClick={() => setOpen(false)}>✕</button>
       </div>
       <div className="inspector-body">
