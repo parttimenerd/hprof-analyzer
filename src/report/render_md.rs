@@ -900,7 +900,7 @@ _Definitions for the heap analysis terms used throughout this report._
   objects it points to.
 - **Retained heap (retained size)**: the total memory freed when this object becomes
   unreachable — its own shallow size plus everything reachable *only* through it.
-  This is the number that answers \"how much does making it unreachable reclaim?\"
+  This is the number that answers \"how much memory does freeing this object release?\"
   and it is the basis for every percentage in this report.
   See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Reachable heap**: all objects the [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) can still
@@ -2770,7 +2770,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         "_Which holder `Class#field` retains the most memory, summed over every object the \
          field points at. Runtime pointee type is the dominant concrete class reached through \
          the field (`varies` when no single type dominates). A field retaining unexpectedly \
-         large memory is a good candidate to null after use or replace with a lazy-initialized \
+         large memory is a good candidate to null out after use or wrap in a lazy-initialized \
          reference._\n\n",
     );
 

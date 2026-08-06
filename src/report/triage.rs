@@ -1175,7 +1175,7 @@ impl Rule for StaticFieldAnchor {
             TriageSeverity::Warning,
             "Static-Field Anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — the object lives for the class-loader lifetime; add eviction, null the field after use, or replace with a `WeakReference` if the data should be reclaimable.",
+                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — the object lives for the class-loader lifetime; add eviction, null out the field after use, or replace with a `WeakReference` if the data should be reclaimable.",
                 s.pretty_class,
                 format_bytes(s.retained),
                 pct,
