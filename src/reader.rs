@@ -386,7 +386,10 @@ impl HprofReader {
             let avail = self.end - self.pos;
             if avail == 0 {
                 if self.refill()? == 0 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof in skip"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated dump: unexpected end of file while skipping record data",
+                    ));
                 }
                 continue;
             }
@@ -469,12 +472,21 @@ impl HprofReader {
                 // to bypass the intermediate buffer.
                 let remaining = dst.len() - written;
                 if remaining >= BUF_CAP {
-                    self.inner.read_exact(&mut dst[written..])?;
+                    self.inner.read_exact(&mut dst[written..]).map_err(|e| {
+                        if e.kind() == io::ErrorKind::UnexpectedEof {
+                            io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "truncated dump: unexpected end of file while reading record data",
+                            )
+                        } else {
+                            e
+                        }
+                    })?;
                     written = dst.len();
                 } else if self.refill()? == 0 {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
-                        "eof in read_into",
+                        "truncated dump: unexpected end of file while reading record data",
                     ));
                 }
             }

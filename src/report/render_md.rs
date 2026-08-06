@@ -283,6 +283,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_dominator_analysis(&r.dominator_analysis, false, &mut out);
     render_threads(&r.threads, false, &mut out);
     render_thread_local_analysis(&r.thread_local_analysis, &mut out);
+    render_framework_analysis(&r.framework_analysis, &mut out);
     render_top_components(&r.top_components, false, &mut out);
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
     render_collections(&r.collections, &r.collection_attribution, false, &mut out);
@@ -1783,8 +1784,8 @@ pub(crate) fn render_thread_local_analysis(
     out.push_str(
         "_Values stored in thread-local slots, grouped by value class. \
 Stale entries have a null key — the `ThreadLocal` object was GC'd but the \
-value remains. In pooled threads (Tomcat, Netty) stale values accumulate \
-because the thread never terminates; call `ThreadLocal.remove()` to clean up._\n\n",
+value remains. In pooled threads (Tomcat, Netty) the thread rarely terminates, \
+so stale values accumulate; call `ThreadLocal.remove()` to clean up._\n\n",
     );
     let mut t = Table::new(
         &["Value Class", "Entries", "Stale", "Retained"],
@@ -3384,7 +3385,7 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
     use crate::md::{Align, Table, bar};
     out.push_str("## Dominator Analysis\n\n");
     out.push_str(
-        "_Instances ranked by retained heap. An object _dominates_ another if every path \
+        "_Instances ranked by retained heap. An object **dominates** another if every path \
 from a GC root to that object passes through it — making the dominator unreachable reclaims \
 everything it dominates._\n\n",
     );
@@ -3991,6 +3992,34 @@ pub(crate) fn render_header_overhead(
             format_bytes(row.total_header_bytes),
             fmt_pct(row.header_pct_of_shallow_bp as f64 / 100.0),
             format_bytes(row.avg_shallow),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+pub(crate) fn render_framework_analysis(
+    items: &[crate::report::model::FrameworkAnalysis],
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    if items.is_empty() {
+        return;
+    }
+    out.push_str("## Framework Analysis\n\n");
+    out.push_str(
+        "_Framework-specific objects and their heap footprint — \
+useful for spotting oversized caches or leaked request contexts._\n\n",
+    );
+    let mut t = Table::new(
+        &["Framework", "Instances", "Retained"],
+        &[Align::Left, Align::Right, Align::Right],
+    );
+    for item in items {
+        t.row([
+            item.framework.clone(),
+            fmt_count(item.instance_count as u64),
+            format_bytes(item.total_retained),
         ]);
     }
     t.render(out);

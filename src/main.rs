@@ -1239,20 +1239,13 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
     if e.kind() == io::ErrorKind::NotFound && !msg.starts_with("cannot ") {
         return format!("cannot open '{input}': no such file or directory");
     }
-    if !looks_like_hprof(input) && std::fs::metadata(input).is_ok() {
-        return format!(
-            "{msg}\n(hint: '{input}' does not start with the HPROF magic; if it \
-             is a saved report JSON, rename it without the .hprof extension to \
-             re-render it)"
-        );
-    }
     // A genuine dump (HPROF magic present) that hits EOF mid-record is almost
-    // always a truncated or partially-copied file — the terse reader message
-    // ("eof in read_into" / "eof in skip") gives no hint of that. Say so.
+    // always a truncated or partially-copied file. Replace the raw internal
+    // reader message with a user-actionable one.
     if e.kind() == io::ErrorKind::UnexpectedEof && looks_like_hprof(input) {
         return format!(
-            "{msg}\n(hint: '{input}' appears truncated or corrupt — the parser \
-             hit end of file mid-record; re-copy the .hprof dump and retry)"
+            "'{input}' appears truncated or corrupt — hit end of file mid-record; \
+             re-copy the .hprof dump and retry"
         );
     }
     msg
@@ -2104,15 +2097,14 @@ fn run(
         ));
     }
 
-    // A valid HPROF header with zero objects means the file was truncated
-    // before any heap data, or is otherwise unusable. Warn and bail rather
-    // than silently emitting an empty report that looks like a real analysis.
+    // A valid HPROF header with zero objects means the file was truncated before
+    // the heap dump segment. Warn on stderr but continue — the report will be
+    // empty, which is still more useful than a hard failure.
     if p1.class_ids.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "dump contains no heap objects — the file appears truncated before \
-             the heap dump segment; re-copy the file and retry",
-        ));
+        eprintln!(
+            "warning: '{input}' contains no heap objects — \
+             the file may be truncated before the heap dump segment"
+        );
     }
 
     // fast (before the expensive graph build) with a message naming the query.

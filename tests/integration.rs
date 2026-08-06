@@ -79,6 +79,29 @@ fn assert_no_panic(combined: &str) {
     );
 }
 
+/// Assert that stderr contains no raw internal reader strings regardless of exit code.
+fn assert_error_message_is_clean(stderr: &str, label: &str) {
+    for bad in &[
+        "eof in read_into",
+        "eof in skip",
+        "failed to fill whole buffer",
+    ] {
+        assert!(
+            !stderr.contains(bad),
+            "{label}: stderr contains raw internal message {bad:?}\nstderr: {stderr}"
+        );
+    }
+}
+
+/// Returns true if the JSON output is at least valid JSON with a schema_version field,
+/// meaning the tool produced a report (even if it covers zero objects).
+fn json_is_valid_report(json: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return false;
+    };
+    v["schema_version"].is_number()
+}
+
 /// Returns true if the JSON report stdout contains at least one object
 /// (overview.total_objects > 0) and at least one class name.
 fn json_report_has_content(json: &str) -> bool {
@@ -506,6 +529,7 @@ fn broken_empty_file() {
     std::fs::write(&path, b"").unwrap();
     let (ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "empty file");
     assert!(!ok, "empty file should not succeed\n{out}");
 }
 
@@ -516,6 +540,7 @@ fn broken_garbage_bytes() {
     std::fs::write(&path, [0xDE, 0xAD, 0xBE, 0xEF].repeat(128)).unwrap();
     let (ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "garbage file");
     assert!(!ok, "garbage file should not succeed\n{out}");
 }
 
@@ -524,9 +549,11 @@ fn broken_header_only() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("header_only.hprof");
     std::fs::write(&path, hprof_header()).unwrap();
-    let (_ok, out) = run_report(&path);
+    let (ok, out) = run_report(&path);
     assert_no_panic(&out);
-    // No objects → may succeed with empty report or fail; either is fine.
+    assert_error_message_is_clean(&out, "header only");
+    // No objects → either succeeds with an empty report or fails; either is fine.
+    let _ = ok;
 }
 
 #[test]
@@ -538,6 +565,7 @@ fn broken_truncated_mid_record_header() {
     std::fs::write(&path, data).unwrap();
     let (_ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "truncated mid-record-header");
 }
 
 #[test]
@@ -554,6 +582,7 @@ fn broken_truncated_mid_record_body() {
     std::fs::write(&path, data).unwrap();
     let (_ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "truncated mid-record-body");
 }
 
 #[test]
@@ -571,6 +600,7 @@ fn broken_truncated_heap_dump_segment() {
     std::fs::write(&path, data).unwrap();
     let (_ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "truncated heap dump segment");
 }
 
 #[test]
@@ -590,6 +620,7 @@ fn broken_heap_dump_with_valid_prefix() {
     std::fs::write(&path, data).unwrap();
     let (_ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "valid prefix then garbage");
 }
 
 #[test]
@@ -612,6 +643,7 @@ fn broken_truncated_gz() {
     std::fs::write(&path, truncated).unwrap();
     let (_ok, out) = run_report(&path);
     assert_no_panic(&out);
+    assert_error_message_is_clean(&out, "truncated gz");
 }
 
 // ---------------------------------------------------------------------------
@@ -691,12 +723,21 @@ fn truncated_real_hprof_plain() {
         let (ok, json, stderr) = run_json(&path);
         let label = format!("plain .hprof cut at {num}/{den} ({cut} bytes)");
         assert_no_panic(&format!("{json}\n{stderr}"));
-        // Either the tool reports an error (non-zero exit) or it produces a
-        // meaningful HTML report.  Silent success with empty content is not ok.
+        assert_error_message_is_clean(&stderr, &label);
+        // Tool must always produce a valid JSON report, even for heavily truncated files.
+        assert!(ok, "{label}: tool exited non-zero\nstderr: {stderr}");
         assert!(
-            !ok || json_report_has_content(&json),
-            "{label}: exit=0 but report has no recognizable content\nstderr: {stderr}"
+            json_is_valid_report(&json),
+            "{label}: exit=0 but output is not a valid JSON report\nstderr: {stderr}\njson: {json}"
         );
+        // For cuts past 1/8 of the file, the heap dump section should be present
+        // and we expect at least some objects in the report.
+        if num * 8 > den {
+            assert!(
+                json_report_has_content(&json),
+                "{label}: cut past 1/8 but report has zero objects\nstderr: {stderr}"
+            );
+        }
     }
 }
 
@@ -718,10 +759,18 @@ fn truncated_real_hprof_gz() {
         let (ok, json, stderr) = run_json(&path);
         let label = format!(".hprof.gz cut at {num}/{den} ({cut} bytes)");
         assert_no_panic(&format!("{json}\n{stderr}"));
+        assert_error_message_is_clean(&stderr, &label);
+        assert!(ok, "{label}: tool exited non-zero\nstderr: {stderr}");
         assert!(
-            !ok || json_report_has_content(&json),
-            "{label}: exit=0 but report has no recognizable content\nstderr: {stderr}"
+            json_is_valid_report(&json),
+            "{label}: exit=0 but output is not a valid JSON report\nstderr: {stderr}\njson: {json}"
         );
+        if num * 8 > den {
+            assert!(
+                json_report_has_content(&json),
+                "{label}: cut past 1/8 but report has zero objects\nstderr: {stderr}"
+            );
+        }
     }
 }
 
@@ -743,9 +792,17 @@ fn truncated_real_hprof_tar_gz() {
         let (ok, json, stderr) = run_json(&path);
         let label = format!(".hprof.tar.gz cut at {num}/{den} ({cut} bytes)");
         assert_no_panic(&format!("{json}\n{stderr}"));
+        assert_error_message_is_clean(&stderr, &label);
+        assert!(ok, "{label}: tool exited non-zero\nstderr: {stderr}");
         assert!(
-            !ok || json_report_has_content(&json),
-            "{label}: exit=0 but report has no recognizable content\nstderr: {stderr}"
+            json_is_valid_report(&json),
+            "{label}: exit=0 but output is not a valid JSON report\nstderr: {stderr}\njson: {json}"
         );
+        if num * 8 > den {
+            assert!(
+                json_report_has_content(&json),
+                "{label}: cut past 1/8 but report has zero objects\nstderr: {stderr}"
+            );
+        }
     }
 }
