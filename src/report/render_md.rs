@@ -224,26 +224,31 @@ pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &m
     out.push_str("## Leak Indicators\n\n");
     out.push_str(
         "_Point-in-time counts for known Java leak patterns. Non-zero values are not \
-always bugs — they are signals worth investigating. See [Memory Triage](#memory-triage) \
-for context on each indicator._\n\n",
+always bugs — see the **What to Check** column for how to triage each one._\n\n",
     );
-    let mut t = Table::new(&["Indicator", "Value"], &[Align::Left, Align::Right]);
+    let mut t = Table::new(
+        &["Indicator", "Value", "What to Check"],
+        &[Align::Left, Align::Right, Align::Left],
+    );
     if li.anonymous_class_count > 0 {
         t.row([
             "Anonymous/generated classes".into(),
             fmt_count(li.anonymous_class_count),
+            "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders.".into(),
         ]);
     }
     if li.thread_local_null_key_count > 0 {
         t.row([
             "`ThreadLocal` null-key entries (cleared referent)".into(),
             fmt_count(li.thread_local_null_key_count),
+            "A null key means the `ThreadLocal` object was GC'd while the thread still holds the value — classic leak in thread pools. Call `ThreadLocal.remove()` when done, or use try-finally to guarantee cleanup.".into(),
         ]);
     }
     if li.direct_byte_buffer_capacity_sum > 0 {
         t.row([
-            "`DirectByteBuffer` total capacity".into(),
+            "`DirectByteBuffer` off-heap capacity".into(),
             format_bytes(li.direct_byte_buffer_capacity_sum),
+            "Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.".into(),
         ]);
     }
     t.render(out);
@@ -3890,11 +3895,11 @@ pub(crate) fn render_header_overhead(
     }
     out.push_str("### Object Header Overhead\n\n");
     out.push_str(
-        "_Classes where object headers consume a large share of shallow heap. \
-         The practical action is to reduce object *count*: merge small objects, \
-         use primitive arrays instead of boxed wrappers, or replace fine-grained \
-         instances with a flat array of fields. Value types (Project Valhalla) \
-         eliminate headers entirely but are not yet generally available._\n\n",
+        "_Classes where object headers (12 bytes with compressed OOPs, 16 without) \
+         consume a large share of shallow heap. The practical action is to reduce \
+         object *count*: merge small objects, use primitive arrays instead of boxed \
+         wrappers, or replace fine-grained instances with a flat array of fields. \
+         Value types (Project Valhalla) eliminate headers entirely._\n\n",
     );
     let mut t = Table::new(
         &[
