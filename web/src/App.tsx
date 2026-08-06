@@ -2829,9 +2829,9 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", background: "var(--code-bg, #f6f7f8)", borderRadius: 4, fontSize: "0.84rem", lineHeight: "1.5" }}>
         <strong>Next Steps</strong>
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
-          <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to open the Inspector and follow the reference chain from this class back to its GC root.</li>
+          <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to trace the reference chain to its GC root.</li>
           {s.accumulation_class && (
-            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field retains the large set of objects.</li>
+            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to find which field retains the large set of objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
             <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list where subscribers are never removed.</li>
