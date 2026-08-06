@@ -867,7 +867,7 @@ function KpiStrip({ report }: { report: Report }) {
   if (top && pct >= 50) {
     verdict = (
       <>
-        <strong>Likely Problem:</strong>{" "}
+        <strong>Top Suspect:</strong>{" "}
         <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /></span>
         — investigate this first.
       </>
@@ -4166,7 +4166,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
       {data.truncated && (
-        <p className="subtitle">Collection value tally was truncated; ranking is a bounded sample.</p>
+        <p className="subtitle">Collection value tally was truncated; shown results are a bounded sample.</p>
       )}
     </section>
   );
@@ -4199,7 +4199,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
         <StdTable columns={cols} data={rows} searchKeys={["collection_class"]} defaultSortFieldId="values" defaultSortAsc={false} />
       )}
       {data.truncated && (
-        <p className="subtitle">Truncated; a bounded sample of collection classes is shown.</p>
+        <p className="subtitle">Results are truncated; only a bounded sample of collection classes is shown.</p>
       )}
     </section>
   );
@@ -5414,7 +5414,7 @@ function DomGraphView({ pairs, idoms }: {
 
 function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[] }) {
   const fmtB = formatBytes;
-  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data — run Full Analysis.</p>;
+  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data — re-run with full analysis flags.</p>;
 
   // Top-N dominator rows (by total dominated_retained)
   const domRetained = new Map<string, number>();
@@ -6801,7 +6801,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
           {!selected ? (
             <div className="trg-sidebar-empty">
               <p>Click a class node to preview its stats and connections here.</p>
-              <p className="trg-sidebar-hint">Double-click or use "Full Details →" to open the in-depth view in the Inspector panel.</p>
+              <p className="trg-sidebar-hint">Use "Full Details →" or "Instances →" to open the full view in the Inspector panel.</p>
             </div>
           ) : (
             <div className="trg-sidebar-content">
@@ -7288,7 +7288,7 @@ function RetentionChain({
             {isExp && (
               <div style={{ paddingLeft: "2rem", marginTop: "1px", marginBottom: "2px" }}>
                 {visibleRefs.length === 0 ? (
-                  <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>No references captured</span>
+                  <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>No outbound references captured.</span>
                 ) : visibleRefs.map((ref, ri) => (
                   <div key={ri} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.76rem", padding: "1px 0" }}>
                     <span style={{ color: "var(--muted)", flexShrink: 0 }}>
@@ -8784,7 +8784,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {wasmOutboundEdges && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  Live references from loaded heap ({wasmOutboundTotal} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
+                  Live outbound references from loaded heap ({wasmOutboundTotal} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
                 </p>
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
