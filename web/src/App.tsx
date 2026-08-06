@@ -778,7 +778,7 @@ function OomTriage({ report }: { report: Report }) {
     <div className="oom" id="memory-triage" tabIndex={-1}>
       <h2>Memory Triage</h2>
       <p className="subtitle">
-        Where retention concentrates.
+        Automated signals pointing to where memory concentrates and what to investigate first.
         {totalHeap > 0 && <> Total reachable heap: <strong>{formatBytes(totalHeap)}</strong>.</>}
       </p>
       <ul>
@@ -2020,6 +2020,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>Heap Composition</h3>
+            <p className="subtitle">Shallow heap broken down by object kind — instance objects, object arrays, and primitive arrays.</p>
             <ChartOrNote hasData={o.heap_composition.by_kind.length >= 2} note="Composition chart needs ≥2 kinds; table only.">
               <HeapCompositionChart data={o.heap_composition.by_kind} />
               <CompositionStackedBar data={o.heap_composition.by_kind} />
@@ -3390,6 +3391,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3>ThreadLocal Variables</h3>
+      <p className="subtitle">Values stored in thread-local slots — stale entries (null key) leak memory until the thread terminates.</p>
       <StdTable
         columns={[
           { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
@@ -11306,7 +11308,7 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
       <div className="inspector-body">
         {!current ? (
           <div className="inspector-empty">
-            <p>Click <strong>⬡</strong> or <strong>⬡≡</strong> next to any class name to inspect it here.</p>
+            <p>Click <strong>⬡</strong> (Inspector) or <strong>⬡≡</strong> (list instances) next to any class name to open it here. Or use the Biggest Instance buttons in the TRG sidebar.</p>
           </div>
         ) : current.kind === "class" ? (
           <InspectorClassPage cls={current.cls} histogram={histogram} report={report} onNavigate={navigate} />
