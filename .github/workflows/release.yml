@@ -165,7 +165,12 @@ jobs:
 
             ## Install / Update
 
-            Re-run the same command to update to the latest nightly — the URL never changes.
+            **Already installed?** Just run:
+            ```sh
+            hprof-analyzer update nightly
+            ```
+
+            **First install** — pick your platform below, then use `hprof-analyzer update nightly` to stay current.
 
             **Linux x86_64 (glibc)**
             ```sh
