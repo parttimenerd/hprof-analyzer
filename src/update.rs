@@ -179,12 +179,45 @@ fn do_update(channel: Channel) -> Result<(), String> {
             .map_err(|e| format!("chmod error: {e}"))?;
     }
 
+    eprintln!("Smoke-testing downloaded binary …");
+    smoke_test(&tmp).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e
+    })?;
+
     eprintln!("Replacing {} …", exe.display());
     self_replace::self_replace(&tmp)
         .map_err(|e| format!("failed to replace binary: {e}"))?;
     let _ = std::fs::remove_file(&tmp);
 
     eprintln!("Done. Run `hprof-analyzer --version` to confirm.");
+    Ok(())
+}
+
+/// Run `<binary> --version` and verify it exits 0 and prints something that
+/// looks like a version string.  Cleans up `tmp` on failure.
+fn smoke_test(binary: &std::path::Path) -> Result<(), String> {
+    let out = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("smoke test failed — could not execute downloaded binary: {e}"))?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!(
+            "smoke test failed — `--version` exited with {}: {}",
+            out.status,
+            stderr.trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = stdout.trim();
+    if stdout.is_empty() {
+        return Err("smoke test failed — `--version` produced no output".to_string());
+    }
+
+    eprintln!("  OK: {stdout}");
     Ok(())
 }
 
