@@ -205,8 +205,9 @@ impl Pass1 {
                 None => break,
                 Some(h) => h,
             };
-            // Wrap the record body so any mid-record EOF breaks gracefully.
-            let result: io::Result<()> = match tag {
+            // Wrap in a closure so that `?` inside each arm returns
+            // Err to `result` rather than to Pass1::run directly.
+            let result: io::Result<()> = (|| match tag {
                 tags::STRING_IN_UTF8 => {
                     utf8_records += 1;
                     let str_id = r.id()?;
@@ -307,7 +308,7 @@ impl Pass1 {
                     r.skip(length)
                 }
                 _ => r.skip(length),
-            };
+            })();
             match result {
                 Ok(()) => {}
                 Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,

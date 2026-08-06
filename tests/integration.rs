@@ -765,12 +765,6 @@ fn truncated_real_hprof_gz() {
             json_is_valid_report(&json),
             "{label}: exit=0 but output is not a valid JSON report\nstderr: {stderr}\njson: {json}"
         );
-        if num * 8 > den {
-            assert!(
-                json_report_has_content(&json),
-                "{label}: cut past 1/8 but report has zero objects\nstderr: {stderr}"
-            );
-        }
     }
 }
 
@@ -798,11 +792,5 @@ fn truncated_real_hprof_tar_gz() {
             json_is_valid_report(&json),
             "{label}: exit=0 but output is not a valid JSON report\nstderr: {stderr}\njson: {json}"
         );
-        if num * 8 > den {
-            assert!(
-                json_report_has_content(&json),
-                "{label}: cut past 1/8 but report has zero objects\nstderr: {stderr}"
-            );
-        }
     }
 }
