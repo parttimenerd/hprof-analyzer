@@ -693,9 +693,9 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
         "_Share of the reachable heap retained by the few largest top-level dominators \
          (a dominator's retained size is everything it keeps alive). Read it as a \
          concentration curve: if **Top 1** is already high, one object is the leak and \
-         releasing it reclaims most of the heap; if the share only climbs as you widen to \
+         making it unreachable reclaims most of the heap; if the share only climbs as you widen to \
          **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache \
-         or collection of similar objects) and no single release helps much._\n\n",
+         or collection of similar objects) and no single fix helps much._\n\n",
     );
     let mut t = Table::new(
         &["Scope", "Retained Share", "Retained"],
@@ -849,9 +849,9 @@ _Definitions for the terms used above._
   plus its own fields (and, for an array, its elements). It does *not* include the
   objects it points to.
 - **Retained heap (retained size)**: the total memory that would be reclaimed if this
-  object were garbage-collected, meaning its own shallow size plus everything
-  reachable *only* through it. This is the number that answers \"how much does
-  releasing this actually reclaim?\" and it is the basis for every percentage in this
+  object became unreachable — its own shallow size plus everything
+  reachable *only* through it. This is the number that answers \"how much would
+  making it unreachable reclaim?\" and it is the basis for every percentage in this
   report. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Reachable heap**: all objects the [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) can still
   reach from a GC root. Anything unreachable is already collectible and is excluded
@@ -3299,7 +3299,7 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
     out.push_str("## Dominator Analysis\n\n");
     out.push_str(
         "_Instances ranked by retained heap. An object _dominates_ another if every path \
-from a GC root to that object passes through it — releasing the dominator reclaims \
+from a GC root to that object passes through it — making the dominator unreachable reclaims \
 everything it dominates._\n\n",
     );
 
@@ -3309,7 +3309,7 @@ everything it dominates._\n\n",
     out.push_str(&format!(
         "_Objects retaining far more than their largest single child — memory held directly \
 in the object or spread across many small dominated children. \
-Drop = object retained − largest child retained (memory reclaimed by releasing this object, \
+Drop = object retained − largest child retained (memory reclaimed if this object became unreachable, \
 net of what the biggest child already accounts for). \
 Threshold {:.1} MB (1% of reachable heap). \
 Multiple rows with the same class are distinct objects._\n\n",
@@ -3411,7 +3411,7 @@ Multiple rows with the same class are distinct objects._\n\n",
         "_One row per dominator class: how many other objects it immediately dominates \
          and the total shallow heap of those dominated objects. A large dominated-shallow \
          figure means instances of that class are collectively gating large portions of \
-         the live heap — releasing them would allow that memory to be reclaimed._\n\n",
+         the live heap — making them unreachable would allow that memory to be reclaimed._\n\n",
     );
     if d.immediate_dominators.rows.is_empty() {
         out.push_str("_No immediate dominators._\n\n");
@@ -3746,8 +3746,10 @@ pub(crate) fn render_duplicate_prim_arrays(
         Some(d) => d,
     };
     out.push_str(
-        "_Primitive arrays with identical content — each group could share a single \
-instance. Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
+        "_Primitive arrays with identical content — each group wastes memory holding \
+redundant copies. Replace with a shared `static final` constant, use a canonical-instance \
+registry, or intern at creation time. \
+Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     );
     out.push_str(&format!(
         "- Approx wasted bytes: {}\n\n",
