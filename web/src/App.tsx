@@ -741,7 +741,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3 style={{ marginBottom: "0.1rem" }}>Leak Score</h3>
-      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Higher score = more likely root cause. Click a card to inspect the class.</p>
+      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Higher score means stronger retention signal. Click a card to inspect the class.</p>
       <div className="leak-score-grid">
         {rows.map(r => {
           const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
@@ -2246,7 +2246,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
   ];
   return (
     <details open>
-      <summary>Accumulated Objects by Class ({rows.length})</summary>
+      <summary>Dominated Objects by Class ({rows.length})</summary>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
     </details>
   );
@@ -2831,7 +2831,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", background: "var(--code-bg, #f6f7f8)", borderRadius: 4, fontSize: "0.84rem", lineHeight: "1.5" }}>
         <strong>Next Steps</strong>
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
-          <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to open the Inspector and walk the reference chain from the accumulation point to its GC root.</li>
+          <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to open the Inspector and trace the reference chain from the accumulation point to its GC root.</li>
           {s.accumulation_class && (
             <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field references the large set of objects.</li>
           )}
@@ -4059,7 +4059,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
           <h3>Tiny Collection Overhead</h3>
           <p className="subtitle">
             Empty (size-0) and singleton (size-1) collections whose wrapper objects are pure overhead — the data could be stored in the field itself (null or a single reference).
-            Overhead = object count × reference-slot width.
+            Overhead is object count × reference-slot width.
           </p>
           <TinyCollectionTable rows={data.tiny_overhead} />
         </>
@@ -4290,7 +4290,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 
   const kindCaption = (kind: string) => {
     switch (kind) {
-      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap is often an unbounded cache; consider bounding the cache size.";
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap may indicate an unbounded cache; consider bounding the cache size.";
       case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign.";
       case "Phantom": return "Phantom references mark objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not being released promptly.";
       default: return "";
@@ -5563,7 +5563,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects whose retained heap greatly exceeds their largest direct child's — the "drop" is memory held directly or spread across many small children. Threshold{" "}
+        Objects whose retained heap greatly exceeds the largest single child's — the "drop" is memory held directly or spread across many small children. Threshold{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -7338,7 +7338,7 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree
     setLoading(false);
   }, [nodeId, session]);
   if (loading) return <p className="subtitle">Loading…</p>;
-  if (!refs.length) return <p className="subtitle">No inbound refs found.</p>;
+  if (!refs.length) return <p className="subtitle">No inbound references found.</p>;
   return (
     <>
       <table className="std-table">
@@ -7362,7 +7362,7 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree
           ))}
         </tbody>
       </table>
-      {total > refs.length && <p className="subtitle" style={{ fontSize: "0.78rem" }}>Showing {refs.length} of {total} inbound refs.</p>}
+      {total > refs.length && <p className="subtitle" style={{ fontSize: "0.78rem" }}>Showing {refs.length} of {total} inbound references.</p>}
     </>
   );
 }
@@ -8214,7 +8214,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             {filtered.length > 0 && (
               <>— total retained: <strong>{fmtB(filtered.reduce((s, [, n]) => s + n.retained, 0))}</strong>
                 {totalHeap > 0 && (
-                  <span style={{ color: "var(--muted)" }}>{" "}({(filtered.reduce((s, [, n]) => s + n.retained, 0) / totalHeap * 100).toFixed(1)}% of GC roots)</span>
+                  <span style={{ color: "var(--muted)" }}>{" "}({(filtered.reduce((s, [, n]) => s + n.retained, 0) / totalHeap * 100).toFixed(1)}% of heap)</span>
                 )}
               </>
             )}
@@ -8522,8 +8522,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           );
           return (
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0.75rem", marginTop:"0.75rem" }}>
-              {([["Outbound Refs", (wasmBelowOutbound??[]).map((r,i)=>mkRow(r.dst_idx,r.field_name,r.display_class,r.retained,i)), "No outbound refs."],
-                 ["Inbound Refs", (wasmBelowInbound??[]).map((r,i)=>mkRow(r.src_idx,r.field_name,r.display_class,r.retained,i)), "No inbound refs."]] as const).map(([title,rows,empty]) => (
+              {([["Outbound References", (wasmBelowOutbound??[]).map((r,i)=>mkRow(r.dst_idx,r.field_name,r.display_class,r.retained,i)), "No outbound references."],
+                 ["Inbound References", (wasmBelowInbound??[]).map((r,i)=>mkRow(r.src_idx,r.field_name,r.display_class,r.retained,i)), "No inbound references."]] as const).map(([title,rows,empty]) => (
                 <div key={String(title)} style={{ background:"var(--card-bg,var(--bg))", border:"1px solid var(--border)", borderRadius:6, padding:"0.6rem 0.75rem" }}>
                   <div style={{ fontWeight:600, fontSize:"0.85rem", marginBottom:"0.35rem" }}>{title}</div>
                   {rows.length===0 ? <p className="subtitle">{empty}</p> : (
@@ -8775,7 +8775,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <>
               {currentNode.edges_unknown && !wasmOutboundEdges && (
                 <p className="subtitle" style={{ color: "var(--warn-border)" }}>
-                  ⚠ Outbound refs not captured for this object (not in top-10,000 by shallow heap).{" "}
+                  ⚠ Outbound references not captured for this object (not in top-10,000 by shallow heap).{" "}
                   <button className="btn-link" style={{ fontSize: "inherit" }}
                     onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
                     View Dominator Tree →
@@ -8789,7 +8789,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
                 <p className="subtitle">Showing first 100 of more edges.{" "}
-                  {(window as any).__wasmSession?.outbound_refs && "Enable exploration for full refs."}
+                  {(window as any).__wasmSession?.outbound_refs && "Enable exploration for the full reference list."}
                 </p>
               )}
               {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
@@ -8798,7 +8798,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </p>
               )}
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
-                <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references (leaf object or all refs are to primitives)."}</p>
+                <p className="subtitle">{refFilter ? `No references matching "${refFilter}".` : "No outbound object references (leaf object or all references are to primitives)."}</p>
               )}
               {groupedEdges.length > 1 && (
                 <input
@@ -9030,7 +9030,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       </table>
                       {iTrunc && (
                         <p className="subtitle" style={{ fontSize: "0.78rem" }}>
-                          Showing first {data.capture_params?.edge_cap ?? 100} inbound refs.{" "}
+                          Showing first {data.capture_params?.edge_cap ?? 100} inbound references.{" "}
                           Re-run with <code>--obj-graph=medium</code> for more.
                         </p>
                       )}
@@ -9811,7 +9811,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {inboundRefs.length > 0 && (
             <div style={{ marginTop: "0.5rem" }}>
               <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
-                Inbound refs from captured graph ({inboundRefs.length})
+                Inbound references from captured graph ({inboundRefs.length})
               </div>
               {(showAllInbound ? inboundRefs : inboundRefs.slice(0, 8)).map(({ srcIdx, field_name }, i) => {
                 const sn = data.nodes[String(srcIdx)];
@@ -11348,7 +11348,7 @@ export default function App({ report }: { report: Report }) {
           <h2>Object Graph Explorer</h2>
           <p className="subtitle">
             Browse the object reference graph and dominator tree.
-            Click a class to list its instances; click an instance to walk its fields and inbound references.
+            Click a class to list its instances; click an instance to explore its fields and inbound references.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
         </section>
