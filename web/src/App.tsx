@@ -11550,7 +11550,7 @@ export default function App({ report }: { report: Report }) {
           <p className="subtitle">
             Browse individual objects: follow reference chains, inspect field values, and trace what keeps each object alive.
             Click a class to list its instances; click an instance to see its fields and inbound references.
-            Best used after Dominator Analysis identifies a suspect class.
+            Start here after Dominator Analysis or Leak Suspects identifies a suspect class or object.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
         </section>
