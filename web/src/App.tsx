@@ -3597,7 +3597,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
       <p className="subtitle">
-        Array length distribution, bucketed by powers of two. Max Length is the inclusive upper bound of each bucket.
+        Array length distribution, bucketed by powers of two. Max Length is each bucket's upper bound.
       </p>
       {empty ? (
         <p className="subtitle">No arrays found.</p>
