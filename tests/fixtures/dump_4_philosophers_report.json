@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-06T17:07:47.852363000Z",
+  "generated": "2026-08-06T18:38:57.636499000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -105591,8 +105591,8 @@
       "severity": "warning",
       "title": "Off-Heap (DirectByteBuffer)",
       "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM.",
-      "anchor": "leak-indicators",
-      "anchor_label": "Leak Indicators"
+      "anchor": "off-heap-nio",
+      "anchor_label": "Off-Heap NIO"
     },
     {
       "id": "fixed-per-object-overhead",
@@ -105600,7 +105600,7 @@
       "title": "Fixed per-Object Header Overhead",
       "detail": "2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections.",
       "anchor": "object-header-overhead",
-      "anchor_label": "Header Overhead"
+      "anchor_label": "Object Header Overhead"
     },
     {
       "id": "empty-collection-cemetery",
