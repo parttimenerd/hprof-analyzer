@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-06T12:00:33.702656000Z",
+  "generated": "2026-08-06T17:07:47.852363000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -105565,7 +105565,7 @@
       "id": "concentration",
       "severity": "info",
       "title": "Concentration",
-      "detail": "diffuse — retention is spread across multiple roots, so there is no single object to free.",
+      "detail": "diffuse — retention is spread across multiple roots, so there is no single holder to target.",
       "anchor": "leak-suspects",
       "anchor_label": "Leak Suspects"
     },
@@ -105573,7 +105573,7 @@
       "id": "shape",
       "severity": "info",
       "title": "Shape",
-      "detail": "deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28.",
+      "detail": "deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 7, max depth 28.",
       "anchor": "dominator-depth-distribution",
       "anchor_label": "Dominator-Depth Distribution"
     },
@@ -105590,7 +105590,7 @@
       "id": "off-heap",
       "severity": "warning",
       "title": "Off-Heap (DirectByteBuffer)",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS.",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM.",
       "anchor": "leak-indicators",
       "anchor_label": "Leak Indicators"
     },
@@ -105598,7 +105598,7 @@
       "id": "fixed-per-object-overhead",
       "severity": "warning",
       "title": "Fixed per-Object Header Overhead",
-      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
+      "detail": "2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections.",
       "anchor": "object-header-overhead",
       "anchor_label": "Header Overhead"
     },
@@ -105606,7 +105606,7 @@
       "id": "empty-collection-cemetery",
       "severity": "info",
       "title": "Empty-Collection Cemetery",
-      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead; consider lazy initialization or null.",
+      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written.",
       "anchor": "collections",
       "anchor_label": "Collections"
     },

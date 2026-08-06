@@ -50,19 +50,19 @@ _At-a-glance digest; see the sections below for full detail._
 
 ## Memory Triage
 
-_Where the reachable heap is concentrated, at a glance._
+_Automated signals pointing to where memory concentrates and what to investigate first._
 
 - **Headline Retainer:** `java.lang.Thread` (a single object) retains 22.9 MB (76.7% of reachable heap). See [Leak Suspects](#leak-suspects).
-- **Concentration:** highly concentrated — `java.lang.Thread` (a single object) holds 76.7% of the heap, so freeing it would reclaim most memory. See [Leak Suspects](#leak-suspects).
-- **Dominant GC-Root Type:** 76.7% of the heap is held by "Thread" roots — retention concentrates at one root class. See [System Overview](#system-overview).
-- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 11273, max depth 41355. See [Dominator-Depth Distribution](#dominator-depth-distribution).
+- **Concentration:** highly concentrated — `java.lang.Thread` (a single object) holds 76.7% of the heap; making it unreachable would reclaim most memory. See [Leak Suspects](#leak-suspects).
+- **Dominant GC-Root Type:** 76.7% of the heap is held by "Thread" roots — retention concentrates at one root type; investigate why this root category holds so much. See [System Overview](#system-overview).
+- **Shape:** deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 11273, max depth 41355. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.lang.Thread`, retains 76.7% and the top 10 retain 92.6% of the heap; 4 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Class-Loader Reload (Low Count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (8.6 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#system-overview).
-- **Thread Pinning:** thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
-- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in the on-heap total above, but can dominate process RSS. See [Leak Indicators](#leak-indicators).
-- **Sparse Object Arrays:** 38,119 object arrays are <=20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. See [Collections](#collections).
-- **Fixed per-Object Header Overhead:** 952,666 objects × 12 B header = 10.9 MB (36.6% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#object-header-overhead).
-- **Empty-Collection Cemetery:** 5,806 of 6,307 tracked collections (92.1%) are empty — pre-allocated but never populated containers waste object-header overhead; consider lazy initialization or null. See [Collections](#collections).
+- **Thread Pinning:** thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding a disproportionate amount of memory alive. Inspect the thread's stack frames and ThreadLocal values in the Threads section. See [Threads](#threads).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Leak Indicators](#leak-indicators).
+- **Sparse Object Arrays:** 38,119 object arrays are <=20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. Replace with a `HashMap`/`SparseArray`, a `List` that grows on demand, or a dedicated sparse-matrix library. See [Collections](#collections).
+- **Fixed per-Object Header Overhead:** 10.9 MB (36.6% of heap) consumed by JVM object headers alone (952,666 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Header Overhead](#object-header-overhead).
+- **Empty-Collection Cemetery:** 5,806 of 6,307 tracked collections (92.1%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written. See [Collections](#collections).
 - **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
 ## System Overview
@@ -5689,9 +5689,11 @@ _Retained heap aggregated by package prefix (rows retaining <1% of the total are
 
 ## Dominator Analysis
 
+_Instances ranked by retained heap. An object **dominates** another if every path from a GC root to that object passes through it — making the dominator unreachable reclaims everything it dominates._
+
 ### Big Drops
 
-_Dominators where retained heap does not flow into a single child — the gap between an object's retained size and its largest child's retained size. A large drop means this object directly owns a lot of memory spread across many children (e.g. an array or collection). Threshold 0.3 MB (1% of reachable shallow). Multiple rows with the same class are distinct objects._
+_Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. Drop = object retained − largest child retained (memory reclaimed if this object became unreachable, net of what the biggest child already accounts for). Threshold 0.3 MB (1% of reachable heap). Multiple rows with the same class are distinct objects._
 
 | Object                                    |      # |    Retained | Largest Child                                     | Child Retained |        Drop |                  |
 | ----------------------------------------- | -----: | ----------: | ------------------------------------------------- | -------------: | ----------: | ---------------- |
@@ -5713,7 +5715,7 @@ _Dominators where retained heap does not flow into a single child — the gap be
 
 ### Immediate Dominators
 
-_Objects immediately dominated, rolled up by the dominator's class; a heavy dominated shallow heap under one class flags a retention hub._
+_One row per dominator class: how many other objects it immediately dominates and the total shallow heap of those dominated objects. A large dominated-shallow figure means instances of that class are collectively gating large portions of the live heap — making them unreachable would allow that memory to be reclaimed._
 
 | Dominator Class                                   | #Dominators |  #Dominated | Dominator Shallow | Dominated Shallow |                  |
 | ------------------------------------------------- | ----------: | ----------: | ----------------: | ----------------: | ---------------- |
@@ -5753,7 +5755,7 @@ _Objects immediately dominated, rolled up by the dominator's class; a heavy domi
 
 ### Thread Overview
 
-_One row per resolved thread; columns mirror Eclipse MAT's Thread Overview._
+_Per-thread retained heap and properties. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
 
 | Name                           | Shallow | Retained | Max. Locals' Retained | Context Class Loader                   | Daemon | Priority | State                                                  |                  |
 | ------------------------------ | ------: | -------: | --------------------: | -------------------------------------- | ------ | -------: | ------------------------------------------------------ | ---------------- |
@@ -5902,7 +5904,7 @@ _Frame percentages are of this thread's 168 B retained heap._
 
 ## Top Components
 
-_Retained heap grouped by class loader (component); `% Heap` is the share of total reachable heap._
+_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. Totals can exceed heap size because boot-loader classes are counted in every component that retains them._
 
 | Component                                              | Retained | % Heap | Top classes                                                                                                                                                                                                                                   |                  |
 | ------------------------------------------------------ | -------: | -----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
@@ -5914,7 +5916,7 @@ _Retained heap grouped by class loader (component); `% Heap` is the share of tot
 
 ## Arrays by Size
 
-_Array-length distribution bucketed by power-of-two element length; `Max length` is the inclusive upper bound of each bucket._
+_Array-length distribution bucketed by power-of-two element length. Helps spot unexpectedly large arrays or many tiny zero-length allocations. `Max length` is the inclusive upper bound of each bucket._
 
 ### Object arrays
 
@@ -5969,7 +5971,7 @@ Zero-length arrays: 2,401
 
 ## Collections
 
-_Collection and array occupancy: how full collections are, how big they get, and constant primitive arrays._
+_Collection fill ratios, map load factors, and constant-value primitive array groups. Low fill ratios waste backing-array memory; high load factors increase hash-bucket collisions and degrade lookup performance._
 
 ### Collections by Kind
 
@@ -6037,9 +6039,9 @@ _64,800 tracked object arrays._
 | 100% (full) |     26,069 |     1.6 MB |        0 B | ██████████▉      |
 |   **Total** | **64,800** | **5.4 MB** | **6.1 MB** |                  |
 
-### Map Collision Ratio
+### Map Load Factor
 
-_493 tracked of 6,202 maps (occupied slots ÷ size; lower is worse)._
+_493 tracked of 6,202 maps (occupied slots ÷ capacity; high values ≥ 90% increase collision chains)._
 
 |      Load % |    Maps |     Shallow |                  |
 | ----------: | ------: | ----------: | ---------------- |
@@ -6162,15 +6164,15 @@ _The largest object arrays by shallow size, individually and aggregated by array
 
 ## References
 
-_Soft/weak/phantom reference referents (what they point at)._
+_Soft, weak, and phantom references — referents, retention status, and null-referent counts._
 
 ### Soft References
 
-_Soft references keep objects alive until the JVM needs memory — they are cleared under GC pressure. A large soft-referenced heap is often a cache that grows unbounded; consider bounding the cache size._
+_Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals an oversized cache; cap it with a max-entries limit or switch to an explicit bounded cache (e.g. Caffeine)._
 
 _281 reference instances._
 
-#### Referent classes
+#### Referent Classes
 
 | Class                                    | Objects | Shallow | Retained |                  |
 | ---------------------------------------- | ------: | ------: | -------: | ---------------- |
@@ -6187,9 +6189,9 @@ _281 reference instances._
 | `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |  20.0 KB | ▎                |
 | `sun.util.resources.Bundles$1`           |       1 |    40 B |     40 B | ▏                |
 
-#### Only-weakly retained _(approximate)_
+#### Only Weakly Retained
 
-_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._
+_Referents reachable only through soft references — no strong path. GC clears these under memory pressure._
 
 | Class                            | Objects | Shallow | Retained |                  |
 | -------------------------------- | ------: | ------: | -------: | ---------------- |
@@ -6197,11 +6199,11 @@ _Objects with no incoming strong reference other than this reference chain — G
 
 ### Weak References
 
-_Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign._
+_Weak references let GC claim referents — reachable only via weak chains, reclaimed at any collection. Large counts are usually benign, but a growing count can indicate ThreadLocal leaks or listener registries not deregistering._
 
-_975 reference instances._
+_975 reference instances. 23 instances have a null referent — referent collected, not yet processed._
 
-#### Referent classes
+#### Referent Classes
 
 | Class                                                             | Objects | Shallow | Retained |                  |
 | ----------------------------------------------------------------- | ------: | ------: | -------: | ---------------- |
@@ -6227,19 +6229,19 @@ _975 reference instances._
 | `scala.reflect.ManifestFactory$ObjectManifest`                    |       1 |    32 B |     32 B | ▏                |
 _… 2 more classes (2 objects, 32 B shallow, 32 B retained)._
 
-#### Only-weakly retained _(approximate)_
+#### Only Weakly Retained
 
-_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._
+_Referents reachable only through weak references — no strong or soft path. GC can reclaim them at any collection._
 
 _None found — no objects are exclusively reachable via this reference kind._
 
 ### Phantom References
 
-_Phantom references mark objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources (file handles, native buffers) are not being released promptly._
+_Phantom references track objects in cleanup pipelines for native resource release. A large backlog signals a stalled or overloaded ReferenceQueue processor, or indicates native resources (file handles, off-heap buffers) not being released promptly._
 
-_38 reference instances._
+_38 reference instances. 1 instance has a null referent — referent collected, not yet processed._
 
-#### Referent classes
+#### Referent Classes
 
 | Class                                 | Objects | Shallow | Retained |                  |
 | ------------------------------------- | ------: | ------: | -------: | ---------------- |
@@ -6251,15 +6253,15 @@ _38 reference instances._
 | `sun.net.www.protocol.jar.URLJarFile` |       1 |    80 B |    344 B | ▏                |
 | `sun.nio.fs.NativeBuffer`             |       1 |    32 B |     64 B | ▏                |
 
-#### Only-weakly retained _(approximate)_
+#### Only Weakly Retained
 
-_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._
+_Referents reachable only through phantom references — queued for post-cleanup resource release._
 
 _None found — no objects are exclusively reachable via this reference kind._
 
 ## Unreachable Objects
 
-_4,266 unreachable objects, 673.0 KB shallow heap (within the unreachable forest retained = shallow since all paths stay in-forest; top 30 classes by shallow)._
+_4,266 unreachable objects, 673.0 KB shallow heap. Top 30 classes by shallow heap._
 
 _Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of heap total) is normal between GC cycles._
 
@@ -6423,13 +6425,13 @@ _Top garbage-root subtrees by retained heap (unreachable objects with no reachab
 
 ## Allocation Sites
 
-_Objects grouped by the stack trace that allocated them — each site is a candidate to allocate less by pooling, caching, or deferring construction. Shallow heap is additive; retained heap is not shown because summing per-object retained values over-counts shared subgraphs (a subtree retained by multiple sites is counted once per allocator, not once total)._
+_Objects grouped by the stack trace that allocated them — shows where heap was created, not necessarily what is keeping it alive. Only available when the dump was captured with the HPROF agent (JDK 8 and earlier). Each site is a candidate to allocate less by pooling, caching, or deferring construction._
 
-_Allocation-site records are present but contain no per-frame data. To capture method-level allocation stacks, run with JFR (`-XX:StartFlightRecording`) or attach a profiler before taking the heap dump._
+_Allocation-site records are present but contain no per-frame data. The HPROF agent must be invoked with `depth=8` or higher to record method-level allocation stacks: `-agentlib:hprof=heap=dump,depth=8`._
 
 ## Retention Concentration
 
-_Share of the reachable heap retained by the few largest top-level dominators (a dominator's retained size is everything it keeps alive). Read it as a concentration curve: if **Top 1** is already high, one object is the leak and freeing it reclaims most of the heap; if the share only climbs as you widen to **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache or collection of similar objects) and no single free helps much._
+_Share of the reachable heap retained by the few largest top-level dominators (a dominator's retained size is everything it keeps alive). Read it as a concentration curve: if **Top 1** is already high, one object is the leak and releasing it reclaims most of the heap; if the share only climbs as you widen to **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache or collection of similar objects) and no single release helps much._
 
 | Scope             | Retained Share |                  |
 | ----------------- | -------------: | ---------------- |
@@ -6440,7 +6442,7 @@ _Share of the reachable heap retained by the few largest top-level dominators (a
 
 ## Dominator-Depth Distribution
 
-_How far each live object sits below a GC root, counted in dominator hops. Most objects clustering at shallow depths means memory is held close to the roots; a long tail means deep, chained structures (often a sign of nested collections or linked leaks)._
+_How many dominator hops each object sits below a GC root. A spike at depth 1–3 is normal; a long tail at depth 10+ points to deeply nested containers or linked structures._
 
 _Half of all live objects sit within 10 hops of a GC root; the deepest chain is 41355 hops._
 
@@ -6501,12 +6503,12 @@ _… (+41305 deeper buckets in JSON)_
 
 ## Leak Indicators
 
-_Scalar signals for common Java leak patterns; non-zero values are flagged in [Memory Triage](#memory-triage) above. This table provides the raw numbers behind those bullets._
+_Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — see the **What to Check** column for how to triage each one._
 
-| Indicator                         |    Value |
-| --------------------------------- | -------: |
-| Anonymous/generated classes       |      178 |
-| `DirectByteBuffer` total capacity | 134.3 MB |
+| Indicator                            |    Value | What to Check                                                                                                                                         |
+| ------------------------------------ | -------: | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anonymous/generated classes          |      178 | High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders. |
+| `DirectByteBuffer` off-heap capacity | 134.3 MB | Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.           |
 
 ## Glossary
 
@@ -6515,10 +6517,10 @@ _Definitions for the terms used above._
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the
   objects it points to.
-- **Retained heap (retained size)**: the total memory that would be freed if this
-  object were garbage-collected, meaning its own shallow size plus everything
-  reachable *only* through it. This is the number that answers "how much does
-  freeing this actually reclaim?" and it is the basis for every percentage in this
+- **Retained heap (retained size)**: the total memory that would be reclaimed if this
+  object became unreachable — its own shallow size plus everything
+  reachable *only* through it. This is the number that answers "how much would
+  making it unreachable reclaim?" and it is the basis for every percentage in this
   report. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Reachable heap**: all objects the [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) can still
   reach from a GC root. Anything unreachable is already collectible and is excluded
@@ -6528,7 +6530,7 @@ _Definitions for the terms used above._
   [JNI](https://en.wikipedia.org/wiki/Java_Native_Interface) references, and
   similar. Every retained-size chain ends at a GC root.
 - **Dominator**: object *A* dominates object *B* if every path from a GC root to
-  *B* passes through *A*. In other words, if *A* were freed, *B* would become
+  *B* passes through *A*. In other words, if *A* became unreachable, *B* would become
   unreachable too. An object's retained heap is exactly the set of objects it
   dominates. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Dominator tree**: the tree formed by linking each object to its immediate
@@ -6556,13 +6558,15 @@ _Definitions for the terms used above._
   that is actually occupied by elements — `elements / capacity`. A fill ratio near
   0 means the backing array is mostly empty (wasted memory). A ratio near 1 means
   the collection is full.
-- **Map collision ratio** (load factor): for hash maps, the fraction of backing-array
-  slots occupied — `occupied_slots / total_slots`. A low load factor means many
-  empty buckets (wasted memory); a very high load factor increases hash collision
-  probability and lookup cost.
+- **Map Load Factor**: for hash maps, the fraction of backing-array
+  slots occupied — `occupied_slots / capacity`. A low load factor means many
+  empty buckets (wasted memory); a high load factor (≥ 90%) increases hash
+  collision chains and lookup cost.
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
-  reachable only through one or more `WeakReference` or `SoftReference` chains.
-  Under GC pressure these objects are candidates for collection.
+  reachable only through one or more `WeakReference`, `SoftReference`, or
+  `PhantomReference` chains. Weak-only referents are collected at the next GC cycle;
+  soft-only referents are collected under memory pressure; phantom-only referents are
+  already unreachable and queued for resource cleanup.
 - **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimisation
   where object references are stored as 32-bit integers instead of 64-bit pointers,
   halving reference-field overhead on heaps <= ~32 GB. Visible in the Heap Summary
