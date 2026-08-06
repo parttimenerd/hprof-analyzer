@@ -4287,7 +4287,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
   const kindCaption = (kind: string) => {
     switch (kind) {
       case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals a large cache; bound the cache size if memory is tight.";
-      case "Weak": return "Weak references let GC claim referents. These objects are reachable only via weak chains — they are reclaimed at the next GC. Large counts are benign.";
+      case "Weak": return "Weak references let GC claim referents. These objects are reachable only via weak chains — GC reclaims them at the next collection. Large counts are benign.";
       case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources not released promptly.";
       default: return "";
     }
@@ -5597,7 +5597,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Object count dominated by each class, and the shallow heap those objects occupy. High dominated-shallow means that class pins a large fraction of live memory.
+        Object count dominated by each class, and the shallow heap those objects occupy. High dominated-shallow means the class pins a large fraction of live memory.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
       </p>
       {idoms.length === 0 ? (
@@ -8771,7 +8771,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <>
               {currentNode.edges_unknown && !wasmOutboundEdges && (
                 <p className="subtitle" style={{ color: "var(--warn-border)" }}>
-                  ⚠ Outbound references were not captured for this object — it fell below the top-10,000 threshold by shallow heap.{" "}
+                  ⚠ Outbound references not captured — object fell below the top-10,000 shallow-heap threshold.{" "}
                   <button className="btn-link" style={{ fontSize: "inherit" }}
                     onClick={() => { setTab("domtree"); window.location.hash = `domtree/${nodeId}`; }}>
                     View Dominator Tree →
