@@ -881,7 +881,7 @@ function KpiStrip({ report }: { report: Report }) {
   } else {
     verdict = (
       <>
-        <strong>Likely Problem:</strong> no dominant retainer; the heap looks evenly distributed.
+        <strong>Likely Problem:</strong> no dominant retainer — heap is spread across many roots.
       </>
     );
   }
@@ -1843,7 +1843,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers consume a large share of shallow heap — candidates for packing multiple instances into an array or replacing with primitives.
+        Classes where object headers consume a large share of shallow heap — candidates for packing into arrays or replacing with primitives.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -2087,7 +2087,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }} />
             </div>
             {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
-              <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — likely a native code reference leak.</p>
+              <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — check for native code that registers global references without releasing them.</p>
             )}
             {o.gc_roots_retained_by_type?.some(r => (r.top_classes?.length ?? 0) > 0) && (
               <>
@@ -2147,8 +2147,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Class names loaded by more than one class loader — a classic class-loader-leak signature (the same class
-            reloaded repeatedly, e.g. per web-app or plugin reload).
+            Class names loaded by more than one class loader — common in environments that reload classes per deployment or plugin (e.g. web-app containers, OSGi).
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -2861,7 +2860,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
       <h2>Leak Suspects</h2>
       <p className="subtitle">Objects holding the most retained heap — most likely causes of excess retention. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
-        <p>No suspect exceeds the leak threshold; retention is spread across many roots.</p>
+        <p>No suspect exceeds the retention threshold — heap is spread across many roots.</p>
       ) : (
         <>
           <h3>Retained-Heap Share</h3>
@@ -3546,7 +3545,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component). Totals can exceed the heap total — boot-loader objects are counted even when referenced by app-code components, so component sums overlap.
+        Retained heap grouped by class loader (component). Totals can exceed the heap size — boot-loader objects are shared across components, so component sums overlap.
       </p>
       <details open>
         <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
@@ -3816,7 +3815,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Map Collision Ratio</h3>
       <p className="subtitle">
-        {fmtCount(mcr?.tracked ?? 0)} tracked of {fmtCount(mcr?.total ?? 0)} maps. Load factor = occupied slots ÷ capacity; high values (≥ 90%) mean dense packing with likely collision chains.
+        {fmtCount(mcr?.tracked ?? 0)} tracked of {fmtCount(mcr?.total ?? 0)} maps. Load factor (occupied slots ÷ capacity); high values (≥ 90%) mean dense packing and longer probe chains.
       </p>
       {mcrBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -4301,7 +4300,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
   return (
     <section id="references">
       <h2>References</h2>
-      <p className="subtitle">Soft, weak, and phantom references — their referents, retention, and null-referent counts.</p>
+      <p className="subtitle">Soft, weak, and phantom references — referents, retention status, and null-referent counts.</p>
       {kinds.length === 0 ? (
         <p className="subtitle">No soft, weak, or phantom references found.</p>
       ) : (
@@ -5535,7 +5534,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Which classes hold the most retained heap, and the objects they keep alive.</p>
+      <p className="subtitle">Classes ranked by retained heap, with the objects they dominate.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
@@ -5892,7 +5891,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap sums across traces; retained is excluded because summing per-object retained over-counts shared subgraphs.</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is summed per trace; retained is omitted because per-trace sums double-count shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking was off in this dump (<code>stack_trace_serial = 0</code>); no allocation sites available.
@@ -6056,7 +6055,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        How far objects sit from a GC root in the dominator tree. Low depth = held close to roots; high depth = long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
+        How far objects sit from a GC root in the dominator tree. Low depth means objects are held close to roots; high depth means long retention chains (nested collections, linked structures). Max depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -6787,7 +6786,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 Showing top {nodeInfos.length} classes by retained flow.
                 Scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect.
                 {(window as any).__wasmExploration
-                  ? <> · <span className="trg-hint-wasm">WASM active — live instance browse available</span></>
+                  ? <> · <span className="trg-hint-wasm">Heap loaded — live instance browsing available</span></>
                   : !ogCtxForHint
                     ? <> · Tip: re-run with <code>--obj-graph</code> to enable instance browsing</>
                   : null}
@@ -9090,7 +9089,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         <>
                           <div style={{ marginTop: "0.4rem" }}>
                             <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0", fontWeight: 600 }}>
-                              Shortest reference path (WASM)
+                              Shortest Path to GC Root
                             </p>
                             <WasmGcPathPanel
                               nodeId={nodeId!}
@@ -9970,7 +9969,7 @@ function GlossarySection() {
   return (
     <section id="glossary">
       <h2>Glossary</h2>
-      <p className="subtitle">Definitions for the terms used above.</p>
+      <p className="subtitle">Key terms used in this report.</p>
       <dl className="summary-grid">
         {entries.map(([term, def]) => (
           <React.Fragment key={term}>
@@ -10534,7 +10533,7 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
       <div className="inspector-page">
         <h3 className="inspector-page-title">Instances of <code>{cls}</code></h3>
         <p className="trg-no-data">
-          Instance list requires WASM or re-run with <code>--obj-graph</code>.
+          Instance list requires loading the .hprof in the browser or re-running with <code>--obj-graph</code>.
         </p>
       </div>
     );
@@ -10689,7 +10688,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
   }, [ogCtx, idx]);
 
   if (!node && !loading) {
-    return <p className="trg-no-data">Object #{idx} not available. WASM or --obj-graph required.</p>;
+    return <p className="trg-no-data">Object #{idx} not available — load the .hprof in the browser or re-run with <code>--obj-graph</code>.</p>;
   }
 
   const retained = node?.retained ?? 0;
@@ -10849,7 +10848,7 @@ function InspectorGCRootPage({ idx, cls, onNavigate }: {
   return (
     <div className="inspector-page">
       <h3 className="inspector-page-title">GC Root Path — <code>{cls.split(".").pop()}</code></h3>
-      {!wasm?.gc_root_path && <p className="trg-no-data">Requires WASM mode.</p>}
+      {!wasm?.gc_root_path && <p className="trg-no-data">Requires loading the .hprof in the browser.</p>}
       {wasm?.gc_root_path && !path && <p className="trg-no-data">Loading…</p>}
       {path && (
         <ol className="inspector-dom-path">
@@ -10902,7 +10901,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
     return (
       <div className="inspector-page">
         <h3 className="inspector-page-title">Fields — <code>{cls.split(".").pop()}</code></h3>
-        <p className="trg-no-data">Field drill-down requires WASM mode.</p>
+        <p className="trg-no-data">Field drill-down requires loading the .hprof in the browser.</p>
       </div>
     );
   }
@@ -11020,7 +11019,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
         {fieldName && <> · field <code>{fieldName}</code></>}
       </h3>
       <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "0 0 0.5rem" }}>
-        Top 50 by retained heap.{!wasm && " Requires WASM mode."}
+        Top 50 by retained heap.{!wasm && " Requires loading the .hprof in the browser."}
       </p>
       {loading && <p className="trg-no-data">Scanning…</p>}
       {rows && rows.length === 0 && <p className="trg-no-data">No instances found.</p>}
