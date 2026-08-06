@@ -1811,7 +1811,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Wrapper types whose instances unbox to primitives — switching to primitive fields eliminates the boxing overhead.
+        Boxed wrapper types — replacing with primitive fields eliminates allocation and header overhead.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -3140,7 +3140,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <p className="subtitle">
             Expand a package to drill into its sub-packages. Totals are cumulative over the subtree. Only top-level
             dominators retaining at least {fmtPct(t.threshold_bp / 100)} of the
-            heap are included; smaller ones are pruned.
+            heap are included; smaller classes are excluded.
           </p>
           <ZoomableTreemap
             root={pkgRoot}
@@ -9957,7 +9957,7 @@ function GlossarySection() {
     ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root — sits at the top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
     ["Dominator Depth", <>the number of dominator-tree hops from an object to its GC root. Low depth means objects sit close to roots; high depth means long retention chains.</>],
-    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
+    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap counts per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" is the shallow size of the biggest instance.</>],
