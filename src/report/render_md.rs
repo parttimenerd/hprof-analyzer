@@ -2582,7 +2582,7 @@ pub(crate) fn render_collection_attribution(
         return;
     };
 
-    out.push_str("## Container Attribution\n\n");
+    out.push_str("## Container Attribution (Class#field)\n\n");
     out.push_str(
         "_Which holder `Class#field` points at the most container memory. Two rankings: total \
          across all containers reached through a field, and the single largest container per \
@@ -2762,7 +2762,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         return;
     };
 
-    out.push_str("## Fields by Retained Size\n\n");
+    out.push_str("## Fields by Retained Size (Class#field)\n\n");
     out.push_str(
         "_Which holder `Class#field` retains the most memory, summed over every object the \
          field points at. Runtime pointee type is the dominant concrete class reached through \
