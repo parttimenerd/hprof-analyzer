@@ -3353,7 +3353,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   return (
     <>
       <h3>Threads by Retained Heap</h3>
-      <p className="subtitle">Click a thread name to jump to its full stack trace below. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory via local variables.</p>
+      <p className="subtitle">Click a thread name to jump to its full stack trace below.</p>
       <StdTable columns={cols} data={sorted} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
     </>
   );
@@ -4292,7 +4292,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
     switch (kind) {
       case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals an oversized cache; cap it with a max-entries limit or switch to an explicit bounded cache (e.g. Caffeine).";
       case "Weak": return "Weak references let GC claim referents — reachable only via weak chains, reclaimed at any collection. Large counts are usually benign, but a growing count can indicate ThreadLocal leaks or listener registries not deregistering.";
-      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources leaking.";
+      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or indicates native resources not being released.";
       default: return "";
     }
   };
@@ -4311,7 +4311,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <p className="subtitle">
               {fmtCount(stats.reference_instances)} reference instances.
               {stats.null_referent_count != null && stats.null_referent_count > 0 && (
-                <> {fmtCount(stats.null_referent_count)} have a null referent — referent collected, not yet processed.
+                <> {fmtCount(stats.null_referent_count)} {stats.null_referent_count === 1 ? "has" : "have"} a null referent — referent collected, not yet processed.
                   {stats.null_referent_count / stats.reference_instances > 0.5 && (
                     <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor is likely stalled.</span>
                   )}
