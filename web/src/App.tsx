@@ -686,7 +686,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
 
 // Browser-friendly overrides for signals whose CLI-oriented text doesn't fit the web UI.
 const SIGNAL_DETAIL_OVERRIDES: Record<string, string> = {
-  "collections-not-analyzed": "Run Full Analysis for wasted capacity.",
+  "collections-not-analyzed": "Re-run with `--collections` to see wasted-capacity breakdown.",
 };
 
 function LeakScoreDashboard({ report }: { report: Report }) {
@@ -1811,7 +1811,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs a 16-byte object header on top of its payload — replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates that overhead.
+        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value adds a 12-byte object header (with compressed OOPs) to the primitive payload — replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates that overhead.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -1841,7 +1841,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where JVM object headers (typically 16 bytes each) dominate shallow heap relative to payload. High header fraction means many small instances — consider replacing with primitive arrays, value types, or a flyweight pool.
+        Classes where JVM object headers (12 bytes with compressed OOPs, 16 without) dominate shallow heap relative to payload. High header fraction means many small instances — consider replacing with primitive arrays, value types, or a flyweight pool.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
