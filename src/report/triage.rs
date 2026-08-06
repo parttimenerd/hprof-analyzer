@@ -983,7 +983,7 @@ impl Rule for LargeUnboundedCollection {
             TriageSeverity::Warning,
             "Large Unbounded Collection",
             format!(
-                "one `{}` holds {} elements{}{}  — likely a static or unbounded cache that never evicts.",
+                "one `{}` holds {} elements{}{} — likely a static or unbounded cache that never evicts.",
                 row.container_class,
                 fmt_count(row.elements),
                 retained_str,

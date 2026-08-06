@@ -3977,7 +3977,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     <section id="collection-waste-budget">
       <h2>Collection Waste Budget</h2>
       <p className="subtitle">
-        Memory wasted by redundant objects — duplicate strings, duplicate primitive arrays, boxed numbers, and over-allocated collection backing arrays. Fix the biggest category first for the highest impact.
+        Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact.
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
@@ -5595,7 +5595,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (the memory that vanishes by releasing this object, net of what the biggest child already covers). Threshold:{" "}
+        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (memory reclaimed by releasing this object, net of what the biggest child already accounts for). Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
