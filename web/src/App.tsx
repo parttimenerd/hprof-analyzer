@@ -3900,7 +3900,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       type: "Duplicate Strings",
       wasted: ds.approx_wasted_bytes,
       objects: ds.total_string_instances - ds.distinct_values,
-      fix: "Use String.intern() or interning cache",
+      fix: "Intern at parse time (e.g. map.computeIfAbsent(s, k -> k)) or use Guava Interner",
     });
   }
 
@@ -3924,7 +3924,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       type: "Boxed Primitives (footprint)*",
       wasted: totalWasted,
       objects: totalObjs,
-      fix: "Use primitive arrays or Eclipse Collections",
+      fix: "Use primitive arrays, or Eclipse Collections / Koloboke for primitive-typed collections",
     });
   }
 
