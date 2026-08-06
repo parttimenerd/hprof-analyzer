@@ -8480,7 +8480,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </p>
           ) : (
             <p className="subtitle" style={{ margin: "0 0 0.4rem", fontSize: "0.8rem" }}>
-              <code>{wasmBelowInfo.display_class}</code> · shallow {fmtB(wasmBelowInfo.shallow)} · retained {fmtB(wasmBelowInfo.retained)} · below significance threshold — live data.
+              <code>{wasmBelowInfo.display_class}</code> · shallow {fmtB(wasmBelowInfo.shallow)} · retained {fmtB(wasmBelowInfo.retained)} · below the significance threshold — data loaded from the live heap.
             </p>
           )}
           {effectiveCls && (
@@ -8725,7 +8725,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
       {!bannerDismissed && !(window as any).__wasmSession && (
         <div style={{ background: "var(--accent-bg, #eff6ff)", border: "1px solid var(--accent-border, #bfdbfe)", borderRadius: 6, padding: "0.4rem 0.6rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
-          <span style={{ flex: 1 }}>Load .hprof in the browser for the full inbound graph and shortest GC root paths.</span>
+          <span style={{ flex: 1 }}>Load the .hprof file in the browser for the full inbound graph and shortest GC root paths.</span>
           <button className="copy-btn" onClick={() => { sessionStorage.setItem("wasm-banner-dismissed", "1"); setBannerDismissed(true); }} style={{ flexShrink: 0, opacity: 0.6 }} title="Dismiss">✕</button>
         </div>
       )}
@@ -8788,8 +8788,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 </p>
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
-                <p className="subtitle">Showing first 100 of more edges.{" "}
-                  {(window as any).__wasmSession?.outbound_refs && "Enable exploration for the full reference list."}
+                <p className="subtitle">Showing first 100 outbound references.{" "}
+                  {(window as any).__wasmSession?.outbound_refs && "Enable exploration for the full list."}
                 </p>
               )}
               {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
@@ -8811,7 +8811,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {groupedEdges.length > 0 && currentEdges.length > groupedEdges.length && (
                 <p className="subtitle" style={{ fontSize: "0.8rem" }}>
-                  {currentEdges.length} edges grouped into {groupedEdges.length} unique field×class combinations.
+                  {currentEdges.length} edges collapsed into {groupedEdges.length} field/class groups.
                   {refFilter && filteredEdges.length < groupedEdges.length && (
                     <> Showing {filteredEdges.length} matching.</>
                   )}
@@ -9295,7 +9295,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           onClick={() => navigate("domtree", chainEnd!, data.nodes[String(chainEnd!)]?.display_class ?? `#${chainEnd}`)}>
                           Skip {chainLen}-step chain →
                         </button>
-                        {" "}(single-child dominator chain — all retain ≥95% of this node)
+                        {" "}(single-child chain — each step retains ≥95% of this object)
                       </p>
                     )}
                   </>
@@ -9329,7 +9329,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 />
               )}
               {currentDomChildren.length === 0 ? (
-                <p className="subtitle">No significant dominated children.</p>
+                <p className="subtitle">No dominated children to show.</p>
               ) : (
                 <>
                   {domViewMode === "grouped" && (() => {
@@ -10219,7 +10219,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
     <div className="app">
       <h1>Heap Dump Comparison ({labels.length} reports)</h1>
       <p className="subtitle">
-        Cross-dump growth across a time series (first = baseline, last = current).
+        Compares retained heap across a time series; the first dump is the baseline, the last is the current state.
       </p>
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml("heap-comparison.html")}>⬇ Save HTML</button>
@@ -10266,7 +10266,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <h2>Transient Spikes (Peak Above Baseline)</h2>
           <p>
             Classes that climbed well above their baseline mid-series then fell back — a
-            first→last Δ alone would miss them. Ranked by peak-over-baseline; the peak may be
+            first-to-last delta alone would miss them. Ranked by peak-over-baseline; the peak may be
             at any intermediate dump.
           </p>
           <SpikeTable labels={labels} rows={diff.spike_leaders} />
@@ -10317,8 +10317,9 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Type Reference Graph Diff</h2>
           <p>
-            Growing directed edges between class types — a high Δ retained weight indicates
-            one class is accumulating more references to another. Sorted by |Δ retained weight|.
+            Directed edges between class types that grew between the first and last dump.
+            A high Δ retained weight indicates one class is accumulating more references to another.
+            Sorted by |Δ retained weight|.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
         </section>
