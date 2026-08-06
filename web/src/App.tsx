@@ -2145,7 +2145,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Class names loaded by more than one class loader — common in environments that reload classes per deployment or plugin (e.g. web-app containers, OSGi).
+            Class names loaded by more than one class loader — typical in environments that hot-reload classes (web-app containers, OSGi).
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -9954,8 +9954,8 @@ function GlossarySection() {
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
-    ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
-    ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Top Consumers" and "Retention Concentration" sections rank these.</>],
+    ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
+    ["Top-Level Dominator", <>an object whose immediate dominator is a GC root — sits at the top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
     ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means objects are retained through long dominator chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
