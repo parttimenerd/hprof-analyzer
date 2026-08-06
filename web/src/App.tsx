@@ -1813,7 +1813,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Wrapper types whose instances occupy heap that could be replaced with primitives.
+        Wrapper types whose instances could be replaced with primitives to reduce heap use.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -3126,7 +3126,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       <h3>Biggest Objects</h3>
       {objHasOwner && (
         <p className="subtitle">
-          <strong>Held via</strong> is the primary incoming <code>Class#field</code>{" "}
+          The <strong>Held via</strong> column shows the primary incoming <code>Class#field</code>{" "}
           reference holding each object — an object may have several referrers.
         </p>
       )}
@@ -3268,7 +3268,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
           <>
-            <p className="subtitle"><em>Frame percentages are relative to this thread's {fmtB(t.retained)} retained heap.</em></p>
+            <p className="subtitle"><em>Frame percentages show each frame's share of this thread's {fmtB(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => {
               const frameCls = frameToClass(sf.frame);
@@ -3404,7 +3404,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
         defaultSortFieldId="ret"
         defaultSortAsc={false}
       />
-      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale — null key (GC cleared the ThreadLocal key; value still held).</p>
+      <p className="hint" style={{ marginTop: "0.3rem" }}>Stale entries have a null key — the GC cleared the <code>ThreadLocal</code> key but the value is still held.</p>
     </div>
   );
 }
@@ -4290,7 +4290,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 
   const kindCaption = (kind: string) => {
     switch (kind) {
-      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap may indicate an unbounded cache; consider bounding the cache size.";
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap often indicates a large cache; if memory is tight, consider bounding the cache size.";
       case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign.";
       case "Phantom": return "Phantom references mark objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not being released promptly.";
       default: return "";
@@ -4321,7 +4321,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — any GC cycle may reclaim them. (Approximate: transitive weak-only detection may miss multi-hop chains.)</p>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — any GC cycle may reclaim them. (Note: transitive weak-only detection may miss multi-hop chains.)</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
@@ -5601,7 +5601,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        How many objects each class directly dominates, and how much shallow heap those dominated objects occupy. A dominator class with high dominated-shallow heap is a retention hub.
+        How many objects each class directly dominates, and how much shallow heap those dominated objects occupy. A dominator class with high dominated-shallow heap holds a large portion of the live heap.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
       </p>
       {idoms.length === 0 ? (
@@ -5734,7 +5734,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — likely the dump was taken before a GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
+              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump may have been taken before a full GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
               : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of total heap) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
@@ -5956,7 +5956,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
             {frameTree.retained > 0 && (
               <>
                 <h3>Retained Heap by Call Path</h3>
-                <p className="subtitle">Retained heap by call path — sized by retained bytes. Click a frame to drill in; toggle Treemap / Flame view.</p>
+                <p className="subtitle">Retained heap grouped by call path. Click a frame to drill in.</p>
                 <ZoomableTreemap<FrameTreeNode>
                   root={frameTree}
                   getChildren={(n) => n.children}
@@ -6251,7 +6251,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
                 return <StdTable columns={queryCols} data={q.rows} searchKeys={[]} cap={q.rows.length} />;
               })()}
               <p className="subtitle">
-                {q.row_count} row(s){q.truncated ? ", truncated" : ""}
+                {fmtCount(q.row_count)} {q.row_count === 1 ? "row" : "rows"}{q.truncated ? " (truncated)" : ""}
               </p>
               {q.note && <p className="subtitle">Note: {q.note}</p>}
               <QueryViz query={q} />
@@ -6874,7 +6874,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               )}
               {selAllOutEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">→ References to ({selAllOutEdges.length} total)</p>
+                  <p className="trg-sidebar-section-label">→ Outbound References ({selAllOutEdges.length} total)</p>
                   <ul className="trg-edge-list">
                     {selOutEdges.map((e, i) => (
                       <li key={i}>
@@ -6895,7 +6895,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               )}
               {selAllInEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">← Referenced by ({selAllInEdges.length} total)</p>
+                  <p className="trg-sidebar-section-label">← Inbound References ({selAllInEdges.length} total)</p>
                   <ul className="trg-edge-list">
                     {selInEdges.map((e, i) => (
                       <li key={i}>
@@ -9961,7 +9961,7 @@ function GlossarySection() {
     ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Top Consumers" and "Retention Concentration" sections rank these.</>],
     ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects are held close to a root; high depth means retention flows through long chains.</>],
-    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class, meaning where a <a href="https://en.wikipedia.org/wiki/Memory_leak" target="_blank" rel="noreferrer">memory leak</a> accumulates.</>],
+    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — a common place where excess memory accumulates.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
@@ -10378,7 +10378,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
       )}
       <div className="trg-edge-cols">
         <div>
-          <h4>References to ({outEdges.length})</h4>
+          <h4>Outbound References ({outEdges.length})</h4>
           <ul className="trg-edge-list">
             {outEdges.slice(0, 8).map((e: any) => (
               <li key={e.dst_class}>
@@ -10398,7 +10398,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           </ul>
         </div>
         <div>
-          <h4>Referenced by ({inEdges.length})</h4>
+          <h4>Inbound References ({inEdges.length})</h4>
           <ul className="trg-edge-list">
             {inEdges.slice(0, 8).map((e: any) => (
               <li key={e.src_class}>
