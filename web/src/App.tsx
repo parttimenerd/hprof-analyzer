@@ -1739,7 +1739,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <>
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
-            Over-allocated backing arrays — strings whose <code>char[]</code> is larger than their character data (typical in Java 6 / early Java 7, where <code>substring()</code> shared the parent's backing array). {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
+            Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>substring()</code> retaining a full backing array (Java 6/7 shared-buffer semantics) or repeated <code>StringBuilder.toString()</code> allocations. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
             {fmtB(w.total_wasted_bytes)} total wasted.
           </p>
           {w.top.length > 0 && (
@@ -6116,7 +6116,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries</>,
       value: fmtCount(thread_local_null_key_count),
-      hint: "A null key means the referent thread was GC'd but the value remained — classic ThreadLocal leak. Check ThreadLocal usage in thread-pool code.",
+      hint: "A null key means the ThreadLocal object was GC'd while the thread still holds the value — classic ThreadLocal leak in thread pools. Explicitly call ThreadLocal.remove() when done, or use try-finally to guarantee cleanup.",
     }] : []),
     ...(direct_byte_buffer_capacity_sum > 0 ? [{
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,

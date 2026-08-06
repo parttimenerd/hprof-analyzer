@@ -173,6 +173,11 @@ Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     // ── Char[] backing-array waste ───────────────────────────────────────────
     if let Some(w) = &d.char_array_waste {
         out.push_str("#### `char[]` Waste\n\n");
+        out.push_str(
+            "_Strings whose `char[]` or `byte[]` backing array is larger than the character \
+data — typical of `substring()` retaining a full backing array (Java 6/7 shared-buffer \
+semantics) or repeated `StringBuilder.toString()` allocations._\n\n",
+        );
         out.push_str(&format!(
             "_{} arrays examined, {} wasteful, {} total wasted._\n\n",
             fmt_count(w.arrays_examined),
