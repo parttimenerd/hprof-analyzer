@@ -2020,7 +2020,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>Heap Composition</h3>
-            <p className="subtitle">Shallow heap broken down by object kind — instance objects, object arrays, and primitive arrays.</p>
+            <p className="subtitle">Shallow heap broken down by object kind: instances, object arrays, primitive arrays, and class objects.</p>
             <ChartOrNote hasData={o.heap_composition.by_kind.length >= 2} note="Composition chart needs ≥2 kinds; table only.">
               <HeapCompositionChart data={o.heap_composition.by_kind} />
               <CompositionStackedBar data={o.heap_composition.by_kind} />

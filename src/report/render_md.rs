@@ -1073,7 +1073,7 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
         use crate::md::bar;
         out.push_str("### Heap Composition\n\n");
         out.push_str(
-            "_Shallow heap broken down by object kind — instance objects, object arrays, and primitive arrays._\n\n",
+            "_Shallow heap broken down by object kind: instances, object arrays, primitive arrays, and class objects._\n\n",
         );
         let max_shallow = o
             .heap_composition
@@ -3104,10 +3104,26 @@ indicates native resources (file handles, off-heap buffers) not being released p
             out.push_str(kind_caption);
             out.push_str("\n\n");
         }
-        out.push_str(&format!(
-            "_{} reference instances._\n\n",
-            fmt_count(stats.reference_instances),
-        ));
+        if stats.null_referent_count > 0 {
+            let stall = if stats.reference_instances > 0
+                && stats.null_referent_count * 2 > stats.reference_instances
+            {
+                " **⚠ Over 50% null — reference queue processor is likely stalled.**"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "_{} reference instances. {} {} a null referent — referent collected, not yet processed.{stall}_\n\n",
+                fmt_count(stats.reference_instances),
+                fmt_count(stats.null_referent_count),
+                if stats.null_referent_count == 1 { "instance has" } else { "instances have" },
+            ));
+        } else {
+            out.push_str(&format!(
+                "_{} reference instances._\n\n",
+                fmt_count(stats.reference_instances),
+            ));
+        }
         out.push_str("#### Referent Classes\n\n");
         render_class_table(&stats.referent_histogram, out);
         out.push_str("#### Only Weakly Retained\n\n");
