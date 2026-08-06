@@ -1995,7 +1995,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.top_class_concentration_bp ?? 0) > 0 && (
             <>
-              <dt>Top-Class Retained Heap Share</dt>
+              <dt title="Retained heap share of the single largest class (top histogram row) — a high value means one class dominates retention">Top-Class Retained Concentration</dt>
               <dd>{fmtPct((o.top_class_concentration_bp ?? 0) / 100)}</dd>
             </>
           )}
