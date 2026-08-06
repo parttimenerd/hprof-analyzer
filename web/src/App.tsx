@@ -741,7 +741,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3 style={{ marginBottom: "0.1rem" }}>Leak Score</h3>
-      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Higher score means stronger retention signal. Click a card to inspect the class.</p>
+      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Composite leak likelihood score based on heap share, bytes per instance, and dominator graph position. Click a card to inspect the class.</p>
       <div className="leak-score-grid">
         {rows.map(r => {
           const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
@@ -752,7 +752,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
           if (r.depth <= 1) signals.push("shallow");
           return (
             <div key={r.cls} className={`leak-score-card leak-score-${conf}`}
-              title={`Score: ${r.score.toFixed(0)} | depth: ${r.depth} | ${(r.pct*100).toFixed(1)}% heap | ${r.instances} instances`}>
+              title={`Score: ${r.score.toFixed(0)} | depth: ${r.depth} | ${(r.pct*100).toFixed(1)}% heap | ${r.instances} ${r.instances === 1 ? "instance" : "instances"}`}>
               <div className="leak-score-bar" style={{ width: `${r.score}%` }} />
               <div className="leak-score-body">
                 <button className="trg-link-btn leak-score-cls" title={r.cls} onClick={() => fireInspect({ kind: "class", cls: r.cls })}>
@@ -3353,7 +3353,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   return (
     <>
       <h3>Threads by Retained Heap</h3>
-      <p className="subtitle">Sorted by retained heap — threads high on this list are pinning objects through local variables or locks. Click a name to jump to its stack trace.</p>
+      <p className="subtitle">Sorted by retained heap — threads high on this list keep significant memory alive through local variables on their call stack. Click a name to jump to its stack trace.</p>
       <StdTable columns={cols} data={sorted} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
     </>
   );
@@ -5627,7 +5627,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Objects dominated by each class and the shallow heap they occupy. High dominated-shallow means the class pins much of live memory.
+        Each row shows one dominator class: how many objects it immediately dominates and the total shallow heap of those dominated objects. High dominated-shallow means instances of that class collectively pin much of live memory.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click or right-click a row to open it in the Navigator.</span>}
       </p>
       {idoms.length === 0 ? (
