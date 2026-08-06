@@ -841,7 +841,7 @@ function WasteSummarySection({ report }: { report: Report }) {
       <h2>Waste Summary</h2>
       <p className="subtitle">
         <strong>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the
-        sources below. Figures are approximate and may overlap slightly.
+        sources below. Figures are approximate; sources may overlap.
       </p>
       <div className="waste-summary-table">
         <StdTable columns={wasteCols} data={w.sources} searchKeys={["label"]} fmtBtn={kbBtn} defaultSortFieldId="reclaimable" defaultSortAsc={false} />
@@ -3125,7 +3125,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       {objHasOwner && (
         <p className="subtitle">
           The <strong>Held via</strong> column shows the primary incoming <code>Class#field</code>{" "}
-          reference holding each object — an object may have several referrers.
+          reference holding each object — an object can have multiple referrers.
         </p>
       )}
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
@@ -4310,7 +4310,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
               {stats.null_referent_count != null && stats.null_referent_count > 0 && (
                 <> {fmtCount(stats.null_referent_count)} have a null referent (GC'd but not yet cleaned up).
                   {stats.null_referent_count / stats.reference_instances > 0.5 && (
-                    <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor may be stalled.</span>
+                    <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor is likely stalled.</span>
                   )}
                 </>
               )}
@@ -5560,7 +5560,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects whose retained heap greatly exceeds their largest single child's — the gap is memory held directly or spread across many small children. Minimum threshold:{" "}
+        Objects whose retained heap greatly exceeds their largest single child's — memory held directly or spread across many small children. Minimum threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -5731,7 +5731,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump may have been taken before a full GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
+              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump was taken before a full GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
               : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of total heap) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
@@ -5798,7 +5798,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
         </p>
         <p>
-          Check for NIO buffer pools or caches that do not release buffers. Common causes include Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
+          Check for NIO buffer pools or caches that leak buffers. Common causes include Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
         </p>
         {isLarge && (
           <p className="subtitle">
@@ -6090,7 +6090,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
         ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
-        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that do not release on close, or Netty/gRPC allocators misconfigured without a buffer cap.",
+        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators misconfigured without a buffer cap.",
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
@@ -9722,7 +9722,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.4rem 0 0" }}>
               {pathBetweenError === "requires .hprof loaded in browser"
                 ? "Path search requires the .hprof loaded in the browser (see banner above)."
-                : `No reference path found (${pathBetweenError}). Objects may not be connected through outbound references.`}
+                : `No reference path found (${pathBetweenError}). Objects are not connected through outbound references.`}
             </p>
           )}
           {pathBetweenResult && pathBetweenResult.length > 0 && (
