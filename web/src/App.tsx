@@ -5608,7 +5608,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
         Objects dominated by each class and the shallow heap they occupy. High dominated-shallow means the class pins much of live memory.
-        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to open it in the Navigator.</span>}
+        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click or right-click a row to open it in the Navigator.</span>}
       </p>
       {idoms.length === 0 ? (
         <p className="subtitle">No immediate dominators.</p>
