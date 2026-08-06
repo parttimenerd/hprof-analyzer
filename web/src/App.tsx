@@ -10299,7 +10299,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       <section className="diff-section">
         <h2>Disappeared Leak Suspects (Resolved)</h2>
         <p className="subtitle">
-          These suspects were flagged in an earlier dump but are absent from the current one — the issue resolved between dumps or was transient.
+          Suspects that appeared in an earlier dump but are absent now — issue resolved between dumps or was transient.
         </p>
         {diff.gone_suspects.length === 0 ? (
           <p className="subtitle">No suspects disappeared in the current dump.</p>
