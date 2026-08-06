@@ -662,7 +662,11 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
 /// `Report.triage`). This renderer is a dumb formatter over that list.
 pub(crate) fn render_oom_triage(r: &Report, out: &mut String) {
     out.push_str("## Memory Triage\n\n");
-    out.push_str("_Automated signals pointing to where memory concentrates and what to investigate first._\n\n");
+    out.push_str(&format!(
+        "_Automated signals pointing to where memory concentrates and what to investigate first. \
+Total reachable heap: {}_\n\n",
+        format_bytes(r.overview.total_shallow),
+    ));
     for s in &r.triage {
         out.push_str(&format_signal_md(s));
     }
@@ -889,7 +893,7 @@ pub(crate) fn render_glossary(out: &mut String) {
 pub(crate) const GLOSSARY: &str = "\
 ## Glossary
 
-_Definitions for the terms used above._
+_Definitions for the heap analysis terms used throughout this report._
 
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the
