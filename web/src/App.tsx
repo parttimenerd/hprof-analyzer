@@ -6082,7 +6082,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        Low depth: objects close to GC roots; high depth: deep retention chains (nested collections, linked lists, long object graphs). Maximum depth: {maxDepth}. A spike at depth 1–3 is normal; a long tail at high depths suggests nested containers holding data you may not expect.
+        Low depth: objects close to GC roots; high depth: deep retention chains (nested collections, linked lists, long object graphs). Maximum depth: {maxDepth}. A spike at depth 1–3 is normal; a long tail at high depths points to deeply nested containers or long reference chains worth investigating.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -10075,7 +10075,7 @@ function GlossarySection() {
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
-    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" is the shallow size of the biggest instance.</>],
+    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type.</>],
   ];
   return (
     <section id="glossary">
