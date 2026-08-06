@@ -4229,8 +4229,8 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
         Which <code>Class#field</code> retains the most memory, summed over every object the field points at.
-        Runtime pointee type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field retaining unexpectedly large memory is a good candidate to null after use or replace with a lazy-initialized reference.
-      </p>
+        Runtime pointee type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field with unexpectedly large retention is a good candidate to null out after use or wrap in a lazy-initialized reference.
+</p>
       {data.truncated && (
         <p className="subtitle">
           Field grouping was truncated (group or pointee cap hit) — ranking is a bounded sample.

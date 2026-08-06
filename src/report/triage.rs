@@ -344,14 +344,14 @@ impl Rule for Concentration {
                 "concentration",
                 TriageSeverity::Info,
                 "Concentration",
-                "diffuse — retention is spread across multiple roots, so there is no single holder to target.".to_string(),
+                "diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Explore the top classes in Leak Suspects to find the most impactful target.".to_string(),
                 Some(("leak-suspects", "Leak Suspects")),
             ),
             None => signal(
                 "concentration",
                 TriageSeverity::Info,
                 "Concentration",
-                "diffuse — no suspect exceeds the threshold; retention is spread across many roots.".to_string(),
+                "diffuse — no dominant retainer found; retention is spread evenly across many roots.".to_string(),
                 None,
             ),
         };
