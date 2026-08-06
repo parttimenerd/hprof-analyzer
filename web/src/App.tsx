@@ -1811,7 +1811,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs at least 16 bytes — a 12-byte object header (with compressed OOPs) plus the primitive field — versus 4–8 bytes as a primitive. Replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates the per-object header.
+        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded to an 8-byte boundary) versus 4–8 bytes as an unboxed primitive. Replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates the per-object header.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -3737,7 +3737,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     <section id="collections">
       <h2>Collections</h2>
       <p className="subtitle">
-        Collection fill ratios, map collision rates, and constant-value primitive array groups. Low fill ratios waste backing-array memory; high collision rates degrade lookup performance.
+        Collection fill ratios, map load factors, and constant-value primitive array groups. Low fill ratios waste backing-array memory; high load factors increase hash-bucket collisions and degrade lookup performance.
       </p>
 
       <h3>Collections by Kind</h3>
@@ -4061,7 +4061,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
           <h3>Tiny Collection Overhead</h3>
           <p className="subtitle">
             Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — replace with null or a direct field reference.
-            Overhead is object count × reference-slot width.
+            Overhead is the wrapper-object count × reference pointer size (4 B with compressed OOPs, 8 B without).
           </p>
           <TinyCollectionTable rows={data.tiny_overhead} />
         </>
@@ -5595,7 +5595,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than any single child — memory held directly or scattered across many small children. <strong>Drop</strong> = retained minus the largest child's retained (bytes that would be reclaimed if the object were released, beyond what its biggest child alone accounts for). Threshold:{" "}
+        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (the memory that vanishes by releasing this object, net of what the biggest child already covers). Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -5632,7 +5632,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Each row shows one dominator class: how many objects it immediately dominates and the total shallow heap of those dominated objects. High dominated-shallow means instances of that class collectively keep much of live memory alive.
+        Each row shows one dominator class: how many other objects it immediately dominates and the total shallow heap of those dominated objects. A large dominated-shallow figure means instances of that class are collectively gating large portions of the live heap — releasing them would allow that memory to be reclaimed.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click or right-click a row to open it in the "Who Holds This Class?" sankey below.</span>}
       </p>
       {idoms.length === 0 ? (
