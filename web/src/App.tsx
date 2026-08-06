@@ -3108,7 +3108,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   return (
     <section id="top-consumers">
       <h2>Top Consumers</h2>
-      <p className="subtitle">Biggest objects, classes, and packages by retained heap.</p>
+      <p className="subtitle">Biggest objects, classes, and packages by retained heap. A class with high retained but low shallow heap is keeping many other objects alive — a strong leak signal.</p>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "treemap"] as const).map(v => (
           <button key={v} onClick={() => setTopView(v)} style={{
@@ -3577,7 +3577,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
       <>
         <h3>{title}</h3>
         {buckets.length === 0 ? (
-          <p className="subtitle">None.</p>
+          <p className="subtitle">None found in this dump.</p>
         ) : (
           <>
             <StdTable columns={cols} data={buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
@@ -3662,7 +3662,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
           Largest {kind} arrays by shallow size — individual instances and class totals.
         </p>
         {individual.length === 0 ? (
-          <p className="subtitle">None.</p>
+          <p className="subtitle">None found in this dump.</p>
         ) : (
           <>
             <StdTable columns={indivCols} data={individual} searchKeys={["array_class"]} fmtBtn={kbBtnArr} defaultSortFieldId="shallow" defaultSortAsc={false} />
@@ -3677,7 +3677,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         )}
         <h4>Top Array Classes ({kind.charAt(0).toUpperCase() + kind.slice(1)})</h4>
         {byClass.length === 0 ? (
-          <p className="subtitle">None.</p>
+          <p className="subtitle">None found in this dump.</p>
         ) : (
           <>
             <StdTable columns={byClassCols} data={byClass} searchKeys={["array_class"]} fmtBtn={kbBtnArr} defaultSortFieldId="shallow" defaultSortAsc={false} />
@@ -3740,7 +3740,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collections by Kind</h3>
       {kindRows.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (() => {
         const kindCols: TableColumn<import("./types").CollectionKindStat>[] = [
           { id: "kind", name: "Kind", grow: 1, cell: (s) => <span style={{ textTransform: "capitalize" }}>{s.kind}</span>, selector: (s) => s.kind, sortable: true },
@@ -3769,7 +3769,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         {cfr && <>{" "}{fmtCount(cfr.total)} collections analyzed ({fmtCount(cfr.tracked)} non-empty shown).</>}
       </p>
       {cfrBuckets.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (
         fillTable("Fill %", "Collections", cfrBuckets, fmtBcfr, kbBtnCfr, useKBcfr)
       )}
@@ -3780,7 +3780,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         {cbs && <>{" "}{fmtCount(cbs.tracked)} tracked; {fmtCount(cbs.empty_count)} empty.</>}
       </p>
       {cbsBuckets.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (() => {
         const cbsCols: TableColumn<import("./types").SizeHistogramBucket>[] = [
           { id: "size", name: "Size ≤", right: true, width: "120px", format: (b) => `≤ ${fmtCount(b.upper_len)}`, selector: (b) => b.upper_len, sortable: true },
@@ -3806,7 +3806,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         {afr && <>{" "}{fmtCount(afr.tracked)} tracked.</>}
       </p>
       {afrBuckets.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (
         fillTable("Fill %", "Arrays", afrBuckets, fmtBafr, kbBtnAfr, useKBafr)
       )}
@@ -3816,7 +3816,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         Load factor (occupied slots ÷ capacity) for {fmtCount(mcr?.tracked ?? 0)} of {fmtCount(mcr?.total ?? 0)} maps; high values (≥ 90%) signal dense packing and longer probe chains.
       </p>
       {mcrBuckets.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (() => {
         const mcrCols: TableColumn<FillRatioBucket>[] = [
           { id: "load", name: "Load %", right: true, width: "130px", format: (b) => ratioLabel(b), selector: (b) => b.lower_ratio_bp, sortable: true },
@@ -3844,7 +3844,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         <p className="subtitle">List truncated — remaining groups folded into one row.</p>
       )}
       {cpaRows.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (() => {
         const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
           { id: "class", name: "Array Class", grow: 1, maxWidth: cpaHasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
@@ -4025,7 +4025,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 
       <h3>Top by Total Memory</h3>
       {mostOverall.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
@@ -4041,7 +4041,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 
       <h3>Largest Single Container</h3>
       {biggestSingle.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (() => {
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
@@ -4193,7 +4193,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
         Element types stored in each collection class, summed across all instances. Spot unexpected or boxed value types that could be replaced with primitive arrays or more specific collections.
       </p>
       {rows.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (
         <StdTable columns={cols} data={rows} searchKeys={["collection_class"]} defaultSortFieldId="values" defaultSortAsc={false} />
       )}
@@ -4238,7 +4238,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
         </p>
       )}
       {rows.length === 0 ? (
-        <p className="subtitle">None.</p>
+        <p className="subtitle">None found in this dump.</p>
       ) : (
         <>
           <StdTable columns={cols} data={rows} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
@@ -4648,7 +4648,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
       <input
         type="text"
         value={search}
-        placeholder="Search for a class to focus…"
+        placeholder="Search class name to navigate Sankey…"
         onChange={(e) => setSearch(e.target.value)}
         style={{ width: "100%", boxSizing: "border-box", padding: "0.4rem 0.6rem", fontSize: "0.9rem", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--fg)" }}
       />
@@ -4698,6 +4698,11 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         <p className="subtitle">No dominator pair data for <code>{shortClass(target)}</code>. This class may not dominate or be dominated by any other — search for a class with entries in the Immediate Dominators table above.</p>
       ) : (
         <>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--muted)", marginBottom: "2px", paddingLeft: 2, paddingRight: 2 }}>
+            <span title="Classes that keep the selected class alive — the objects you'd need to release to free it">← Dominators (hold it)</span>
+            <span style={{ fontWeight: 600, color: "var(--fg)" }}>{shortClass(target)}</span>
+            <span title="Classes kept alive by the selected class — what would be freed if it were released">Dominated (held) →</span>
+          </div>
           <svg
             width={w} height={svgHeight}
             role="img" aria-label={`Who holds ${target}`}
@@ -5547,7 +5552,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Classes ranked by retained heap, with the objects they dominate.</p>
+      <p className="subtitle">Classes ranked by retained heap, with the objects they dominate. An object <em>dominates</em> another if every path from a GC root to that object passes through it — meaning releasing the dominator would free everything it dominates.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
@@ -5576,7 +5581,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than any single child — memory held directly or scattered across many small children. Threshold:{" "}
+        Objects retaining far more than any single child — memory held directly or scattered across many small children. <strong>Drop</strong> = retained minus the largest child's retained (bytes that would be freed if the object were released, beyond what its biggest child alone accounts for). Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -5656,7 +5661,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class — left: its dominators; right: classes it dominates. Click any node or row to refocus.
+            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it would free if it were released). A wide right side means this class is a large memory holder. Click any node or row to refocus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -6817,6 +6822,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}
               title="Reset zoom and pan to default">⊡ View</button>
             <button onClick={() => setFullscreen(f => !f)}
+              title={fullscreen ? "Exit fullscreen (Esc)" : "Expand to full window for easier exploration"}
               style={{ padding: "0.15rem 0.55rem", fontSize: "0.82rem", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", background: "transparent", color: "var(--fg)" }}>
               {fullscreen ? "⛶ Exit" : "⛶ Fullscreen"}
             </button>
@@ -6991,7 +6997,8 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 </>
               )}
               <div className="trg-sidebar-actions">
-                <button className="show-more-btn" onClick={() => fireInspect({ kind: "class", cls: selected })}>
+                <button className="show-more-btn" title="Open class details, field stats, and reference chains in the floating Inspector panel"
+                  onClick={() => fireInspect({ kind: "class", cls: selected })}>
                   Full Details →
                 </button>
                 <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
@@ -8836,7 +8843,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 {(["outbound","inbound"] as const).map(t => (
                   <React.Fragment key={t}>
                     {t === "inbound" && <span style={{ color: "var(--muted)" }}>|</span>}
-                    <button className="btn-link" style={{ fontWeight: activeRefTab === t ? 700 : 400, fontSize: "0.9rem", padding: "0 2px" }} onClick={() => setActiveRefTab(t)}>
+                    <button className="btn-link"
+                      title={t === "outbound" ? "Objects referenced by this object (what it holds)" : "Objects that reference this object (what holds it alive)"}
+                      style={{ fontWeight: activeRefTab === t ? 700 : 400, fontSize: "0.9rem", padding: "0 2px" }} onClick={() => setActiveRefTab(t)}>
                       {t.charAt(0).toUpperCase() + t.slice(1)}
                     </button>
                   </React.Fragment>
@@ -10529,6 +10538,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           Type Graph →
         </button>
         <button className="show-more-btn"
+          title="Scroll to System Overview and highlight this class in the heap histogram"
           onClick={() => {
             document.getElementById("system-overview")?.scrollIntoView({ behavior: "smooth" });
             window.dispatchEvent(new CustomEvent("highlight-class", { detail: { cls } }));
@@ -11447,6 +11457,9 @@ export default function App({ report }: { report: Report }) {
             <kbd>Ctrl+S</kbd> Save offline
           </span>
         )}
+        <span className="save-hint" title="g then h/l/t/d/r/o — jump to section; / — focus filter; Alt+←/→ — back/forward in Explorer">
+          <kbd>g</kbd> shortcuts
+        </span>
         <ThemeToggle />
       </div>
       <Nav report={report} />
@@ -11518,8 +11531,9 @@ export default function App({ report }: { report: Report }) {
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
           <p className="subtitle">
-            Browse the reference graph and dominator tree.
-            Click a class to list its instances; click an instance for fields and inbound references.
+            Browse individual objects: follow reference chains, inspect field values, and trace what keeps each object alive.
+            Click a class to list its instances; click an instance to see its fields and inbound references.
+            Best used after Dominator Analysis identifies a suspect class.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
         </section>
