@@ -1547,7 +1547,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file — shows which kinds of data were captured. Missing allocation frames are normal; they require the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), which was removed in JDK 9.
+        Record-type counts from the raw HPROF file — useful for diagnosing truncated or unusual dumps. Zero stack frames means no allocation-site data (requires <code>-agentlib:hprof=heap=dump,depth=8</code>, removed in JDK 9); a mismatch between load-class and class-dump counts can indicate a partial write.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -6141,7 +6141,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — see the <strong>What to Check</strong> column to triage each one.
+        Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — see the <strong>What to Check</strong> column for how to triage each one.
       </p>
       <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
@@ -10390,7 +10390,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Transient Spikes (Peak Above Baseline)</h2>
           <p className="subtitle">
-            Classes that peaked well above baseline mid-series then retreated — invisible to first-to-last comparison. Ranked by peak-over-baseline; peak at an intermediate dump.
+            Classes whose retained peaked at an intermediate dump then reclaimed by the last — invisible to first-to-last comparison. Ranked by peak-minus-baseline retained.
           </p>
           <SpikeTable labels={labels} rows={diff.spike_leaders} />
         </section>
