@@ -887,3 +887,10 @@ kbd {
 .leak-score-mid .leak-score-num { color: #b80; }
 .leak-score-tags { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px 8px 6px; }
 .leak-score-tag { font-size: 0.68rem; background: var(--code-bg, rgba(0,0,0,0.06)); border-radius: 3px; padding: 1px 4px; color: var(--muted); }
+
+/* Sankey chain-to-root panel */
+.sankey-chain-panel { width: 180px; flex-shrink: 0; background: var(--card-bg, var(--bg)); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.5rem; font-size: 0.8rem; max-height: 420px; overflow-y: auto; }
+.sankey-chain-header { font-weight: 600; margin-bottom: 0.35rem; overflow: hidden; font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.sankey-chain-step { padding: 0.15rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--mono, monospace); font-size: 0.78rem; }
+.sankey-chain-step:hover:not(.sankey-chain-current) { color: var(--accent); text-decoration: underline; }
+.sankey-chain-current { font-weight: 600; color: var(--accent); }

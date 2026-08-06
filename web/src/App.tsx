@@ -1810,7 +1810,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded to an 8-byte boundary) versus 4–8 bytes as an unboxed primitive. Replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates the per-object header.
+        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded to 8-byte boundary) versus 4–8 bytes as an unboxed primitive. Replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates the per-object header.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -1989,7 +1989,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
-              <dt>Unreachable Fraction (unreachable ÷ heap)</dt>
+              <dt title="unreachable ÷ (reachable + unreachable)">Heap Fragmentation (unreachable / total)</dt>
               <dd>{fmtPct((o.heap_fragmentation_ratio ?? 0) * 100)}</dd>
             </>
           )}
@@ -3127,7 +3127,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects</h3>
-      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when a suspect didn&apos;t cross the leak-suspects threshold. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
+      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when the suspect you care about didn&apos;t cross the leak-suspect threshold. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
@@ -3387,7 +3387,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3>ThreadLocal Variables</h3>
-      <p className="subtitle">Values stored in thread-local slots — stale entries have a null key (the <code>ThreadLocal</code> object was GC'd) but retain their value until the entry is explicitly removed or the thread terminates. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate; call <code>ThreadLocal.remove()</code> to clean up.</p>
+      <p className="subtitle">Values stored in thread-local slots, grouped by value class. Stale entries have a null key — the <code>ThreadLocal</code> object was GC'd but the value remains. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate; call <code>ThreadLocal.remove()</code> to clean up.</p>
       <StdTable
         columns={[
           { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
@@ -3415,7 +3415,7 @@ function FrameworkAnalysisSection({ items }: { items?: FrameworkAnalysis[] }) {
   return (
     <section className="section" id="framework-analysis">
       <h2>Framework Analysis</h2>
-      <p className="subtitle">Detected: {detected}. Framework-specific objects and their heap footprint — useful for spotting oversized caches or leaked request contexts.</p>
+      <p className="subtitle">Frameworks detected: {detected}. Framework-specific objects and their heap footprint — useful for spotting oversized caches or leaked request contexts.</p>
       <div className="framework-cards">
         {items.map(item => (
           <div key={item.framework} className="framework-card">
@@ -3457,7 +3457,7 @@ function ThreadsSection({ report }: { report: Report }) {
       <h2>Threads</h2>
       <p className="subtitle">Per-thread call stacks and retained heap. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables.</p>
       {threads.length === 0 ? (
-        <p className="subtitle">No thread call stacks.</p>
+        <p className="subtitle">No thread call stacks were recorded in this dump.</p>
       ) : (
         <>
           <ThreadsByRetainedTable threads={threads} />
@@ -3976,7 +3976,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     <section id="collection-waste-budget">
       <h2>Collection Waste Budget</h2>
       <p className="subtitle">
-        Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
+        Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate.
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
@@ -4161,7 +4161,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
       <p className="subtitle">
-        The largest individual collection instances. <strong>Owner</strong> is the primary incoming <code>Class#field</code>; <strong>Value Type</strong> is the dominant runtime element type of the backing array (the direct element, not the logical key/value — for a <code>Map&lt;K,V&gt;</code> this is often <code>Entry</code> or <code>Object</code>, not <code>V</code>). Oversized collections often signal unbounded growth, missing eviction, or data that should be paginated or right-sized. Owner, retained, and value-type columns require <code>--collections</code>.
+        The largest individual collection instances. <strong>Owner</strong> is the primary incoming <code>Class#field</code>; <strong>Value Type</strong> is the dominant runtime element type of the backing array (the direct element, not the logical key/value — for a <code>Map&lt;K,V&gt;</code> this is often <code>Entry</code> or <code>Object</code>, not <code>V</code>). Oversized collections often signal unbounded growth, missing eviction, or data that should be paginated or right-sized. Owner/retained/value columns require <code>--collections</code>.
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
@@ -4328,7 +4328,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             }</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
-              : <p className="subtitle"><em>None detected.</em></p>
+              : <p className="subtitle">None found — no objects are exclusively reachable via this reference kind.</p>
             }
           </React.Fragment>
         ))
@@ -4519,6 +4519,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
   const [cols, setCols] = React.useState<SankeyColCount>(3);
   const [fullscreen, setFullscreen] = React.useState(false);
   const [popover, setPopover] = React.useState<NodePopover | null>(null);
+  const [showChain, setShowChain] = React.useState(true);
 
   // When a table row drives an external pivot, reset history and jump to it.
   const prevExternal = React.useRef(externalTarget);
@@ -4623,6 +4624,20 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
 
   const popoverNode = popover ? nodeById.get(popover.nodeId) : null;
 
+  const chainToRoot = React.useMemo(() => {
+    const chain: string[] = [target];
+    const seen = new Set<string>([target]);
+    let cur = target;
+    for (let i = 0; i < 50; i++) {
+      const p = pairs.find(p => p.dominated_class === cur);
+      if (!p || seen.has(p.dominator_class)) break;
+      chain.push(p.dominator_class);
+      seen.add(p.dominator_class);
+      cur = p.dominator_class;
+    }
+    return chain; // [target, ..., root]
+  }, [target, pairs]);
+
   const toolbar = (
     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
       {/* Column selector */}
@@ -4640,6 +4655,12 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         >{c}</button>
       ))}
       <span style={{ flex: 1 }} />
+      {/* Chain-to-root toggle */}
+      {!showChain && chainToRoot.length > 1 && (
+        <button className="show-more-btn"
+          onClick={() => setShowChain(true)}
+          title="Show dominator chain to root">Chain ▸</button>
+      )}
       {/* Fullscreen button */}
       <button
         onClick={() => setFullscreen(f => !f)}
@@ -4824,12 +4845,34 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
     </div>
   ) : null;
 
+  const chainPanel = showChain && chainToRoot.length > 1 ? (
+    <div className="sankey-chain-panel">
+      <div className="sankey-chain-header">
+        Chain to root
+        <button className="show-more-btn" style={{ float: "right", fontSize: "0.75rem", padding: "0 4px" }}
+          onClick={() => setShowChain(false)}>✕</button>
+      </div>
+      {chainToRoot.map((cls, i) => (
+        <div key={cls}
+          className={"sankey-chain-step" + (i === 0 ? " sankey-chain-current" : "")}
+          title={cls}
+          onClick={i > 0 ? () => { setHistory([]); setTarget(cls); onPivot?.(cls); } : undefined}
+          style={{ cursor: i > 0 ? "pointer" : "default" }}>
+          {i === 0 ? "●" : i === chainToRoot.length - 1 ? "⌖" : "┃"} {shortClass(cls)}
+        </div>
+      ))}
+    </div>
+  ) : null;
+
   const inner = (
     <>
       {toolbar}
       {searchBox}
       {breadcrumb}
-      {svgEl}
+      <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>{svgEl}</div>
+        {chainPanel}
+      </div>
     </>
   );
 
@@ -5593,8 +5636,8 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (memory reclaimed if this object became unreachable, net of what the biggest child already accounts for). Multiple rows with the same class are distinct objects. Threshold:{" "}
-        {thresholdMb} MB (1% of reachable heap).
+        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (memory reclaimed if this object became unreachable, net of what the biggest child already accounts for). Threshold:{" "}
+        {thresholdMb} MB (1% of reachable heap). Multiple rows with the same class are distinct objects.
       </p>
       {drops.length === 0 ? (
         <p className="subtitle">No objects meet the threshold.</p>
@@ -6030,7 +6073,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       <p className="subtitle">
         Share of the reachable heap retained by the few largest top-level dominators (a dominator&apos;s retained size is everything it keeps alive). Read it as a concentration curve: if{" "}
         <strong>Top 1</strong> is already high, one object is the accumulation point — making it unreachable reclaims most of the heap; if the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
-        retention spans many peers (e.g. a large cache or collection) and no single fix helps much.
+        retention is spread across many peers (e.g. a big cache or collection of similar objects) and no single fix helps much.
       </p>
       <ConcentrationChart rc={rc} />
       <ConcentrationStackedBar rc={rc} />
@@ -6553,6 +6596,8 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   const [fullscreen, setFullscreen] = React.useState(false);
   const [layoutKey, setLayoutKey] = React.useState(0);
   const [showEdgeFields, setShowEdgeFields] = React.useState(false);
+  const [showAllOut, setShowAllOut] = React.useState(false);
+  const [showAllIn, setShowAllIn] = React.useState(false);
   const cyContainerRef = React.useRef<HTMLDivElement>(null);
   const cyRef = React.useRef<cytoscape.Core | null>(null);
 
@@ -6734,6 +6779,9 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     applyCyHighlight(cyRef.current, selected);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
+
+  // Reset show-all state when selection changes
+  React.useEffect(() => { setShowAllOut(false); setShowAllIn(false); }, [selected]);
 
   const tableCols: TableColumn<TypeEdge>[] = [
     { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
@@ -6958,7 +7006,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 <>
                   <p className="trg-sidebar-section-label">→ Outbound References ({selAllOutEdges.length} total)</p>
                   <ul className="trg-edge-list">
-                    {selOutEdges.map((e, i) => (
+                    {(showAllOut ? selAllOutEdges : selOutEdges).map((e, i) => (
                       <li key={i}>
                         <button className="trg-link-btn" onClick={() => setSelected(e.dst_class)}>
                           {tpfgShortName(e.dst_class)}
@@ -6971,7 +7019,10 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                     ))}
                   </ul>
                   {selAllOutEdges.length > EDGE_SHOW && (
-                    <p className="trg-sidebar-more">{selAllOutEdges.length - EDGE_SHOW} more not shown</p>
+                    <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
+                      onClick={() => setShowAllOut(v => !v)}>
+                      {showAllOut ? "Show fewer" : `Show ${selAllOutEdges.length - EDGE_SHOW} more`}
+                    </button>
                   )}
                 </>
               )}
@@ -6979,7 +7030,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 <>
                   <p className="trg-sidebar-section-label">← Inbound References ({selAllInEdges.length} total)</p>
                   <ul className="trg-edge-list">
-                    {selInEdges.map((e, i) => (
+                    {(showAllIn ? selAllInEdges : selInEdges).map((e, i) => (
                       <li key={i}>
                         <button className="trg-link-btn" onClick={() => setSelected(e.src_class)}>
                           {tpfgShortName(e.src_class)}
@@ -6989,7 +7040,10 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                     ))}
                   </ul>
                   {selAllInEdges.length > EDGE_SHOW && (
-                    <p className="trg-sidebar-more">{selAllInEdges.length - EDGE_SHOW} more not shown</p>
+                    <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
+                      onClick={() => setShowAllIn(v => !v)}>
+                      {showAllIn ? "Show fewer" : `Show ${selAllInEdges.length - EDGE_SHOW} more`}
+                    </button>
                   )}
                 </>
               )}
@@ -9398,6 +9452,28 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         {" "}(single-child chain — each step retains ≥95% of this object)
                       </p>
                     )}
+                    {/* Parent / depth nav */}
+                    {(() => {
+                      const parentId = dominatorChain.length > 1 ? dominatorChain[1] : null;
+                      const parentNode = parentId != null ? data.nodes[String(parentId)] : null;
+                      const depth = dominatorChain.length - 1;
+                      return (parentNode || depth > 0) ? (
+                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.4rem" }}>
+                          {parentNode && (
+                            <button className="show-more-btn"
+                              title={`Up to parent: ${parentNode.display_class}`}
+                              onClick={() => navigate("domtree", parentId!, parentNode.display_class)}>
+                              ↑ Parent
+                            </button>
+                          )}
+                          {depth > 0 && (
+                            <span style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                              depth {depth}
+                            </span>
+                          )}
+                        </div>
+                      ) : null;
+                    })()}
                   </>
                 );
               })()}
@@ -10470,6 +10546,22 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
   // WASM loaded but full analysis not yet run (no retained sizes)
   const needsFullAnalysis = !!wasmSession && (!wasm?.gc_root_path || wasmSession?.has_retained?.() === false);
 
+  const ogCtx = React.useContext(ObjGraphCtx);
+
+  // Most common idom class across all instances of this class (dominator relationship, not inheritance)
+  const parentDomClass = React.useMemo(() => {
+    if (!ogCtx) return null;
+    const tally = new Map<string, number>();
+    for (const node of Object.values(ogCtx)) {
+      if (node.display_class !== cls || node.idom == null) continue;
+      const idomNode = ogCtx[String(node.idom)];
+      if (!idomNode || idomNode.display_class === cls) continue;
+      tally.set(idomNode.display_class, (tally.get(idomNode.display_class) ?? 0) + 1);
+    }
+    if (tally.size === 0) return null;
+    return [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }, [ogCtx, cls]);
+
   // Biggest instance index from WASM instance list (loaded lazily on demand)
   const [biggestIdx, setBiggestIdx] = React.useState<number | null>(null);
   React.useEffect(() => {
@@ -10497,6 +10589,17 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
             <tr><th>Instances</th><td>{fmtCount(hist.instances)}</td></tr>
             <tr><th>Shallow Heap</th><td>{formatBytes(hist.shallow)}</td></tr>
             <tr><th>Retained Heap</th><td>{formatBytes(hist.retained)}</td></tr>
+            {parentDomClass && (
+              <tr>
+                <th title="Most common immediate dominator class across instances of this class">Held by (most common)</th>
+                <td>
+                  <button className="btn-link" style={{ fontFamily: "var(--mono, monospace)", fontSize: "0.85rem" }}
+                    onClick={() => onNavigate({ kind: "class", cls: parentDomClass })}>
+                    {shortClass(parentDomClass)}
+                  </button>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       )}
