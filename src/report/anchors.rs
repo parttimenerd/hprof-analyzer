@@ -51,6 +51,10 @@ pub enum SectionId {
     DominatorDepth,
     LeakIndicators,
     Glossary,
+    ThreadLocalAnalysis,
+    FrameworkAnalysis,
+    TopRetainers,
+    CollectionWasteBudget,
 }
 
 impl SectionId {
@@ -86,6 +90,10 @@ impl SectionId {
             SectionId::DominatorDepth => "dominator-depth-distribution",
             SectionId::LeakIndicators => "leak-indicators",
             SectionId::Glossary => "glossary",
+            SectionId::ThreadLocalAnalysis => "threadlocal-analysis",
+            SectionId::FrameworkAnalysis => "framework-analysis",
+            SectionId::TopRetainers => "top-retainers",
+            SectionId::CollectionWasteBudget => "collection-waste-budget",
         }
     }
 
@@ -121,6 +129,10 @@ impl SectionId {
             SectionId::DominatorDepth => "Dominator-Depth Distribution",
             SectionId::LeakIndicators => "Leak Indicators",
             SectionId::Glossary => "Glossary",
+            SectionId::ThreadLocalAnalysis => "ThreadLocal Analysis",
+            SectionId::FrameworkAnalysis => "Framework Analysis",
+            SectionId::TopRetainers => "Top Retainers",
+            SectionId::CollectionWasteBudget => "Collection Waste Budget",
         }
     }
 

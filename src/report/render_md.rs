@@ -288,6 +288,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
     render_collections(&r.collections, &r.collection_attribution, false, &mut out);
     render_collection_attribution(&r.collection_attribution, false, &mut out);
+    render_collection_waste_budget(r, &mut out);
     render_fields_by_size(&r.fields_by_size, false, &mut out);
     render_biggest_collections(&r.biggest_collections, false, &mut out);
     render_top_retainers(&r.top_retainers, &mut out);
@@ -467,6 +468,12 @@ fn render_toc(r: &Report, out: &mut String) {
     out.push_str(&SectionId::TopConsumers.toc_bullet());
     out.push_str(&SectionId::DominatorAnalysis.toc_bullet());
     out.push_str(&SectionId::Threads.toc_bullet());
+    if !r.thread_local_analysis.is_empty() {
+        out.push_str(&SectionId::ThreadLocalAnalysis.toc_bullet());
+    }
+    if !r.framework_analysis.is_empty() {
+        out.push_str(&SectionId::FrameworkAnalysis.toc_bullet());
+    }
     if !r.top_components.components.is_empty() {
         out.push_str(&SectionId::TopComponents.toc_bullet());
     }
@@ -474,6 +481,25 @@ fn render_toc(r: &Report, out: &mut String) {
     out.push_str(&SectionId::Collections.toc_bullet());
     if r.collection_attribution.is_some() {
         out.push_str(&SectionId::ContainerAttribution.toc_bullet());
+    }
+    // Synthetic waste-budget table (cross-section aggregate).
+    {
+        let has_waste = r
+            .overview
+            .duplicate_strings
+            .as_ref()
+            .is_some_and(|d| d.approx_wasted_bytes > 0)
+            || r.overview
+                .duplicate_prim_arrays
+                .as_ref()
+                .is_some_and(|d| d.total_wasted_bytes > 0)
+            || r.overview.boxed_numbers.iter().any(|b| b.total_shallow > 0)
+            || r.collection_attribution
+                .as_ref()
+                .is_some_and(|ca| ca.tiny_overhead.iter().any(|t| t.overhead_bytes > 0));
+        if has_waste {
+            out.push_str(&SectionId::CollectionWasteBudget.toc_bullet());
+        }
     }
     if r.fields_by_size
         .as_ref()
@@ -492,6 +518,9 @@ fn render_toc(r: &Report, out: &mut String) {
         .is_some_and(|c| !c.rows.is_empty())
     {
         out.push_str(&SectionId::CollectionContents.toc_bullet());
+    }
+    if !r.top_retainers.is_empty() {
+        out.push_str(&SectionId::TopRetainers.toc_bullet());
     }
     out.push_str(&SectionId::References.toc_bullet());
     out.push_str(&SectionId::UnreachableObjects.toc_bullet());
@@ -4058,6 +4087,124 @@ useful for spotting oversized caches or leaked request contexts._\n\n",
             format_bytes(item.total_retained),
         ]);
     }
+    t.render(out);
+    out.push('\n');
+}
+
+/// "Collection Waste Budget" — a synthetic cross-section table that aggregates
+/// avoidable-allocation sources: duplicate strings, duplicate primitive arrays,
+/// boxed primitives, and empty/singleton collection overhead.
+pub(crate) fn render_collection_waste_budget(r: &crate::report::Report, out: &mut String) {
+    use crate::md::{Align, Table};
+
+    struct WasteRow {
+        kind: String,
+        wasted: u64,
+        objects: u64,
+        fix: &'static str,
+    }
+
+    let mut rows: Vec<WasteRow> = Vec::new();
+
+    if let Some(ds) = &r.overview.duplicate_strings {
+        if ds.approx_wasted_bytes > 0 {
+            rows.push(WasteRow {
+                kind: "Duplicate Strings".into(),
+                wasted: ds.approx_wasted_bytes,
+                objects: ds.total_string_instances.saturating_sub(ds.distinct_values),
+                fix: "Intern at parse time or use a canonical-instance registry",
+            });
+        }
+    }
+
+    if let Some(dp) = &r.overview.duplicate_prim_arrays {
+        if dp.total_wasted_bytes > 0 {
+            let groups: u64 = dp.rows.iter().map(|r| r.duplicated_groups).sum();
+            rows.push(WasteRow {
+                kind: "Duplicate Primitive Arrays".into(),
+                wasted: dp.total_wasted_bytes,
+                objects: groups,
+                fix: "Deduplicate or replace with shared static final constants",
+            });
+        }
+    }
+
+    if !r.overview.boxed_numbers.is_empty() {
+        let total_shallow: u64 = r
+            .overview
+            .boxed_numbers
+            .iter()
+            .map(|b| b.total_shallow)
+            .sum();
+        let total_instances: u64 = r.overview.boxed_numbers.iter().map(|b| b.instances).sum();
+        if total_shallow > 0 {
+            rows.push(WasteRow {
+                kind: "Boxed Primitives (footprint)".into(),
+                wasted: total_shallow,
+                objects: total_instances,
+                fix: "Use primitive arrays; or Eclipse Collections / Koloboke for typed collections",
+            });
+        }
+    }
+
+    if let Some(ca) = &r.collection_attribution {
+        for t in &ca.tiny_overhead {
+            if t.overhead_bytes > 0 {
+                let kind = format!(
+                    "Empty/Singleton {} (`{}#{}`)",
+                    {
+                        let mut s = t.container_kind.clone();
+                        if let Some(c) = s.get_mut(0..1) {
+                            c.make_ascii_uppercase();
+                        }
+                        s
+                    },
+                    t.holder_class,
+                    t.field
+                );
+                rows.push(WasteRow {
+                    kind,
+                    wasted: t.overhead_bytes,
+                    objects: t.empty_count + t.singleton_count,
+                    fix: "Use null or Collections.emptyList() sentinels until the collection is first written",
+                });
+            }
+        }
+    }
+
+    if rows.is_empty() {
+        return;
+    }
+
+    rows.sort_by_key(|r| std::cmp::Reverse(r.wasted));
+    let total_wasted: u64 = rows.iter().map(|r| r.wasted).sum();
+    let total_objects: u64 = rows.iter().map(|r| r.objects).sum();
+
+    out.push_str("## Collection Waste Budget\n\n");
+    out.push_str(
+        "_Memory tied up in avoidable objects — duplicate strings, duplicate primitive \
+arrays, boxed primitives, and empty/singleton collection overhead. \
+Fix the biggest category first for the highest impact. Figures are approximate._\n\n",
+    );
+
+    let mut t = Table::new(
+        &["Waste Type", "Wasted", "Objects", "Fix"],
+        &[Align::Left, Align::Right, Align::Right, Align::Left],
+    );
+    for row in &rows {
+        t.row([
+            row.kind.clone(),
+            format_bytes(row.wasted),
+            fmt_count(row.objects),
+            row.fix.to_string(),
+        ]);
+    }
+    t.row([
+        "**Total**".into(),
+        format!("**{}**", format_bytes(total_wasted)),
+        format!("**{}**", fmt_count(total_objects)),
+        String::new(),
+    ]);
     t.render(out);
     out.push('\n');
 }
