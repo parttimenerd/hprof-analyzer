@@ -5597,7 +5597,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        How many objects each class directly dominates, and how much shallow heap those dominated objects occupy. High dominated-shallow values mean that class pins a large fraction of live memory.
+        Object count dominated by each class, and the shallow heap those objects occupy. High dominated-shallow means that class pins a large fraction of live memory.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
       </p>
       {idoms.length === 0 ? (
@@ -5890,7 +5890,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
       <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is summed per trace; retained heap is excluded — per-trace sums double-count shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
-          This dump was captured without allocation tracking; no stack-trace data is available.
+          This dump has no allocation tracking data.
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
@@ -6051,7 +6051,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        How far objects sit from a GC root in the dominator tree. Low depth means objects sit close to roots; high depth means long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
+        Dominator-tree distance from each object to a GC root. Low depth means objects sit close to roots; high depth means long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -9960,7 +9960,7 @@ function GlossarySection() {
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
-    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
+    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" is the shallow size of the biggest instance.</>],
   ];
   return (
     <section id="glossary">
