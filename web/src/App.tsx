@@ -5828,7 +5828,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           )}
           <details open>
             <summary>Unreachable Objects by Class ({fmtCount(rows.length)} rows)</summary>
-            <p className="subtitle" style={{ fontSize: "0.82rem" }}>Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates total reclaim.</p>
+            <p className="subtitle" style={{ fontSize: "0.82rem" }}>Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates the total reclaimable memory.</p>
             {(() => {
               const unreachCols: TableColumn<UnreachableClassRow>[] = [
                 { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
@@ -10465,7 +10465,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Transient Spikes (Peak Above Baseline)</h2>
           <p className="subtitle">
-            Classes whose retained peaked at an intermediate dump then reclaimed by the last — invisible to first-to-last comparison. Ranked by peak-minus-baseline retained.
+            Classes whose retained heap peaked at an intermediate dump then recovered by the final dump — invisible to a first-to-last comparison. Ranked by peak-minus-baseline retained.
           </p>
           <SpikeTable labels={labels} rows={diff.spike_leaders} />
         </section>
@@ -10515,7 +10515,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <h2>Type Reference Graph Diff</h2>
           <p className="subtitle">
             Directed edges between class types that grew between the first and last dump.
-            A large Δ: more references from one class to another.
+            A large Δ means more references from that source class to the target.
             Sorted by absolute change in retained heap.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
