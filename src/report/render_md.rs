@@ -885,7 +885,7 @@ _Definitions for the terms used above._
   that is actually occupied by elements — `elements / capacity`. A fill ratio near
   0 means the backing array is mostly empty (wasted memory). A ratio near 1 means
   the collection is full.
-- **Map collision ratio** (load factor): for hash maps, the fraction of backing-array
+- **Map Load Factor**: for hash maps, the fraction of backing-array
   slots occupied — `occupied_slots / total_slots`. A low load factor means many
   empty buckets (wasted memory); a very high load factor increases hash collision
   probability and lookup cost.
@@ -2235,7 +2235,7 @@ pub(crate) fn render_collections(
     // ── Map Load Factor ──────────────────────────────────────────────────────
     out.push_str("### Map Load Factor\n\n");
     out.push_str(&format!(
-        "_{} tracked of {} maps (occupied slots ÷ size; lower is worse)._\n\n",
+        "_{} tracked of {} maps (occupied slots ÷ capacity; high values ≥ 90% increase collision chains)._\n\n",
         fmt_count(c.map_collision_ratio.tracked),
         fmt_count(c.map_collision_ratio.total),
     ));
