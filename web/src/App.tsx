@@ -3132,7 +3132,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
-      <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — a strong leak signal.</p>
+      <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis.</p>
       <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
         extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
       />
@@ -3141,7 +3141,7 @@ function TopConsumersSection({ report }: { report: Report }) {
         <>
           <h3>Biggest Packages</h3>
           <p className="subtitle">
-            Expand a package to see its sub-packages. Totals roll up through the subtree. Only classes retaining ≥{fmtPct(t.threshold_bp / 100)} of the heap are shown — smaller classes are omitted.
+            Expand a package to see its sub-packages. Totals roll up through the subtree. Only classes retaining ≥{fmtPct(t.threshold_bp / 100)} of the heap are shown.
           </p>
           <ZoomableTreemap
             root={pkgRoot}
@@ -3815,7 +3815,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Map Collision Ratio</h3>
       <p className="subtitle">
-        Load factor (occupied slots ÷ capacity) for {fmtCount(mcr?.tracked ?? 0)} of {fmtCount(mcr?.total ?? 0)} maps; high values (≥ 90%) signal dense packing and longer probe chains.
+        Load factor (occupied slots ÷ capacity) for {fmtCount(mcr?.tracked ?? 0)} of {fmtCount(mcr?.total ?? 0)} maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup.
       </p>
       {mcrBuckets.length === 0 ? (
         <p className="subtitle">None found in this dump.</p>
@@ -5560,7 +5560,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Classes ranked by retained heap, with the objects they dominate. An object <em>dominates</em> another if every path from a GC root to that object passes through it — meaning releasing the dominator would free everything it dominates.</p>
+      <p className="subtitle">Classes ranked by retained heap, with the objects they dominate. An object <em>dominates</em> another if every path from a GC root to that object passes through it — releasing a dominator frees everything it dominates.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (

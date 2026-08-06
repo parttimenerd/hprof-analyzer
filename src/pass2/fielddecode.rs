@@ -814,8 +814,14 @@ fn join_attribution(
         if let Some(rec) = container_records.get(&e.pointee) {
             out.push(AttributionRaw {
                 container_idx: rec.container_idx,
-                holder_class: holder_class_names[e.holder_class_key as usize].clone(),
-                field: field_names[e.field_key as usize].clone(),
+                holder_class: holder_class_names
+                    .get(e.holder_class_key as usize)
+                    .cloned()
+                    .unwrap_or_default(),
+                field: field_names
+                    .get(e.field_key as usize)
+                    .cloned()
+                    .unwrap_or_default(),
                 container_kind: rec.kind,
                 container_class: rec.container_class.clone(),
                 elements: rec.elements,
@@ -863,8 +869,11 @@ fn assemble_field_size_raw(
             // list (and any first-wins owner join against it) is stable run to run.
             pointee_indices.sort_unstable();
             FieldSizeRaw {
-                holder_class: holder_class_names[hk as usize].clone(),
-                field: field_names[fk as usize].clone(),
+                holder_class: holder_class_names
+                    .get(hk as usize)
+                    .cloned()
+                    .unwrap_or_default(),
+                field: field_names.get(fk as usize).cloned().unwrap_or_default(),
                 pointee_indices,
             }
         })
@@ -1691,8 +1700,14 @@ impl FieldDecodeState {
                 m.entry(e.pointee).or_insert_with(|| {
                     format!(
                         "{}#{}",
-                        self.holder_class_names[e.holder_class_key as usize],
-                        self.field_names[e.field_key as usize]
+                        self.holder_class_names
+                            .get(e.holder_class_key as usize)
+                            .map(|s| s.as_str())
+                            .unwrap_or("?"),
+                        self.field_names
+                            .get(e.field_key as usize)
+                            .map(|s| s.as_str())
+                            .unwrap_or("?"),
                     )
                 });
             }
