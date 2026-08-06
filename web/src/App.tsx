@@ -3839,7 +3839,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Constant Primitive Arrays</h3>
       <p className="subtitle">
-        Primitive arrays where every element is the same value — often zero-initialized buffers or sentinel arrays. Replace duplicates with a shared constant to reclaim the memory.
+        Primitive arrays where every element is the same value — often zero-initialized buffers or sentinel arrays. Replace duplicates with a shared constant to reclaim the memory. Short arrays (length &lt; 8 with few instances) are filtered as noise.
       </p>
       {cpa?.truncated && (
         <p className="subtitle">List truncated — remaining groups folded into one row.</p>
@@ -5784,6 +5784,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           )}
           <details open>
             <summary>Unreachable Objects by Class ({fmtCount(rows.length)} rows)</summary>
+            <p className="subtitle" style={{ fontSize: "0.82rem" }}>Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates total reclaim.</p>
             {(() => {
               const unreachCols: TableColumn<UnreachableClassRow>[] = [
                 { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
