@@ -1740,7 +1740,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <>
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
-            Over-allocated backing arrays — strings whose <code>char[]</code> is larger than the actual character data (pre-Java-9 substring sharing). {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
+            Over-allocated backing arrays — strings whose <code>char[]</code> is larger than their character data (typical in Java 6 / early Java 7, where <code>substring()</code> shared the parent's backing array). {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} over-allocated,{" "}
             {fmtB(w.total_wasted_bytes)} total wasted.
           </p>
           {w.top.length > 0 && (
@@ -1775,7 +1775,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
     <section id="duplicate-prim-arrays">
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
-        Primitive arrays with identical content — each group collapses to one instance.
+        Primitive arrays with identical content — each group could share a single instance.
         Approximate wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
@@ -1990,7 +1990,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
-              <dt>Unreachable Fraction (unreachable ÷ total)</dt>
+              <dt>Unreachable Fraction (unreachable ÷ heap)</dt>
               <dd>{fmtPct((o.heap_fragmentation_ratio ?? 0) * 100)}</dd>
             </>
           )}
