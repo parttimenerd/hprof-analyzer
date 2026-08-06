@@ -2861,7 +2861,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Classes retaining the most heap. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
+      <p className="subtitle">Classes with disproportionately high retained heap — likely culprits when investigating a memory leak. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
       {l.suspects.length === 0 ? (
         <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in <a href="#dominator-analysis" onClick={(e) => { e.preventDefault(); document.getElementById("dominator-analysis")?.scrollIntoView({ behavior: "smooth" }); }}>Dominator Analysis</a>.</p>
       ) : (
@@ -3353,7 +3353,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   return (
     <>
       <h3>Threads by Retained Heap</h3>
-      <p className="subtitle">Click a thread name to jump to its full stack trace below.</p>
+      <p className="subtitle">Sorted by retained heap — threads high on this list are pinning objects through local variables or locks. Click a name to jump to its stack trace.</p>
       <StdTable columns={cols} data={sorted} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
     </>
   );
@@ -5560,7 +5560,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Classes ranked by retained heap, with the objects they dominate. An object <em>dominates</em> another if every path from a GC root to that object passes through it — releasing a dominator frees everything it dominates.</p>
+      <p className="subtitle">Instances ranked by retained heap. An object <em>dominates</em> another if every path from a GC root to that object passes through it — releasing the dominator frees everything it dominates.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
@@ -6082,7 +6082,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        Low depth: objects close to GC roots; high depth: deep retention chains (nested collections, linked lists, long object graphs). Maximum depth: {maxDepth}. A spike at depth 1–3 is normal; a long tail at high depths points to deeply nested containers or long reference chains worth investigating.
+        How many dominator hops each object sits below a GC root. A spike at depth 1–3 is normal; a long tail at depth 10+ points to deeply nested containers or linked structures. Maximum depth in this dump: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
