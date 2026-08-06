@@ -1549,7 +1549,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file — useful for verifying dump completeness. Allocation-site frames (used by the Allocation Sites section) are recorded only with the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
+        Record-type counts from the raw HPROF file. Allocation-site frames are recorded only with the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -3776,7 +3776,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collections by Size</h3>
       <p className="subtitle">
-        Element-count distribution of collections, bucketed by size — useful for spotting oversized or pre-allocated collections.
+        Element-count distribution of collections, bucketed by size — highlights oversized or pre-allocated collections.
         {cbs && <>{" "}{fmtCount(cbs.tracked)} tracked; {fmtCount(cbs.empty_count)} empty.</>}
       </p>
       {cbsBuckets.length === 0 ? (
@@ -4228,7 +4228,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> retains the most heap across all its instances — useful for pinpointing which field holds the most live data.
+        Which <code>Class#field</code> retains the most heap across all its instances — pinpoints which fields hold the most live data.
         Pointee Type is the most common concrete class stored in that field.
       </p>
       {data.truncated && (
@@ -5798,7 +5798,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
         </p>
         <p>
-          Check for NIO buffer pools or caches that are not releasing buffers. Common causes include Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
+          Check for NIO buffer pools or caches that do not release buffers. Common causes include Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
         </p>
         {isLarge && (
           <p className="subtitle">
@@ -6089,8 +6089,8 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
-        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See Off-Heap NIO section.</strong>
-        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that don't release on close, or Netty/gRPC allocators misconfigured with no max.",
+        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
+        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that do not release on close, or Netty/gRPC allocators misconfigured with no max.",
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
