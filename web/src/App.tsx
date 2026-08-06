@@ -8652,7 +8652,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <span style={{ display: "flex", gap: "0.1rem", alignItems: "center", fontSize: "0.78rem", color: "var(--muted)" }} title="Navigate same-class instances by retained size (lateral — no breadcrumb push). Keyboard: [ / ]">
             <button className="btn-link" style={{ fontSize: "0.78rem", padding: "0 3px", opacity: siblingIdx > 0 ? 1 : 0.3 }}
               disabled={siblingIdx <= 0}
-              title="Previous same-class instance [ key"
+              title="Previous same-class instance ([ key)"
               onClick={() => {
                 if (siblingIdx > 0) {
                   const s = classSiblings[siblingIdx - 1];
@@ -8665,7 +8665,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <span style={{ fontSize: "0.72rem" }}>{siblingIdx + 1}/{classSiblings.length}</span>
             <button className="btn-link" style={{ fontSize: "0.78rem", padding: "0 3px", opacity: siblingIdx < classSiblings.length - 1 ? 1 : 0.3 }}
               disabled={siblingIdx >= classSiblings.length - 1}
-              title="Next same-class instance ] key"
+              title="Next same-class instance (] key)"
               onClick={() => {
                 if (siblingIdx < classSiblings.length - 1) {
                   const s = classSiblings[siblingIdx + 1];
