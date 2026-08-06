@@ -4288,7 +4288,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
     switch (kind) {
       case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals a large cache; bound the cache size if memory is tight.";
       case "Weak": return "Weak references let GC claim referents. These objects are reachable only via weak chains — GC reclaims them at the next collection. Large counts are benign.";
-      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources not released promptly.";
+      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources leaking.";
       default: return "";
     }
   };
@@ -4317,10 +4317,10 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects reachable only via this reference kind — GC can reclaim them at any collection. Transitive weak-only detection may miss multi-hop chains.</p>
+            <p className="subtitle">Objects reachable only via this reference kind — GC can reclaim them at any collection. Multi-hop chains may not be detected.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
-              : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
+              : <p className="subtitle"><em>None detected.</em></p>
             }
           </React.Fragment>
         ))
