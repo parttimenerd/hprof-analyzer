@@ -5672,7 +5672,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Each row shows one dominator class: how many other objects it immediately dominates and the total shallow heap of those dominated objects. A large dominated-shallow figure means instances of that class are collectively gating large portions of the live heap — making them unreachable would allow that memory to be reclaimed.
+        Each row shows one dominator class: how many other objects it immediately dominates and the total shallow heap of those dominated objects. A large dominated-shallow figure means instances of that class are collectively gating large portions of the live heap — making them unreachable reclaims that memory.
         {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click or right-click a row to open it in the "Who Holds This Class?" sankey below.</span>}
       </p>
       {idoms.length === 0 ? (
@@ -5713,7 +5713,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it keeps alive — making it unreachable would reclaim that memory). A wide right side means this class is a large memory holder. Click any node or row to refocus.
+            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it keeps alive — making it unreachable reclaims that memory). A wide right side means this class is a large memory holder. Click any node or row to refocus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
