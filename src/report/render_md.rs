@@ -911,8 +911,7 @@ _Definitions for the heap analysis terms used throughout this report._
   [JNI](https://en.wikipedia.org/wiki/Java_Native_Interface) references, and
   similar. Every retained-size chain ends at a GC root.
 - **Dominator**: object *A* dominates object *B* if every path from a GC root to
-  *B* passes through *A*. In other words, if *A* became unreachable, *B* would become
-  unreachable too. An object's retained heap is exactly the set of objects it
+  *B* passes through *A*. In other words, if *A* becomes unreachable, *B* does too. An object's retained heap is exactly the set of objects it
   dominates. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Dominator tree**: the tree formed by linking each object to its immediate
   dominator. Retained sizes are computed by summing shallow sizes up this tree.
@@ -946,8 +945,9 @@ _Definitions for the heap analysis terms used throughout this report._
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
   reachable only through one or more `WeakReference`, `SoftReference`, or
   `PhantomReference` chains. Weak-only referents are collected at the next GC cycle;
-  soft-only referents are collected under memory pressure; phantom-only referents are
-  already unreachable and queued for resource cleanup.
+  soft-only referents are collected under memory pressure; phantom-only referents have
+  been finalized and their references enqueued for post-mortem cleanup via a
+  ReferenceQueue.
 - **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimization
   where object references are stored as 32-bit integers instead of 64-bit pointers,
   halving reference-field overhead on heaps ≤ ~32 GB. Visible in the Heap Summary

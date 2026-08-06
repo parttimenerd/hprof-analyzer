@@ -4725,7 +4725,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
       ) : (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--muted)", marginBottom: "2px", paddingLeft: 2, paddingRight: 2 }}>
-            <span title="Classes that keep the selected class alive — must be released to free it">← Dominators (hold it)</span>
+            <span title="Classes that keep the selected class alive — drop one to free it">← Dominators (hold it)</span>
             <span style={{ fontWeight: 600, color: "var(--fg)" }}>{shortClass(target)}</span>
             <span title="Classes kept alive by the selected class — bytes freed when it becomes unreachable">Dominated (held) →</span>
           </div>
@@ -6597,6 +6597,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   const [showEdgeFields, setShowEdgeFields] = React.useState(false);
   const [showAllOut, setShowAllOut] = React.useState(false);
   const [showAllIn, setShowAllIn] = React.useState(false);
+  const [showAllSiblings, setShowAllSiblings] = React.useState(false);
   const cyContainerRef = React.useRef<HTMLDivElement>(null);
   const cyRef = React.useRef<cytoscape.Core | null>(null);
 
@@ -6780,7 +6781,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   }, [selected]);
 
   // Reset show-all state when selection changes
-  React.useEffect(() => { setShowAllOut(false); setShowAllIn(false); }, [selected]);
+  React.useEffect(() => { setShowAllOut(false); setShowAllIn(false); setShowAllSiblings(false); }, [selected]);
 
   const tableCols: TableColumn<TypeEdge>[] = [
     { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
@@ -7052,7 +7053,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                     Siblings (from <button className="trg-link-btn" onClick={() => setSelected(parentClass)} title={parentClass}>{tpfgShortName(parentClass)}</button>)
                   </p>
                   <ul className="trg-edge-list">
-                    {siblingEdges.slice(0, 6).map((e, i) => (
+                    {(showAllSiblings ? siblingEdges : siblingEdges.slice(0, 6)).map((e, i) => (
                       <li key={i} style={e.dst_class === selected ? { fontWeight: 600 } : undefined}>
                         <button className="trg-link-btn" onClick={() => setSelected(e.dst_class)} style={e.dst_class === selected ? { fontWeight: 600 } : undefined}>
                           {tpfgShortName(e.dst_class)}{e.dst_class === selected ? " → this" : ""}
@@ -7062,7 +7063,10 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                     ))}
                   </ul>
                   {siblingEdges.length > 6 && (
-                    <p className="trg-sidebar-more">{siblingEdges.length - 6} more not shown</p>
+                    <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
+                      onClick={() => setShowAllSiblings(v => !v)}>
+                      {showAllSiblings ? "Show fewer" : `Show ${siblingEdges.length - 6} more`}
+                    </button>
                   )}
                 </>
               )}
@@ -10152,14 +10156,14 @@ function GlossarySection() {
     ["Retained Heap (Retained Size)", <>the total memory freed when this object becomes unreachable: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
-    ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em> — in other words, if <em>A</em> became unreachable, so would <em>B</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em> — in other words, if <em>A</em> becomes unreachable, so does <em>B</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained heap equals the shallow-size sum of each subtree.</>],
     ["Top-Level Dominator", <>an object directly held by a GC root — top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
     ["Dominator Depth", <>dominator-tree hop count from an object to its GC root. Low depth: objects near roots; high depth: long retention chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory accumulates.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
-    ["Only-Weakly Retained", <>an object that has no incoming strong reference — reachable only through <code>WeakReference</code>, <code>SoftReference</code>, or <code>PhantomReference</code> chains. Weak-only referents are collected at the next GC cycle; soft-only referents are collected under memory pressure; phantom-only referents are already unreachable and queued for resource cleanup.</>],
+    ["Only-Weakly Retained", <>an object that has no incoming strong reference — reachable only through <code>WeakReference</code>, <code>SoftReference</code>, or <code>PhantomReference</code> chains. Weak-only referents are collected at the next GC cycle; soft-only referents are collected under memory pressure; phantom-only referents have been finalized and their references enqueued for post-mortem cleanup via a ReferenceQueue.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type.</>],
     ["Collection Fill Ratio", <>fraction of a collection's backing-array capacity occupied by elements — <code>elements ÷ capacity</code>. Near 0 means mostly empty (wasted memory); near 1 means the collection is full.</>],
     ["Map Load Factor", <>for hash maps, the fraction of backing-array slots occupied — <code>occupied_slots ÷ capacity</code>. Low load factor = many empty buckets (wasted memory); high load factor (≥ 90%) increases hash-collision chains and lookup cost.</>],

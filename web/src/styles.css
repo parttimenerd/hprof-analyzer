@@ -771,12 +771,6 @@ kbd {
   font-weight: 600;
   color: var(--muted);
 }
-.trg-sidebar-more {
-  margin: 2px 0 0;
-  font-size: 0.72rem;
-  color: var(--muted);
-  font-style: italic;
-}
 .trg-sidebar-actions {
   display: flex;
   flex-direction: column;
