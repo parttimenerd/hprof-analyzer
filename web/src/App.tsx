@@ -741,7 +741,7 @@ function LeakScoreDashboard({ report }: { report: Report }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3 style={{ marginBottom: "0.1rem" }}>Leak Score</h3>
-      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Composite leak likelihood score based on heap share, bytes per instance, and dominator graph position. Click a card to inspect the class.</p>
+      <p className="subtitle" style={{ marginBottom: "0.5rem" }}>Composite leak likelihood score (0–99) based on heap share, bytes per instance, and dominator graph position. Higher score = more likely accumulation point. Click a card to inspect the class.</p>
       <div className="leak-score-grid">
         {rows.map(r => {
           const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
@@ -3839,7 +3839,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Constant Primitive Arrays</h3>
       <p className="subtitle">
-        Primitive arrays where every element is the same value — often zero-initialized buffers or sentinel arrays. Replace duplicates with a shared constant to reclaim the memory. Short arrays (length &lt; 8 with few instances) are filtered as noise.
+        Primitive arrays whose every element is identical — possible candidates for deduplication or replacement with a shared constant. Short arrays (length &lt; 8 with few instances) are filtered as noise.
       </p>
       {cpa?.truncated && (
         <p className="subtitle">List truncated — remaining groups folded into one row.</p>
@@ -4234,7 +4234,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       </p>
       {data.truncated && (
         <p className="subtitle">
-          ⚠ Field group results were truncated — captured values may undercount the full heap.
+          Field grouping was truncated (group or pointee cap hit) — ranking is a bounded sample.
         </p>
       )}
       {rows.length === 0 ? (
