@@ -10261,8 +10261,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Transient Spikes (Peak Above Baseline)</h2>
           <p className="subtitle">
-            Classes that climbed well above their baseline mid-series then fell back — a
-            first-to-last delta alone would miss them. Ranked by peak-over-baseline; the peak falls at an intermediate dump.
+            Classes that peaked well above baseline mid-series then retreated — invisible to first-to-last comparison. Ranked by peak-over-baseline; peak at an intermediate dump.
           </p>
           <SpikeTable labels={labels} rows={diff.spike_leaders} />
         </section>
@@ -11351,7 +11350,7 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Class-level reference topology: each edge represents one class referencing another, weighted by retained heap. Retained Flow sums referenced-object retained sizes across all instances — can exceed total heap when objects are shared.</p>
+          <p className="subtitle">Class-level reference topology: each edge represents one class referencing another, weighted by retained heap. Retained Flow sums the retained sizes of referenced objects across all instances — can exceed total heap when objects are shared.</p>
           <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}
