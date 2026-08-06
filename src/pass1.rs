@@ -139,6 +139,7 @@ pub struct Pass1 {
     /// Used to emit the MAT `o2hprof` index. Empty when MAT emission is off.
     pub hprof_offsets: Vec<u64>,
     /// True if the input gzip stream was truncated (detected by `LenientGzDecoder`).
+    #[allow(dead_code)]
     pub truncated_input: bool,
 }
 
