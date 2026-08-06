@@ -5148,7 +5148,7 @@ function DomGraphView({ pairs, idoms }: {
   }, [selected, focusMode, blamePath, getAncestors, getSubtree]);
 
   if (pairs.length === 0) {
-    return <p className="subtitle">No dominator pair data available.</p>;
+    return <p className="subtitle">No dominator pair data.</p>;
   }
 
   const btnStyle = (active: boolean) => ({
@@ -5410,7 +5410,7 @@ function DomGraphView({ pairs, idoms }: {
 
 function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[] }) {
   const fmtB = formatBytes;
-  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data available for the heatmap.</p>;
+  if (pairs.length === 0) return <p className="trg-no-data">No dominator pair data for this heatmap.</p>;
 
   // Top-N dominator rows (by total dominated_retained)
   const domRetained = new Map<string, number>();
@@ -9037,7 +9037,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (currentNode?.edges_unknown) {
                   return (
                     <p className="subtitle">
-                      Inbound references not available in this report. Load the .hprof in the browser for the full inbound graph.
+                      Inbound references absent from this report. Load the .hprof in the browser for the full inbound graph.
                     </p>
                   );
                 }
@@ -9720,7 +9720,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {pathBetweenError && (
             <p style={{ fontSize: "0.8rem", color: "var(--error, #ef4444)", margin: "0.4rem 0 0" }}>
               {pathBetweenError === "requires .hprof loaded in browser"
-                ? "Path search requires the .hprof loaded in the browser (see banner above)."
+                ? "Path search requires the .hprof loaded in the browser."
                 : `No reference path found (${pathBetweenError}). Objects are not connected through outbound references.`}
             </p>
           )}
