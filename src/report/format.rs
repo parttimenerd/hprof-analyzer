@@ -252,10 +252,9 @@ pub(crate) fn group_thousands(digits: &str) -> String {
 /// heading. Depth = how many dominator hops an object sits below a GC root, so a
 /// tall shallow side (low depths) means most memory is retained close to the
 /// roots, while a long tail means deep, chained structures.
-pub(crate) const DEPTH_DIST_CAPTION: &str = "_How far each live object sits below a GC \
-root, counted in dominator hops. Most objects clustering at shallow depths \
-means memory is held close to the roots; a long tail means deep, chained \
-structures (often a sign of nested collections or linked leaks)._\n\n";
+pub(crate) const DEPTH_DIST_CAPTION: &str = "_How many dominator hops each object sits \
+below a GC root. A spike at depth 1–3 is normal; a long tail at depth 10+ points to \
+deeply nested containers or linked structures._\n\n";
 
 /// Derived per-bucket depth stats (percent + running cumulative percent) plus a
 /// one-line human summary, all computed from the raw `objects` counts. Kept out

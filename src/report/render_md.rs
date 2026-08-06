@@ -217,9 +217,9 @@ pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &m
     use crate::md::{Align, Table};
     out.push_str("## Leak Indicators\n\n");
     out.push_str(
-        "_Scalar signals for common Java leak patterns; non-zero values are flagged \
-in [Memory Triage](#memory-triage) above. This table provides the raw numbers \
-behind those bullets._\n\n",
+        "_Point-in-time counts for known Java leak patterns. Non-zero values are not \
+always bugs — they are signals worth investigating. See [Memory Triage](#memory-triage) \
+for context on each indicator._\n\n",
     );
     let mut t = Table::new(&["Indicator", "Value"], &[Align::Left, Align::Right]);
     if li.anonymous_class_count > 0 {
@@ -907,7 +907,7 @@ _Definitions for the terms used above._
 pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## System Overview\n\n");
-    out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
+    out.push_str("_JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and system properties._\n\n");
     out.push_str("### Heap Summary\n\n");
     let mut summary = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
     summary.row(["HPROF format".into(), o.format.clone()]);
