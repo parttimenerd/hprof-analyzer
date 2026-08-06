@@ -2073,7 +2073,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>GC Roots by Type</h3>
-            <p className="subtitle">GC roots are the entry points where the JVM starts reachability scanning — anything reachable from a root stays alive. Common root types: thread-stack locals, JNI global references, static fields of loaded classes, and monitor-held objects.</p>
+            <p className="subtitle">GC roots are the entry points where the JVM starts reachability scanning — anything reachable from a root stays alive. Common root types: thread-stack locals, JNI global references, static fields of loaded classes, and synchronized lock objects.</p>
             {totalRetained > 0
               ? <GcRootsRetainedChart data={gcRows} />
               : <GcRootsChart data={gcRows} />}
@@ -3813,7 +3813,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         fillTable("Fill %", "Arrays", afrBuckets, fmtBafr, kbBtnAfr, useKBafr)
       )}
 
-      <h3>Map Collision Ratio</h3>
+      <h3>Map Load Factor</h3>
       <p className="subtitle">
         Load factor (occupied slots ÷ capacity) for {fmtCount(mcr?.tracked ?? 0)} of {fmtCount(mcr?.total ?? 0)} maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup.
       </p>
@@ -4311,7 +4311,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <p className="subtitle">
               {fmtCount(stats.reference_instances)} reference instances.
               {stats.null_referent_count != null && stats.null_referent_count > 0 && (
-                <> {fmtCount(stats.null_referent_count)} {stats.null_referent_count === 1 ? "has" : "have"} a null referent — referent collected, not yet processed.
+                <> {fmtCount(stats.null_referent_count)} {stats.null_referent_count === 1 ? "instance has" : "instances have"} a null referent — referent collected, not yet processed.
                   {stats.null_referent_count / stats.reference_instances > 0.5 && (
                     <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor is likely stalled.</span>
                   )}

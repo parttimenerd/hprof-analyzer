@@ -1870,7 +1870,7 @@ fn fill_ratio_label(b: &FillRatioBucket) -> String {
 /// count of each table. Emits the heading + fallback italic lines even when
 /// empty so the document structure stays stable.
 /// Render a fill-ratio bucket table (`Collection Fill Ratio`, `Array Fill
-/// Ratio`, `Map Collision Ratio`). `count_header` names the object column
+/// Ratio`, `Map Load Factor`). `count_header` names the object column
 /// (e.g. "Collections"); `with_wasted` adds the Wasted bytes column. When
 /// `graphs` is set a proportional bar column on objects is appended.
 fn render_fill_ratio_table(
@@ -2232,8 +2232,8 @@ pub(crate) fn render_collections(
     render_top_contributors(attribution, &["object array"], 10, out);
     render_worst_single_containers(attribution, &["object array"], 5, out);
 
-    // ── Map Collision Ratio ──────────────────────────────────────────────────
-    out.push_str("### Map Collision Ratio\n\n");
+    // ── Map Load Factor ──────────────────────────────────────────────────────
+    out.push_str("### Map Load Factor\n\n");
     out.push_str(&format!(
         "_{} tracked of {} maps (occupied slots ÷ size; lower is worse)._\n\n",
         fmt_count(c.map_collision_ratio.tracked),
