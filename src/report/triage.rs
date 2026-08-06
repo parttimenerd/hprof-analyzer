@@ -344,7 +344,7 @@ impl Rule for Concentration {
                 "concentration",
                 TriageSeverity::Info,
                 "Concentration",
-                "diffuse — retention is spread across multiple roots, so there is no single object to free.".to_string(),
+                "diffuse — retention is spread across multiple roots, so there is no single holder to target.".to_string(),
                 Some(("leak-suspects", "Leak Suspects")),
             ),
             None => signal(
@@ -404,7 +404,7 @@ impl Rule for Shape {
         let shape = if p90 <= 3 {
             "shallow (most objects are held within a few hops of a GC root)"
         } else {
-            "deep (retention flows through long dominator chains — often nested collections or linked structures)"
+            "deep — long dominator chains (often nested collections or linked structures)"
         };
         Some(signal(
             "shape",
@@ -1474,13 +1474,13 @@ impl Rule for FixedPerObjectOverhead {
             TriageSeverity::Warning,
             "Fixed per-Object Header Overhead",
             format!(
-                "{} objects × {} B header = {} ({:.1}% of heap) is consumed by JVM \
-                 object headers alone — consider value types, primitive arrays, or \
+                "{} ({:.1}% of heap) consumed by JVM object headers alone \
+                 ({} objects × {} B each) — consider value types, primitive arrays, or \
                  fewer wrapper objects.",
-                fmt_count(r.overview.total_objects),
-                header_bytes,
                 format_bytes(overhead),
                 pct,
+                fmt_count(r.overview.total_objects),
+                header_bytes,
             ),
             Some(("object-header-overhead", "Header Overhead")),
         ))

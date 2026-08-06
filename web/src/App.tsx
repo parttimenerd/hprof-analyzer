@@ -1548,7 +1548,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file — shows which kinds of data were captured. Missing allocation frames are normal; they require the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), which was removed in JDK 9+.
+        Record-type counts from the raw HPROF file — shows which kinds of data were captured. Missing allocation frames are normal; they require the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), which was removed in JDK 9.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -2101,7 +2101,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
       })()}
 
       <h3>Class Histogram (by Retained Heap)</h3>
-      <p className="subtitle">Every loaded class with its instance count, shallow heap (own bytes), and retained heap (what would be freed if all instances were released).</p>
+      <p className="subtitle">Every loaded class with its instance count, shallow heap (own bytes), and retained heap (what would be reclaimed if all instances were released).</p>
       {o.histogram_truncated_to != null && (
         <p className="subtitle">
           Histogram capped to the largest {fmtCount(o.histogram_truncated_to)} classes.
@@ -4707,9 +4707,9 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
       ) : (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--muted)", marginBottom: "2px", paddingLeft: 2, paddingRight: 2 }}>
-            <span title="Classes that keep the selected class alive — the objects you'd need to release to free it">← Dominators (hold it)</span>
+            <span title="Classes that keep the selected class alive — the objects you'd need to release to reclaim it">← Dominators (hold it)</span>
             <span style={{ fontWeight: 600, color: "var(--fg)" }}>{shortClass(target)}</span>
-            <span title="Classes kept alive by the selected class — what would be freed if it were released">Dominated (held) →</span>
+            <span title="Classes kept alive by the selected class — what would be reclaimed if it were released">Dominated (held) →</span>
           </div>
           <svg
             width={w} height={svgHeight}
@@ -5566,7 +5566,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Instances ranked by retained heap. An object <em>dominates</em> another if every path from a GC root to that object passes through it — releasing the dominator frees everything it dominates.</p>
+      <p className="subtitle">Instances ranked by retained heap. An object <em>dominates</em> another if every path from a GC root to that object passes through it — releasing the dominator reclaims everything it dominates.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
@@ -5587,7 +5587,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
             onClick={() => { pivotToClass(ctxMenu.cls); setCtxMenu(null); }}
             style={{ display: "block", width: "100%", textAlign: "left", padding: "0.4rem 0.8rem", border: "none", background: "transparent", color: "var(--fg)", cursor: "pointer", fontSize: "0.9rem" }}
           >
-            View in Navigator
+            View in Who Holds Sankey
           </button>
         </div>
       )}
@@ -5595,7 +5595,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than any single child — memory held directly or scattered across many small children. <strong>Drop</strong> = retained minus the largest child's retained (bytes that would be freed if the object were released, beyond what its biggest child alone accounts for). Threshold:{" "}
+        Objects retaining far more than any single child — memory held directly or scattered across many small children. <strong>Drop</strong> = retained minus the largest child's retained (bytes that would be reclaimed if the object were released, beyond what its biggest child alone accounts for). Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -5618,8 +5618,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               defaultSortFieldId="drop" defaultSortAsc={false}
               onRowClicked={hasPairs ? (r) => pivotToClass(r.display_class) : undefined}
               onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.display_class }); } : undefined}
-              rowClickTitle={hasPairs ? "Click to view in Navigator" : undefined}
-            />
+              rowClickTitle={hasPairs ? "Click to view in Who Holds sankey" : undefined}            />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropRetained)}</span>
@@ -5633,8 +5632,8 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Each row shows one dominator class: how many objects it immediately dominates and the total shallow heap of those dominated objects. High dominated-shallow means instances of that class collectively pin much of live memory.
-        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click or right-click a row to open it in the Navigator.</span>}
+        Each row shows one dominator class: how many objects it immediately dominates and the total shallow heap of those dominated objects. High dominated-shallow means instances of that class collectively keep much of live memory alive.
+        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click or right-click a row to open it in the "Who Holds This Class?" sankey below.</span>}
       </p>
       {idoms.length === 0 ? (
         <p className="subtitle">No immediate dominators.</p>
@@ -5657,8 +5656,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               defaultSortFieldId="dominated_shallow" defaultSortAsc={false}
               onRowClicked={hasPairs ? (r) => pivotToClass(r.dominator_class) : undefined}
               onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.dominator_class }); } : undefined}
-              rowClickTitle={hasPairs ? "Click to view in Navigator" : undefined}
-              extraBtns={<CopyTsvBtn rows={[["Dominator Class","# Dominators","# Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...idoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
+              rowClickTitle={hasPairs ? "Click to view in Who Holds sankey" : undefined}              extraBtns={<CopyTsvBtn rows={[["Dominator Class","# Dominators","# Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...idoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
             />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
@@ -5675,7 +5673,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it would free if it were released). A wide right side means this class is a large memory holder. Click any node or row to refocus.
+            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it keeps alive — releasing it would reclaim that memory). A wide right side means this class is a large memory holder. Click any node or row to refocus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -6025,7 +6023,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       <h2>Retention Concentration</h2>
       <p className="subtitle">
         Share of the reachable heap retained by the few largest top-level dominators. If{" "}
-        <strong>Top 1</strong> is high, freeing that one object reclaims most memory; if
+        <strong>Top 1</strong> is high, releasing that one object reclaims most memory; if
         the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
         retention spans many peers.
       </p>
@@ -10071,7 +10069,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow Size", <>an object's header plus its fields (and, for an array, its elements). Does <em>not</em> include referenced objects.</>],
-    ["Retained Heap (Retained Size)", <>the total memory freed if this object were garbage-collected: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Retained Heap (Retained Size)", <>the total memory reclaimed if this object were garbage-collected: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
