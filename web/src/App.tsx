@@ -778,7 +778,7 @@ function OomTriage({ report }: { report: Report }) {
     <div className="oom" id="memory-triage" tabIndex={-1}>
       <h2>Memory Triage</h2>
       <p className="subtitle">
-        Where the reachable heap is concentrated, at a glance.
+        Where the reachable heap is concentrated.
         {totalHeap > 0 && <> Total reachable heap: <strong>{formatBytes(totalHeap)}</strong>.</>}
       </p>
       <ul>
@@ -4165,7 +4165,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
       {data.truncated && (
-        <p className="subtitle">Collection value tally was truncated; some value groups were cut off.</p>
+        <p className="subtitle">Collection value tally truncated — some value groups dropped.</p>
       )}
     </section>
   );
@@ -4197,7 +4197,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
         <StdTable columns={cols} data={rows} searchKeys={["collection_class"]} defaultSortFieldId="values" defaultSortAsc={false} />
       )}
       {data.truncated && (
-        <p className="subtitle">Results are truncated; some collection classes were cut off.</p>
+        <p className="subtitle">Results truncated — some collection classes dropped.</p>
       )}
     </section>
   );
@@ -4318,7 +4318,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — any GC cycle may reclaim them. Transitive weak-only detection may miss multi-hop chains.</p>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC can reclaim these at any collection. Transitive weak-only detection may miss multi-hop chains.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
