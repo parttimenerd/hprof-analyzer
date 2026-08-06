@@ -1841,7 +1841,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where JVM object headers (12 bytes with compressed OOPs, 16 without) dominate shallow heap relative to payload. High header fraction means many small instances — consider replacing with primitive arrays, value types, or a flyweight pool.
+        Classes where object headers (12 bytes with compressed OOPs, 16 without) consume a large share of shallow heap. The fix is to reduce object <em>count</em>: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -3112,7 +3112,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   return (
     <section id="top-consumers">
       <h2>Top Consumers</h2>
-      <p className="subtitle">Biggest objects, classes, and packages by retained heap.</p>
+      <p className="subtitle">Biggest objects, classes, and packages by retained heap. Unlike Leak Suspects, these tables are unfiltered — use them when a suspect didn&apos;t cross the leak threshold, or to see the full retention picture.</p>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "treemap"] as const).map(v => (
           <button key={v} onClick={() => setTopView(v)} style={{
@@ -3128,7 +3128,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects</h3>
-      <p className="subtitle">Individual objects with the highest retained heap. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
+      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
@@ -6022,10 +6022,9 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
     <section id="retention-concentration">
       <h2>Retention Concentration</h2>
       <p className="subtitle">
-        Share of the reachable heap retained by the few largest top-level dominators. If{" "}
-        <strong>Top 1</strong> is high, releasing that one object reclaims most memory; if
-        the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
-        retention spans many peers.
+        Share of the reachable heap retained by the few largest top-level dominators (a dominator&apos;s retained size is everything it keeps alive). Read it as a concentration curve: if{" "}
+        <strong>Top 1</strong> is already high, one object is the leak — releasing it reclaims most of the heap; if the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
+        retention spans many peers (e.g. a large cache or collection) and no single release helps much.
       </p>
       <ConcentrationChart rc={rc} />
       <ConcentrationStackedBar rc={rc} />
