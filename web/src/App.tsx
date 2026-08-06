@@ -2834,13 +2834,13 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to find which field retains the large set of objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
-            <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list where subscribers are never removed.</li>
+            <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list missing deregistration.</li>
           )}
           {s.root_type_label === "Java Frame" && (
             <li>Held via a <strong>thread stack frame</strong> — check the Threads section for a blocked or long-running thread; it retains these objects until the frame returns.</li>
           )}
           {s.root_type_label === "JNI Global" && (
-            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check JNI code for missing <code>DeleteGlobalRef</code> calls.</li>
+            <li>Held by a <strong>JNI global reference</strong> — native code pins these objects; check JNI code for missing <code>DeleteGlobalRef</code> calls.</li>
           )}
           {!s.root_type_label && (
             <li>No single GC root holds all instances — retention spans multiple roots. Filter the Dominator Graph (<em>Dominator Analysis → Graph</em>) to this class to trace which root retains each instance.</li>
