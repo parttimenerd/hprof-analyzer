@@ -2857,7 +2857,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
       <h2>Leak Suspects</h2>
       <p className="subtitle">Classes retaining the most heap. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
-        <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in Dominator Analysis.</p>
+        <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in <a href="#dominator-analysis" onClick={(e) => { e.preventDefault(); document.getElementById("dominator-analysis")?.scrollIntoView({ behavior: "smooth" }); }}>Dominator Analysis</a>.</p>
       ) : (
         <>
           <h3>Retained-Heap Share</h3>
@@ -5725,7 +5725,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
       {rows.length === 0 ? (
-        <p className="subtitle">No unreachable objects.</p>
+        <p className="subtitle">No unreachable objects — either a full GC ran before the dump was taken, or all live objects are reachable from a GC root.</p>
       ) : (
         <>
           <p className="subtitle">
@@ -6177,7 +6177,7 @@ function fmtCell(v: QueryValue): string {
 }
 
 // Rich cell renderer for a single QueryValue — adds copy/pivot/navigate for obj_ref.
-function QueryCell({ val, colName, hasObjGraph }: { val: QueryValue; colName: string; hasObjGraph: boolean }) {
+function QueryCell({ val, colName }: { val: QueryValue; colName: string }) {
   if (val.kind === "str") return <ExpandableText text={val.v} label={colName} />;
   if (val.kind === "obj_ref") {
     const { class: cls, index: idx } = val.v;
@@ -6189,10 +6189,7 @@ function QueryCell({ val, colName, hasObjGraph }: { val: QueryValue; colName: st
         <PivotBtn cls={cls} />
         <OqlBtn cls={cls} />
         <ListObjectsBtn cls={cls} />
-        {hasObjGraph && (
-          <button className="copy-btn" title="Open in Object Graph Explorer" style={{ visibility: "visible" }}
-            onClick={() => (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`)}>⬡↗</button>
-        )}
+        <ExploreBtn denseIdx={idx} label={cls} />
       </span>
     );
   }
@@ -6215,7 +6212,6 @@ function downloadQueryCsv(q: QueryResult) {
 function CustomQueriesSection({ report }: { report: Report }) {
   const queries = report.queries;
   if (!queries?.length) return null;
-  const hasObjGraph = !!report.obj_graph_flat;
   return (
     <section id="custom-queries">
       <h2>Custom Queries</h2>
@@ -6244,7 +6240,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
                   grow: 1,
                   minWidth: "80px",
                   maxWidth: "500px",
-                  cell: (row) => <QueryCell val={row[ci]} colName={c.name} hasObjGraph={hasObjGraph} />,
+                  cell: (row) => <QueryCell val={row[ci]} colName={c.name} />,
                   selector: (row) => fmtCell(row[ci]),
                   sortable: true,
                 }));
@@ -7089,8 +7085,6 @@ function WasmQueryPanel({
     setRunning(false);
   };
 
-  const hasObjGraph = true; // always true: rendered only when __wasmExploration is live
-
   return (
     <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--border-faint, #f0f0f0)", paddingTop: "0.5rem" }}>
       <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0", fontWeight: 600 }}>
@@ -7158,7 +7152,7 @@ function WasmQueryPanel({
                   <tr key={ri}>
                     {row.map((val, ci) => (
                       <td key={ci}>
-                        <QueryCell val={val} colName={cols[ci]?.name ?? ""} hasObjGraph={hasObjGraph} />
+                        <QueryCell val={val} colName={cols[ci]?.name ?? ""} />
                       </td>
                     ))}
                   </tr>
