@@ -1,18 +1,24 @@
 //! `hprof-analyzer update [nightly|latest]`
 //!
-//! Downloads the archive for the current platform from GitHub Releases and
-//! atomically replaces the running binary.  The target triple is baked in at
-//! compile time so no runtime detection is needed.
+//! With no argument: fetches release metadata from GitHub and prints the
+//! current version, latest nightly build, and latest stable release.
+//!
+//! With a channel argument: downloads the archive for the current platform
+//! and atomically replaces the running binary.
+//!
+//! The target triple is baked in at compile time (BUILD_TARGET) so no
+//! runtime detection is needed.
 
-use std::io::{self, Read};
+use std::io::Read;
 
 const REPO: &str = "parttimenerd/hprof-analyzer";
 const TARGET: &str = env!("BUILD_TARGET");
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Which release channel to update from.
 #[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
 pub enum Channel {
-    /// The rolling nightly build (default) — updated on every push to main.
+    /// The rolling nightly build — updated on every push to main.
     Nightly,
     /// The latest stable tagged release.
     Latest,
@@ -25,23 +31,120 @@ impl Channel {
             Channel::Latest => "latest stable",
         }
     }
+
     /// GitHub release download URL base for this channel.
     fn download_base(self) -> String {
         match self {
-            // Rolling tag — direct download.
             Channel::Nightly => {
                 format!("https://github.com/{REPO}/releases/download/nightly")
             }
-            // `latest` is a redirect alias GitHub resolves to the newest tag.
+            // GitHub resolves `releases/latest/download` to the newest tag.
             Channel::Latest => {
                 format!("https://github.com/{REPO}/releases/latest/download")
             }
         }
     }
+
+    /// GitHub API URL for this channel's release metadata.
+    fn api_url(self) -> String {
+        match self {
+            Channel::Nightly => {
+                format!("https://api.github.com/repos/{REPO}/releases/tags/nightly")
+            }
+            Channel::Latest => {
+                format!("https://api.github.com/repos/{REPO}/releases/latest")
+            }
+        }
+    }
 }
 
-/// Run the update command.  Errors are returned as a human-readable string.
-pub fn run(channel: Channel) -> Result<(), String> {
+/// Run the update command.
+/// `channel = None` → show version status and exit.
+/// `channel = Some(c)` → download and replace the binary.
+pub fn run(channel: Option<Channel>) -> Result<(), String> {
+    match channel {
+        None => show_status(),
+        Some(c) => do_update(c),
+    }
+}
+
+/// Fetch release info for both channels and print a comparison table.
+fn show_status() -> Result<(), String> {
+    println!("hprof-analyzer {CURRENT_VERSION}  (target: {TARGET})");
+    println!();
+
+    let nightly = fetch_release_info(Channel::Nightly);
+    let latest = fetch_release_info(Channel::Latest);
+
+    println!("  nightly  {}", format_release_info(&nightly));
+    println!("  latest   {}", format_release_info(&latest));
+    println!();
+    println!("To update, run:");
+    println!("  hprof-analyzer update nightly   # replace with latest nightly build");
+    println!("  hprof-analyzer update latest    # replace with latest stable release");
+    Ok(())
+}
+
+/// Minimal GitHub release info we care about.
+struct ReleaseInfo {
+    name: String,
+    published_at: String,
+    body_first_line: String,
+}
+
+fn fetch_release_info(channel: Channel) -> Result<ReleaseInfo, String> {
+    let url = channel.api_url();
+    let mut resp = ureq::get(&url)
+        .header("User-Agent", "hprof-analyzer")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| format!("{e}"))?;
+
+    if resp.status() != 200 {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let json: serde_json::Value = serde_json::from_reader(resp.body_mut().as_reader())
+        .map_err(|e| format!("{e}"))?;
+
+    let name = json["name"].as_str().unwrap_or("?").to_string();
+    let published_at = json["published_at"]
+        .as_str()
+        .unwrap_or("?")
+        // Trim the time portion — just show the date.
+        .split('T')
+        .next()
+        .unwrap_or("?")
+        .to_string();
+    // First non-empty line of the release body that contains "Commit:"
+    let body_first_line = json["body"]
+        .as_str()
+        .unwrap_or("")
+        .lines()
+        .find(|l| l.contains("Commit:"))
+        .map(|l| l.trim().to_string())
+        .unwrap_or_default();
+
+    Ok(ReleaseInfo { name, published_at, body_first_line })
+}
+
+fn format_release_info(r: &Result<ReleaseInfo, String>) -> String {
+    match r {
+        Ok(info) => {
+            let commit = if info.body_first_line.is_empty() {
+                String::new()
+            } else {
+                format!("  ({})", info.body_first_line)
+            };
+            format!("{} — published {}{}",
+                info.name, info.published_at, commit)
+        }
+        Err(e) => format!("(could not fetch: {e})"),
+    }
+}
+
+/// Download the given channel and atomically replace this binary.
+fn do_update(channel: Channel) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("cannot locate current executable: {e}"))?;
 
@@ -60,12 +163,11 @@ pub fn run(channel: Channel) -> Result<(), String> {
         extract_from_tar_gz(&bytes)?
     };
 
-    // Write to a temp file next to the exe, then atomically replace.
+    // Write to a sibling temp file, then atomically replace.
     let tmp = exe.with_extension("update_tmp");
     std::fs::write(&tmp, &new_binary)
         .map_err(|e| format!("failed to write temp file {}: {e}", tmp.display()))?;
 
-    // Make executable on Unix.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -93,9 +195,10 @@ fn archive_name() -> (String, bool) {
     (format!("hprof-analyzer-{TARGET}.{ext}"), is_zip)
 }
 
-/// Download `url` into memory, following redirects.
+/// Download `url` into memory.
 fn download(url: &str) -> Result<Vec<u8>, String> {
     let mut resp = ureq::get(url)
+        .header("User-Agent", "hprof-analyzer")
         .call()
         .map_err(|e| format!("HTTP request failed: {e}"))?;
 
@@ -118,6 +221,7 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
 /// Extract the `hprof-analyzer[.exe]` binary from a `.tar.gz` archive.
 fn extract_from_tar_gz(data: &[u8]) -> Result<Vec<u8>, String> {
     use flate2::read::GzDecoder;
+    use std::io;
     use tar::Archive;
 
     let gz = GzDecoder::new(io::Cursor::new(data));
@@ -148,6 +252,7 @@ fn extract_from_tar_gz(data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Extract the `hprof-analyzer.exe` binary from a `.zip` archive.
 fn extract_from_zip(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io;
     use zip::ZipArchive;
 
     let cursor = io::Cursor::new(data);

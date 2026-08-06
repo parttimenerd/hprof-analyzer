@@ -268,11 +268,18 @@ struct Cli {
 /// positional input; see `Cli`.
 #[derive(Subcommand)]
 enum Cmd {
-    /// Download the latest release and replace the running binary.
+    /// Show available versions and optionally replace the running binary.
+    ///
+    /// With no argument: shows the current version, latest nightly build, and
+    /// latest stable release without changing anything.
+    ///
+    /// With a channel argument: downloads that release and replaces this binary.
+    ///   hprof-analyzer update nightly   # replace with latest nightly
+    ///   hprof-analyzer update latest    # replace with latest stable release
     Update {
-        /// Release channel to update from (default: nightly).
-        #[arg(value_enum, default_value = "nightly")]
-        channel: update::Channel,
+        /// Channel to update from. Omit to just show version info.
+        #[arg(value_enum)]
+        channel: Option<update::Channel>,
     },
     /// Compare reports (MAT export vs ours, or two of ours across time)
     Compare {
@@ -558,8 +565,7 @@ fn main() {
             if let Err(e) = update::run(channel) {
                 fail(e);
             }
-        }
-        Some(Cmd::Compare { cmd }) => match cmd {
+        }        Some(Cmd::Compare { cmd }) => match cmd {
             CompareCmd::Mat { mat, ours, format } => {
                 // Name a missing input up front — `run_diff` opens both files but
                 // surfaces only a bare OS error, so pre-check for a clear message.
