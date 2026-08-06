@@ -898,11 +898,11 @@ _Definitions for the heap analysis terms used throughout this report._
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the
   objects it points to.
-- **Retained heap (retained size)**: the total memory that would be reclaimed if this
-  object became unreachable — its own shallow size plus everything
-  reachable *only* through it. This is the number that answers \"how much would
-  making it unreachable reclaim?\" and it is the basis for every percentage in this
-  report. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
+- **Retained heap (retained size)**: the total memory freed when this object becomes
+  unreachable — its own shallow size plus everything reachable *only* through it.
+  This is the number that answers \"how much does making it unreachable reclaim?\"
+  and it is the basis for every percentage in this report.
+  See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Reachable heap**: all objects the [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) can still
   reach from a GC root. Anything unreachable is already collectible and is excluded
   from the totals here.
@@ -1152,7 +1152,7 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
         "_Every loaded class with its instance count, shallow heap (own bytes), and retained heap \
-(what would be reclaimed if all instances became unreachable). Top 50 shown; full list in JSON._\n\n",
+(bytes freed when all instances become unreachable). Top 50 shown; full list in JSON._\n\n",
     );
     let mut hist = Table::new(
         &[
@@ -3443,8 +3443,8 @@ by how much dominated shallow heap they gate._\n\n",
     out.push_str(&format!(
         "_Objects retaining far more than their largest single child — memory held directly \
 in the object or spread across many small dominated children. \
-Drop = object retained − largest child retained (memory reclaimed if this object became unreachable, \
-net of what the biggest child already accounts for). \
+Drop = object retained − largest child retained (bytes freed when this object becomes unreachable, \
+net of what its biggest child already accounts for). \
 Threshold {:.1} MB (1% of reachable heap). \
 Multiple rows with the same class are distinct objects._\n\n",
         threshold_mb,

@@ -2100,7 +2100,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
       })()}
 
       <h3>Class Histogram (by Retained Heap)</h3>
-      <p className="subtitle">Every loaded class with its instance count, shallow heap (own bytes), and retained heap (what would be reclaimed if all instances became unreachable).</p>
+      <p className="subtitle">Every loaded class with its instance count, shallow heap (own bytes), and retained heap (bytes freed when all instances become unreachable).</p>
       {o.histogram_truncated_to != null && (
         <p className="subtitle">
           Histogram capped to the largest {fmtCount(o.histogram_truncated_to)} classes.
@@ -4725,9 +4725,9 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
       ) : (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--muted)", marginBottom: "2px", paddingLeft: 2, paddingRight: 2 }}>
-            <span title="Classes that keep the selected class alive — what you'd need to make unreachable to stop retaining it">← Dominators (hold it)</span>
+            <span title="Classes that keep the selected class alive — must be released to free it">← Dominators (hold it)</span>
             <span style={{ fontWeight: 600, color: "var(--fg)" }}>{shortClass(target)}</span>
-            <span title="Classes kept alive by the selected class — what would be reclaimed if it became unreachable">Dominated (held) →</span>
+            <span title="Classes kept alive by the selected class — bytes freed when it becomes unreachable">Dominated (held) →</span>
           </div>
           <svg
             width={w} height={svgHeight}
@@ -5635,7 +5635,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (memory reclaimed if this object became unreachable, net of what the biggest child already accounts for). Threshold:{" "}
+        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (bytes freed when this object becomes unreachable, net of what its biggest child already accounts for). Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap). Multiple rows with the same class are distinct objects.
       </p>
       {drops.length === 0 ? (
@@ -10149,7 +10149,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow Size", <>an object's header plus its fields (and, for an array, its elements). Does <em>not</em> include referenced objects.</>],
-    ["Retained Heap (Retained Size)", <>the total memory reclaimed if this object became unreachable: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Retained Heap (Retained Size)", <>the total memory freed when this object becomes unreachable: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em> — in other words, if <em>A</em> became unreachable, so would <em>B</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
