@@ -2840,7 +2840,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>Held via a <strong>thread stack frame</strong> — check the Threads section for a blocked or long-running thread; it retains these objects until the frame returns.</li>
           )}
           {s.root_type_label === "JNI Global" && (
-            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check for JNI code that registers globals without a matching <code>DeleteGlobalRef</code>.</li>
+            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check JNI code for missing <code>DeleteGlobalRef</code> calls.</li>
           )}
           {!s.root_type_label && (
             <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root retains each instance.</li>
@@ -4317,7 +4317,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC can reclaim these at any collection. Transitive weak-only detection may miss multi-hop chains.</p>
+            <p className="subtitle">Objects reachable only via this reference kind — GC can reclaim them at any collection. Transitive weak-only detection may miss multi-hop chains.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
@@ -9958,7 +9958,7 @@ function GlossarySection() {
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root — sits at the top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
     ["Dominator Depth", <>the number of dominator-tree hops from an object to its GC root. Low depth means objects sit close to roots; high depth means long retention chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
-    ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
+    ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap counts per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" is the shallow size of the biggest instance.</>],
   ];
