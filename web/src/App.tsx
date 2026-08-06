@@ -2436,6 +2436,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
       {node.field_edge && <span className="path-field">.{node.field_edge} → </span>}
       <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
         <code>{node.display_class}</code>
+        <CopyBtn text={node.display_class} />
         <PivotBtn cls={node.display_class} />
         <OqlBtn cls={node.display_class} />
         <ListObjectsBtn cls={node.display_class} />
@@ -2791,6 +2792,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           Accumulation point:{" "}
           <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}>
             <code>{s.accumulation_class}</code>
+            <CopyBtn text={s.accumulation_class} />
             <PivotBtn cls={s.accumulation_class} />
             <OqlBtn cls={s.accumulation_class} />
             <ListObjectsBtn cls={s.accumulation_class} />
@@ -3028,6 +3030,7 @@ function TopConsumersSection({ report }: { report: Report }) {
         <span className="copy-cell">
           <code title={o.display_class}>{o.display_class}</code>
           <span style={{ color: "var(--muted)", fontSize: "0.75rem", flexShrink: 0 }}>#{denseIdx}</span>
+          <CopyBtn text={o.display_class} />
           <PivotBtn cls={o.display_class} />
           <OqlBtn cls={o.display_class} />
           <ListObjectsBtn cls={o.display_class} />
@@ -3055,6 +3058,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       return text ? (
         <span className="copy-cell">
           <ExpandableText text={text} label="Held Via" />
+          <CopyBtn text={text} />
           {cls && <PivotBtn cls={cls} />}
           {cls && <OqlBtn cls={cls} />}
           {cls && <ListObjectsBtn cls={cls} />}
@@ -4110,6 +4114,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
         <span className="copy-cell">
           <code>{r.container_class}</code>
           {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
+          <CopyBtn text={r.container_class} />
           <PivotBtn cls={r.container_class} />
           <OqlBtn cls={r.container_class} />
           <ListObjectsBtn cls={r.container_class} />
@@ -5907,6 +5912,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
             const frameLabel = (
               <span className="copy-cell">
                 <code>{s.frames[0]}</code>
+                <CopyBtn text={s.frames[0]} />
                 {cls && <PivotBtn cls={cls} />}
                 {cls && <OqlBtn cls={cls} />}
                 {cls && <ListObjectsBtn cls={cls} />}
