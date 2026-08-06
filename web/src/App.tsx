@@ -4188,7 +4188,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
     <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
-        Element types stored in each collection class, aggregated across all instances.
+        Element types stored in each collection class, summed across all instances.
       </p>
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -4227,7 +4227,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> retains the most heap, aggregated across all instances.
+        Which <code>Class#field</code> retains the most heap across all instances.
         Pointee Type: the most common concrete class referenced by that field.
       </p>
       {data.truncated && (
