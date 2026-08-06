@@ -881,7 +881,7 @@ function KpiStrip({ report }: { report: Report }) {
   } else {
     verdict = (
       <>
-        <strong>Retention Pattern:</strong> no dominant retainer — heap is spread across many roots.
+        <strong>Retention Pattern:</strong> no dominant retainer — heap spans many roots.
       </>
     );
   }
@@ -2843,7 +2843,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check JNI code for missing <code>DeleteGlobalRef</code> calls.</li>
           )}
           {!s.root_type_label && (
-            <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root retains each instance.</li>
+            <li>No single GC root holds all instances — retention spans multiple roots. Filter the Dominator Graph (<em>Dominator Analysis → Graph</em>) to this class to trace which root retains each instance.</li>
           )}
         </ul>
       </div>
@@ -2858,7 +2858,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
       <h2>Leak Suspects</h2>
       <p className="subtitle">Classes retaining the most heap. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
-        <p className="subtitle">No suspect exceeds the retention threshold — heap is spread across many roots.</p>
+        <p className="subtitle">No suspect exceeds the retention threshold — heap spans many roots.</p>
       ) : (
         <>
           <h3>Retained-Heap Share</h3>
