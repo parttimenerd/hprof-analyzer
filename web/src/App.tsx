@@ -1841,7 +1841,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers consume a large share of shallow heap — candidates for packing into arrays or replacing with primitives.
+        Classes where object headers dominate shallow heap — pack into arrays or replace with primitives.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -3123,8 +3123,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       <h3>Biggest Objects</h3>
       {objHasOwner && (
         <p className="subtitle">
-          The <strong>Held via</strong> column shows the primary incoming <code>Class#field</code>{" "}
-          reference holding each object — an object can have multiple referrers.
+          <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object. Objects can have multiple referrers.
         </p>
       )}
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
@@ -5990,7 +5989,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
         Share of the reachable heap retained by the few largest top-level dominators. If{" "}
         <strong>Top 1</strong> is high, freeing that one object reclaims most memory; if
         the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
-        retention is spread across many peers.
+        retention spans many peers.
       </p>
       <ConcentrationChart rc={rc} />
       <ConcentrationStackedBar rc={rc} />
