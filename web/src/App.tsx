@@ -2863,8 +2863,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
         <>
           <h3>Retained-Heap Share</h3>
           <p className="subtitle">
-            How concentrated retention is: each slice is one suspect&apos;s retained heap; the remainder is everything
-            else on the reachable heap.
+            Retention concentration: each slice is one suspect&apos;s retained heap; the remainder is everything else.
           </p>
           <ChartOrNote hasData={l.suspects.length > 0 && l.total_shallow > 0} note="No leak suspects to chart.">
             <LeakShareChart suspects={l.suspects} total={l.total_shallow} onSlice={(i) => {
@@ -4308,7 +4307,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <p className="subtitle">
               {fmtCount(stats.reference_instances)} reference instances.
               {stats.null_referent_count != null && stats.null_referent_count > 0 && (
-                <> {fmtCount(stats.null_referent_count)} have a null referent (GC'd but not yet cleaned up).
+                <> {fmtCount(stats.null_referent_count)} have a null referent — referent collected, not yet processed.
                   {stats.null_referent_count / stats.reference_instances > 0.5 && (
                     <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor is likely stalled.</span>
                   )}
@@ -5731,8 +5730,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump was taken before a full GC cycle completed. This memory will be reclaimed automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
-              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of total heap) is normal between GC cycles."}
+              ? <>Unreachable objects not yet reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump was taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
+              : "Unreachable objects not yet reclaimed. A small unreachable heap (< 5%) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
@@ -6120,7 +6119,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
       <p className="subtitle">
         Combined ranking of <code>Class#field</code> references and stack-frame locals by retained heap.
         {" "}Totals can exceed heap size for linked structures (e.g. <code>List#next</code>),
-        where each node's retained heap includes its entire tail — use as a relative ranking.
+        where each node's retained heap includes its entire tail — treat totals as relative, not absolute.
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
