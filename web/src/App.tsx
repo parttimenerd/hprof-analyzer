@@ -2085,7 +2085,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }} />
             </div>
             {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
-              <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — check for native code that registers global references without releasing them.</p>
+              <p className="subtitle" style={{ color: 'var(--warn-border)' }}>⚠ JNI roots hold significant retained heap — check for native code registering JNI globals without a matching <code>DeleteGlobalRef</code>.</p>
             )}
             {o.gc_roots_retained_by_type?.some(r => (r.top_classes?.length ?? 0) > 0) && (
               <>
@@ -5989,7 +5989,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       <h2>Retention Concentration</h2>
       <p className="subtitle">
         Share of the reachable heap retained by the few largest top-level dominators. If{" "}
-        <strong>Top 1</strong> is already high, freeing that one object reclaims most memory; if
+        <strong>Top 1</strong> is high, freeing that one object reclaims most memory; if
         the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
         retention is spread across many peers.
       </p>
@@ -6090,7 +6090,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
         ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
-        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that do not release on close, or Netty/gRPC allocators misconfigured with no max.",
+        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that do not release on close, or Netty/gRPC allocators misconfigured without a buffer cap.",
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
@@ -10263,8 +10263,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <h2>Transient Spikes (Peak Above Baseline)</h2>
           <p className="subtitle">
             Classes that climbed well above their baseline mid-series then fell back — a
-            first-to-last delta alone would miss them. Ranked by peak-over-baseline; the peak may be
-            at any intermediate dump.
+            first-to-last delta alone would miss them. Ranked by peak-over-baseline; the peak falls at an intermediate dump.
           </p>
           <SpikeTable labels={labels} rows={diff.spike_leaders} />
         </section>
