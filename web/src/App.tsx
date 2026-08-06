@@ -1811,7 +1811,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value adds a 12-byte object header (with compressed OOPs) to the primitive payload — replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates that overhead.
+        Heap consumed by <code>Integer</code>, <code>Long</code>, <code>Double</code>, and other boxed wrapper types. Each boxed value costs at least 16 bytes — a 12-byte object header (with compressed OOPs) plus the primitive field — versus 4–8 bytes as a primitive. Replacing with primitive fields or <code>int[]</code>/<code>long[]</code> arrays eliminates the per-object header.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -3545,7 +3545,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component). Totals can exceed heap size — boot-loader objects are shared across components.
+        Retained heap grouped by class loader (component). Totals can exceed heap size because boot-loader classes are counted in every component that retains them.
       </p>
       <details open>
         <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
@@ -5750,7 +5750,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
       {rows.length === 0 ? (
-        <p className="subtitle">No unreachable objects — either a full GC ran before the dump was taken, or all live objects are reachable from a GC root.</p>
+        <p className="subtitle">No unreachable objects — all heap objects are reachable from a GC root. This is normal when a full GC ran before the dump was taken.</p>
       ) : (
         <>
           <p className="subtitle">
@@ -6036,7 +6036,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
           { id: "scope", name: "Scope", grow: 1, selector: (r) => r.scope, sortable: true },
           { id: "share", name: "Retained Share", right: true, width: "150px", selector: (r) => r.bp, format: (r) => fmtPct(r.bp / 100), sortable: true },
         ];
-        return <StdTable columns={rcCols} data={rcRows} searchKeys={[]} defaultSortFieldId="share" defaultSortAsc={false} />;
+        return <StdTable columns={rcCols} data={rcRows} searchKeys={[]} defaultSortFieldId="share" defaultSortAsc={true} />;
       })()}
       {rc.num_objects_ge_1pct > 0 && (
         <p className="subtitle"><em>{fmtCount(rc.num_objects_ge_1pct)} {rc.num_objects_ge_1pct === 1 ? "object" : "objects"} each hold ≥1% of the reachable heap.</em></p>
