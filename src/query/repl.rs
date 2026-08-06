@@ -3190,7 +3190,7 @@ fn handle_set(
         )?;
         writeln!(
             out,
-            "  {cb}color{cr}  {cg_val}{:<12}{cr}  {cd}(ANSI colours in table cells){cr}",
+            "  {cb}color{cr}  {cg_val}{:<12}{cr}  {cd}(ANSI colors in table cells){cr}",
             if color { "on" } else { "off" }
         )?;
         writeln!(
@@ -5017,7 +5017,7 @@ fn handle_meta(
             );
             c!(
                 "!set color on|off",
-                "ANSI colours in table cells (default on)"
+                "ANSI colors in table cells (default on)"
             );
             c!("!set null <str>", "null display string (default \"null\")");
             c!("!width [N]", "cap cell display width (0 = unlimited)");

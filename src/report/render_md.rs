@@ -948,9 +948,9 @@ _Definitions for the heap analysis terms used throughout this report._
   `PhantomReference` chains. Weak-only referents are collected at the next GC cycle;
   soft-only referents are collected under memory pressure; phantom-only referents are
   already unreachable and queued for resource cleanup.
-- **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimisation
+- **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimization
   where object references are stored as 32-bit integers instead of 64-bit pointers,
-  halving reference-field overhead on heaps <= ~32 GB. Visible in the Heap Summary
+  halving reference-field overhead on heaps ≤ ~32 GB. Visible in the Heap Summary
   as `Compressed OOPs: yes`.
 - **Class#field**: the notation used throughout this report to identify a specific
   field — `HolderClass#fieldName`. For example `java.util.HashMap#table` names the
