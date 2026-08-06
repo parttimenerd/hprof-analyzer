@@ -282,6 +282,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
     render_dominator_analysis(&r.dominator_analysis, false, &mut out);
     render_threads(&r.threads, false, &mut out);
+    render_thread_local_analysis(&r.thread_local_analysis, &mut out);
     render_top_components(&r.top_components, false, &mut out);
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
     render_collections(&r.collections, &r.collection_attribution, false, &mut out);
@@ -1761,8 +1762,45 @@ fn render_thread_locals(objs: &[ThreadLocalObj], out: &mut String) {
     out.push('\n');
 }
 
-/// Render the "Top Components" section: retained heap grouped by class loader
-/// (component), mirroring Eclipse MAT's Top Components view. Each row lists the
+/// Render the aggregated ThreadLocal analysis table: per-value-class entry
+/// counts, stale counts, and retained heap. Only emitted when the analysis ran
+/// (i.e. `--find-duplicates` was passed) and produced at least one row.
+pub(crate) fn render_thread_local_analysis(
+    rows: &[crate::report::model::ThreadLocalLeakRow],
+    out: &mut String,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    use crate::md::{Align, Table};
+    out.push_str("## ThreadLocal Analysis\n\n");
+    out.push_str(
+        "_Values stored in thread-local slots, grouped by value class. \
+Stale entries have a null key — the `ThreadLocal` object was GC'd but the \
+value remains. In pooled threads (Tomcat, Netty) stale values accumulate \
+because the thread never terminates; call `ThreadLocal.remove()` to clean up._\n\n",
+    );
+    let mut t = Table::new(
+        &["Value Class", "Entries", "Stale", "Retained"],
+        &[Align::Left, Align::Right, Align::Right, Align::Right],
+    );
+    for r in rows {
+        let stale_cell = if r.stale_count > 0 {
+            format!("⚠ {}", fmt_count(r.stale_count as u64))
+        } else {
+            "0".to_string()
+        };
+        t.row([
+            format!("`{}`", r.value_class),
+            fmt_count(r.entry_count as u64),
+            stale_cell,
+            format_bytes(r.retained),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
 /// component's retained heap, its share of total reachable retained heap, and
 /// its top classes inlined. `graphs` adds a proportional retained bar column.
 /// Shared by plain md and md-graphs.
