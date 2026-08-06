@@ -1637,6 +1637,10 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
         out.push_str("_No thread call stacks were recorded in this dump._\n\n");
         return;
     }
+    out.push_str(
+        "_Per-thread call stacks and retained heap. A thread keeps everything on its stack \
+alive — blocked or long-running threads can hold significant memory through local variables._\n\n",
+    );
 
     // ── Thread Overview table (always-on properties) ────────────────────────
     out.push_str("### Thread Overview\n\n");
