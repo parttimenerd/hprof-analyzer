@@ -564,9 +564,9 @@ mod tests {
             0,
         );
         assert_eq!(object_kind(&g, 0), "Instances");
-        assert_eq!(object_kind(&g, 1), "Object arrays");
-        assert_eq!(object_kind(&g, 2), "Primitive arrays");
-        assert_eq!(object_kind(&g, 3), "Class objects");
+        assert_eq!(object_kind(&g, 1), "Object Arrays");
+        assert_eq!(object_kind(&g, 2), "Primitive Arrays");
+        assert_eq!(object_kind(&g, 3), "Class Objects");
     }
 
     #[test]
@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(bk[0].kind, "Instances");
         assert_eq!(bk[0].objects, 2);
         assert_eq!(bk[0].shallow_heap, 32);
-        assert_eq!(bk[1].kind, "Primitive arrays");
+        assert_eq!(bk[1].kind, "Primitive Arrays");
         assert_eq!(bk[1].objects, 1);
         assert_eq!(bk[1].shallow_heap, 40);
     }
@@ -658,7 +658,7 @@ mod tests {
         );
         assert!(md.contains("**Shape:**"), "missing shape line");
         assert!(
-            md.contains("**One leak or many:**"),
+            md.contains("**Concentration:**"),
             "missing concentration line"
         );
     }
@@ -1320,7 +1320,7 @@ mod tests {
         assert_eq!(triage.level(), 2, "Memory Triage should be an H2 section");
         // The headline retainer is a bullet, not just loose text.
         assert!(
-            triage.has_bullet_starting_with("**Headline retainer:**"),
+            triage.has_bullet_starting_with("**Headline Retainer:**"),
             "missing headline retainer bullet"
         );
         // Fixture's #1 suspect is com.foo.A (a single object) at 1000/270 -> dominates.

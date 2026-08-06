@@ -35,7 +35,7 @@ export function pctOf(part: number, total: number): number {
 // displayed so all formats agree on precision and the floor.
 export function fmtPct(p: number): string {
   if (p <= 0) return "0.0%";
-  if (p < 0.1) return "<0.1%";
+  if (p < 0.1) return "< 0.1%";
   return p.toFixed(1) + "%";
 }
 

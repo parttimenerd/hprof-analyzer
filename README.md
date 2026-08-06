@@ -133,10 +133,17 @@ sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
 hprof-analyzer heap.hprof report.html
 ```
 
-Gzip-compressed dumps (`.hprof.gz`) and gzip-compressed tar archives
-(`.hprof.tar.gz`, `.tar.gz`, `.tgz`) are read transparently — no decompression
-to disk needed. Analysis time scales with the dump — seconds for small dumps,
-minutes for multi-gigabyte ones (see [Performance](#performance)).
+Compressed dumps are read transparently — no manual decompression needed:
+
+| Format | Notes |
+|--------|-------|
+| `.hprof` | Raw dump |
+| `.hprof.gz` | Gzip-compressed dump |
+| `.hprof.zip` | ZIP archive containing the dump |
+| `.hprof.tar.gz`, `.tar.gz`, `.tgz` | Gzip-compressed tar archive; the first `.hprof` entry is used |
+
+Analysis time scales with the dump — seconds for small dumps, minutes for
+multi-gigabyte ones (see [Performance](#performance)).
 
 ## Why you might want it
 
@@ -254,7 +261,7 @@ Node.js/npm is only needed if you modify the web sources under `web/src/`.
 ```
 hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
 
-  <INPUT>   a .hprof, .hprof.gz, .hprof.tar.gz, .tar.gz, or .tgz heap dump
+  <INPUT>   a .hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .tar.gz, or .tgz heap dump
               → analyze it and write a report
             a saved report .json[.gz] → re-render it to another format
 

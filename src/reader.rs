@@ -7,6 +7,10 @@ use flate2::read::GzDecoder;
 use std::{
     fs::File,
     io::{self, BufReader, Cursor, Read},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 const BUF_CAP: usize = 8 << 20; // 8 MiB refill chunk
@@ -28,6 +32,55 @@ pub struct HprofReader {
     /// Total bytes delivered to callers since `open()`. Used to record the
     /// HPROF file offset of each object record for the MAT `o2hprof` index.
     bytes_consumed: u64,
+    /// Set to `true` if the underlying gzip stream was truncated/corrupt.
+    /// Callers can check this after a scan to include a "partial data" notice.
+    truncated_input: Arc<AtomicBool>,
+}
+
+/// Wraps `GzDecoder` and converts gzip checksum / trailer errors into clean
+/// EOF. This lets truncated gzip streams be read up to the point of truncation
+/// rather than failing with an error when the gzip footer is missing or corrupt.
+/// A warning is printed to stderr on the first such error so the user knows the
+/// report may be partial.
+pub(crate) struct LenientGzDecoder<R: Read> {
+    inner: GzDecoder<R>,
+    warned: bool,
+    truncated: Arc<AtomicBool>,
+}
+
+impl<R: Read> LenientGzDecoder<R> {
+    pub(crate) fn new(r: R, truncated: Arc<AtomicBool>) -> Self {
+        Self {
+            inner: GzDecoder::new(r),
+            warned: false,
+            truncated,
+        }
+    }
+}
+
+impl<R: Read> Read for LenientGzDecoder<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.inner.read(buf) {
+            Ok(n) => Ok(n),
+            Err(e)
+                if e.kind() == io::ErrorKind::UnexpectedEof
+                    || e.kind() == io::ErrorKind::InvalidData =>
+            {
+                self.truncated.store(true, Ordering::Relaxed);
+                if !self.warned {
+                    self.warned = true;
+                    eprintln!(
+                        "warning: gzip stream ended prematurely ({}); \
+                         the dump appears truncated — report will cover \
+                         whatever data was successfully decompressed",
+                        e
+                    );
+                }
+                Ok(0)
+            }
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl HprofReader {
@@ -52,12 +105,10 @@ impl HprofReader {
             return Self::open_zip(path);
         }
 
-        // Stitch the sniffed magic bytes back onto the front of the stream so we
-        // never re-open the path (avoids a double-open + a TOCTOU window, and
-        // works on inputs that can only be opened once).
+        let truncated = Arc::new(AtomicBool::new(false));
         let stream = Cursor::new(magic.to_vec()).chain(peek);
         let inner: Box<dyn Read> = if magic[..2] == [0x1f, 0x8b] {
-            Box::new(GzDecoder::new(stream))
+            Box::new(LenientGzDecoder::new(stream, Arc::clone(&truncated)))
         } else {
             Box::new(stream)
         };
@@ -70,6 +121,7 @@ impl HprofReader {
             pos: 0,
             end: 0,
             bytes_consumed: 0,
+            truncated_input: truncated,
         };
         r.read_header()?;
         Ok(r)
@@ -78,10 +130,15 @@ impl HprofReader {
     /// Open a `.hprof.tar.gz` (or `.tgz`), find the first `.hprof` entry, and
     /// stream it through the parser. The tar archive is read sequentially — no
     /// Seek required — so multi-gigabyte archives decompress on-the-fly.
+    ///
+    /// Truncated archives are handled leniently: gzip checksum/trailer errors
+    /// are treated as EOF so the HPROF record loop can process whatever data
+    /// was successfully decompressed.
     #[cfg(feature = "native")]
     fn open_tar_gz(path: &str) -> io::Result<Self> {
         let file = File::open(path)?;
-        let gz = GzDecoder::new(BufReader::new(file));
+        let truncated = Arc::new(AtomicBool::new(false));
+        let gz = LenientGzDecoder::new(BufReader::new(file), Arc::clone(&truncated));
         // Leak the archive to give it `'static` lifetime so `tar::Entry` (which
         // borrows it) can be boxed as `Box<dyn Read + 'static>`. The archive's
         // only resource is the file handle, which is consumed by reading the
@@ -102,6 +159,7 @@ impl HprofReader {
                     pos: 0,
                     end: 0,
                     bytes_consumed: 0,
+                    truncated_input: truncated,
                 };
                 r.read_header()?;
                 return Ok(r);
@@ -144,22 +202,39 @@ impl HprofReader {
     }
 
     /// Construct a reader from any `Read` implementation.
-    /// Used by `HprofSource::open` for the `Bytes` variant. Reads the HPROF
-    /// header before returning.
-    pub(crate) fn from_reader(r: impl Read + 'static) -> io::Result<Self> {
-        let inner: Box<dyn Read> = Box::new(r);
+    /// Used by `HprofSource::open` for the `Bytes` variant (including WASM).
+    /// The caller may pass a pre-wired `truncated` flag; pass `None` to get a
+    /// fresh one (always false for non-gzip inputs).
+    pub(crate) fn from_reader_with_flag(
+        r: impl Read + 'static,
+        truncated: Arc<AtomicBool>,
+    ) -> io::Result<Self> {
         let mut reader = HprofReader {
             format: String::new(),
             id_size: 4,
             timestamp_ms: 0,
-            inner,
+            inner: Box::new(r),
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
             bytes_consumed: 0,
+            truncated_input: truncated,
         };
         reader.read_header()?;
         Ok(reader)
+    }
+
+    /// Construct a reader from any `Read` implementation with a fresh (always-false)
+    /// truncation flag. Used by `open_zip` and tests.
+    pub(crate) fn from_reader(r: impl Read + 'static) -> io::Result<Self> {
+        Self::from_reader_with_flag(r, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Returns `true` if the underlying gzip stream was truncated or corrupt.
+    /// When true, the report covers only the records that were decompressed before
+    /// the stream ended prematurely.
+    pub fn is_truncated(&self) -> bool {
+        self.truncated_input.load(Ordering::Relaxed)
     }
 
     fn read_header(&mut self) -> io::Result<()> {
@@ -424,6 +499,7 @@ mod tests {
             pos: 0,
             end: 0,
             bytes_consumed: 0,
+            truncated_input: Arc::new(AtomicBool::new(false)),
         };
         assert_eq!(r.u1().unwrap(), 0xAB);
         assert_eq!(r.u2().unwrap(), 0x1234);
@@ -443,6 +519,7 @@ mod tests {
             pos: 0,
             end: 0,
             bytes_consumed: 0,
+            truncated_input: Arc::new(AtomicBool::new(false)),
         };
         assert_eq!(r.u1().unwrap(), 0);
         r.skip(9).unwrap(); // skip 1..=9
@@ -471,6 +548,7 @@ mod tests {
             pos: 0,
             end: 0,
             bytes_consumed: 0,
+            truncated_input: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -492,5 +570,54 @@ mod tests {
             let err = r.read_header().unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "sz={sz}");
         }
+    }
+
+    // Build a minimal valid HPROF dump: header + one minimal record.
+    // Used to test truncated-gzip handling.
+    fn minimal_hprof() -> Vec<u8> {
+        let mut v = header_blob(4);
+        // Append one STRING_IN_UTF8 (tag 0x01): timestamp(4) + length(4) + no bytes.
+        v.push(0x01); // tag
+        v.extend_from_slice(&0u32.to_be_bytes()); // timestamp
+        v.extend_from_slice(&0u32.to_be_bytes()); // length = 0 (empty body)
+        v
+    }
+
+    fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut enc =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    #[test]
+    fn lenient_gz_decoder_clean_stream_not_truncated() {
+        let gz = gzip_bytes(&minimal_hprof());
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut dec = LenientGzDecoder::new(io::Cursor::new(gz), Arc::clone(&flag));
+        let mut out = Vec::new();
+        dec.read_to_end(&mut out).unwrap();
+        assert_eq!(out, minimal_hprof(), "clean stream decompresses correctly");
+        assert!(!flag.load(Ordering::Relaxed), "clean stream should not set truncated flag");
+    }
+
+    #[test]
+    fn lenient_gz_decoder_truncated_stream_sets_flag() {
+        let gz = gzip_bytes(&minimal_hprof());
+        // Drop the last 4 bytes to truncate the gzip trailer.
+        let truncated = gz[..gz.len() - 4].to_vec();
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut dec = LenientGzDecoder::new(io::Cursor::new(truncated), Arc::clone(&flag));
+        let mut out = Vec::new();
+        // Should not error — returns however many bytes decompressed successfully.
+        dec.read_to_end(&mut out).unwrap();
+        assert!(flag.load(Ordering::Relaxed), "truncated stream should set flag");
+    }
+
+    #[test]
+    fn from_reader_is_truncated_false_by_default() {
+        let r = HprofReader::from_reader(io::Cursor::new(header_blob(4))).unwrap();
+        assert!(!r.is_truncated());
     }
 }

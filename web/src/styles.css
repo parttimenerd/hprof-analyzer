@@ -813,6 +813,7 @@ kbd {
 .inspector-field-tags { display: inline-flex; gap: 3px; flex-wrap: wrap; margin-left: 4px; }
 .inspector-field-tag { font-family: var(--mono); font-size: 0.72rem; background: var(--code-bg, rgba(0,0,0,0.06)); color: var(--muted); padding: 0px 3px; border-radius: 3px; }
 .trg-gcpath-section { margin: 0.5rem 0 0; padding: 0.4rem 0.5rem; border-top: 1px solid var(--border); }
+.trg-gcpath-list { margin: 0.2rem 0 0; padding: 0 0 0 1.2rem; font-size: 0.76rem; line-height: 1.6; }
 .inspector-idom-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 6px 8px; background: var(--code-bg, rgba(0,0,0,0.04)); border-radius: 6px; font-size: 0.78rem; }
 .inspector-idom-label { color: var(--muted); font-size: 0.74rem; margin-right: 4px; white-space: nowrap; }
 .inspector-idom-item { background: none; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 2px 4px; border-radius: 4px; }

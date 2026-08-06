@@ -249,6 +249,15 @@ behind those bullets._\n\n",
 pub fn render_markdown(r: &Report) -> String {
     let mut out = String::new();
     render_title(&r.overview, &r.generated, &mut out);
+    if r.truncated_input {
+        out.push_str(
+            "> **Warning — truncated input:** the heap dump file was incomplete \
+             (the gzip stream ended prematurely). This report covers only the \
+             objects and classes that were successfully read before the stream \
+             ended. Totals, leak suspects, and top consumers may be understated. \
+             Re-copy the dump to get a complete analysis.\n\n",
+        );
+    }
     render_toc(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);

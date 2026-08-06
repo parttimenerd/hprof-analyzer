@@ -1,9 +1,7 @@
 use std::io::{self, Cursor};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 
-use flate2::read::GzDecoder;
-
-use crate::reader::HprofReader;
+use crate::reader::{HprofReader, LenientGzDecoder};
 
 /// `AsRef<[u8]>` wrapper around `Arc<Vec<u8>>` so `Cursor<ArcBuf>` implements
 /// `Read`.  This avoids copying the buffer when opening a new scan.
@@ -43,7 +41,11 @@ impl HprofSource {
             HprofSource::Bytes { data, .. } => {
                 let buf = ArcBuf(Arc::clone(data));
                 if buf.0.len() >= 2 && buf.0[0] == 0x1f && buf.0[1] == 0x8b {
-                    HprofReader::from_reader(GzDecoder::new(Cursor::new(buf)))
+                    let truncated = Arc::new(AtomicBool::new(false));
+                    HprofReader::from_reader_with_flag(
+                        LenientGzDecoder::new(Cursor::new(buf), Arc::clone(&truncated)),
+                        truncated,
+                    )
                 } else {
                     HprofReader::from_reader(Cursor::new(buf))
                 }

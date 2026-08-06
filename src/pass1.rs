@@ -138,6 +138,8 @@ pub struct Pass1 {
     /// (decompressed stream position), in the same dense-id order as `id_map`.
     /// Used to emit the MAT `o2hprof` index. Empty when MAT emission is off.
     pub hprof_offsets: Vec<u64>,
+    /// True if the input gzip stream was truncated (detected by `LenientGzDecoder`).
+    pub truncated_input: bool,
 }
 
 impl Pass1 {
@@ -305,6 +307,8 @@ impl Pass1 {
         }
 
         crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
+        // Capture truncation flag before dropping the reader.
+        let truncated_input = r.is_truncated();
         // Free the reader buffer and no-longer-needed intern map before the
         // sort to trim the working set as much as possible before allocating order.
         drop(r);
@@ -441,6 +445,7 @@ impl Pass1 {
             heap_dump_segments,
             gc_root_tag_counts,
             hprof_offsets: tmp_hprof_offsets,
+            truncated_input,
         })
     }
 }

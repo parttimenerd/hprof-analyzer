@@ -798,6 +798,8 @@ export interface FieldStats {
 export interface Report {
   schema_version: number;
   generated: string;
+  /** True when the input gzip stream was truncated; report covers partial data only. */
+  truncated_input?: boolean;
   overview: SystemOverview;
   leaks: LeakSuspects;
   top: TopConsumers;

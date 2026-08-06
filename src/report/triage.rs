@@ -1638,6 +1638,7 @@ mod tests {
         Report {
             schema_version: SCHEMA_VERSION,
             generated: String::new(),
+            truncated_input: false,
             overview: SystemOverview::default(),
             leaks: LeakSuspects::default(),
             top: TopConsumers::default(),

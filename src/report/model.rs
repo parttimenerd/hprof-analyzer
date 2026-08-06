@@ -1624,6 +1624,10 @@ pub struct FieldStats {
 pub struct Report {
     pub schema_version: u32,
     pub generated: String,
+    /// True when the input dump was truncated (gzip stream ended prematurely).
+    /// The report covers only the records that were decompressed before truncation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated_input: bool,
     pub overview: SystemOverview,
     pub leaks: LeakSuspects,
     pub top: TopConsumers,

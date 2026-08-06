@@ -234,6 +234,10 @@
         "$ref": "#/$defs/TriageSignal"
       }
     },
+    "truncated_input": {
+      "description": "True when the input dump was truncated (gzip stream ended prematurely).\nThe report covers only the records that were decompressed before truncation.",
+      "type": "boolean"
+    },
     "type_ref_graph": {
       "description": "Type-level reference graph (TPFG). Present when --obj-graph is used.",
       "type": "array",

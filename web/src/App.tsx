@@ -4681,6 +4681,10 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         <OqlBtn cls={target} />
         <ListObjectsBtn cls={target} />
       </span>
+      <button className="show-more-btn" style={{ fontSize: "0.82rem", padding: "1px 6px", flexShrink: 0 }}
+        onClick={() => fireInspect({ kind: "class", cls: target })}>
+        In Inspector →
+      </button>
     </div>
   );
 
@@ -5400,6 +5404,8 @@ function DomGraphView({ pairs, idoms }: {
             onClick={() => fireInspect({ kind: "class", cls: selected })}>Inspect →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
             onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>Instances →</button>
+          <button className="show-more-btn" style={{ flexShrink: 0 }}
+            onClick={() => { window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: selected })); window.location.hash = "type-ref-graph"; }}>Type Graph →</button>
         </div>
       )}
     </div>
@@ -6569,6 +6575,29 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   );
 
   const ogCtxForHint = React.useContext(ObjGraphCtx);
+  const hasDomData = React.useContext(HasDomDataCtx);
+
+  const [biggestWasmIdx, setBiggestWasmIdx] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    setBiggestWasmIdx(null);
+    if (!selected || !(wasm as any)?.find_instances) return;
+    try {
+      const r = JSON.parse((wasm as any).find_instances(selected, 1)) as Array<{ idx: number; cls: string }>;
+      if (r.length > 0) setBiggestWasmIdx(r[0].idx);
+    } catch { /* ignore */ }
+  }, [selected]);
+  const biggestStaticIdx = React.useMemo(() => {
+    if (!ogCtxForHint || !selected) return null;
+    let best: { idx: number; retained: number } | null = null;
+    for (const [k, n] of Object.entries(ogCtxForHint)) {
+      if (n.display_class === selected) {
+        const idx = parseInt(k, 10);
+        if (!best || n.retained > best.retained) best = { idx, retained: n.retained };
+      }
+    }
+    return best?.idx ?? null;
+  }, [ogCtxForHint, selected]);
+  const biggestIdx = biggestWasmIdx ?? biggestStaticIdx;
 
   // Build Cytoscape elements and mount
   React.useEffect(() => {
@@ -6627,6 +6656,25 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     if (!cyRef.current) return;
     cyRef.current.style(buildCyStyleWithFields(showEdgeFields) as any).update();
   }, [showEdgeFields]);
+
+  // Listen for external "select this class" events (e.g. from Object Explorer's "Open in Type Graph →")
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const cls = (e as CustomEvent<string>).detail;
+      if (!cls) return;
+      setSelected(cls);
+      setView("graph");
+      // If the class is visible in the graph, pan to it; otherwise just select it (sidebar will appear)
+      setTimeout(() => {
+        const cy = cyRef.current;
+        if (!cy) return;
+        const node = cy.getElementById(cls);
+        if (node.length) { cy.animate({ fit: { eles: node, padding: 60 } }, { duration: 300 }); applyCyHighlight(cy, cls); }
+      }, 100);
+    };
+    window.addEventListener("trg-focus-class", handler);
+    return () => window.removeEventListener("trg-focus-class", handler);
+  }, []);
 
   // Apply filter highlight via Cytoscape style
   const filterLc = filter.toLowerCase().trim();
@@ -6794,7 +6842,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
           {!selected ? (
             <div className="trg-sidebar-empty">
               <p>Click a class node to preview its stats and connections here.</p>
-              <p className="trg-sidebar-hint">Use "Full Details →" or "Instances →" to open the full view in the Inspector panel.</p>
+              <p className="trg-sidebar-hint">Use "Full Details →", "Instances →", "Explorer →", or "In Dominator →" to navigate.</p>
             </div>
           ) : (
             <div className="trg-sidebar-content">
@@ -6859,10 +6907,17 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                   </>
                 );
               })()}
-              {selInfo.hist.root_path && selInfo.hist.root_path.length > 0 && (
+              {selInfo?.hist?.root_path && selInfo.hist.root_path.length > 0 && (
                 <div className="trg-gcpath-section">
-                  <p className="trg-sidebar-section-label">⊘ GC Root Path</p>
-                  <RootPathChain steps={selInfo.hist.root_path} />
+                  <p className="trg-sidebar-section-label">⊘ GC Root Path ({selInfo.hist.root_path.length} steps)</p>
+                  <ol className="trg-gcpath-list">
+                    {selInfo.hist.root_path.map((step, i) => (
+                      <li key={i} style={{ fontSize: "0.76rem", color: i === 0 ? "var(--accent)" : i === selInfo!.hist!.root_path!.length - 1 ? "var(--ok, #065f46)" : undefined }}>
+                        {step.display_class.split(".").pop()}
+                        {step.root_type_label && <span style={{ color: "var(--muted)", marginLeft: "0.3em" }}>({step.root_type_label})</span>}
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               )}
               {selAllOutEdges.length > 0 && (
@@ -6931,12 +6986,24 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 <button className="show-more-btn" onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>
                   Instances →
                 </button>
-                <button className="show-more-btn" title="Jump to Object Graph section" onClick={() => {
-                  window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: { cls: selected } }));
-                  window.location.hash = "#object-graph";
+                <button className="show-more-btn" title="Jump to Object Graph section and filter by class" onClick={() => {
+                  window.dispatchEvent(new CustomEvent("explore-class", { detail: selected }));
+                  window.location.hash = "object-graph";
                 }}>
-                  Graph →
+                  Explorer →
                 </button>
+                {hasDomData && (
+                  <button className="show-more-btn" title="Open in WhoHolds Dominator Sankey"
+                    onClick={() => { window.dispatchEvent(new CustomEvent("pivot-class", { detail: selected })); window.location.hash = "dominator-analysis"; }}>
+                    In Dominator →
+                  </button>
+                )}
+                {biggestIdx != null && (
+                  <button className="show-more-btn"
+                    onClick={() => fireInspect({ kind: "instance", idx: biggestIdx, cls: selected! })}>
+                    Biggest Instance →
+                  </button>
+                )}
               </div>
               <div className="trg-sidebar-btns">
                 <CopyBtn text={selected} />
@@ -7666,6 +7733,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
   const [pathSource, setPathSource] = React.useState<{nodeId: number; label: string} | null>(null);
   const [pathBetweenResult, setPathBetweenResult] = React.useState<any[] | null>(null);
   const [pathBetweenError, setPathBetweenError] = React.useState<string | null>(null);
+  const hasDomData = React.useContext(HasDomDataCtx);
 
   React.useEffect(() => {
     setWasmOutboundEdges(null);
@@ -9585,13 +9653,25 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <button className="btn-link" style={{ fontSize: "0.82rem" }}
                     title={`Open ${currentNode.display_class} in Type Reference Graph`}
                     onClick={() => {
-                      document.getElementById("type-ref-graph")?.scrollIntoView({ behavior: "smooth" });
-                      fireInspect({ kind: "class", cls: currentNode.display_class });
+                      window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: currentNode.display_class }));
+                      window.location.hash = "type-ref-graph";
                     }}>
                     Open in Type Graph →
                   </button>
                 </td>
               </tr>
+              {hasDomData && (
+                <tr>
+                  <th>Dominator</th>
+                  <td>
+                    <button className="btn-link" style={{ fontSize: "0.82rem" }}
+                      title={`Show ${currentNode.display_class} in WhoHolds Dominator Sankey`}
+                      onClick={() => pivotClass(currentNode.display_class)}>
+                      Open in Dominator →
+                    </button>
+                  </td>
+                </tr>
+              )}
               <tr>
                 <th>Shallow</th>
                 <td>{fmtB(currentNode.shallow)}</td>
@@ -10328,6 +10408,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
   onNavigate: (p: InspectPage) => void;
 }) {
   const hist = histogram.find((h: any) => h.pretty_class === cls);
+  const hasDomData = React.useContext(HasDomDataCtx);
   const edges: any[] = report.type_ref_graph ?? [];
   const outEdges = edges.filter((e: any) => e.src_class === cls).sort((a: any, b: any) => b.retained_weight - a.retained_weight);
   const inEdges  = edges.filter((e: any) => e.dst_class === cls).sort((a: any, b: any) => b.retained_weight - a.retained_weight);
@@ -10419,7 +10500,10 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           </button>
         )}
         <button className="show-more-btn"
-          onClick={() => fireInspect({ kind: "class", cls })}>
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: cls }));
+            window.location.hash = "type-ref-graph";
+          }}>
           Type Graph →
         </button>
         <button className="show-more-btn"
@@ -10429,6 +10513,11 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           }}>
           In Histogram →
         </button>
+        {hasDomData && (
+          <button className="show-more-btn" onClick={() => pivotClass(cls)}>
+            In Dominator →
+          </button>
+        )}
         <OqlBtn cls={cls} />
       </div>
       {report?.field_stats && (() => {
@@ -10600,6 +10689,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
   const ogCtx = React.useContext(ObjGraphCtx);
   const wasm = (window as any).__wasmExploration;
   const useWasm = !!wasm?.get_node_info;
+  const hasDomData = React.useContext(HasDomDataCtx);
 
   const staticNode: ObjGraphFlatNode | null = ogCtx ? (ogCtx[String(idx)] ?? null) : null;
   const [wasmInfo, setWasmInfo] = React.useState<{ shallow: number; retained: number } | null>(null);
@@ -10822,6 +10912,17 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
         }}>
           Object Explorer →
         </button>
+        <button className="show-more-btn" onClick={() => {
+          (window as any).__explorerNavigate?.("domtree", idx);
+          document.getElementById("object-graph")?.scrollIntoView({ behavior: "smooth" });
+        }}>
+          Dominator Tree →
+        </button>
+        {hasDomData && (
+          <button className="show-more-btn" onClick={() => pivotClass(cls)}>
+            In Dominator →
+          </button>
+        )}
       </div>
     </div>
   );
@@ -11291,6 +11392,16 @@ export default function App({ report }: { report: Report }) {
       </div>
       <Nav report={report} />
       <NavBreadcrumb />
+      {report.truncated_input && (
+        <div style={{ background: "var(--warn-bg, #fefce8)", border: "1px solid var(--warn-border, #fde047)", borderRadius: 6, padding: "0.5rem 0.75rem", margin: "0.5rem 0", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.875rem" }}>
+          <span style={{ fontSize: "1.1em" }}>⚠</span>
+          <span style={{ flex: 1 }}>
+            <strong>Truncated input:</strong> the heap dump file was incomplete (the gzip stream ended prematurely).
+            This report covers only the objects and classes that were successfully read before the stream ended.
+            Totals, leak suspects, and top consumers may be understated. Re-copy the dump to get a complete analysis.
+          </span>
+        </div>
+      )}
       {saveState !== "idle" && !!(window as any).__wasmSession && (
         <div className={`save-toast save-toast-${saveState}`}>
           {saveState === "saving" && "Generating offline report…"}

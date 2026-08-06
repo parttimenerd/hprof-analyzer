@@ -273,6 +273,7 @@ fn analyze_to_report_inner(
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
     let p1 = pass1::Pass1::run(source, false)?;
+    let truncated_input = p1.truncated_input;
     progress("pass1", 1.0);
 
     if p1.class_ids.len() > u32::MAX as usize {
@@ -434,7 +435,7 @@ fn analyze_to_report_inner(
         Some(a)
     };
 
-    let report = report::build_model(
+    let mut report = report::build_model(
         &mut g,
         dc_off,
         dc_tgt,
@@ -444,6 +445,7 @@ fn analyze_to_report_inner(
         alloc_sites,
         precomputed_field_stats,
     );
+    report.truncated_input = truncated_input;
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
     // Extract the per-object retained-size array before g is dropped.

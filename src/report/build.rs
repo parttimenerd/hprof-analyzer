@@ -613,6 +613,7 @@ pub fn build_model(
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
+        truncated_input: false,
         overview,
         leaks,
         top,
