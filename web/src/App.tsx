@@ -1702,7 +1702,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        String values seen more than once — reclaim with <code>String.intern()</code> or a deduplication pass.
+        String values seen more than once — reclaim by normalizing at parse time, using <code>-XX:+UseStringDeduplication</code> (G1 GC), or sharing a canonical instance per value.
         Approximate wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
