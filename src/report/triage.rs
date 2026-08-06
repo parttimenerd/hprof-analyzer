@@ -374,7 +374,7 @@ impl Rule for DominantGcRootType {
             TriageSeverity::Warning,
             "Dominant GC-Root Type",
             format!(
-                "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root type; investigate why this root category holds so much.",
+                "{:.1}% of the heap is held by \"{}\" roots — see GC Roots by Type in System Overview for the per-class breakdown.",
                 pct, top.root_type,
             ),
             Some(("system-overview", "System Overview")),
