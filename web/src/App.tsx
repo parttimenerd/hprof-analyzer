@@ -1688,7 +1688,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <h2>Duplicate Strings</h2>
         <p className="subtitle">
           {wasRun
-            ? "Duplicate-string analysis ran but found no data."
+            ? "Duplicate-string analysis found no data."
             : <>
                 Not run — use <strong>Full Analysis</strong> in the browser or pass <code>--find-duplicates</code> via CLI.
 </>
@@ -1762,7 +1762,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
         <h2>Duplicate Primitive Arrays</h2>
         <p className="subtitle">
           {wasRun
-            ? "Duplicate primitive-array analysis ran but found no data."
+            ? "Duplicate primitive-array analysis found no data."
             : <>
                 Not run — use <strong>Full Analysis</strong> in the browser or pass <code>--find-duplicates</code> via CLI.
 </>
@@ -2840,7 +2840,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>Held via a <strong>thread stack frame</strong> — open the Threads section and find the thread whose stack references this class; a blocked or long-running thread keeps these objects alive until the frame returns.</li>
           )}
           {s.root_type_label === "JNI Global" && (
-            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; look for JNI code that registers globals without a matching delete.</li>
+            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; look for JNI code that registers globals without a matching <code>DeleteGlobalRef</code>.</li>
           )}
           {!s.root_type_label && (
             <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root keeps each instance alive.</li>
