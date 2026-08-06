@@ -1688,7 +1688,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <h2>Duplicate Strings</h2>
         <p className="subtitle">
           {wasRun
-            ? "Duplicate-string analysis found no data."
+            ? "No duplicate strings found."
             : <>
                 Not run — use <strong>Full Analysis</strong> in the browser or pass <code>--find-duplicates</code> via CLI.
 </>
@@ -1762,7 +1762,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
         <h2>Duplicate Primitive Arrays</h2>
         <p className="subtitle">
           {wasRun
-            ? "Duplicate primitive-array analysis found no data."
+            ? "No duplicate primitive arrays found."
             : <>
                 Not run — use <strong>Full Analysis</strong> in the browser or pass <code>--find-duplicates</code> via CLI.
 </>
@@ -5797,7 +5797,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
         </p>
         <p>
-          Check for NIO buffer pools or caches that leak buffers. Common causes include Netty's PooledByteBufAllocator, FileChannel mapping, or custom ByteBuffer pools.
+          Check Netty's PooledByteBufAllocator, FileChannel mappings, and custom ByteBuffer pools for buffer leaks.
         </p>
         {isLarge && (
           <p className="subtitle">
