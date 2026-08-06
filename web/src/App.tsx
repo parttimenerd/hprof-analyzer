@@ -1548,7 +1548,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file — shows which kinds of data were captured. Missing allocation frames means the HPROF agent ran without stack tracking; enable it with <code>java -agentlib:hprof=heap=dump,depth=8</code>.
+        Record-type counts from the raw HPROF file — shows which kinds of data were captured. Missing allocation frames are normal; they require the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), which was removed in JDK 9+.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -3840,7 +3840,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Constant Primitive Arrays</h3>
       <p className="subtitle">
-        Primitive arrays where every element is the same value — often zero-initialized buffers or sentinel arrays. Deduplicate them with a shared singleton or intern pool to reclaim the backing storage.
+        Primitive arrays where every element is the same value — often zero-initialized buffers or sentinel arrays. Replace duplicates with a shared constant to reclaim the memory.
       </p>
       {cpa?.truncated && (
         <p className="subtitle">List truncated — remaining groups folded into one row.</p>
@@ -5920,7 +5920,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
       <p className="subtitle">Objects grouped by the stack trace that allocated them — shows where heap was created, not necessarily what is keeping it alive. Requires the HPROF agent with allocation tracking enabled.</p>
       {!data.traces_present ? (
         <p className="subtitle">
-          Allocation tracking not captured. Enable it with: <code>java -agentlib:hprof=heap=dump,depth=8</code> — then re-dump.
+          Allocation tracking not captured. This requires the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), removed in JDK 9+; standard <code>jmap</code>/<code>jcmd</code> dumps do not include allocation sites.
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
@@ -10072,7 +10072,7 @@ function GlossarySection() {
     ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained heap equals the shallow-size sum of each subtree.</>],
     ["Top-Level Dominator", <>an object directly held by a GC root — top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
     ["Dominator Depth", <>dominator-tree hop count from an object to its GC root. Low depth: objects near roots; high depth: long retention chains.</>],
-    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory pools.</>],
+    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory accumulates.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type.</>],
