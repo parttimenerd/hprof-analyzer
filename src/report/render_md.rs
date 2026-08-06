@@ -652,7 +652,10 @@ pub(crate) fn render_waste_summary(r: &Report, out: &mut String) {
     }
     out.push_str("## Waste Summary\n\n");
     out.push_str(&format!(
-        "_Approximately **{}** looks reclaimable across the sources below. Figures are approximate and may overlap slightly._\n\n",
+        "_Approximately **{}** estimated reclaimable across the sources below — \
+duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton \
+collection overhead. Fix the biggest category first for the highest impact. Figures are \
+approximate; sources may overlap._\n\n",
         format_bytes(w.total_bytes)
     ));
     let mut t = crate::md::Table::new(
@@ -1057,6 +1060,9 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
     if o.heap_composition.by_kind.len() > 1 {
         use crate::md::bar;
         out.push_str("### Heap Composition\n\n");
+        out.push_str(
+            "_Shallow heap broken down by object kind — instance objects, object arrays, and primitive arrays._\n\n",
+        );
         let max_shallow = o
             .heap_composition
             .by_kind
