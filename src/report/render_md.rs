@@ -894,9 +894,10 @@ _Definitions for the terms used above._
   empty buckets (wasted memory); a very high load factor increases hash collision
   probability and lookup cost.
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
-  reachable only through one or more `WeakReference` or `SoftReference` chains.
-  Weak-only referents are collected at the next GC cycle; soft-only referents are
-  collected under memory pressure.
+  reachable only through one or more `WeakReference`, `SoftReference`, or
+  `PhantomReference` chains. Weak-only referents are collected at the next GC cycle;
+  soft-only referents are collected under memory pressure; phantom-only referents are
+  already unreachable and queued for resource cleanup.
 - **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimisation
   where object references are stored as 32-bit integers instead of 64-bit pointers,
   halving reference-field overhead on heaps <= ~32 GB. Visible in the Heap Summary
@@ -3100,7 +3101,20 @@ indicates native resources (file handles, off-heap buffers) not being released p
         out.push_str("#### Referent Classes\n\n");
         render_class_table(&stats.referent_histogram, out);
         out.push_str("#### Only Weakly Retained\n\n");
-        out.push_str("_Objects with no incoming strong reference other than this reference chain — reachable only via this reference kind._\n\n");
+        let only_caption = match stats.kind.as_str() {
+            "Soft" => {
+                "_Referents reachable only through soft references — no strong path. GC clears these under memory pressure._"
+            }
+            "Weak" => {
+                "_Referents reachable only through weak references — no strong or soft path. GC can reclaim them at any collection._"
+            }
+            "Phantom" => {
+                "_Referents reachable only through phantom references — queued for post-cleanup resource release._"
+            }
+            _ => "_Objects reachable only via this reference kind — no incoming strong reference._",
+        };
+        out.push_str(only_caption);
+        out.push_str("\n\n");
         if stats.only_weakly_retained.is_empty() {
             out.push_str(
                 "_None found — no objects are exclusively reachable via this reference kind._\n\n",
