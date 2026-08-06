@@ -3112,7 +3112,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   return (
     <section id="top-consumers">
       <h2>Top Consumers</h2>
-      <p className="subtitle">Biggest objects, classes, and packages by retained heap. A class with high retained but low shallow heap is keeping many other objects alive — a strong leak signal.</p>
+      <p className="subtitle">Biggest objects, classes, and packages by retained heap.</p>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "treemap"] as const).map(v => (
           <button key={v} onClick={() => setTopView(v)} style={{
