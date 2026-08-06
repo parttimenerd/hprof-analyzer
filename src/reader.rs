@@ -585,8 +585,7 @@ mod tests {
 
     fn gzip_bytes(data: &[u8]) -> Vec<u8> {
         use std::io::Write;
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(data).unwrap();
         enc.finish().unwrap()
     }
@@ -599,7 +598,10 @@ mod tests {
         let mut out = Vec::new();
         dec.read_to_end(&mut out).unwrap();
         assert_eq!(out, minimal_hprof(), "clean stream decompresses correctly");
-        assert!(!flag.load(Ordering::Relaxed), "clean stream should not set truncated flag");
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "clean stream should not set truncated flag"
+        );
     }
 
     #[test]
@@ -612,7 +614,10 @@ mod tests {
         let mut out = Vec::new();
         // Should not error — returns however many bytes decompressed successfully.
         dec.read_to_end(&mut out).unwrap();
-        assert!(flag.load(Ordering::Relaxed), "truncated stream should set flag");
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "truncated stream should set flag"
+        );
     }
 
     #[test]
