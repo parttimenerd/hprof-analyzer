@@ -2857,7 +2857,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Classes retaining the most heap. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
+      <p className="subtitle">Classes retaining the most heap. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
       {l.suspects.length === 0 ? (
         <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in <a href="#dominator-analysis" onClick={(e) => { e.preventDefault(); document.getElementById("dominator-analysis")?.scrollIntoView({ behavior: "smooth" }); }}>Dominator Analysis</a>.</p>
       ) : (
@@ -4160,7 +4160,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
       <p className="subtitle">
-        Largest collection instances by element count.
+        Largest collection instances by element count — oversized collections often signal unbounded growth, missing eviction, or data that should be paginated.
         {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag for field attribution.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
@@ -4190,7 +4190,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
     <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
-        Element types stored in each collection class, summed across all instances.
+        Element types stored in each collection class, summed across all instances. Spot unexpected or boxed value types that could be replaced with primitive arrays or more specific collections.
       </p>
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
