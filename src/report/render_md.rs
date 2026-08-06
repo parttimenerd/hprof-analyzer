@@ -1579,7 +1579,9 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
     // ── Thread Overview table (always-on properties) ────────────────────────
     out.push_str("### Thread Overview\n\n");
     out.push_str(
-        "_One row per resolved thread; columns mirror Eclipse MAT's Thread Overview._\n\n",
+        "_Per-thread retained heap and properties. A thread keeps everything on its \
+stack alive — blocked or long-running threads can hold significant memory through \
+local variables._\n\n",
     );
     let retained_max = t.threads.iter().map(|th| th.retained).max().unwrap_or(0);
     let mut headers: Vec<&str> = vec![
@@ -1752,7 +1754,8 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
         return;
     }
     out.push_str(
-        "_Retained heap grouped by class loader (component); `% Heap` is the share of total reachable heap._\n\n",
+        "_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. \
+Totals can exceed heap size because boot-loader classes are counted in every component that retains them._\n\n",
     );
     let retained_max = tc.components.iter().map(|c| c.retained).max().unwrap_or(0);
     let mut headers: Vec<&str> = vec!["Component", "Retained", "% Heap", "Top classes"];
@@ -1803,8 +1806,9 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
         return;
     }
     out.push_str(
-        "_Array-length distribution bucketed by power-of-two element length; \
-         `Max length` is the inclusive upper bound of each bucket._\n\n",
+        "_Array-length distribution bucketed by power-of-two element length. \
+Helps spot unexpectedly large arrays or many tiny zero-length allocations. \
+`Max length` is the inclusive upper bound of each bucket._\n\n",
     );
 
     let render_table = |title: &str, buckets: &[SizeHistogramBucket], out: &mut String| {
@@ -2065,8 +2069,9 @@ pub(crate) fn render_collections(
     use crate::md::{Align, Table, bar};
     out.push_str("## Collections\n\n");
     out.push_str(
-        "_Collection and array occupancy: how full collections are, how big they get, \
-         and constant primitive arrays._\n\n",
+        "_Collection fill ratios, map load factors, and constant-value primitive array groups. \
+Low fill ratios waste backing-array memory; high load factors increase hash-bucket \
+collisions and degrade lookup performance._\n\n",
     );
 
     // ── Collections by Kind ──────────────────────────────────────────────────
@@ -3782,7 +3787,10 @@ pub(crate) fn render_boxed_numbers(
     }
     out.push_str("### Boxed Numbers\n\n");
     out.push_str(
-        "_Wrapper types whose instances occupy heap that could be replaced with primitives._\n\n",
+        "_Heap consumed by `Integer`, `Long`, `Double`, and other boxed wrapper types. \
+Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded \
+to 8-byte boundary) versus 4–8 bytes for an unboxed primitive. Replacing with \
+primitive fields or `int[]`/`long[]` arrays eliminates the per-object header._\n\n",
     );
     let mut t = Table::new(
         &[
