@@ -1112,7 +1112,8 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
-        "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
+        "_Every loaded class with its instance count, shallow heap (own bytes), and retained heap \
+(what would be reclaimed if all instances became unreachable). Top 50 shown; full list in JSON._\n\n",
     );
     let mut hist = Table::new(
         &[
@@ -1169,6 +1170,8 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
         out.push_str("### Class Loaders\n\n");
         out.push_str(
             "_Classes grouped by the loader that defined them. \
+Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common \
+source of metaspace and heap leaks. \
 The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), \
 not an instance name — the hprof format does not record loader names. \
 Multiple rows with the same loader class are distinct loader instances; \
@@ -1440,12 +1443,15 @@ It is worth investigating only if the instance count is unexpectedly high \
 pub(crate) fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## Top Consumers\n\n");
+    out.push_str(
+        "_Biggest objects, classes, and packages by retained heap. Unlike Leak Suspects, \
+these tables are unfiltered — use them when a suspect didn't cross the leak threshold, \
+or to see the full retention picture._\n\n",
+    );
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(
-        "_All top-level dominators ranked by retained heap. Unlike Leak Suspects, \
-this list is unfiltered — it includes every object directly dominated by a GC root, \
-down to the smallest. Use it when the suspect you care about didn't cross the \
-leak-suspect threshold, or to see the full retention picture._\n\n",
+        "_All top-level dominators ranked by retained heap — every object directly held by a GC root. \
+Use it when the suspect you care about didn't cross the leak-suspect threshold._\n\n",
     );
     // The "Held via" column names the dominant incoming `Class#field` reference
     // (the primary referrer; an object may have others). Present only when
@@ -2827,12 +2833,13 @@ pub(crate) fn render_biggest_collections(
     };
     out.push_str("## Biggest Collections\n\n");
     out.push_str(
-        "_The largest individual collection instances. Owner is the primary incoming \
-         `Class#field`; value type is the dominant runtime element type of the \
+        "_The largest individual collection instances. **Owner** is the primary incoming \
+         `Class#field`; **Value Type** is the dominant runtime element type of the \
          backing array (the direct element, not the logical key/value — for a \
          `Map<K,V>` this is often `Entry` or `Object`, not `V`). \
-         Owner/retained/value columns require `--collections`. Consider replacing \
-         over-allocated maps/lists with right-sized or lazy alternatives._\n\n",
+         Oversized collections often signal unbounded growth, missing eviction, or data \
+         that should be paginated or right-sized. \
+         Owner/retained/value columns require `--collections`._\n\n",
     );
 
     // When per-kind breakdown is available show it directly (avoids listing every

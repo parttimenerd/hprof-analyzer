@@ -3387,7 +3387,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3>ThreadLocal Variables</h3>
-      <p className="subtitle">Values stored in thread-local slots — stale entries (null key, cleaned-up referent) retain their values until the entry is explicitly removed or the thread terminates. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate.</p>
+      <p className="subtitle">Values stored in thread-local slots — stale entries have a null key (the <code>ThreadLocal</code> object was GC'd) but retain their value until the entry is explicitly removed or the thread terminates. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate.</p>
       <StdTable
         columns={[
           { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
@@ -6111,12 +6111,12 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(anonymous_class_count > 0 ? [{
       indicator: "Anonymous/Generated Classes",
       value: fmtCount(anonymous_class_count),
-      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" for the biggest.",
+      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" to find the biggest offenders.",
     }] : []),
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries</>,
       value: fmtCount(thread_local_null_key_count),
-      hint: "A null key means the ThreadLocal object was GC'd while the thread still holds the value — classic ThreadLocal leak in thread pools. Explicitly call ThreadLocal.remove() when done, or use try-finally to guarantee cleanup.",
+      hint: "A null key means the ThreadLocal object was GC'd while the thread still holds the value — classic leak in thread pools. Call ThreadLocal.remove() when done, or use try-finally to guarantee cleanup.",
     }] : []),
     ...(direct_byte_buffer_capacity_sum > 0 ? [{
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
