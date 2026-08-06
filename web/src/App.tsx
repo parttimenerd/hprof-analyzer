@@ -2856,7 +2856,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Classes retaining the most heap — prime candidates for memory investigation. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
+      <p className="subtitle">Classes retaining the most heap. Class-name icons: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> List Instances</p>
       {l.suspects.length === 0 ? (
         <p className="subtitle">No suspect exceeds the retention threshold — heap is spread across many roots.</p>
       ) : (
@@ -3813,7 +3813,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Map Collision Ratio</h3>
       <p className="subtitle">
-        Load factor (occupied slots ÷ capacity) for {fmtCount(mcr?.tracked ?? 0)} of {fmtCount(mcr?.total ?? 0)} maps; high values (≥ 90%) indicate dense packing and longer probe chains.
+        Load factor (occupied slots ÷ capacity) for {fmtCount(mcr?.tracked ?? 0)} of {fmtCount(mcr?.total ?? 0)} maps; high values (≥ 90%) signal dense packing and longer probe chains.
       </p>
       {mcrBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -5564,7 +5564,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
-        <p className="subtitle">No significant drops.</p>
+        <p className="subtitle">No objects meet the threshold.</p>
       ) : (() => {
         const dropCols: TableColumn<import("./types").BigDropRow>[] = [
           { id: "object", name: "Object", grow: 1, maxWidth: "310px", cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ListObjectsBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
