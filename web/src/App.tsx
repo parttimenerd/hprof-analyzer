@@ -3251,7 +3251,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
       </summary>
       <div className="thread-body">
         <div className="thread-meta-row">
-          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code>{cls}</code><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /></span>
+          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code>{cls}</code><CopyBtn text={cls} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /></span>
           <span className="thread-meta-item"><span className="thread-meta-label">shallow</span>{fmtB(t.shallow)}</span>
           <span className="thread-meta-item"><span className="thread-meta-label">retained</span>{fmtB(t.retained)}</span>
           <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span>{fmtB(t.max_local_retained)}</span>
@@ -10884,7 +10884,8 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
           <button className="inspector-gcpath-toggle" onClick={() => setGcPathOpen(v => !v)}>
             {gcPathOpen ? "▼" : "▶"} Path to GC Root
           </button>
-          {gcPathOpen && !gcPath && <p className="trg-no-data">Loading…</p>}
+          {gcPathOpen && !gcPath && loading && <p className="trg-no-data">Loading…</p>}
+          {gcPathOpen && !gcPath && !loading && <p className="trg-no-data" style={{ color: "var(--muted)" }}>No GC root path available for this object.</p>}
           {gcPathOpen && gcPath && (
             <ol className="inspector-dom-path">
               {gcPath.map((step: any, i: number) => (
@@ -10959,6 +10960,11 @@ function InspectorGCRootPage({ idx, cls, onNavigate }: {
           ))}
         </ol>
       )}
+      <div className="trg-page-actions">
+        <button className="show-more-btn" onClick={() => onNavigate({ kind: "instance", idx, cls })}>
+          ← Instance View
+        </button>
+      </div>
     </div>
   );
 }
@@ -11025,6 +11031,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
                   onClick={() => onNavigate({ kind: "instance", idx: f.dense_idx, cls: f.display_class ?? "?" })}>
                   {(f.display_class ?? "?").split(".").pop()}
                 </button>
+                <CopyBtn text={f.display_class ?? ""} />
                 {refSizes.has(f.dense_idx) && (
                   <span className="trg-edge-stat">
                     {formatBytes(refSizes.get(f.dense_idx)!)} retained
