@@ -517,7 +517,7 @@ impl Rule for ThreadLocalLeak {
             TriageSeverity::Warning,
             "ThreadLocal Leak",
             format!(
-                "{} ThreadLocalMap entries have a cleared key — the referent thread was GC'd but the value was never removed. Values leak until the thread terminates or `ThreadLocal.remove()` is called. Common in thread-pooled servers.",
+                "{} ThreadLocalMap entries have a cleared key — the `ThreadLocal` object was GC'd but the value was never removed. Values accumulate until the thread terminates or `ThreadLocal.remove()` is called. Common in thread-pooled servers.",
                 fmt_count(n),
             ),
             Some(("leak-indicators", "Leak Indicators")),
@@ -581,9 +581,9 @@ impl Rule for WeakRefEscape {
         Some(signal(
             "weak-ref-escape",
             TriageSeverity::Info,
-            "Weak-Ref Escape",
+            "Only-Weakly Retained Objects",
             format!(
-                "{} objects only weakly retained, totaling {} — the next GC cycle will reclaim them. If they are not being reclaimed in practice, check that you are not also holding a strong reference elsewhere.",
+                "{} objects only weakly/softly/phantom retained, totaling {} — no strong path keeps them alive; GC can reclaim them (weak: at any collection; soft: under memory pressure). If they are not being reclaimed in practice, check that you are not also holding a strong reference elsewhere.",
                 fmt_count(only_weak_objects),
                 format_bytes(only_weak_retained),
             ),
