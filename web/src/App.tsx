@@ -5920,7 +5920,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them — shows where heap was created, not necessarily what is keeping it alive. Only available when the dump was captured with the HPROF agent (JDK 8 and earlier).</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them — shows where heap was created, not necessarily what is keeping it alive. Only available when the dump was captured with the HPROF agent (JDK 8 and earlier). Each site is a candidate to allocate less by pooling, caching, or deferring construction.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking not captured. This requires the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), removed in JDK 9; standard <code>jmap</code>/<code>jcmd</code> dumps do not include allocation sites.
