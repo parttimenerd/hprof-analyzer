@@ -2831,7 +2831,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
           <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to open the Inspector and follow the reference chain from this class back to its GC root.</li>
           {s.accumulation_class && (
-            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field is retaining the large set of objects.</li>
+            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field retains the large set of objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
             <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — look for a static field that is never cleared or a listener list where subscribers are never removed.</li>
@@ -2843,7 +2843,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; look for JNI code that registers globals without a matching delete.</li>
           )}
           {!s.root_type_label && (
-            <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root is keeping each instance alive.</li>
+            <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root keeps each instance alive.</li>
           )}
         </ul>
       </div>
@@ -4020,7 +4020,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
     <section id="container-attribution-classfield">
       <h2>Container Attribution</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> holds the most collection memory — helps locate which field is backing the largest maps or lists.
+        Which <code>Class#field</code> holds the most collection memory — identifies which field backs the largest maps or lists.
       </p>
 
       <h3>Top by Total Memory</h3>
@@ -4189,7 +4189,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
     <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
-        What element types your collections hold, aggregated per collection class.
+        Element types stored in each collection class, aggregated across all instances.
       </p>
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -10314,7 +10314,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <h2>Type Reference Graph Diff</h2>
           <p className="subtitle">
             Directed edges between class types that grew between the first and last dumps.
-            A high Δ retained weight indicates one class is accumulating more references to another.
+            A high Δ retained weight indicates one class accumulates more references to another.
             Sorted by absolute change in retained weight.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
