@@ -689,9 +689,9 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
         "_Share of the reachable heap retained by the few largest top-level dominators \
          (a dominator's retained size is everything it keeps alive). Read it as a \
          concentration curve: if **Top 1** is already high, one object is the leak and \
-         freeing it reclaims most of the heap; if the share only climbs as you widen to \
+         releasing it reclaims most of the heap; if the share only climbs as you widen to \
          **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache \
-         or collection of similar objects) and no single free helps much._\n\n",
+         or collection of similar objects) and no single release helps much._\n\n",
     );
     let mut t = Table::new(
         &["Scope", "Retained Share", "Retained"],
@@ -844,10 +844,10 @@ _Definitions for the terms used above._
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the
   objects it points to.
-- **Retained heap (retained size)**: the total memory that would be freed if this
+- **Retained heap (retained size)**: the total memory that would be reclaimed if this
   object were garbage-collected, meaning its own shallow size plus everything
   reachable *only* through it. This is the number that answers \"how much does
-  freeing this actually reclaim?\" and it is the basis for every percentage in this
+  releasing this actually reclaim?\" and it is the basis for every percentage in this
   report. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Reachable heap**: all objects the [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) can still
   reach from a GC root. Anything unreachable is already collectible and is excluded
@@ -857,7 +857,7 @@ _Definitions for the terms used above._
   [JNI](https://en.wikipedia.org/wiki/Java_Native_Interface) references, and
   similar. Every retained-size chain ends at a GC root.
 - **Dominator**: object *A* dominates object *B* if every path from a GC root to
-  *B* passes through *A*. In other words, if *A* were freed, *B* would become
+  *B* passes through *A*. In other words, if *A* were released, *B* would become
   unreachable too. An object's retained heap is exactly the set of objects it
   dominates. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Dominator tree**: the tree formed by linking each object to its immediate
@@ -3079,7 +3079,7 @@ or that native resources (file handles, native buffers) are not being released p
         out.push_str("#### Referent classes\n\n");
         render_class_table(&stats.referent_histogram, out);
         out.push_str("#### Only-weakly retained _(approximate)_\n\n");
-        out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._\n\n");
+        out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would reclaim them._\n\n");
         if stats.only_weakly_retained.is_empty() {
             out.push_str(
                 "_None found — no objects are exclusively reachable via this reference kind._\n\n",

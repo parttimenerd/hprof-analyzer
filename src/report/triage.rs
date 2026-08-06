@@ -330,7 +330,7 @@ impl Rule for Concentration {
                     TriageSeverity::Critical,
                     "Concentration",
                     format!(
-                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap, so freeing it would reclaim most memory.",
+                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap, so releasing it would reclaim most memory.",
                         s.pretty_class,
                         kind,
                         held_by,
