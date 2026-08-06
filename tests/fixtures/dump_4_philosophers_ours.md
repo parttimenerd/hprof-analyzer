@@ -18,6 +18,8 @@ _All sizes are binary (1 KB = 1024 bytes, 1 MB = 1024 KB, and so on)._
 - [Top Components](#top-components)
 - [Arrays by Size](#arrays-by-size)
 - [Collections](#collections)
+- [Collection Waste Budget](#collection-waste-budget)
+- [Top Retainers](#top-retainers)
 - [References](#references)
 - [Unreachable Objects](#unreachable-objects)
 - [Allocation Sites](#allocation-sites)
@@ -52,14 +54,14 @@ _At-a-glance digest; see the sections below for full detail._
 
 ## Memory Triage
 
-_Automated signals pointing to where memory concentrates and what to investigate first._
+_Automated signals pointing to where memory concentrates and what to investigate first. Total reachable heap: 11.6 MB_
 
 - **Headline Retainer:** `scala.concurrent.stm.ccstm.InTxnImpl` (a class group) retains 2.7 MB (22.9% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single holder to target. See [Leak Suspects](#leak-suspects).
 - **Shape:** deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 7, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 objects each hold ≥1%. See [Top Consumers](#top-consumers).
-- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Leak Indicators](#leak-indicators).
-- **Fixed per-Object Header Overhead:** 2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Header Overhead](#object-header-overhead).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
+- **Fixed per-Object Header Overhead:** 2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Empty-Collection Cemetery:** 5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written. See [Collections](#collections).
 - **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
@@ -689,6 +691,8 @@ _One row per dominator class: how many other objects it immediately dominates an
 | **Total**                                                             |  **48,664** | **214,614** |        **2.1 MB** |       **10.9 MB** |
 
 ## Threads
+
+_Per-thread call stacks and retained heap. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
 
 ### Thread Overview
 
@@ -5998,6 +6002,15 @@ _The largest object arrays by shallow size, individually and aggregated by array
 | `scala.math.BigInt[]`                           |         1 |     8.0 KB |
 | **Total**                                       | **5,125** | **2.9 MB** |
 
+## Collection Waste Budget
+
+_Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate._
+
+| Waste Type                   |      Wasted |   Objects | Fix                                                                           |
+| ---------------------------- | ----------: | --------: | ----------------------------------------------------------------------------- |
+| Boxed Primitives (footprint) |     20.8 KB |     1,201 | Use primitive arrays; or Eclipse Collections / Koloboke for typed collections |
+| **Total**                    | **20.8 KB** | **1,201** |                                                                               |
+
 ## Top Retainers
 
 _Combined ranking of `Class#field` references and stack-frame locals by retained heap. Retained totals can exceed heap size for linked structures (e.g. `List#next`) where each node retains its entire tail — treat as relative, not additive._
@@ -6327,7 +6340,7 @@ _Point-in-time counts for known Java leak patterns. Non-zero values are not alwa
 
 ## Glossary
 
-_Definitions for the terms used above._
+_Definitions for the heap analysis terms used throughout this report._
 
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the

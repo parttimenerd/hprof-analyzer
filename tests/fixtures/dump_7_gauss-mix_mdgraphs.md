@@ -50,13 +50,13 @@ _At-a-glance digest; see the sections below for full detail._
 
 ## Memory Triage
 
-_Automated signals pointing to where memory concentrates and what to investigate first._
+_Automated signals pointing to where memory concentrates and what to investigate first. Total reachable heap: 33.1 MB_
 
 - **Headline Retainer:** `java.util.zip.ZipFile$Source` (a class group) retains 12.3 MB (37.3% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single holder to target. See [Leak Suspects](#leak-suspects).
 - **Shape:** deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 7, max depth 967. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.util.zip.ZipFile$Source`, retains 8.1% and the top 10 retain 43.5% of the heap; 15 objects each hold ≥1%. See [Top Consumers](#top-consumers).
-- **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Leak Indicators](#leak-indicators).
+- **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
 - **GC Waste:** 11.6% of the heap is unreachable (4.3 MB) — largest garbage cluster rooted at `int[]` (512.0 KB); the GC has not yet collected it. Trigger a full GC or investigate why these objects are promoted without being reclaimed. See [Unreachable Objects](#unreachable-objects).
 - **Empty-Collection Cemetery:** 6,686 of 9,466 tracked collections (70.6%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written. See [Collections](#collections).
 - **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
@@ -675,6 +675,8 @@ _One row per dominator class: how many other objects it immediately dominates an
 | **Total**                                                                  | **146,791** | **450,094** |        **5.5 MB** |       **29.1 MB** |                  |
 
 ## Threads
+
+_Per-thread call stacks and retained heap. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
 
 ### Thread Overview
 
@@ -13551,7 +13553,7 @@ _Point-in-time counts for known Java leak patterns. Non-zero values are not alwa
 
 ## Glossary
 
-_Definitions for the terms used above._
+_Definitions for the heap analysis terms used throughout this report._
 
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the

@@ -50,15 +50,15 @@ _At-a-glance digest; see the sections below for full detail._
 
 ## Memory Triage
 
-_Automated signals pointing to where memory concentrates and what to investigate first._
+_Automated signals pointing to where memory concentrates and what to investigate first. Total reachable heap: 11.3 MB_
 
 - **Headline Retainer:** `java.lang.Thread` (a single object) retains 5.5 MB (48.8% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single holder to target. See [Leak Suspects](#leak-suspects).
 - **Shape:** deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 8, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.lang.Thread`, retains 48.8% and the top 10 retain 84.3% of the heap; 6 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Thread Pinning:** thread `main` retains 5.5 MB (48.8% of heap) and pins 329 thread-local roots — a live thread is holding a disproportionate amount of memory alive. Inspect the thread's stack frames and ThreadLocal values in the Threads section. See [Threads](#threads).
-- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Leak Indicators](#leak-indicators).
-- **Fixed per-Object Header Overhead:** 3.8 MB (34.1% of heap) consumed by JVM object headers alone (334,875 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Header Overhead](#object-header-overhead).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
+- **Fixed per-Object Header Overhead:** 3.8 MB (34.1% of heap) consumed by JVM object headers alone (334,875 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Empty-Collection Cemetery:** 2,943 of 3,891 tracked collections (75.6%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written. See [Collections](#collections).
 - **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
@@ -10557,6 +10557,8 @@ _One row per dominator class: how many other objects it immediately dominates an
 
 ## Threads
 
+_Per-thread call stacks and retained heap. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
+
 ### Thread Overview
 
 _Per-thread retained heap and properties. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
@@ -11291,7 +11293,7 @@ _Point-in-time counts for known Java leak patterns. Non-zero values are not alwa
 
 ## Glossary
 
-_Definitions for the terms used above._
+_Definitions for the heap analysis terms used throughout this report._
 
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the

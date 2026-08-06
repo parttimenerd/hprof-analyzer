@@ -50,7 +50,7 @@ _At-a-glance digest; see the sections below for full detail._
 
 ## Memory Triage
 
-_Automated signals pointing to where memory concentrates and what to investigate first._
+_Automated signals pointing to where memory concentrates and what to investigate first. Total reachable heap: 29.8 MB_
 
 - **Headline Retainer:** `java.lang.Thread` (a single object) retains 22.9 MB (76.7% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** highly concentrated — `java.lang.Thread` (a single object) holds 76.7% of the heap; making it unreachable would reclaim most memory. See [Leak Suspects](#leak-suspects).
@@ -59,9 +59,9 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **One Leak or Many:** the single biggest object, `java.lang.Thread`, retains 76.7% and the top 10 retain 92.6% of the heap; 4 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Class-Loader Reload (Low Count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (8.6 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#system-overview).
 - **Thread Pinning:** thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding a disproportionate amount of memory alive. Inspect the thread's stack frames and ThreadLocal values in the Threads section. See [Threads](#threads).
-- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Leak Indicators](#leak-indicators).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
 - **Sparse Object Arrays:** 38,119 object arrays are <=20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. Replace with a `HashMap`/`SparseArray`, a `List` that grows on demand, or a dedicated sparse-matrix library. See [Collections](#collections).
-- **Fixed per-Object Header Overhead:** 10.9 MB (36.6% of heap) consumed by JVM object headers alone (952,666 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Header Overhead](#object-header-overhead).
+- **Fixed per-Object Header Overhead:** 10.9 MB (36.6% of heap) consumed by JVM object headers alone (952,666 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Empty-Collection Cemetery:** 5,806 of 6,307 tracked collections (92.1%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written. See [Collections](#collections).
 - **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
@@ -5753,6 +5753,8 @@ _One row per dominator class: how many other objects it immediately dominates an
 
 ## Threads
 
+_Per-thread call stacks and retained heap. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
+
 ### Thread Overview
 
 _Per-thread retained heap and properties. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
@@ -6512,7 +6514,7 @@ _Point-in-time counts for known Java leak patterns. Non-zero values are not alwa
 
 ## Glossary
 
-_Definitions for the terms used above._
+_Definitions for the heap analysis terms used throughout this report._
 
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the
