@@ -916,7 +916,7 @@ impl Rule for DuplicateStrings {
                 fmt_count(ds.total_string_instances),
                 example,
             ),
-            Some(("duplicate-strings", "Duplicate Strings")),
+            Some(("duplicate-strings-approximate", "Duplicate Strings")),
         ))
     }
 }
@@ -946,7 +946,7 @@ impl Rule for CharArraySlack {
                 format_bytes(caw.total_wasted_bytes),
                 fmt_count(caw.wasteful_arrays),
             ),
-            Some(("duplicate-strings", "Duplicate Strings")),
+            Some(("duplicate-strings-approximate", "Duplicate Strings")),
         ))
     }
 }
