@@ -861,7 +861,7 @@ _Definitions for the terms used above._
   [JNI](https://en.wikipedia.org/wiki/Java_Native_Interface) references, and
   similar. Every retained-size chain ends at a GC root.
 - **Dominator**: object *A* dominates object *B* if every path from a GC root to
-  *B* passes through *A*. In other words, if *A* were released, *B* would become
+  *B* passes through *A*. In other words, if *A* became unreachable, *B* would become
   unreachable too. An object's retained heap is exactly the set of objects it
   dominates. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Dominator tree**: the tree formed by linking each object to its immediate

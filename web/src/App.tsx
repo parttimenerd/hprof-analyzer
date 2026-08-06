@@ -3387,7 +3387,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3>ThreadLocal Variables</h3>
-      <p className="subtitle">Values stored in thread-local slots — stale entries (null key) leak memory until the thread terminates.</p>
+      <p className="subtitle">Values stored in thread-local slots — stale entries (null key, cleaned-up referent) retain their values until the entry is explicitly removed or the thread terminates. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate.</p>
       <StdTable
         columns={[
           { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
