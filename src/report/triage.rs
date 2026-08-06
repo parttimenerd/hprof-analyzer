@@ -677,7 +677,7 @@ impl Rule for GcWaste {
             TriageSeverity::Warning,
             "GC Waste",
             format!(
-                "{:.1}% of the heap is unreachable ({}){}; the GC has not yet collected it. Trigger a full GC or investigate why these objects are promoted without being reclaimed.",
+                "{:.1}% of the heap is unreachable ({}){}; the GC has not yet collected it. Trigger a full GC (`jcmd <pid> GC.run`) and re-dump — if the count drops sharply, the dump was taken mid-collection.",
                 pct, size_desc, cluster,
             ),
             Some(("unreachable-objects", "Unreachable Objects")),
