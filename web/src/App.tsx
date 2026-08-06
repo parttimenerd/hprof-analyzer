@@ -1704,7 +1704,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
         String values seen more than once — each duplicate is wasted heap that <code>String.intern()</code> or a deduplication pass could reclaim.
-        Approx wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
+        Approximate wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
 
@@ -1778,7 +1778,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
         Primitive arrays with identical content — duplicate copies that could be deduplicated to one.
-        Approx wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
+        Approximate wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
         <DupPrimArrayRowsTable rows={d.rows} />
@@ -5434,7 +5434,7 @@ function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[]
   return (
     <div>
       <p className="subtitle" style={{ marginTop: 0 }}>
-        Rows = dominator class · Columns = dominated class · Cell = retained bytes flowing through that pair.
+        Rows: dominator class · Columns: dominated class · Cell: retained bytes flowing through that pair.
         Click a cell to inspect the dominated class.
       </p>
       <div style={{ overflowX: "auto" }}>
@@ -7260,7 +7260,7 @@ function RetentionChain({
                 <button
                   className="btn-link"
                   style={{ fontSize: "0.7rem", width: "1.2em", flexShrink: 0, color: "var(--muted)" }}
-                  title={isExp ? "Collapse outbound refs" : "Expand outbound refs"}
+                  title={isExp ? "Collapse outbound references" : "Expand outbound references"}
                   onClick={() => toggleExpand(node.denseIdx)}
                 >
                   {isExp ? "▼" : "▶"}
@@ -7288,7 +7288,7 @@ function RetentionChain({
             {isExp && (
               <div style={{ paddingLeft: "2rem", marginTop: "1px", marginBottom: "2px" }}>
                 {visibleRefs.length === 0 ? (
-                  <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>No refs captured</span>
+                  <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>No references captured</span>
                 ) : visibleRefs.map((ref, ri) => (
                   <div key={ri} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.76rem", padding: "1px 0" }}>
                     <span style={{ color: "var(--muted)", flexShrink: 0 }}>
@@ -8200,7 +8200,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 type="text"
                 value={jumpInput}
                 onChange={e => setJumpInput(e.target.value)}
-                placeholder="Go to obj # or 0x…"
+                placeholder="Go to object # or 0x…"
                 style={{ width: "9em", fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
                 title="Jump to an object by its dense index"
               />
@@ -8282,7 +8282,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <thead>
             <tr>
               <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "class" ? { col: "class", asc: !s.asc } : { col: "class", asc: true })}>Class {rootSort.col === "class" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
-              <th style={{ whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }} title="Dense index — use in 'Go to obj #' to navigate directly" onClick={() => setRootSort(s => s.col === "idx" ? { col: "idx", asc: !s.asc } : { col: "idx", asc: true })}># {rootSort.col === "idx" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
+              <th style={{ whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }} title="Dense index — use in 'Go to object #' to navigate directly" onClick={() => setRootSort(s => s.col === "idx" ? { col: "idx", asc: !s.asc } : { col: "idx", asc: true })}># {rootSort.col === "idx" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
               <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "shallow" ? { col: "shallow", asc: !s.asc } : { col: "shallow", asc: false })}>Shallow {rootSort.col === "shallow" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
               <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => setRootSort(s => s.col === "retained" ? { col: "retained", asc: !s.asc } : { col: "retained", asc: false })}>Retained {rootSort.col === "retained" ? (rootSort.asc ? "▲" : "▼") : ""}</th>
               <th style={{ textAlign: "right" }}>% Heap</th>
@@ -8424,7 +8424,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     setBreadcrumb(prev => prev.slice(0, i));
                     window.location.hash = `${b.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${b.nodeId}`;
                   }}
-                  title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
+                  title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound references" : undefined}
                 >
                   {b.sourceTab === "domtree" && <span style={{ color: "var(--muted)", fontSize: "0.8em", marginRight: "2px" }}>⌞</span>}
                   {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
@@ -8480,7 +8480,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </p>
           ) : (
             <p className="subtitle" style={{ margin: "0 0 0.4rem", fontSize: "0.8rem" }}>
-              <code>{wasmBelowInfo.display_class}</code> · shallow {fmtB(wasmBelowInfo.shallow)} · retained {fmtB(wasmBelowInfo.retained)} · below significance threshold — live WASM data.
+              <code>{wasmBelowInfo.display_class}</code> · shallow {fmtB(wasmBelowInfo.shallow)} · retained {fmtB(wasmBelowInfo.retained)} · below significance threshold — live data.
             </p>
           )}
           {effectiveCls && (
@@ -8575,7 +8575,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   lastInternalNavRef.current = b.nodeId;
                   window.location.hash = `${b.sourceTab ?? (tab === "graph" ? "explore" : tab)}/${b.nodeId}`;
                 }}
-                title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound refs" : undefined}
+                title={b.sourceTab === "domtree" ? "Navigated via dominator tree" : b.sourceTab === "explore" ? "Navigated via outbound references" : undefined}
               >
                 {b.sourceTab === "domtree" && <span style={{ color: "var(--muted)", fontSize: "0.8em", marginRight: "2px" }}>⌞</span>}
                 {(b.label.split(".").pop() ?? b.label)}#{b.nodeId}
@@ -8706,7 +8706,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             type="text"
             value={jumpInput}
             onChange={e => setJumpInput(e.target.value)}
-            placeholder="Go to obj # or 0x…"
+            placeholder="Go to object # or 0x…"
             style={{ width: "9em", fontSize: "0.82rem", padding: "1px 5px", border: "1px solid var(--border, #e2e8f0)", borderRadius: 4, background: "var(--input-bg, var(--bg))", color: "inherit" }}
             title="Jump to an object by its dense index"
           />
@@ -8854,7 +8854,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           <td>
                             <span className="copy-cell">
                               <button className="btn-link"
-                                title={edge.count > 1 ? `Navigate to biggest instance (×${edge.count} total)` : "Navigate to outbound refs"}
+                                title={edge.count > 1 ? `Navigate to biggest instance (×${edge.count} total)` : "Navigate to outbound references"}
                                 onClick={() => {
                                   navigate("explore", edge.child_idx, edge.child_class, edge.field_name || undefined, edge.count > 1 ? edge.groupKey : undefined);
                                 }}>
@@ -8926,7 +8926,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </td>
                               <td>
                                 <span className="copy-cell" style={{ paddingLeft: "0.5rem" }}>
-                                  <button className="btn-link" title="Navigate to outbound refs" style={{ fontSize: "0.8rem" }}
+                                  <button className="btn-link" title="Navigate to outbound references" style={{ fontSize: "0.8rem" }}
                                     onClick={() => navigate("explore", m.child_idx, m.child_class, edge.field_name || undefined)}>
                                     <code>{m.child_class}</code>
                                   </button>
@@ -8983,7 +8983,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 const pct = currentNode.retained > 0 ? Math.round(childTotal / currentNode.retained * 100) : 0;
                 return (
                   <p className="subtitle" style={{ fontSize: "0.78rem", marginTop: "0.4rem" }}>
-                    {currentEdges.length} ref{currentEdges.length === 1 ? "" : "s"} · children retain {fmtB(childTotal)} ({pct}%) · self shallow {fmtB(selfOnly)}
+                    {currentEdges.length} reference{currentEdges.length === 1 ? "" : "s"} · children retain {fmtB(childTotal)} ({pct}%) · self shallow {fmtB(selfOnly)}
                   </p>
                 );
               })()}
@@ -9442,7 +9442,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             <tr key={childId}>
                               <td>
                                 <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                                  <button className="btn-link" title="Explore outbound refs"
+                                  <button className="btn-link" title="Explore outbound references"
                                     onClick={() => navigate("explore", childId, cn.display_class)}
                                   >
                                     <code>{cn.display_class}</code>
@@ -9526,7 +9526,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <th>Object #</th>
                 <td>
                   <span className="copy-cell">
-                    <span title="0-based dense index; use in 'Go to obj #' to navigate here">{nodeId}</span>
+                    <span title="0-based dense index; use in 'Go to object #' to navigate here">{nodeId}</span>
                     <CopyBtn text={String(nodeId)} />
                   </span>
                 </td>
@@ -9870,7 +9870,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <React.Fragment key={childId}>
                       <div style={{ overflow: "hidden", padding: "1px 2px" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", minWidth: 0 }}>
-                          <button className="btn-link" title="Explore outbound refs"
+                          <button className="btn-link" title="Explore outbound references"
                             style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
                             onClick={() => navigate("explore", childId, cn.display_class)}>
                             <code style={{ fontSize: "0.8rem" }}>{cn.display_class}</code>
@@ -10392,7 +10392,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                     ))}
                   </span>
                 )}
-                <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
+                <span className="trg-edge-stat">{fmtCount(e.edge_count)} references · {formatBytes(e.retained_weight)}</span>
               </li>
             ))}
           </ul>
@@ -10412,7 +10412,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                     ))}
                   </span>
                 )}
-                <span className="trg-edge-stat">{fmtCount(e.edge_count)} refs · {formatBytes(e.retained_weight)}</span>
+                <span className="trg-edge-stat">{fmtCount(e.edge_count)} references · {formatBytes(e.retained_weight)}</span>
               </li>
             ))}
           </ul>
@@ -10446,7 +10446,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         return (
           <details style={{ marginTop: "0.5rem" }}>
             <summary style={{ fontSize: "0.82rem", cursor: "pointer" }}>
-              Field Statistics ({cfs.ref_fields.length} ref field{cfs.ref_fields.length !== 1 ? "s" : ""})
+              Field Statistics ({cfs.ref_fields.length} reference field{cfs.ref_fields.length !== 1 ? "s" : ""})
             </summary>
             <table style={{ fontSize: "0.78rem", width: "100%", borderCollapse: "collapse", marginTop: "0.3rem" }}>
               <thead>
@@ -10459,7 +10459,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
               <tbody>
                 {cfs.ref_fields.map((f: any, i: number) => (
                   <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-                    <td><code>{f.field_name || "(all refs)"}</code></td>
+                    <td><code>{f.field_name || "(all references)"}</code></td>
                     <td style={{ textAlign: "right" }}>{f.non_null_count.toLocaleString()}</td>
                     <td style={{ textAlign: "right" }}>{formatBytes(f.total_retained)}</td>
                   </tr>
@@ -10744,7 +10744,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
             {topFields.map((f, i) => (
               <li key={i}>
                 <div className="inspector-field-bar-row">
-                  <code className="trg-field-name">{f.name || <span style={{color:"var(--muted)"}}>ref</span>}</code>
+                  <code className="trg-field-name">{f.name || <span style={{color:"var(--muted)"}}>(unnamed reference)</span>}</code>
                   <button className="trg-link-btn" onClick={() => onNavigate({ kind: "instance", idx: f.idx, cls: f.cls })}>
                     {f.cls.split(".").pop()}
                   </button>
@@ -10921,7 +10921,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
         {sorted.map((f: any, i: number) => (
           <li key={i}>
             <code className="trg-field-name">
-              {f.name || <span style={{color:"var(--muted)"}}>(unnamed ref)</span>}
+              {f.name || <span style={{color:"var(--muted)"}}>(unnamed reference)</span>}
             </code>
             {f.kind === "ref" ? (
               <>
@@ -11292,7 +11292,7 @@ export default function App({ report }: { report: Report }) {
         </button>
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml((report.overview.source_name || "heap-report").replace(/[^a-z0-9._-]/gi, "_") + ".html")}>⬇ Save HTML</button>
         {(window as any).__wasmSession && (
-          <span className="save-hint" title="Downloads a self-contained HTML without WASM">
+          <span className="save-hint" title="Downloads a self-contained HTML without live heap exploration">
             <kbd>Ctrl+S</kbd> Save offline
           </span>
         )}
