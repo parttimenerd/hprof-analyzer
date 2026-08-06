@@ -1775,7 +1775,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
     <section id="duplicate-prim-arrays">
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
-        Primitive arrays with identical content — each duplicate group collapses to one instance on deduplication.
+        Primitive arrays with identical content — each duplicate group reduces to one instance after deduplication.
         Approximate wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
