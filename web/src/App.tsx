@@ -840,8 +840,7 @@ function WasteSummarySection({ report }: { report: Report }) {
     <section className="section" id="waste-summary" tabIndex={-1}>
       <h2>Waste Summary</h2>
       <p className="subtitle">
-        <strong>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the
-        sources below. Figures are approximate; sources may overlap.
+        <strong>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
       </p>
       <div className="waste-summary-table">
         <StdTable columns={wasteCols} data={w.sources} searchKeys={["label"]} fmtBtn={kbBtn} defaultSortFieldId="reclaimable" defaultSortAsc={false} />
@@ -2148,7 +2147,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Classes loaded by multiple class loaders — typical in hot-reload environments (web containers, OSGi) but can cause ClassCastException and hidden memory overhead when the same class exists in multiple loaders.
+            Class names loaded by more than one class loader — N copies means N separate static state instances and N times the metaspace cost. Typical symptom of class-loader leaks (each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all instances, the others are likely leaked copies.
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -2861,7 +2860,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
   return (
     <section id="leak-suspects">
       <h2>Leak Suspects</h2>
-      <p className="subtitle">Classes with disproportionately high retained heap — likely culprits when investigating a memory leak. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
+      <p className="subtitle">Objects and class groups retaining the most heap — the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference keeping it alive. Class-name icons: <span title="Copy class name">⎘</span> Copy · <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> OQL · <span title="List all instances in Object Graph Explorer">⬡≡</span> Instances</p>
       {l.suspects.length === 0 ? (
         <p className="subtitle">No single class dominates heap retention — heap spans many roots. Explore the largest classes in <a href="#top-consumers" onClick={(e) => { e.preventDefault(); document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth" }); }}>Top Consumers</a> or trace retention chains in <a href="#dominator-analysis" onClick={(e) => { e.preventDefault(); document.getElementById("dominator-analysis")?.scrollIntoView({ behavior: "smooth" }); }}>Dominator Analysis</a>.</p>
       ) : (
@@ -5595,7 +5594,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (memory reclaimed by releasing this object, net of what the biggest child already accounts for). Threshold:{" "}
+        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (memory reclaimed by releasing this object, net of what the biggest child already accounts for). Multiple rows with the same class are distinct objects. Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -5754,7 +5753,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
       {rows.length === 0 ? (
-        <p className="subtitle">No unreachable objects — all heap objects are reachable from a GC root. This is normal when a full GC ran before the dump was taken.</p>
+        <p className="subtitle">No unreachable objects. All heap objects are reachable from a GC root — normal when a full GC ran before the dump was taken.</p>
       ) : (
         <>
           <p className="subtitle">
@@ -5764,8 +5763,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? <>Unreachable objects not yet reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump was taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was pre-GC garbage.</>
-              : "Unreachable objects not yet reclaimed. A small unreachable heap (< 5%) is normal between GC cycles."}
+              ? <>Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of heap total, this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was pre-GC garbage.</>
+              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5%) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
