@@ -4020,7 +4020,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
     <section id="container-attribution-classfield">
       <h2>Container Attribution</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> holds the most collection memory — identifies which field backs the largest maps or lists.
+        Which <code>Class#field</code> holds the most collection memory — the primary field backing maps or lists.
       </p>
 
       <h3>Top by Total Memory</h3>
@@ -4228,8 +4228,8 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
-        Which <code>Class#field</code> retains the most heap across all its instances — pinpoints which fields hold the most live data.
-        Pointee Type is the most common concrete class stored in that field.
+        Which <code>Class#field</code> retains the most heap, aggregated across all instances.
+        Pointee Type: the most common concrete class referenced by that field.
       </p>
       {data.truncated && (
         <p className="subtitle">
