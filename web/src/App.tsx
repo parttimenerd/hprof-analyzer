@@ -4287,9 +4287,9 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 
   const kindCaption = (kind: string) => {
     switch (kind) {
-      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap often indicates a large cache; if memory is tight, consider bounding the cache size.";
-      case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign.";
-      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not released promptly.";
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals a large cache; bound the cache size if memory is tight.";
+      case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — they are reclaimed at the next GC. Large counts are benign.";
+      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources not released promptly.";
       default: return "";
     }
   };
@@ -6102,7 +6102,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Counts for common Java leak patterns — any non-zero value is worth investigating.
+        Counts for common Java leak patterns — any non-zero count warrants investigation.
       </p>
       <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
@@ -9958,7 +9958,7 @@ function GlossarySection() {
     ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Top Consumers" and "Retention Concentration" sections rank these.</>],
     ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means retention flows through long chains.</>],
-    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — a common place where excess memory accumulates.</>],
+    ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
@@ -10301,7 +10301,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       <section className="diff-section">
         <h2>Disappeared Leak Suspects (Resolved)</h2>
         <p className="subtitle">
-          These suspects were flagged in an earlier dump but are absent from the current one — the issue may be resolved or was transient.
+          These suspects were flagged in an earlier dump but are absent from the current one — the issue resolved between dumps or was transient.
         </p>
         {diff.gone_suspects.length === 0 ? (
           <p className="subtitle">No suspects disappeared in the current dump.</p>
