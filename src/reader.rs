@@ -202,7 +202,9 @@ impl HprofReader {
         // `ZipFile` is `Read` but borrows `archive`, so we must read into a Vec.
         // For typical .hprof.zip sizes (tens to hundreds of MB decompressed) this
         // is acceptable; the parser's own pass1 scan then proceeds from a Cursor.
-        let mut hprof_bytes = Vec::with_capacity(entry.size() as usize);
+        // Cap the pre-allocation at 2 GiB to avoid OOM on corrupt ZIP size fields.
+        let cap = (entry.size() as usize).min(2 * 1024 * 1024 * 1024);
+        let mut hprof_bytes = Vec::with_capacity(cap);
         let mut entry = entry;
         entry.read_to_end(&mut hprof_bytes)?;
         Self::from_reader(Cursor::new(hprof_bytes))
@@ -418,6 +420,12 @@ impl HprofReader {
 
     /// Read exactly `n` bytes into a freshly allocated `Vec`.
     pub fn read_bytes(&mut self, n: usize) -> io::Result<Vec<u8>> {
+        if n > 1 << 30 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("read_bytes: requested {n} bytes exceeds 1 GiB sanity limit"),
+            ));
+        }
         let mut v = vec![0u8; n];
         self.read_into(&mut v)?;
         self.bytes_consumed += n as u64;
@@ -426,6 +434,12 @@ impl HprofReader {
 
     /// Like `read_bytes` but reuses an existing buffer to avoid repeated allocation.
     pub fn read_bytes_reuse(&mut self, buf: &mut Vec<u8>, n: usize) -> io::Result<()> {
+        if n > 1 << 30 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("read_bytes_reuse: requested {n} bytes exceeds 1 GiB sanity limit"),
+            ));
+        }
         buf.resize(n, 0);
         self.read_into(buf)?;
         self.bytes_consumed += n as u64;

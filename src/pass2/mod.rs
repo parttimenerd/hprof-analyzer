@@ -138,7 +138,7 @@ impl Pass2 {
             let sz = match p1.kind[i] {
                 3 => {
                     // Class object: shallow from static fields only, attributed to java.lang.Class.
-                    let addr = p1.class_addr_table[cid as usize];
+                    let addr = p1.class_addr_table.get(cid as usize).copied().unwrap_or(0);
                     match p1.class_map.get(&addr) {
                         Some(ci) => class_obj_shallow(ci, ptr_size, ref_size),
                         None => align_up(ptr_size + ref_size, 8) as u32,
@@ -157,7 +157,7 @@ impl Pass2 {
                 }
                 _ => {
                     // Instance: MAT calculateSizeRecursive over the super chain.
-                    let addr = p1.class_addr_table[cid as usize];
+                    let addr = p1.class_addr_table.get(cid as usize).copied().unwrap_or(0);
                     if p1.class_map.contains_key(&addr) {
                         instance_shallow_size(
                             addr,
@@ -226,7 +226,7 @@ impl Pass2 {
                 }
                 1 => {
                     // Object array: cid indexes the array-class address (loader-distinct).
-                    let addr = p1.class_addr_table[cid as usize];
+                    let addr = p1.class_addr_table.get(cid as usize).copied().unwrap_or(0);
                     class_idx[i] = get_or_insert_class(
                         addr,
                         &|| {
@@ -241,7 +241,7 @@ impl Pass2 {
                 }
                 _ => {
                     // Instance: cid indexes the class-object address (loader-distinct).
-                    let addr = p1.class_addr_table[cid as usize];
+                    let addr = p1.class_addr_table.get(cid as usize).copied().unwrap_or(0);
                     class_idx[i] = get_or_insert_class(
                         addr,
                         &|| {
@@ -787,7 +787,7 @@ impl Pass2 {
                 // Only plain instances (kind 0) are real loader objects.
                 if p1.kind[idx] == 0 {
                     let cid = p1.class_ids[idx];
-                    let class_addr = p1.class_addr_table[cid as usize];
+                    let class_addr = p1.class_addr_table.get(cid as usize).copied().unwrap_or(0);
                     if let Some(name) = p1
                         .class_map
                         .get(&class_addr)

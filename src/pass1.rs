@@ -263,7 +263,10 @@ impl Pass1 {
                     let stack_serial = r.u4()?;
                     let thread_serial = r.u4()?;
                     let num_frames = r.u4()?;
-                    let mut frames = Vec::with_capacity(num_frames as usize);
+                    // Sane cap: STACK_TRACE records in real dumps have at most
+                    // a few thousand frames; a corrupt u32::MAX would OOM.
+                    let num_frames = num_frames.min(65_536) as usize;
+                    let mut frames = Vec::with_capacity(num_frames);
                     for _ in 0..num_frames {
                         frames.push(r.id()?);
                     }
