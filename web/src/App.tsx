@@ -2073,7 +2073,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>GC Roots by Type</h3>
-            <p className="subtitle">Objects directly anchored to GC roots keep their entire transitive reference graph alive. JVM locals, JNI globals, system classes, and monitor-held objects are the main root types.</p>
+            <p className="subtitle">GC roots are the entry points where the JVM starts reachability scanning — anything reachable from a root stays alive. Common root types: thread-stack locals, JNI global references, static fields of loaded classes, and monitor-held objects.</p>
             {totalRetained > 0
               ? <GcRootsRetainedChart data={gcRows} />
               : <GcRootsChart data={gcRows} />}
@@ -2116,7 +2116,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Class Loaders</h3>
           <p className="subtitle">
-            Each tile is a class loader sized by retained heap. Click to inspect; use ← to go back.
+            Retained heap attributed to each class loader — growing loaders (e.g. web-app or plugin loaders) are a common source of metaspace and heap leaks. Each tile is sized by retained heap. Click to inspect; use ← to go back.
           </p>
           {(() => {
             type LoaderNode = LoaderRollup & { _children?: LoaderRollup[] };
