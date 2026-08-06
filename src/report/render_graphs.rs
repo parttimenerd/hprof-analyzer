@@ -157,7 +157,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Heap fragmentation".into(),
+            "Dead object ratio".into(),
             format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
         ]);
     }

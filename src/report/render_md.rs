@@ -1013,7 +1013,7 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Heap fragmentation (unreachable / heap total)".into(),
+            "Dead object ratio (unreachable / heap total)".into(),
             fmt_pct(o.heap_fragmentation_ratio * 100.0),
         ]);
     }

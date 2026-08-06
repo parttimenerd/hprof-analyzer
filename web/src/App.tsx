@@ -1989,7 +1989,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
-              <dt title="unreachable ÷ (reachable + unreachable)">Heap Fragmentation (unreachable / total)</dt>
+              <dt title="unreachable ÷ (reachable + unreachable)">Dead Object Ratio (unreachable / total)</dt>
               <dd>{fmtPct((o.heap_fragmentation_ratio ?? 0) * 100)}</dd>
             </>
           )}
