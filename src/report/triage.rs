@@ -663,20 +663,23 @@ impl Rule for GcWaste {
                 )
             })
             .unwrap_or_default();
-        let size_desc = if o.unreachable_retained > o.unreachable_shallow + o.unreachable_shallow / 20 {
-            format!("{} shallow, {} retained", format_bytes(o.unreachable_shallow), format_bytes(o.unreachable_retained))
-        } else {
-            format_bytes(o.unreachable_shallow)
-        };
+        let size_desc =
+            if o.unreachable_retained > o.unreachable_shallow + o.unreachable_shallow / 20 {
+                format!(
+                    "{} shallow, {} retained",
+                    format_bytes(o.unreachable_shallow),
+                    format_bytes(o.unreachable_retained)
+                )
+            } else {
+                format_bytes(o.unreachable_shallow)
+            };
         Some(signal(
             "gc-waste",
             TriageSeverity::Warning,
             "GC Waste",
             format!(
                 "{:.1}% of the heap is unreachable garbage ({}){}.",
-                pct,
-                size_desc,
-                cluster,
+                pct, size_desc, cluster,
             ),
             Some(("unreachable-objects", "Unreachable Objects")),
         ))

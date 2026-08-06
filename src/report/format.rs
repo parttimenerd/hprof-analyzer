@@ -387,16 +387,16 @@ pub fn pretty_class_name(raw: &str) -> String {
 /// (e.g. `[L…;`, `[[B`) is an object array.
 pub(crate) fn object_kind(g: &Graph, i: usize) -> &'static str {
     if class_obj_repr(g, i) != u32::MAX {
-        return "Class objects";
+        return "Class Objects";
     }
     let raw = match g.class_names.get(g.class_idx[i] as usize) {
         Some(r) => r,
         None => return "Instances",
     };
     if is_prim_array_desc(raw) {
-        "Primitive arrays"
+        "Primitive Arrays"
     } else if raw.starts_with('[') {
-        "Object arrays"
+        "Object Arrays"
     } else {
         "Instances"
     }

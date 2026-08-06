@@ -20,7 +20,7 @@ use crate::{
         ArrayFillRatio, CollectionFillRatio, CollectionKindStat, CollectionKindSummary,
         CollectionsAnalysis, CollectionsBySize, ConstantArrayRow, ConstantPrimitiveArrays,
         FillRatioBucket, MapCollisionRatio, RefStatClassRow, ReferenceStats, ReferencesAnalysis,
-        SizeHistogramBucket,
+        SizeHistogramBucket, pretty_class_name,
     },
     types::HprofType,
 };
@@ -931,7 +931,7 @@ fn pretty_name(class_id: u64, p1: &Pass1) -> String {
     p1.class_map
         .get(&class_id)
         .and_then(|ci| p1.strings.get(&ci.name_id))
-        .map(|s| s.replace('/', "."))
+        .map(|s| pretty_class_name(s))
         .unwrap_or_else(|| format!("0x{class_id:x}"))
 }
 

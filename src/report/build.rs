@@ -700,7 +700,7 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
         .map(|b| b.wasted)
         .sum();
     push(
-        "Under-filled collections",
+        "Under-filled Collections",
         coll_fill,
         Some(SectionId::Collections.slug()),
     );
@@ -714,20 +714,20 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
         .map(|b| b.wasted)
         .sum();
     push(
-        "Under-filled object arrays",
+        "Under-filled Object Arrays",
         arr_fill,
         Some(SectionId::Collections.slug()),
     );
 
     if let Some(dup) = report.overview.duplicate_strings.as_ref() {
         push(
-            "Duplicate String values",
+            "Duplicate String Values",
             dup.approx_wasted_bytes,
             Some(SectionId::DuplicateStrings.slug()),
         );
         if let Some(caw) = dup.char_array_waste.as_ref() {
             push(
-                "String backing-array slack",
+                "String Backing-Array Slack",
                 caw.total_wasted_bytes,
                 Some(SectionId::DuplicateStrings.slug()),
             );
@@ -736,7 +736,7 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
 
     if let Some(dpa) = report.overview.duplicate_prim_arrays.as_ref() {
         // Rendered as a `###` subsection of System Overview, no dedicated anchor.
-        push("Duplicate primitive arrays", dpa.total_wasted_bytes, None);
+        push("Duplicate Primitive Arrays", dpa.total_wasted_bytes, None);
     }
 
     if sources.is_empty() {
@@ -2190,9 +2190,9 @@ fn build_system_overview(
     let mut unreach_shallow: Vec<u64> = vec![0; class_count];
     const KIND_ORDER: [&str; 4] = [
         "Instances",
-        "Object arrays",
-        "Primitive arrays",
-        "Class objects",
+        "Object Arrays",
+        "Primitive Arrays",
+        "Class Objects",
     ];
     let kind_idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
     let mut comp_objs = [0u64; 4];
@@ -2276,7 +2276,7 @@ fn build_system_overview(
             unreach_comp_objs[b] += 1;
             unreach_comp_sh[b] += sh;
             // Track prim-array sub-types for the composition chart.
-            if b == kind_idx("Primitive arrays") {
+            if b == kind_idx("Primitive Arrays") {
                 if let Some(raw) = g.class_names.get(ci_raw) {
                     let human: &'static str = match raw.as_str() {
                         "[B" => "byte[]",
