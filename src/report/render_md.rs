@@ -886,7 +886,7 @@ _Definitions for the terms used above._
   0 means the backing array is mostly empty (wasted memory). A ratio near 1 means
   the collection is full.
 - **Map Load Factor**: for hash maps, the fraction of backing-array
-  slots occupied — `occupied_slots / total_slots`. A low load factor means many
+  slots occupied — `occupied_slots / capacity`. A low load factor means many
   empty buckets (wasted memory); a very high load factor increases hash collision
   probability and lookup cost.
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
@@ -1271,10 +1271,9 @@ pub(crate) fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     out.push_str(
         "_Objects and class groups retaining the most heap, ranked by retained size. \
 These are the most likely accumulation points for excessive memory usage. \
-To fix: follow the dominator chain to the nearest object you control, \
-and drop or null out the reference that keeps it alive. The path to GC root \
-is shown for each suspect below — the tool cannot yet name the specific field; \
-that requires field-labeled reference paths._\n\n",
+To fix: follow the dominator chain to the nearest object you control \
+and drop or null out the reference that keeps it alive. \
+The path to GC root is shown for each suspect below._\n\n",
     );
 
     for (rank, s) in l.suspects.iter().enumerate() {
