@@ -2147,7 +2147,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Class names loaded by more than one class loader — N copies means N separate static state instances and N times the metaspace cost. Typical symptom of class-loader leaks (each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all instances, the others are likely leaked copies.
+            Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — typical symptom of class-loader leaks (each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all instances, the others are likely leaked copies.
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -3387,7 +3387,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
   return (
     <div style={{ marginTop: "1rem" }}>
       <h3>ThreadLocal Variables</h3>
-      <p className="subtitle">Values stored in thread-local slots — stale entries have a null key (the <code>ThreadLocal</code> object was GC'd) but retain their value until the entry is explicitly removed or the thread terminates. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate.</p>
+      <p className="subtitle">Values stored in thread-local slots — stale entries have a null key (the <code>ThreadLocal</code> object was GC'd) but retain their value until the entry is explicitly removed or the thread terminates. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate; call <code>ThreadLocal.remove()</code> to clean up.</p>
       <StdTable
         columns={[
           { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
@@ -4059,7 +4059,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <>
           <h3>Tiny Collection Overhead</h3>
           <p className="subtitle">
-            Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — replace with null or a direct field reference.
+            Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — use null or <code>Collections.emptyList()</code> sentinels until the collection is first written.
             Overhead is the wrapper-object count × reference pointer size (4 B with compressed OOPs, 8 B without).
           </p>
           <TinyCollectionTable rows={data.tiny_overhead} />
@@ -5755,6 +5755,9 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
         <p className="subtitle">No unreachable objects. All heap objects are reachable from a GC root — normal when a full GC ran before the dump was taken.</p>
       ) : (
         <>
+          <p className="subtitle">
+            Objects that are no longer reachable from any GC root but have not yet been collected. A small unreachable fraction (&lt; 5%) is normal between GC cycles; a large one suggests the dump was taken mid-collection.
+          </p>
           <p className="subtitle">
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects,{" "}
             {fmtB(data?.unreachable_shallow ?? 0)} shallow heap.
