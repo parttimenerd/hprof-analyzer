@@ -1702,7 +1702,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        String values seen more than once — each duplicate is wasted heap that <code>String.intern()</code> or a deduplication pass could reclaim.
+        String values seen more than once — each extra copy wastes heap that <code>String.intern()</code> or a deduplication pass can reclaim.
         Approximate wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
@@ -1775,7 +1775,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
     <section id="duplicate-prim-arrays">
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
-        Primitive arrays with identical content — duplicate copies that could be deduplicated to one.
+        Primitive arrays with identical content — each duplicate group collapses to one instance on deduplication.
         Approximate wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
@@ -1811,7 +1811,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
       <p className="subtitle">
-        Wrapper types whose instances could be replaced with primitives to reduce heap use.
+        Wrapper types whose instances unbox to primitives — switching to primitive fields eliminates the boxing overhead.
       </p>
       <StdTable columns={boxedCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
       {holders.length > 0 && (
@@ -4289,7 +4289,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
     switch (kind) {
       case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap often indicates a large cache; if memory is tight, consider bounding the cache size.";
       case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign.";
-      case "Phantom": return "Phantom references mark objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not being released promptly.";
+      case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not released promptly.";
       default: return "";
     }
   };
@@ -5802,7 +5802,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
         </p>
         {isLarge && (
           <p className="subtitle">
-            ⚠ Over 256 MB of off-heap NIO memory detected. This may cause OS-level memory pressure invisible to the JVM.
+            ⚠ Over 256 MB of off-heap NIO memory detected — invisible to GC and can cause OS-level memory pressure.
           </p>
         )}
       </div>
