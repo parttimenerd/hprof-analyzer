@@ -10317,9 +10317,9 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         <section className="diff-section">
           <h2>Type Reference Graph Diff</h2>
           <p>
-            Directed edges between class types that grew between the first and last dump.
+            Directed edges between class types that grew between the first and last dumps.
             A high Δ retained weight indicates one class is accumulating more references to another.
-            Sorted by |Δ retained weight|.
+            Sorted by absolute change in retained weight.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
         </section>
