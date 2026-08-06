@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Nightly at 02:17 UTC — cross-platform builds run once per day if main changed
-    - cron: '17 2 * * *'
 
 permissions:
   contents: read
@@ -20,7 +17,6 @@ jobs:
   # Lint + full test suite (unit + integration + parity). Ubuntu only: the tests
   # are platform-independent and the parity fixtures are the same everywhere.
   build-test:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -63,62 +59,6 @@ jobs:
           name: hprof-analyzer-linux
           path: target/release/hprof-analyzer
           retention-days: 1
-
-  # Cross-platform release builds — run nightly only to avoid burning CI minutes
-  # on every push. Confirms the binary compiles on every target we ship.
-  cross-build:
-    name: build (${{ matrix.target }})
-    if: github.event_name == 'schedule'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
-          targets: ${{ matrix.target }}
-
-      - name: Add cross-compilation target
-        run: rustup target add ${{ matrix.target }}
-
-      # build.rs bundles web/ (esbuild) into the git-ignored web/dist/bundle.js
-      # that src/html.rs embeds, so node/npm are required to compile the crate.
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install musl tools
-        if: endsWith(matrix.target, '-linux-musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
 
   # Deploy GitHub Pages only on main push, after build-test passes.
   # Re-uses the binary artifact from build-test to avoid a second full Rust build.

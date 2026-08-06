@@ -2,11 +2,10 @@ name: Release
 
 on:
   # Tagged releases: build + attach archives to a GitHub Release for the tag.
+  # Main-branch pushes: replace the rolling `nightly` release.
   push:
+    branches: [main]
     tags: ["v*"]
-  # Nightly: only publishes on days where a commit landed in the last 24h.
-  schedule:
-    - cron: "17 4 * * *"
   # Manual trigger (always builds; publishes to the rolling `nightly` release).
   workflow_dispatch:
 
@@ -14,32 +13,16 @@ permissions:
   contents: write
 
 jobs:
-  # For scheduled runs, skip the whole thing unless something was committed in
-  # the last 24 hours. Tag pushes and manual dispatches always proceed.
+  # Always proceed — the workflow is only triggered by real events (push /
+  # tag / manual), so there is no need to gate on recent-commit counts.
   gate:
     runs-on: ubuntu-latest
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Decide whether to build
+      - name: Proceed
         id: check
-        run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          count="$(git rev-list --after='24 hours ago' --count HEAD)"
-          echo "commits in last 24h: $count"
-          if [ "$count" -gt 0 ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "proceed=true" >> "$GITHUB_OUTPUT"
 
   build:
     needs: gate
@@ -147,10 +130,10 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
 
-  # Nightly / manual: refresh a single rolling `nightly` pre-release.
+  # Main push / manual: replace the single rolling `nightly` pre-release.
   release-nightly:
     needs: build
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -177,5 +160,5 @@ jobs:
           prerelease: true
           files: artifacts/*
           body: |
-            Rolling nightly build from the latest commit on main.
+            Rolling nightly build — updated on every push to main.
             Commit: ${{ github.sha }}
