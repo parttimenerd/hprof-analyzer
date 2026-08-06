@@ -100,7 +100,7 @@ function ReportHeader({ report }: { report: Report }) {
             <span className="report-meta-sep">·</span>
           </>
         )}
-        <span title="This HTML file is fully self-contained — it can be opened offline, emailed, or archived.">📦 Self-contained</span>
+        <span title="Fully self-contained — open offline, email, or archive.">📦 Self-contained</span>
         <span className="report-meta-sep">·</span>
         <span>Sizes: 1&nbsp;KB = 1024 B</span>
       </p>
@@ -686,7 +686,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
 
 // Browser-friendly overrides for signals whose CLI-oriented text doesn't fit the web UI.
 const SIGNAL_DETAIL_OVERRIDES: Record<string, string> = {
-  "collections-not-analyzed": "Run Full Analysis to check for wasted capacity.",
+  "collections-not-analyzed": "Run Full Analysis for wasted capacity.",
 };
 
 function LeakScoreDashboard({ report }: { report: Report }) {
@@ -875,7 +875,7 @@ function KpiStrip({ report }: { report: Report }) {
   } else if (top) {
     verdict = (
       <>
-        <strong>Retention Pattern:</strong> spread — the top class holds only {fmtPct(pct)}, so no single class dominates.
+        <strong>Retention Pattern:</strong> spread — top class holds only {fmtPct(pct)}.
       </>
     );
   } else {
@@ -1571,7 +1571,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
     <section id="size-distribution">
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
-        Retained heap distributed across {fmtCount(d.count)} top-level dominators — concentrated in a few large objects, or spread across many small ones.
+        Retained heap distributed across {fmtCount(d.count)} top-level dominators — concentrated in a few large objects, or scattered across many small ones.
         Min / Max: {fmtB(d.min)} / {fmtB(d.max)} · Median: {fmtB(d.median)} · Total: {fmtB(d.total)}.
       </p>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
@@ -1626,7 +1626,7 @@ function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
     <>
       <h3>Classes Holding the Most Strings</h3>
       <p className="subtitle">
-        Number of <code>java.lang.String</code> instances referenced by each class's instances.
+        <code>java.lang.String</code> instances referenced by each class.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["class_name"]} defaultSortFieldId="refs" defaultSortAsc={false} />
     </>
@@ -1702,7 +1702,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        String values seen more than once — each extra copy wastes heap that <code>String.intern()</code> or a deduplication pass can reclaim.
+        String values seen more than once — reclaim with <code>String.intern()</code> or a deduplication pass.
         Approximate wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
@@ -1775,7 +1775,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
     <section id="duplicate-prim-arrays">
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
-        Primitive arrays with identical content — each duplicate group reduces to one instance after deduplication.
+        Primitive arrays with identical content — each group collapses to one instance.
         Approximate wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
@@ -2009,7 +2009,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           <SysPropsTable rows={o.system_properties} />
         </details>
       ) : (
-        <p className="subtitle">System properties not captured in this dump.</p>
+        <p className="subtitle">System properties not captured.</p>
       )}
 
       {o.heap_composition.by_kind.length > 0 && (() => {
@@ -2021,7 +2021,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         return (
           <>
             <h3>Heap Composition</h3>
-            <ChartOrNote hasData={o.heap_composition.by_kind.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
+            <ChartOrNote hasData={o.heap_composition.by_kind.length >= 2} note="Composition chart needs ≥2 kinds; table only.">
               <HeapCompositionChart data={o.heap_composition.by_kind} />
               <CompositionStackedBar data={o.heap_composition.by_kind} />
             </ChartOrNote>
@@ -2145,7 +2145,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Class names loaded by more than one class loader — typical in environments that hot-reload classes (web-app containers, OSGi).
+            Classes loaded by multiple class loaders — typical in hot-reload environments (web-app containers, OSGi).
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -2831,7 +2831,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
           <li>Click <span title="Open in Inspector">⬡</span> next to the class name above to trace the reference chain to its GC root.</li>
           {s.accumulation_class && (
-            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to find which field retains the large set of objects.</li>
+            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to find which field retains these objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
             <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list missing deregistration.</li>
@@ -3105,7 +3105,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   return (
     <section id="top-consumers">
       <h2>Top Consumers</h2>
-      <p className="subtitle">Biggest individual objects, classes, and packages by retained heap.</p>
+      <p className="subtitle">Biggest objects, classes, and packages by retained heap.</p>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "treemap"] as const).map(v => (
           <button key={v} onClick={() => setTopView(v)} style={{
@@ -3137,9 +3137,8 @@ function TopConsumersSection({ report }: { report: Report }) {
         <>
           <h3>Biggest Packages</h3>
           <p className="subtitle">
-            Expand a package to drill into its sub-packages. Totals are cumulative over the subtree. Only top-level
-            dominators retaining at least {fmtPct(t.threshold_bp / 100)} of the
-            heap are included; smaller classes are excluded.
+            Expand a package to see its sub-packages. Totals roll up through the subtree. Only top-level
+            dominators retaining ≥{fmtPct(t.threshold_bp / 100)} of the heap — smaller classes omitted.
           </p>
           <ZoomableTreemap
             root={pkgRoot}
@@ -3264,7 +3263,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
           <>
-            <p className="subtitle"><em>Frame percentages show each frame's share of this thread's {fmtB(t.retained)} retained heap.</em></p>
+            <p className="subtitle"><em>%: each frame's share of this thread's {fmtB(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => {
               const frameCls = frameToClass(sf.frame);
@@ -3452,9 +3451,9 @@ function ThreadsSection({ report }: { report: Report }) {
   return (
     <section id="threads">
       <h2>Threads</h2>
-      <p className="subtitle">Per-thread call stacks recorded in the dump.</p>
+      <p className="subtitle">Per-thread call stacks.</p>
       {threads.length === 0 ? (
-        <p className="subtitle">No thread call stacks in this dump.</p>
+        <p className="subtitle">No thread call stacks.</p>
       ) : (
         <>
           <ThreadsByRetainedTable threads={threads} />
@@ -3541,7 +3540,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component). Totals can exceed heap size — boot-loader objects are shared across components, so component sums overlap.
+        Retained heap grouped by class loader (component). Totals can exceed heap size — boot-loader objects are shared across components.
       </p>
       <details open>
         <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
@@ -3774,7 +3773,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collections by Size</h3>
       <p className="subtitle">
-        Element-count distribution of collections, bucketed by size — highlights oversized or pre-allocated collections.
+        Element-count distribution of collections, bucketed by size.
         {cbs && <>{" "}{fmtCount(cbs.tracked)} tracked; {fmtCount(cbs.empty_count)} empty.</>}
       </p>
       {cbsBuckets.length === 0 ? (
@@ -4056,7 +4055,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <>
           <h3>Tiny Collection Overhead</h3>
           <p className="subtitle">
-            Empty (size-0) and singleton (size-1) collections whose wrapper object is unnecessary — the field could hold null or the single element directly.
+            Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — replace with null or a direct field reference.
             Overhead is object count × reference-slot width.
           </p>
           <TinyCollectionTable rows={data.tiny_overhead} />
@@ -4158,7 +4157,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
       <h2>Biggest Collections</h2>
       <p className="subtitle">
         Largest collection instances by element count.
-        {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag to see which fields hold these collections.</>}
+        {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag for field attribution.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
@@ -4285,8 +4284,8 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 
   const kindCaption = (kind: string) => {
     switch (kind) {
-      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals a large cache; bound the cache size if memory is tight.";
-      case "Weak": return "Weak references let GC claim referents. These objects are reachable only via weak chains — GC reclaims them at the next collection. Large counts are benign.";
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals an oversized cache; cap the cache size.";
+      case "Weak": return "Weak references let GC claim referents — reachable only via weak chains, reclaimed at any collection. Large counts are benign.";
       case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources leaking.";
       default: return "";
     }
@@ -5558,7 +5557,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects whose retained heap greatly exceeds their largest single child's — memory held directly or spread across many small children. Minimum threshold:{" "}
+        Objects retaining far more than any single child — memory held directly or scattered across many small children. Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap).
       </p>
       {drops.length === 0 ? (
@@ -5596,8 +5595,8 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
-        Object count dominated by each class, and the shallow heap those objects occupy. High dominated-shallow means the class pins a large fraction of live memory.
-        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to view it in the Navigator below.</span>}
+        Objects dominated by each class and the shallow heap they occupy. High dominated-shallow means the class pins much of live memory.
+        {hasPairs && <span style={{ color: "var(--muted)", fontSize: "0.9em" }}> Click a row to open it in the Navigator.</span>}
       </p>
       {idoms.length === 0 ? (
         <p className="subtitle">No immediate dominators.</p>
@@ -5638,7 +5637,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class to see which classes dominate it (left) and which it dominates (right). Click any node or row to refocus.
+            Select a class — left: its dominators; right: classes it dominates. Click any node or row to refocus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -5685,7 +5684,7 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
   return (
     <>
       <h3>Unreachable Heap Composition</h3>
-      <ChartOrNote hasData={chartKinds.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
+      <ChartOrNote hasData={chartKinds.length >= 2} note="Composition chart needs ≥2 kinds; table only.">
         <CompositionStackedBar data={chartKinds} />
       </ChartOrNote>
       {(() => {
@@ -5729,7 +5728,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? <>Unreachable objects not yet reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump was taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. To confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was just pre-GC garbage.</>
+              ? <>Unreachable objects not yet reclaimed. At {fmtPct(unreachablePct)} of total heap, this is elevated — the dump was taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if count drops, it was pre-GC garbage.</>
               : "Unreachable objects not yet reclaimed. A small unreachable heap (< 5%) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
@@ -5789,7 +5788,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
   return (
     <section id="off-heap-nio" tabIndex={-1}>
       <h2>Off-Heap NIO Memory</h2>
-      <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — not counted in JVM heap totals.</p>
+      <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — excluded from JVM heap totals.</p>
       <div className="card">
         <p>
           <strong>{formatBytes(capacity)}</strong>
@@ -5886,10 +5885,10 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap sums per trace; retained heap excluded — per-trace sums double-count shared subgraphs.</p>
+      <p className="subtitle">Objects grouped by allocating stack trace — shallow heap totals per trace; retained heap omitted (double-counts shared subgraphs).</p>
       {!data.traces_present ? (
         <p className="subtitle">
-          This dump has no allocation tracking data.
+          Allocation tracking not enabled.
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
@@ -6050,7 +6049,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        Dominator-tree distance from each object to a GC root. Low depth means objects sit close to roots; high depth means long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
+        Low depth: objects near roots; high depth: long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -6076,7 +6075,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(anonymous_class_count > 0 ? [{
       indicator: "Anonymous/Generated Classes",
       value: fmtCount(anonymous_class_count),
-      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" to find the biggest.",
+      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" for the biggest.",
     }] : []),
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries</>,
@@ -6087,8 +6086,8 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
-        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). This memory is invisible to GC and can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
-        : "Native memory not tracked by the JVM heap. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.",
+        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). Invisible to GC — can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
+        : "Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.",
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
@@ -6117,8 +6116,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
       <h2>Top Retainers</h2>
       <p className="subtitle">
         Combined ranking of <code>Class#field</code> references and stack-frame locals by retained heap.
-        {" "}Totals can exceed heap size for linked structures (e.g. <code>List#next</code>),
-        where each node's retained heap includes its entire tail — treat totals as relative, not absolute.
+        {" "}Totals can exceed heap size for linked structures (e.g. <code>List#next</code>) — each node retains its entire tail; treat totals as relative.
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
@@ -6214,7 +6212,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
   return (
     <section id="custom-queries">
       <h2>Custom Queries</h2>
-      <p className="subtitle">Results of the OQL queries supplied on the command line.</p>
+      <p className="subtitle">OQL queries from the command line.</p>
       {queries.map((q: QueryResult, qi) => (
         <div key={qi}>
           <h3 style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
@@ -7504,7 +7502,7 @@ function OGEGraphView({ data, onNavigate }: {
       <div style={{ flex: "0 0 220px", minWidth: 180, fontSize: "0.82rem", maxHeight: 440, overflowY: "auto" }}>
         {!graphSelected || !selectedNodeData ? (
           <div style={{ color: "var(--muted)", padding: "0.5rem 0" }}>
-            <p style={{ margin: "0 0 0.3rem" }}>Click a node to see details.</p>
+            <p style={{ margin: "0 0 0.3rem" }}>Click a node for details.</p>
             <p style={{ margin: 0, fontSize: "0.76rem" }}>Nodes sized by retained heap, colored by class.</p>
           </div>
         ) : (
@@ -8728,7 +8726,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
       {!bannerDismissed && !!(window as any).__wasmSession && !(window as any).__wasmExploration && (
         <div style={{ background: "var(--accent-bg, #eff6ff)", border: "1px solid var(--accent-border, #bfdbfe)", borderRadius: 6, padding: "0.4rem 0.6rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
           <span style={{ flex: 1 }}>
-            Heap loaded in browser. Enable full exploration to use inbound references and GC root paths.
+            Heap loaded in browser. Enable full exploration for inbound references and GC root paths.
           </span>
           <button className="copy-btn" style={{ flexShrink: 0 }}
             onClick={async () => {
@@ -8784,12 +8782,12 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
                 <p className="subtitle">Showing first 100 outbound references.{" "}
-                  {(window as any).__wasmSession?.outbound_refs && "Load the .hprof in the browser to browse all references."}
+                  {(window as any).__wasmSession?.outbound_refs && "Load the .hprof in the browser for all references."}
                 </p>
               )}
               {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  All fields unnamed — re-run with <code>--ref-paths</code> to see field names.
+                  All fields unnamed — re-run with <code>--ref-paths</code> for field names.
                 </p>
               )}
               {pagedEdges.length === 0 && !currentNode.edges_unknown && (
@@ -8895,14 +8893,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             {domBadgeChildIdx === edge.child_idx && (
                               <span
                                 className="shared-badge"
-                                title="This child is the dominant retention path (immediate dominator child with highest retained size)"
+                                title="Dominant retention path — immediate dominator child with highest retained size"
                                 style={{ background: "var(--ok-bg, #d1fae5)", color: "var(--ok, #065f46)", borderColor: "var(--ok-border, #a7f3d0)" }}
                               >
                                 Dom
                               </span>
                             )}
                             {edge.any_shared && (
-                              <span className="shared-badge" title="Shared: this child's retained heap belongs to another subtree — value is a gross sum">&#8635; Shared</span>
+                              <span className="shared-badge" title="Shared: retained heap owned by another subtree — gross sum">&#8635; Shared</span>
                             )}
                             {breadcrumbIdSet.has(edge.child_idx) && (
                               <span className="shared-badge" title="Already in navigation path — back-reference or cycle" style={{ background: "var(--warn-bg, #fef3c7)", color: "var(--warn, #92400e)", borderColor: "var(--warn-border, #fde68a)" }}>↩ Visited</span>
@@ -9036,7 +9034,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (currentNode?.edges_unknown) {
                   return (
                     <p className="subtitle">
-                      Inbound references absent from this report. Load the .hprof in the browser for the full inbound graph.
+                      Inbound references not captured. Load the .hprof in the browser for the full inbound graph.
                     </p>
                   );
                 }
@@ -9061,7 +9059,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       <div style={{ marginTop: "0.4rem" }}>
                         <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "0 0 0.3rem 0" }}>
                           Dominator path{" "}
-                          <span title="Objects that dominate this object's memory. Not necessarily the actual reference path." style={{ cursor: "help", borderBottom: "1px dotted var(--muted)" }}>(?)</span>
+                          <span title="Dominating objects — not the actual reference path." style={{ cursor: "help", borderBottom: "1px dotted var(--muted)" }}>(?)</span>
                         </p>
                         {chainReversed.map((idx, i) => {
                           const node = data.nodes[String(idx)];
@@ -9785,7 +9783,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               <div style={{ marginTop: "0.5rem" }}>
                 <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
                   Retaining path (dominator chain)
-                  <span title="Objects that dominate this object's memory. Not necessarily the actual reference path." style={{ cursor: "help", borderBottom: "1px dotted var(--muted)", marginLeft: "0.3rem", fontSize: "0.74rem" }}>(?)</span>
+                  <span title="Dominating objects — not the actual reference path." style={{ cursor: "help", borderBottom: "1px dotted var(--muted)", marginLeft: "0.3rem", fontSize: "0.74rem" }}>(?)</span>
                 </div>
                 <RetentionChain
                   nodes={chainNodes}
@@ -9949,15 +9947,15 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow Size", <>an object's header plus its fields (and, for an array, its elements). Does <em>not</em> include referenced objects.</>],
-    ["Retained Heap (Retained Size)", <>the total memory freed if this object were garbage-collected: its shallow size plus everything reachable <em>only</em> through it. The basis for every percentage in this report. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Retained Heap (Retained Size)", <>the total memory freed if this object were garbage-collected: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
-    ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
-    ["Top-Level Dominator", <>an object whose immediate dominator is a GC root — sits at the top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
-    ["Dominator Depth", <>the number of dominator-tree hops from an object to its GC root. Low depth means objects sit close to roots; high depth means long retention chains.</>],
+    ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained heap equals the shallow-size sum of each subtree.</>],
+    ["Top-Level Dominator", <>an object directly held by a GC root — top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
+    ["Dominator Depth", <>dominator-tree hop count from an object to its GC root. Low depth: objects near roots; high depth: long retention chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory pools.</>],
-    ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap counts per (class, loader) pair.</>],
+    ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" is the shallow size of the biggest instance.</>],
   ];
@@ -10214,7 +10212,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
     <div className="app">
       <h1>Heap Dump Comparison ({labels.length} reports)</h1>
       <p className="subtitle">
-        Tracks retained-heap changes across a time series — the first dump is baseline, the last is current.
+        Retained-heap changes across a dump series — first dump is baseline.
       </p>
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" title="Save this self-contained report as an HTML file" onClick={() => saveHtml("heap-comparison.html")}>⬇ Save HTML</button>
@@ -10254,7 +10252,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         nameLabel="Class"
         labels={labels}
         rows={diff.growth_leaders}
-        emptyNote="No class grew in retained heap."
+        emptyNote="No classes grew."
       />
       {diff.spike_leaders.length > 0 ? (
         <section className="diff-section">
@@ -10270,21 +10268,21 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         nameLabel="Class"
         labels={labels}
         rows={diff.new_classes}
-        emptyNote="No classes are new in the current dump."
+        emptyNote="No new classes."
       />
       <DiffSection
         title="Removed Classes"
         nameLabel="Class"
         labels={labels}
         rows={diff.removed_classes}
-        emptyNote="No classes dropped out of the current dump."
+        emptyNote="No removed classes."
       />
       <DiffSection
         title="New / Grown Leak Suspects"
         nameLabel="Suspect"
         labels={labels}
         rows={diff.grown_suspects}
-        emptyNote="No leak suspect is new or grew in the current dump."
+        emptyNote="No new or growing suspects."
         showNew
       />
       <DiffSection
@@ -10292,7 +10290,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         nameLabel="Suspect"
         labels={labels}
         rows={diff.shrunk_suspects}
-        emptyNote="No leak suspect shrank in the current dump."
+        emptyNote="No shrinking suspects."
       />
       <section className="diff-section">
         <h2>Disappeared Leak Suspects (Resolved)</h2>
@@ -10310,7 +10308,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <h2>Type Reference Graph Diff</h2>
           <p className="subtitle">
             Directed edges between class types that grew between the first and last dump.
-            A large Δ means one class accumulated more references to another.
+            A large Δ: more references from one class to another.
             Sorted by absolute change in retained heap.
           </p>
           <TpfgDiffTable rows={diff.tpfg_diff} fmtB={fmtB} />
@@ -10841,7 +10839,7 @@ function InspectorGCRootPage({ idx, cls, onNavigate }: {
   return (
     <div className="inspector-page">
       <h3 className="inspector-page-title">GC Root Path — <code>{cls.split(".").pop()}</code></h3>
-      {!wasm?.gc_root_path && <p className="trg-no-data">Load the .hprof in the browser to see the path to GC root.</p>}
+      {!wasm?.gc_root_path && <p className="trg-no-data">Load the .hprof in the browser for the GC root path.</p>}
       {wasm?.gc_root_path && !path && <p className="trg-no-data">Loading…</p>}
       {path && (
         <ol className="inspector-dom-path">
@@ -11012,7 +11010,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
         {fieldName && <> · field <code>{fieldName}</code></>}
       </h3>
       <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "0 0 0.5rem" }}>
-        Top 50 by retained heap.{!wasm && " Load the .hprof in the browser to enable this view."}
+        Top 50 by retained heap.{!wasm && " Load the .hprof in the browser for this view."}
       </p>
       {loading && <p className="trg-no-data">Scanning…</p>}
       {rows && rows.length === 0 && <p className="trg-no-data">No instances found.</p>}
@@ -11340,8 +11338,8 @@ export default function App({ report }: { report: Report }) {
         <section id="object-graph">
           <h2>Object Graph Explorer</h2>
           <p className="subtitle">
-            Browse the object reference graph and dominator tree.
-            Click a class to list its instances; click an instance to explore its fields and inbound references.
+            Browse the reference graph and dominator tree.
+            Click a class to list its instances; click an instance for fields and inbound references.
           </p>
           <ObjectGraphExplorer data={report.obj_graph_flat} />
         </section>
@@ -11349,7 +11347,7 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Class-level reference topology: each edge represents one class referencing another, weighted by retained heap. Retained Flow sums the retained sizes of referenced objects across all instances — can exceed total heap when objects are shared.</p>
+          <p className="subtitle">Reference topology between class types — each directed edge weighted by retained heap. Retained Flow sums referenced-object retained sizes across all instances — can exceed heap if objects are shared.</p>
           <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}
