@@ -1549,7 +1549,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
       <p className="subtitle">
-        Record-type counts from the raw HPROF file — useful for verifying dump completeness. Allocation-site frames (used by the Allocation Sites section) require the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
+        Record-type counts from the raw HPROF file — useful for verifying dump completeness. Allocation-site frames (used by the Allocation Sites section) are recorded only with the legacy HPROF agent: <code>java -agentlib:hprof=heap=dump,depth=8</code>.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </section>
@@ -1690,9 +1690,8 @@ function DuplicateStringsSection({ report }: { report: Report }) {
           {wasRun
             ? "Duplicate-string analysis ran but found no data."
             : <>
-                Not run. Re-analyze with the <strong>Full Analysis</strong> option (browser)
-                {" "}or pass <code>--find-duplicates</code> (CLI).
-              </>
+                Not run — use <strong>Full Analysis</strong> in the browser or pass <code>--find-duplicates</code> via CLI.
+</>
           }
         </p>
       </section>
@@ -1765,9 +1764,8 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
           {wasRun
             ? "Duplicate primitive-array analysis ran but found no data."
             : <>
-                Not run. Re-analyze with the <strong>Full Analysis</strong> option (browser)
-                {" "}or pass <code>--find-duplicates</code> (CLI).
-              </>
+                Not run — use <strong>Full Analysis</strong> in the browser or pass <code>--find-duplicates</code> via CLI.
+</>
           }
         </p>
       </section>
@@ -3984,7 +3982,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       </p>
       {showCollectionsNote && (
         <p className="subtitle">
-          Some waste categories require <code>--collections</code> to analyze.
+          Re-run with <code>--collections</code> to include collection waste categories.
         </p>
       )}
       {hasBn && (
@@ -4067,8 +4065,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 
       {data.truncated && (
         <p className="subtitle">
-          Attribution data was truncated — some holder or container records were capped; rankings are a
-          bounded sample.
+          Attribution data was truncated — some holder or container records were capped; totals may undercount the full heap.
         </p>
       )}
     </section>
@@ -4161,7 +4158,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
       <h2>Biggest Collections</h2>
       <p className="subtitle">
         The largest individual collection instances by element count.
-        {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns are only populated with <code>--collections</code> — re-run with that flag to see which fields hold these collections.</>}
+        {!data.combined.some(r => r.owner != null) && <> Owner, retained, and value-type columns require <code>--collections</code> — re-run with that flag to see which fields hold these collections.</>}
       </p>
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
@@ -4191,7 +4188,6 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
         What element types your collections hold, aggregated per collection class.
-        Requires <code>--collections</code>.
       </p>
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
@@ -4321,7 +4317,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             <h4>Only Weakly Retained</h4>
-            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — any GC cycle may reclaim them. (Note: transitive weak-only detection may miss multi-hop chains.)</p>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — any GC cycle may reclaim them. Transitive weak-only detection may miss multi-hop chains.</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />
               : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
@@ -6055,7 +6051,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        How far objects sit from a GC root in the dominator tree. Low depth means objects are held close to roots; high depth means long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
+        How far objects sit from a GC root in the dominator tree. Low depth means objects sit close to roots; high depth means long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -8725,7 +8721,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
       {!bannerDismissed && !(window as any).__wasmSession && (
         <div style={{ background: "var(--accent-bg, #eff6ff)", border: "1px solid var(--accent-border, #bfdbfe)", borderRadius: 6, padding: "0.4rem 0.6rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
-          <span style={{ flex: 1 }}>Load the .hprof file in the browser for the full inbound graph and shortest GC root paths.</span>
+          <span style={{ flex: 1 }}>Load the .hprof in the browser for the full inbound graph and shortest GC root paths.</span>
           <button className="copy-btn" onClick={() => { sessionStorage.setItem("wasm-banner-dismissed", "1"); setBannerDismissed(true); }} style={{ flexShrink: 0, opacity: 0.6 }} title="Dismiss">✕</button>
         </div>
       )}
@@ -8789,7 +8785,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
                 <p className="subtitle">Showing first 100 outbound references.{" "}
-                  {(window as any).__wasmSession?.outbound_refs && "Re-run with live heap loaded to browse all references."}
+                  {(window as any).__wasmSession?.outbound_refs && "Load the .hprof in the browser to browse all references."}
                 </p>
               )}
               {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
@@ -9041,7 +9037,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 if (currentNode?.edges_unknown) {
                   return (
                     <p className="subtitle">
-                      Inbound references not available in this report. Load the .hprof file in the browser for the full inbound graph.
+                      Inbound references not available in this report. Load the .hprof in the browser for the full inbound graph.
                     </p>
                   );
                 }
@@ -9960,7 +9956,7 @@ function GlossarySection() {
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
     ["Top-Level Dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Top Consumers" and "Retention Concentration" sections rank these.</>],
-    ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects are held close to a root; high depth means retention flows through long chains.</>],
+    ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means retention flows through long chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — a common place where excess memory accumulates.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
     ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
@@ -10315,7 +10311,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       {diff.tpfg_diff && diff.tpfg_diff.length > 0 && (
         <section className="diff-section">
           <h2>Type Reference Graph Diff</h2>
-          <p>
+          <p className="subtitle">
             Directed edges between class types that grew between the first and last dumps.
             A high Δ retained weight indicates one class is accumulating more references to another.
             Sorted by absolute change in retained weight.
