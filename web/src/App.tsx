@@ -3976,7 +3976,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     <section id="collection-waste-budget">
       <h2>Collection Waste Budget</h2>
       <p className="subtitle">
-        Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact.
+        Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
@@ -4238,7 +4238,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
         </p>
       )}
       {rows.length === 0 ? (
-        <p className="subtitle">None found in this dump.</p>
+        <p className="subtitle">No field-size data — pass <code>--collections</code> to enable field attribution.</p>
       ) : (
         <>
           <StdTable columns={cols} data={rows} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
@@ -5927,6 +5927,10 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking not captured. This requires the HPROF agent (<code>-agentlib:hprof=heap=dump,depth=8</code>), removed in JDK 9; standard <code>jmap</code>/<code>jcmd</code> dumps do not include allocation sites.
+        </p>
+      ) : !data.sites.some(s => s.frames.length > 0) ? (
+        <p className="subtitle">
+          Allocation-site records are present but contain no per-frame data. The HPROF agent must be invoked with <code>depth=8</code> or higher to record method-level allocation stacks: <code>-agentlib:hprof=heap=dump,depth=8</code>.
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
