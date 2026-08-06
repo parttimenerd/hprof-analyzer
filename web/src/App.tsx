@@ -2834,13 +2834,13 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to see what it holds and which field retains the large set of objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
-            <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — look for a static field never cleared or a listener list where subscribers are never removed.</li>
+            <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list where subscribers are never removed.</li>
           )}
           {s.root_type_label === "Java Frame" && (
             <li>Held via a <strong>thread stack frame</strong> — open the Threads section and find the thread whose stack references this class; a blocked or long-running thread keeps these objects alive until the frame returns.</li>
           )}
           {s.root_type_label === "JNI Global" && (
-            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; look for JNI code that registers globals without a matching <code>DeleteGlobalRef</code>.</li>
+            <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check for JNI code that registers globals without a matching <code>DeleteGlobalRef</code>.</li>
           )}
           {!s.root_type_label && (
             <li>No single GC root holds all instances — retention is spread across multiple roots. Use the Dominator Graph (<em>Dominator Analysis → Graph</em>) filtered to this class to trace which root keeps each instance alive.</li>
@@ -4287,7 +4287,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
   const kindCaption = (kind: string) => {
     switch (kind) {
       case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap signals a large cache; bound the cache size if memory is tight.";
-      case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — they are reclaimed at the next GC. Large counts are benign.";
+      case "Weak": return "Weak references let GC claim referents. These objects are reachable only via weak chains — they are reclaimed at the next GC. Large counts are benign.";
       case "Phantom": return "Phantom references track objects in finalization or cleanup pipelines. A large backlog signals a stalled or overloaded ReferenceQueue processor, or native resources not released promptly.";
       default: return "";
     }
@@ -6131,7 +6131,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
                 <code>{r.name}</code>
                 <CopyBtn text={r.name} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} />
                 {isThreadLocal && (
-                  <span title="ThreadLocal entries stay alive as long as the thread lives. In thread-pooled servers (Netty, Tomcat) values are never released unless explicitly removed — common cause of slow leaks."
+                  <span title="ThreadLocal entries live as long as the thread. In thread-pooled servers (Netty, Tomcat) values persist unless explicitly removed — classic slow leak."
                         style={{ marginLeft: 4, color: "var(--warn, #c84)", fontSize: "0.8em", cursor: "help" }}>⚠ TL</span>
                 )}
               </span>
