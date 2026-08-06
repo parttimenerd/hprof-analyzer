@@ -34,7 +34,7 @@ mat-oracle = []
 # The WASM crate depends on hprof-analyzer with default-features = false to
 # avoid pulling in these non-WASM-compatible crates.
 default = ["native"]
-native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip", "dep:tar"]
+native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip", "dep:tar", "dep:ureq", "dep:self-replace"]
 
 [dependencies]
 base64 = "0.22"
@@ -48,6 +48,10 @@ zstd = { version = "0.13", default-features = false, optional = true }
 # detect the installed MAT parser ID. deflate feature only; no bzip2/zstd needed.
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 tar = { version = "0.4", optional = true }
+# HTTP download for `update` subcommand; TLS via native OS roots (rustls + webpki).
+ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
+# Atomic self-replacement of the running binary (handles Windows file locking).
+self-replace = { version = "1", optional = true }
 scraper = { version = "0.27", optional = true }
 # pinned to =1.2.1: schemars 1.x had breaking API changes; bump carefully
 schemars = "=1.2.1"

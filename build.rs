@@ -15,6 +15,11 @@ use std::process::Command;
 use std::time::SystemTime;
 
 fn main() {
+    // Expose the build target triple so `src/update.rs` can construct the
+    // correct download URL without any runtime detection.
+    let target = std::env::var("TARGET").expect("Cargo always sets TARGET");
+    println!("cargo:rustc-env=BUILD_TARGET={target}");
+
     println!("cargo:rerun-if-changed=web/src");
     println!("cargo:rerun-if-changed=web/package.json");
     println!("cargo:rerun-if-changed=web/package-lock.json");

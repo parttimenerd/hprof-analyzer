@@ -42,6 +42,7 @@ mod sweep;
 mod trace;
 mod types;
 mod unreachable_retained;
+mod update;
 mod vbyte;
 
 use std::io::IsTerminal;
@@ -267,6 +268,12 @@ struct Cli {
 /// positional input; see `Cli`.
 #[derive(Subcommand)]
 enum Cmd {
+    /// Download the latest release and replace the running binary.
+    Update {
+        /// Release channel to update from (default: nightly).
+        #[arg(value_enum, default_value = "nightly")]
+        channel: update::Channel,
+    },
     /// Compare reports (MAT export vs ours, or two of ours across time)
     Compare {
         #[command(subcommand)]
@@ -547,6 +554,11 @@ fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         None => run_default(cli),
+        Some(Cmd::Update { channel }) => {
+            if let Err(e) = update::run(channel) {
+                fail(e);
+            }
+        }
         Some(Cmd::Compare { cmd }) => match cmd {
             CompareCmd::Mat { mat, ours, format } => {
                 // Name a missing input up front — `run_diff` opens both files but
