@@ -617,7 +617,7 @@ _Retained heap aggregated by package prefix (rows retaining <1% of the total are
 
 ## Dominator Analysis
 
-_Instances ranked by retained heap. An object **dominates** another if every path from a GC root to that object passes through it — making the dominator unreachable reclaims everything it dominates._
+_An object **dominates** another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. **Big Drops** shows objects holding memory directly or across many small children; **Immediate Dominators** ranks classes by how much dominated shallow heap they gate._
 
 ### Big Drops
 
@@ -696,7 +696,7 @@ _Per-thread call stacks and retained heap. A thread keeps everything on its stac
 
 ### Thread Overview
 
-_Per-thread retained heap and properties. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables._
+_Name, shallow/retained heap, max single-local retained, context class loader, daemon flag, priority, and thread state for every recorded thread._
 
 | Name                           | Shallow | Retained | Max. Locals' Retained | Context Class Loader                   | Daemon | Priority | State                                                  |
 | ------------------------------ | ------: | -------: | --------------------: | -------------------------------------- | ------ | -------: | ------------------------------------------------------ |
@@ -6141,6 +6141,8 @@ _Referents reachable only through phantom references — queued for post-cleanup
 _None found — no objects are exclusively reachable via this reference kind._
 
 ## Unreachable Objects
+
+_Objects that are no longer reachable from any GC root but have not yet been collected. A small unreachable fraction (< 5%) is normal between GC cycles; a large one suggests the dump was taken mid-collection._
 
 _5,970 unreachable objects, 816.8 KB shallow heap. Top 30 classes by shallow heap._
 

@@ -1649,9 +1649,8 @@ alive — blocked or long-running threads can hold significant memory through lo
     // ── Thread Overview table (always-on properties) ────────────────────────
     out.push_str("### Thread Overview\n\n");
     out.push_str(
-        "_Per-thread retained heap and properties. A thread keeps everything on its \
-stack alive — blocked or long-running threads can hold significant memory through \
-local variables._\n\n",
+        "_Name, shallow/retained heap, max single-local retained, context class loader, \
+daemon flag, priority, and thread state for every recorded thread._\n\n",
     );
     let retained_max = t.threads.iter().map(|th| th.retained).max().unwrap_or(0);
     let mut headers: Vec<&str> = vec![
@@ -3247,9 +3246,14 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
     use crate::md::{Align, Table, bar};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
-        out.push_str("_No unreachable objects._\n\n");
+        out.push_str("_No unreachable objects. All heap objects are reachable from a GC root — normal when a full GC ran before the dump._\n\n");
         return;
     }
+    out.push_str(
+        "_Objects that are no longer reachable from any GC root but have not yet been \
+collected. A small unreachable fraction (< 5%) is normal between GC cycles; a large \
+one suggests the dump was taken mid-collection._\n\n",
+    );
     out.push_str(&format!(
         "_{} unreachable objects, {} shallow heap. \
          Top {} classes by shallow heap._\n\n",
@@ -3427,9 +3431,10 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
     use crate::md::{Align, Table, bar};
     out.push_str("## Dominator Analysis\n\n");
     out.push_str(
-        "_Instances ranked by retained heap. An object **dominates** another if every path \
-from a GC root to that object passes through it — making the dominator unreachable reclaims \
-everything it dominates._\n\n",
+        "_An object **dominates** another if every path from a GC root passes through it — \
+making it unreachable reclaims the entire dominated subtree. **Big Drops** shows objects \
+holding memory directly or across many small children; **Immediate Dominators** ranks classes \
+by how much dominated shallow heap they gate._\n\n",
     );
 
     // ---- Big Drops ----

@@ -1840,7 +1840,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
-        Classes where object headers (12 bytes with compressed OOPs, 16 without) consume a large share of shallow heap. The fix is to reduce object <em>count</em>: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields.
+        Classes where object headers (12 bytes with compressed OOPs, 16 without) consume a large share of shallow heap. The fix is to reduce object <em>count</em>: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields. Value types (Project Valhalla) eliminate headers entirely.
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="total_hdr" defaultSortAsc={false} />
     </section>
@@ -3599,7 +3599,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
       <p className="subtitle">
-        Array length distribution bucketed by powers of two — each row shows arrays up to that length. Helps spot unexpectedly large arrays or many tiny zero-length allocations.
+        Array length distribution bucketed by powers of two — <strong>Max Length</strong> is the inclusive upper bound of each bucket. Spot unexpectedly large arrays, many tiny zero-length allocations, or a skewed distribution that explains outsized array heap.
       </p>
       {empty ? (
         <p className="subtitle">No arrays found.</p>
@@ -5565,7 +5565,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">Instances ranked by retained heap. An object <em>dominates</em> another if every path from a GC root to that object passes through it — making the dominator unreachable reclaims everything it dominates.</p>
+      <p className="subtitle">An object <em>dominates</em> another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. <strong>Big Drops</strong> shows objects holding memory directly or across many small children. <strong>Immediate Dominators</strong> ranks classes by how much dominated shallow heap they gate. <strong>Graph</strong> visualizes the dominator tree; <strong>Heatmap</strong> maps dominator → dominated by class.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
@@ -6135,7 +6135,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
       <p className="subtitle">
-        Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — check the "What to Check" column for how to triage each one.
+        Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — see the <strong>What to Check</strong> column to triage each one.
       </p>
       <StdTable columns={leakCols} data={leakRows} searchKeys={[]} fmtBtn={kbBtn} />
     </section>
