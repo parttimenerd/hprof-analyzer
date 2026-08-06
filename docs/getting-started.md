@@ -111,6 +111,15 @@ Equivalent to `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak R
 | `.md` / `-f md` | Plain Markdown |
 | `-f md-graphs` | Markdown with ASCII charts |
 
+## Updating
+
+```bash
+hprof-analyzer update nightly   # replace the running binary with the latest nightly
+hprof-analyzer update           # show current version + latest nightly, no changes
+```
+
+The binary fetches the correct archive for the current platform, smoke-tests it, then atomically replaces itself.
+
 ## Shell completions
 
 ```bash

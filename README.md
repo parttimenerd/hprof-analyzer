@@ -242,6 +242,18 @@ curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly
 sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
 ```
 
+**Already installed?** Update to the latest nightly in one command:
+
+```sh
+hprof-analyzer update nightly
+```
+
+To see your current version and what's available without updating:
+
+```sh
+hprof-analyzer update
+```
+
 ### With Cargo
 
 Requires Rust 1.85+. If you don't have it, install [rustup](https://rustup.rs/) first:
