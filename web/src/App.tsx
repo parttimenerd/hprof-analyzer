@@ -2837,7 +2837,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list where subscribers are never removed.</li>
           )}
           {s.root_type_label === "Java Frame" && (
-            <li>Held via a <strong>thread stack frame</strong> — open the Threads section and find the thread whose stack references this class; a blocked or long-running thread keeps these objects alive until the frame returns.</li>
+            <li>Held via a <strong>thread stack frame</strong> — check the Threads section for a blocked or long-running thread; it retains these objects until the frame returns.</li>
           )}
           {s.root_type_label === "JNI Global" && (
             <li>Held by a <strong>JNI global reference</strong> — native code is pinning these objects; check for JNI code that registers globals without a matching <code>DeleteGlobalRef</code>.</li>
@@ -9949,9 +9949,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
-    ["Shallow Size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
-    ["Retained Heap (Retained Size)", <>the total memory that would be freed if this object were garbage-collected: its own shallow size plus everything reachable <em>only</em> through it. This is the basis for every percentage in this report. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
-    ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can still reach from a GC root. Anything unreachable is already collectible and is excluded from the totals here.</>],
+    ["Shallow Size", <>an object's header plus its fields (and, for an array, its elements). Does <em>not</em> include referenced objects.</>],
+    ["Retained Heap (Retained Size)", <>the total memory freed if this object were garbage-collected: its shallow size plus everything reachable <em>only</em> through it. The basis for every percentage in this report. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator Tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes sum shallow sizes up this tree.</>],
@@ -9959,7 +9959,7 @@ function GlossarySection() {
     ["Dominator Depth", <>how many dominator-tree hops an object sits below a GC root. Low depth means most objects sit close to a root; high depth means objects are retained through long dominator chains.</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class — where excess memory pools.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
-    ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
+    ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
   ];
   return (
