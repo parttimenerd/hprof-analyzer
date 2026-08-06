@@ -547,7 +547,7 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread Pinning",
             format!(
-                "thread `{}` retains {} ({:.1}% of heap) and pins {} thread-local roots — a live thread is holding a disproportionate amount of memory alive. Inspect the thread's stack frames and ThreadLocal values in the Threads section.",
+                "thread `{}` retains {} ({:.1}% of heap) and holds {} thread-local GC roots alive — a live thread is keeping a disproportionate amount of memory reachable. Inspect the thread's stack frames and ThreadLocal values in the Threads section.",
                 who,
                 format_bytes(t.retained),
                 share,
@@ -709,7 +709,7 @@ impl Rule for OverCapacityCollections {
             TriageSeverity::Info,
             "Over-Capacity Collections",
             format!(
-                "{} wasted by under-filled collections (<=50% full across {} tracked) — call `trimToSize()` after bulk loads, or right-size initial capacity to reduce backing-array slack.",
+                "{} wasted by under-filled collections (≤50% full across {} tracked) — call `trimToSize()` after bulk loads, or right-size initial capacity to reduce backing-array slack.",
                 format_bytes(wasted),
                 fmt_count(cfr.tracked),
             ),
@@ -1398,7 +1398,7 @@ impl Rule for SparseObjectArrays {
             TriageSeverity::Info,
             "Sparse Object Arrays",
             format!(
-                "{} object arrays are <={}% full ({} wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. Replace with a `HashMap`/`SparseArray`, a `List` that grows on demand, or a dedicated sparse-matrix library.",
+                "{} object arrays are ≤{}% full ({} wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. Replace with a `HashMap` / `SparseArray`, a `List` that grows on demand, or a dedicated sparse-matrix library.",
                 fmt_count(sparse_objects),
                 SPARSE_ARRAY_FILL_BP / 100,
                 format_bytes(wasted),
