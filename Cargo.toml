@@ -71,6 +71,7 @@ regex = "1"
 libc = "0.2"
 
 [dev-dependencies]
+cargo-husky = { version = "1.5.0", features = ["precommit-hook", "run-cargo-fmt"] }
 jsonschema = "0.47.0"
 proptest = "1"
 tempfile = "3"

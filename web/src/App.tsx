@@ -1922,7 +1922,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
   return (
     <section id="system-overview">
       <h2>System Overview</h2>
-      <p className="subtitle">Reachable heap totals and top classes by retained heap.</p>
+      <p className="subtitle">JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and system properties.</p>
 
       <div className="card">
         <dl className="summary-grid">
@@ -2098,6 +2098,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
       })()}
 
       <h3>Class Histogram (by Retained Heap)</h3>
+      <p className="subtitle">Every loaded class with its instance count, shallow heap (own bytes), and retained heap (what would be freed if all instances were released).</p>
       {o.histogram_truncated_to != null && (
         <p className="subtitle">
           Histogram capped to the largest {fmtCount(o.histogram_truncated_to)} classes.
@@ -3124,6 +3125,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects</h3>
+      <p className="subtitle">Individual objects with the highest retained heap. Click a row to jump to it in the Object Graph Explorer.</p>
       {objHasOwner && (
         <p className="subtitle">
           <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object. Objects can have multiple referrers.
@@ -3132,6 +3134,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes</h3>
+      <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — a strong leak signal.</p>
       <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
         extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
       />
@@ -3414,7 +3417,7 @@ function FrameworkAnalysisSection({ items }: { items?: FrameworkAnalysis[] }) {
   return (
     <section className="section" id="framework-analysis">
       <h2>Framework Analysis</h2>
-      <p className="subtitle">Detected: {detected}</p>
+      <p className="subtitle">Detected: {detected}. Framework-specific objects and their heap footprint — useful for spotting oversized caches or leaked request contexts.</p>
       <div className="framework-cards">
         {items.map(item => (
           <div key={item.framework} className="framework-card">
@@ -3454,7 +3457,7 @@ function ThreadsSection({ report }: { report: Report }) {
   return (
     <section id="threads">
       <h2>Threads</h2>
-      <p className="subtitle">Per-thread call stacks.</p>
+      <p className="subtitle">Per-thread call stacks and retained heap. A thread keeps everything on its stack alive — blocked or long-running threads can hold significant memory through local variables.</p>
       {threads.length === 0 ? (
         <p className="subtitle">No thread call stacks.</p>
       ) : (
@@ -3598,7 +3601,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
       <p className="subtitle">
-        Array length distribution, bucketed by powers of two. Max Length is each bucket's upper bound.
+        Array length distribution bucketed by powers of two — each row shows arrays up to that length. Helps spot unexpectedly large arrays or many tiny zero-length allocations.
       </p>
       {empty ? (
         <p className="subtitle">No arrays found.</p>
@@ -3975,7 +3978,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     <section id="collection-waste-budget">
       <h2>Collection Waste Budget</h2>
       <p className="subtitle">
-        Collection waste categories ranked by wasted bytes.
+        Memory wasted by redundant objects — duplicate strings, duplicate primitive arrays, boxed numbers, and unnecessary collection wrappers. Fix the biggest category first for the highest impact.
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
@@ -5187,6 +5190,9 @@ function DomGraphView({ pairs, idoms }: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      <p className="subtitle" style={{ margin: "0 0 0.25rem" }}>
+        Class-level dominator graph — each node is a class, each edge means the source dominates the target. Node size reflects retained heap. Use <strong>▲ Retained by</strong> / <strong>▼ Retains</strong> to focus on a selected class's ancestors or subtree.
+      </p>
       {/* Toolbar row 1: layout + focus + label controls */}
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
         <button onClick={() => { setLayoutKey(k => k + 1); setSelected(null); }}
@@ -5320,6 +5326,9 @@ function DomGraphView({ pairs, idoms }: {
       )}
 
       {/* Graph canvas */}
+      {fdEdges.length === 0 && (
+        <p className="subtitle" style={{ color: "var(--muted)" }}>No edges to display — the filtered set of classes has no direct dominator relationships. Try increasing the node cap or clearing any active filter.</p>
+      )}
       <div className="cy-graph-container" ref={cyContainerRef} />
 
       {/* Heat legend */}
@@ -5812,7 +5821,7 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
   return (
     <section id="off-heap-nio" tabIndex={-1}>
       <h2>Off-Heap NIO Memory</h2>
-      <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — excluded from JVM heap totals.</p>
+      <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — not counted in JVM heap totals and invisible to the GC. Can trigger OS-level OOM if unbounded.</p>
       <div className="card">
         <p>
           <strong>{formatBytes(capacity)}</strong>
@@ -5909,10 +5918,10 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by allocating stack trace — shallow heap totals per trace; retained heap omitted (double-counts shared subgraphs).</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them — shows where heap was created, not necessarily what is keeping it alive. Requires the HPROF agent with allocation tracking enabled.</p>
       {!data.traces_present ? (
         <p className="subtitle">
-          Allocation tracking not enabled.
+          Allocation tracking not captured. Enable it with: <code>java -agentlib:hprof=heap=dump,depth=8</code> — then re-dump.
         </p>
       ) : (() => {
         const allocCols: TableColumn<import("./types").AllocSite>[] = [
@@ -6074,7 +6083,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
     <section id="dominator-depth-distribution">
       <h2>Dominator-Depth Distribution</h2>
       <p className="subtitle">
-        Low depth: objects near roots; high depth: long retention chains (nested collections, linked structures). Maximum depth: {maxDepth}.
+        Low depth: objects close to GC roots; high depth: deep retention chains (nested collections, linked lists, long object graphs). Maximum depth: {maxDepth}. A spike at depth 1–3 is normal; a long tail at high depths suggests nested containers holding data you may not expect.
       </p>
       <DepthHistogramChart data={hist} />
       <details>
@@ -6141,7 +6150,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
       <h2>Top Retainers</h2>
       <p className="subtitle">
         Combined ranking of <code>Class#field</code> references and stack-frame locals by retained heap.
-        {" "}Totals can exceed heap size for linked structures (e.g. <code>List#next</code>) — each node retains its entire tail; treat totals as relative.
+        Retained totals can exceed heap size for linked structures (e.g. <code>List#next</code>) where each node retains its entire tail — treat as relative, not additive.
       </p>
       {(() => {
         const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
@@ -6233,7 +6242,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
   return (
     <section id="custom-queries">
       <h2>Custom Queries</h2>
-      <p className="subtitle">OQL queries from the command line.</p>
+      <p className="subtitle">OQL queries embedded in this report at generation time.</p>
       {queries.map((q: QueryResult, qi) => (
         <div key={qi}>
           <h3 style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
@@ -10072,7 +10081,7 @@ function GlossarySection() {
   return (
     <section id="glossary">
       <h2>Glossary</h2>
-      <p className="subtitle">Key terms.</p>
+      <p className="subtitle">Definitions for the heap analysis terms used throughout this report.</p>
       <dl className="summary-grid">
         {entries.map(([term, def]) => (
           <React.Fragment key={term}>
@@ -10673,6 +10682,7 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
         <tbody>
           {slice.map((n, i) => (
             <tr key={n.idx} className="trg-inst-row"
+                title="Click to open this instance in the Inspector"
                 onClick={() => onNavigate({ kind: "instance", idx: n.idx, cls: n.cls })}>
               <td>{page * TRG_PAGE_SIZE + i + 1}</td>
               <td><code>{n.idx}</code></td>
@@ -11274,8 +11284,8 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
     <div className="heap-inspector" style={{ width }}>
       <div className="inspector-resize-handle" onMouseDown={handleResizeMD} />
       <div className="inspector-header">
-        <button className="inspector-nav-btn" disabled={stack.length <= 1} onClick={goBack}>←</button>
-        <button className="inspector-nav-btn" disabled={fwd.length === 0} onClick={goFwd}>→</button>
+        <button className="inspector-nav-btn" title="Back (Alt+←)" disabled={stack.length <= 1} onClick={goBack}>←</button>
+        <button className="inspector-nav-btn" title="Forward (Alt+→)" disabled={fwd.length === 0} onClick={goFwd}>→</button>
         <span className="inspector-title" title={
           current?.kind === "class" ? current.cls :
           current?.kind === "instance" ? `${current.cls} #${current.idx}` :
@@ -11291,7 +11301,7 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
            current?.kind === "field-scan" ? `Scan — ${current.cls.split(".").pop()}` :
            "Heap Inspector"}
         </span>
-        <button className="inspector-close-btn" onClick={() => setOpen(false)}>✕</button>
+        <button className="inspector-close-btn" title="Close Inspector" onClick={() => setOpen(false)}>✕</button>
       </div>
       <div className="inspector-body">
         {!current ? (
@@ -11488,7 +11498,7 @@ export default function App({ report }: { report: Report }) {
             onClick={() => { document.getElementById(navToast.sectionId)?.scrollIntoView({ behavior: "smooth" }); setNavToast(null); }}>
             Jump there ↓
           </button>
-          <button className="nav-toast-close" onClick={() => setNavToast(null)}>✕</button>
+          <button className="nav-toast-close" title="Dismiss" onClick={() => setNavToast(null)}>✕</button>
         </div>
       )}
       <HeapInspector report={report} histogram={report.overview?.histogram ?? []} />
@@ -11541,7 +11551,7 @@ export default function App({ report }: { report: Report }) {
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
         <section id="type-ref-graph" className="section">
           <h2>Type Reference Graph</h2>
-          <p className="subtitle">Reference topology between class types — each directed edge weighted by retained heap. Retained Flow sums referenced-object retained sizes across all instances — can exceed heap if objects are shared.</p>
+          <p className="subtitle">Reference topology between class types — each directed edge shows references from one class to another, weighted by retained heap. <strong>Retained Flow</strong> aggregates referenced-object retained sizes across all instances; it can exceed total heap when objects are shared.</p>
           <TypeRefGraph edges={report.type_ref_graph} histogram={report.overview.histogram} objGraph={report.obj_graph_flat} />
         </section>
       )}

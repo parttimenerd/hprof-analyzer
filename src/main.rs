@@ -565,7 +565,8 @@ fn main() {
             if let Err(e) = update::run(channel) {
                 fail(e);
             }
-        }        Some(Cmd::Compare { cmd }) => match cmd {
+        }
+        Some(Cmd::Compare { cmd }) => match cmd {
             CompareCmd::Mat { mat, ours, format } => {
                 // Name a missing input up front — `run_diff` opens both files but
                 // surfaces only a bare OS error, so pre-check for a clear message.

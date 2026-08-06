@@ -104,8 +104,8 @@ fn fetch_release_info(channel: Channel) -> Result<ReleaseInfo, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    let json: serde_json::Value = serde_json::from_reader(resp.body_mut().as_reader())
-        .map_err(|e| format!("{e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_reader(resp.body_mut().as_reader()).map_err(|e| format!("{e}"))?;
 
     let name = json["name"].as_str().unwrap_or("?").to_string();
     let published_at = json["published_at"]
@@ -125,7 +125,11 @@ fn fetch_release_info(channel: Channel) -> Result<ReleaseInfo, String> {
         .map(|l| l.trim().to_string())
         .unwrap_or_default();
 
-    Ok(ReleaseInfo { name, published_at, body_first_line })
+    Ok(ReleaseInfo {
+        name,
+        published_at,
+        body_first_line,
+    })
 }
 
 fn format_release_info(r: &Result<ReleaseInfo, String>) -> String {
@@ -136,8 +140,7 @@ fn format_release_info(r: &Result<ReleaseInfo, String>) -> String {
             } else {
                 format!("  ({})", info.body_first_line)
             };
-            format!("{} — published {}{}",
-                info.name, info.published_at, commit)
+            format!("{} — published {}{}", info.name, info.published_at, commit)
         }
         Err(e) => format!("(could not fetch: {e})"),
     }
@@ -145,8 +148,8 @@ fn format_release_info(r: &Result<ReleaseInfo, String>) -> String {
 
 /// Download the given channel and atomically replace this binary.
 fn do_update(channel: Channel) -> Result<(), String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("cannot locate current executable: {e}"))?;
+    let exe =
+        std::env::current_exe().map_err(|e| format!("cannot locate current executable: {e}"))?;
 
     let (archive_name, is_zip) = archive_name();
     let url = format!("{base}/{archive_name}", base = channel.download_base());
@@ -175,8 +178,7 @@ fn do_update(channel: Channel) -> Result<(), String> {
             .map_err(|e| format!("metadata error: {e}"))?
             .permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&tmp, perms)
-            .map_err(|e| format!("chmod error: {e}"))?;
+        std::fs::set_permissions(&tmp, perms).map_err(|e| format!("chmod error: {e}"))?;
     }
 
     eprintln!("Smoke-testing downloaded binary …");
@@ -186,8 +188,7 @@ fn do_update(channel: Channel) -> Result<(), String> {
     })?;
 
     eprintln!("Replacing {} …", exe.display());
-    self_replace::self_replace(&tmp)
-        .map_err(|e| format!("failed to replace binary: {e}"))?;
+    self_replace::self_replace(&tmp).map_err(|e| format!("failed to replace binary: {e}"))?;
     let _ = std::fs::remove_file(&tmp);
 
     eprintln!("Done. Run `hprof-analyzer --version` to confirm.");
@@ -289,8 +290,7 @@ fn extract_from_zip(data: &[u8]) -> Result<Vec<u8>, String> {
     use zip::ZipArchive;
 
     let cursor = io::Cursor::new(data);
-    let mut archive =
-        ZipArchive::new(cursor).map_err(|e| format!("bad zip: {e}"))?;
+    let mut archive = ZipArchive::new(cursor).map_err(|e| format!("bad zip: {e}"))?;
 
     for i in 0..archive.len() {
         let mut file = archive
