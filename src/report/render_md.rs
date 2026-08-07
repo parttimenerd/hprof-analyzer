@@ -2462,7 +2462,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
 
     out.push_str(&format!("### Top Arrays ({kind})\n\n"));
     out.push_str(&format!(
-        "_The largest {kind} arrays by shallow size, individually and aggregated by array class._\n\n"
+        "_Largest {kind} arrays by shallow size — individual instances and class totals._\n\n"
     ));
 
     // Largest individual arrays.
