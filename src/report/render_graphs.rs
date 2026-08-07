@@ -286,6 +286,16 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
         }
         t.render(out);
         out.push('\n');
+        const JNI_WARN_THRESHOLD: u64 = 100 * 1024 * 1024;
+        if o.gc_roots_retained_by_type
+            .iter()
+            .any(|r| r.root_type.to_lowercase().contains("jni") && r.retained > JNI_WARN_THRESHOLD)
+        {
+            out.push_str(
+                "_⚠ JNI roots hold significant retained heap — check for native code \
+registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
+            );
+        }
     }
 
     // Heap Composition — with a proportional shallow-heap bar.

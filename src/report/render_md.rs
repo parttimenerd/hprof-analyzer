@@ -1105,6 +1105,17 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
         }
         t.render(out);
         out.push('\n');
+        // JNI warning: large JNI retained heap is a common native-code leak.
+        const JNI_WARN_THRESHOLD: u64 = 100 * 1024 * 1024;
+        if o.gc_roots_retained_by_type
+            .iter()
+            .any(|r| r.root_type.to_lowercase().contains("jni") && r.retained > JNI_WARN_THRESHOLD)
+        {
+            out.push_str(
+                "_⚠ JNI roots hold significant retained heap — check for native code \
+registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
+            );
+        }
     }
 
     // Heap composition by kind: worth a table only when >1 kind present
