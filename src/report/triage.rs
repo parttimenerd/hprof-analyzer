@@ -776,7 +776,7 @@ impl Rule for ObjectSwarm {
             TriageSeverity::Warning,
             "Object Swarm",
             format!(
-                "{} live `{}` instances ({} shallow, {:.1}% of heap) — typically an unbounded queue, list, or log accumulation.",
+                "{} live `{}` instances ({} shallow, {:.1}% of heap) — many tiny objects accumulating; check for an unbounded queue, growing log buffer, or DTO/event accumulation. Either cap the collection or process and discard entries on-the-fly.",
                 fmt_count(row.instances),
                 row.pretty_class,
                 format_bytes(row.shallow),
@@ -1445,9 +1445,9 @@ impl Rule for BigDropConcentration {
             "Dominator-Tree Big Drop",
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
-                 drops here in the dominator tree, meaning this object uniquely retains \
-                 most of that memory with no sharing across other top-level subtrees. \
-                 Follow the retaining chain in Dominator Analysis to find the GC root.",
+                 drops here in the dominator tree — every path from a GC root to those objects \
+                 passes through this one node. Follow the retaining chain in Dominator Analysis \
+                 to find the GC root that keeps it alive.",
                 row.display_class,
                 pct,
                 format_bytes(row.drop_bytes),
