@@ -3535,13 +3535,13 @@ function ThreadsSection({ report }: { report: Report }) {
           {visible.map((t, i) => (
             <ThreadCard key={`${genKey}-${i}`} t={t} open={openAll} />
           ))}
-          {!isFiltering && !showAll && view.length > CAP && (
+          {!isFiltering && !showAll && visible.length < view.length && (
             <button
               className="theme-toggle"
               style={{ marginTop: "0.5rem" }}
               onClick={() => setShowAll(true)}
             >
-              Show {fmtCount(view.length - CAP)} More Threads
+              Show {fmtCount(view.length - visible.length)} More Threads
             </button>
           )}
         </>
