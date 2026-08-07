@@ -2251,7 +2251,7 @@ collisions and degrade lookup performance._\n\n",
     }
     out.push_str("### Collection Fill Ratio\n\n");
     out.push_str(&format!(
-        "_Fraction of each collection's backing-array capacity in use — low fill wastes \
+        "_Fraction of each collection's capacity in use — low fill wastes \
 backing-array memory. {} collections analyzed ({} non-empty tracked)._\n\n",
         fmt_count(c.collection_fill_ratio.total),
         fmt_count(c.collection_fill_ratio.tracked),
