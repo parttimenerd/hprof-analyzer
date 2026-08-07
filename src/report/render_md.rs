@@ -861,7 +861,7 @@ fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut Stri
         let chain_len = last_depth - first_depth + 1;
         out.push_str(&format!(
             "\n_… depths {}–{}: {} hop{} each with {} objects (a single growth-path chain; \
-full depth data in JSON)_\n",
+full depth data in HTML report)_\n",
             first_depth,
             last_depth,
             chain_len,
@@ -874,7 +874,7 @@ full depth data in JSON)_\n",
         let hidden_objects: u64 = stats.rows[shown..].iter().map(|&(_, o, _, _)| o).sum();
         let last_cum = stats.rows.last().map(|&(_, _, _, c)| c).unwrap_or(0.0);
         out.push_str(&format!(
-            "\n_… (+{} deeper buckets, {} objects, {} cumulative — full data in JSON)_\n",
+            "\n_… (+{} deeper buckets, {} objects, {} cumulative — see HTML report for full depth data)_\n",
             hidden,
             fmt_count(hidden_objects),
             fmt_pct(last_cum),
@@ -1071,7 +1071,7 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
         t.render(out);
         if o.system_properties.len() > CAP {
             out.push_str(&format!(
-                "\n_… (+{} more properties in JSON)_\n",
+                "\n_… (+{} more properties not shown)_\n",
                 o.system_properties.len() - CAP
             ));
         }
@@ -1197,7 +1197,7 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
         let tail_shallow: u64 = o.histogram[50..].iter().map(|r| r.shallow).sum();
         let tail_retained: u64 = o.histogram[50..].iter().map(|r| r.retained).sum();
         out.push_str(&format!(
-            "_… {} more classes, {} shallow / {} retained (full list in JSON)._\n",
+            "_… {} more classes, {} shallow / {} retained (see HTML report for full list)._\n",
             fmt_count(remaining as u64),
             format_bytes(tail_shallow),
             format_bytes(tail_retained),
@@ -3722,7 +3722,7 @@ fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
         if depth >= DOM_TREE_MAX_DEPTH && !node.children.is_empty() {
             let child_indent = "  ".repeat(depth + 1);
             out.push_str(&format!(
-                "{}_… ({} deeper — full data in JSON)_\n",
+                "{}_… ({} deeper — see HTML report for full tree)_\n",
                 child_indent,
                 node.children.len(),
             ));
@@ -3769,7 +3769,7 @@ fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
     if remaining > 0 {
         let child_indent = "  ".repeat(depth + 1);
         out.push_str(&format!(
-            "{}_… ({} more siblings — full data in JSON)_\n",
+            "{}_… ({} more siblings — see HTML report for full list)_\n",
             child_indent, remaining,
         ));
     }
