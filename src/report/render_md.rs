@@ -3460,7 +3460,7 @@ Multiple rows with the same class are distinct objects._\n\n",
         threshold_mb,
     ));
     if d.big_drops.rows.is_empty() {
-        out.push_str("_No significant drops._\n\n");
+        out.push_str("_No objects meet the threshold._\n\n");
     } else {
         let drop_max = d
             .big_drops
