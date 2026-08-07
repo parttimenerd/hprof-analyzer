@@ -784,8 +784,11 @@ function OomTriage({ report }: { report: Report }) {
       <ul>
         {signals.map((s, i) => {
           const detail = SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail;
+          const sevColor = s.severity === "critical" ? "var(--critical, #c0392b)" : s.severity === "warning" ? "var(--warn-border, #c84)" : "var(--muted, #888)";
+          const sevLabel = s.severity === "critical" ? "Critical" : s.severity === "warning" ? "Warning" : "Info";
           return (
             <li key={i}>
+              <span title={sevLabel} style={{ color: sevColor, marginRight: "0.3rem", fontSize: "0.85em" }}>●</span>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
               {s.nav_class && <>{" "}<PivotBtn cls={s.nav_class} /><OqlBtn cls={s.nav_class} /><ListObjectsBtn cls={s.nav_class} /></>}
               {s.anchor && s.anchor_label ? (
