@@ -2818,7 +2818,7 @@ pub(crate) fn render_collection_attribution(
             .map(|r| r.overhead_bytes)
             .max()
             .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Class#field", "Kind", "Empty", "Size-1", "Overhead"];
+        let mut headers: Vec<&str> = vec!["Class#field", "Kind", "Empty", "Singleton", "Overhead"];
         let mut aligns = vec![
             Align::Left,
             Align::Left,

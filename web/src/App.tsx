@@ -4007,7 +4007,7 @@ function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionR
     { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
     { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count, sortable: true },
     { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count, sortable: true },
-    { id: "overhead", name: useKB ? "Overhead (KB)" : "Overhead Bytes", right: true, width: useKB ? "150px" : "138px", cell: byteCell(r => r.overhead_bytes, fmtB, useKB), selector: (r) => r.overhead_bytes, sortable: true },
+    { id: "overhead", name: useKB ? "Overhead (KB)" : "Overhead", right: true, width: useKB ? "150px" : "110px", cell: byteCell(r => r.overhead_bytes, fmtB, useKB), selector: (r) => r.overhead_bytes, sortable: true },
   ];
   return <StdTable columns={cols} data={rows} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="overhead" defaultSortAsc={false} />;
 }
@@ -4026,7 +4026,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 
       <h3>Top by Total Memory</h3>
       {mostOverall.length === 0 ? (
-        <p className="subtitle">None found in this dump.</p>
+        <p className="subtitle">No collections exceeded the size threshold.</p>
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
@@ -4042,7 +4042,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 
       <h3>Largest Single Container</h3>
       {biggestSingle.length === 0 ? (
-        <p className="subtitle">None found in this dump.</p>
+        <p className="subtitle">No collections exceeded the size threshold.</p>
       ) : (() => {
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
