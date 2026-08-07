@@ -1052,7 +1052,7 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     }
 
     // System properties (additive; captured from java.lang.System.props). Table
-    // capped for readability; the full sorted list lives in JSON. Values are
+    // capped for readability; excess entries are noted inline. Values are
     // truncated to keep rows scannable.
     if !o.system_properties.is_empty() {
         const CAP: usize = 40;

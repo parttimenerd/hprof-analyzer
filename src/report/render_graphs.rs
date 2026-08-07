@@ -243,7 +243,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
         t.render(out);
         if o.system_properties.len() > CAP {
             out.push_str(&format!(
-                "\n_… (+{} more properties in JSON)_\n",
+                "\n_… (+{} more properties not shown)_\n",
                 o.system_properties.len() - CAP
             ));
         }
@@ -314,7 +314,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
         "_Every loaded class with its instance count, shallow heap (own bytes), and retained heap \
-         (bytes freed when all instances become unreachable). Top 50 shown; full list in JSON._\n\n",
+         (bytes freed when all instances become unreachable). Top 50 shown._\n\n",
     );
     let hist_max = o
         .histogram
@@ -572,7 +572,7 @@ fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
     t.render(out);
     if total > shown {
         out.push_str(&format!(
-            "\n_… (+{} deeper buckets in JSON)_\n",
+            "\n_… (+{} deeper buckets not shown)_\n",
             total - shown
         ));
     }
