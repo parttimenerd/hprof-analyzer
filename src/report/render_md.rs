@@ -702,10 +702,10 @@ pub(crate) fn render_waste_summary(r: &Report, out: &mut String) {
     }
     out.push_str("## Waste Summary\n\n");
     out.push_str(&format!(
-        "_Approximately **{}** estimated reclaimable across the sources below — \
+        "**{}** estimated reclaimable across the sources below — \
 duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton \
 collection overhead. Fix the biggest category first for the highest impact. Figures are \
-approximate; sources may overlap._\n\n",
+approximate; sources may overlap.\n\n",
         format_bytes(w.total_bytes)
     ));
     let mut t = crate::md::Table::new(
@@ -1329,7 +1329,11 @@ pub(crate) fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     out.push_str("## Leak Suspects\n\n");
 
     if l.suspects.is_empty() {
-        out.push_str("No single object or class group exceeds the threshold.\n\n");
+        out.push_str(
+            "_No single class dominates heap retention — heap spans many roots. \
+Explore the largest classes in the Top Consumers section or trace retention chains in \
+Dominator Analysis._\n\n",
+        );
         return;
     }
 
@@ -1910,7 +1914,7 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
         return;
     }
     out.push_str(
-        "_Array length distribution bucketed by powers of two — `Max length` is the inclusive \
+        "_Array length distribution bucketed by powers of two — **Max Length** is the inclusive \
 upper bound of each bucket. Spot unexpectedly large arrays, many tiny zero-length allocations, \
 or a skewed distribution that explains outsized array heap._\n\n",
     );
@@ -2245,9 +2249,10 @@ collisions and degrade lookup performance._\n\n",
     }
     out.push_str("### Collection Fill Ratio\n\n");
     out.push_str(&format!(
-        "_{} tracked of {} collections._\n\n",
-        fmt_count(c.collection_fill_ratio.tracked),
+        "_Fraction of each collection's backing-array capacity in use — low fill wastes \
+backing-array memory. {} collections analyzed ({} non-empty tracked)._\n\n",
         fmt_count(c.collection_fill_ratio.total),
+        fmt_count(c.collection_fill_ratio.tracked),
     ));
     render_fill_ratio_table(
         &c.collection_fill_ratio.buckets,
@@ -2331,7 +2336,8 @@ collisions and degrade lookup performance._\n\n",
     }
     out.push_str("### Array Fill Ratio\n\n");
     out.push_str(&format!(
-        "_{} tracked object arrays._\n\n",
+        "_Non-null element fraction of object arrays — low fill leaves most slots empty. \
+{} tracked._\n\n",
         fmt_count(c.array_fill_ratio.tracked),
     ));
     render_fill_ratio_table(
@@ -2348,7 +2354,7 @@ collisions and degrade lookup performance._\n\n",
     // ── Map Load Factor ──────────────────────────────────────────────────────
     out.push_str("### Map Load Factor\n\n");
     out.push_str(&format!(
-        "_{} tracked of {} maps (occupied slots ÷ capacity; high values ≥ 90% increase collision chains)._\n\n",
+        "_Load factor (occupied slots ÷ capacity) for {} of {} maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup._\n\n",
         fmt_count(c.map_collision_ratio.tracked),
         fmt_count(c.map_collision_ratio.total),
     ));

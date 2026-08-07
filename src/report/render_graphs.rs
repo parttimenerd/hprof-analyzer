@@ -325,8 +325,8 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     if !o.loader_rollup.is_empty() {
         out.push_str("### Class Loaders\n\n");
         out.push_str(
-            "_Classes grouped by the loader that defined them; many loaders each holding heap \
-             can signal a class-loader leak._\n\n",
+            "_Retained heap attributed to each class loader. Growing loaders \
+             (e.g. web-app or plugin loaders) are a common source of metaspace and heap leaks._\n\n",
         );
         let lmax = o
             .loader_rollup
