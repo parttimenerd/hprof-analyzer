@@ -255,7 +255,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
         out.push('\n');
     }
 
-    // GC Roots by Type — with a proportional count bar.
+    // GC Roots by Type — with a proportional retained bar when data is available.
     if o.gc_roots_by_type.len() > 1 {
         out.push_str("### GC Roots by Type\n\n");
         out.push_str(
@@ -263,25 +263,60 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
              anything reachable from a root stays alive. Common root types: thread-stack locals, \
              JNI global references, static fields of loaded classes, and synchronized lock objects._\n\n",
         );
-        let max = o
-            .gc_roots_by_type
-            .iter()
-            .map(|r| r.count)
-            .max()
-            .unwrap_or(0);
-        let mut t = Table::new(
-            &["Root Type", "Count", ""],
-            &[Align::Left, Align::Right, Align::Left],
-        );
-        for row in &o.gc_roots_by_type {
-            t.row([
-                row.root_type.clone(),
-                fmt_count(row.count),
-                bar(row.count, max, GRAPH_BAR_WIDTH),
-            ]);
+        if !o.gc_roots_retained_by_type.is_empty() {
+            let total_count: u64 = o.gc_roots_retained_by_type.iter().map(|r| r.count).sum();
+            let max_retained = o
+                .gc_roots_retained_by_type
+                .iter()
+                .map(|r| r.retained)
+                .max()
+                .unwrap_or(0);
+            let mut t = Table::new(
+                &["Root Type", "Count", "% of Roots", "Retained", ""],
+                &[
+                    Align::Left,
+                    Align::Right,
+                    Align::Right,
+                    Align::Right,
+                    Align::Left,
+                ],
+            );
+            for row in &o.gc_roots_retained_by_type {
+                t.row([
+                    row.root_type.clone(),
+                    fmt_count(row.count),
+                    fmt_pct(if total_count > 0 {
+                        row.count as f64 / total_count as f64 * 100.0
+                    } else {
+                        0.0
+                    }),
+                    format_bytes(row.retained),
+                    bar(row.retained, max_retained, GRAPH_BAR_WIDTH),
+                ]);
+            }
+            t.render(out);
+            out.push('\n');
+        } else {
+            let max = o
+                .gc_roots_by_type
+                .iter()
+                .map(|r| r.count)
+                .max()
+                .unwrap_or(0);
+            let mut t = Table::new(
+                &["Root Type", "Count", ""],
+                &[Align::Left, Align::Right, Align::Left],
+            );
+            for row in &o.gc_roots_by_type {
+                t.row([
+                    row.root_type.clone(),
+                    fmt_count(row.count),
+                    bar(row.count, max, GRAPH_BAR_WIDTH),
+                ]);
+            }
+            t.render(out);
+            out.push('\n');
         }
-        t.render(out);
-        out.push('\n');
         const JNI_WARN_THRESHOLD: u64 = 100 * 1024 * 1024;
         if o.gc_roots_retained_by_type
             .iter()
