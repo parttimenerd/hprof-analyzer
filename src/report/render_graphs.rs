@@ -545,12 +545,19 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
     out.push_str("## Leak Suspects\n\n");
 
     if l.suspects.is_empty() {
-        out.push_str("No single object or class group exceeds the threshold.\n\n");
+        out.push_str(
+            "_No single class dominates heap retention — heap spans many roots. \
+Explore the largest classes in the Top Consumers section or trace retention chains in \
+Dominator Analysis._\n\n",
+        );
         return;
     }
 
     out.push_str(
-        "_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._\n\n",
+        "_Objects and class groups retaining the most heap, ranked by retained size — \
+the most likely accumulation points for excessive memory usage. To fix: follow the \
+dominator chain to the nearest object you control and drop or null out the reference \
+that keeps it alive. The path to GC root is shown for each suspect below._\n\n",
     );
 
     // Share overview: one proportional bar per suspect, keyed to the largest
@@ -725,9 +732,15 @@ Investigate only if the instance count is unexpectedly high \
 fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut String) {
     use crate::md::{Align, Table, bar, sparkline, tree_prefix};
     out.push_str("## Top Consumers\n\n");
+    out.push_str(
+        "_Biggest objects, classes, and packages by retained heap. Unlike Leak Suspects, \
+these tables are unfiltered — use them when a suspect didn't cross the leak threshold, \
+or to see the full retention picture._\n\n",
+    );
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(
-        "_Individual objects retaining the most heap; `% Heap` is the share of total reachable heap._\n\n",
+        "_All top-level dominators ranked by retained heap — every object directly held by a GC root. \
+         Use it when the suspect you care about didn't cross the leak-suspect threshold._\n\n",
     );
     let obj_max = t
         .biggest_objects
@@ -800,8 +813,9 @@ fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut S
         let d = &t.size_distribution;
         out.push_str("### Top-Dominator Size Distribution\n\n");
         out.push_str(&format!(
-            "_Retained-size spread across all {} top-level dominators (the biggest memory contributors)._\n\n",
-            d.count
+            "_Retained heap distributed across all {} top-level dominators. The shape reveals whether \
+a handful of large objects dominate the heap or memory is scattered across many small ones._\n\n",
+            fmt_count(d.count)
         ));
         out.push_str(&format!("- Dominators: {}\n", fmt_count(d.count)));
         out.push_str(&format!(
