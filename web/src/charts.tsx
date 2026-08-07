@@ -119,7 +119,7 @@ function FlatTreemap({
           return (
             <div
               key={i}
-              title={`${label}: ${fmt(value)} (${pct}%)`}
+              title={`${label}: ${fmt(value)} (${pct})`}
               onClick={clickable ? () => onSlice!(origIdx) : undefined}
               style={{
                 position: "absolute",
@@ -451,7 +451,7 @@ export function ZoomableTreemap<T>({
                 )}
                 {lw > 44 && lh > 38 && (
                   <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(11, lw / 8), color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {fmt(val)} ({pct}%)
+                    {fmt(val)} ({pct})
                   </span>
                 )}
               </div>
