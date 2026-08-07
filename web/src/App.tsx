@@ -783,7 +783,7 @@ function OomTriage({ report }: { report: Report }) {
       </p>
       <ul>
         {signals.map((s, i) => {
-          const detail = (SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail).replace(/\blazy initialisation\b/g, "lazy initialization");
+          const detail = SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail;
           return (
             <li key={i}>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
