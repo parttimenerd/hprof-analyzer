@@ -56,7 +56,9 @@ pub(crate) fn render_duplicate_strings(
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {
-            out.push_str("_Duplicate-string analysis not run (pass `--find-duplicates`)._\n\n");
+            out.push_str(
+                "_Duplicate-string analysis not run — pass `--find-duplicates` to enable._\n\n",
+            );
             return;
         }
         Some(d) => d,
@@ -3883,7 +3885,7 @@ pub(crate) fn render_duplicate_prim_arrays(
     let d = match d {
         None => {
             out.push_str(
-                "_Duplicate primitive-array analysis not run (pass `--find-duplicates`)._\n\n",
+                "_Duplicate primitive-array analysis not run — pass `--find-duplicates` to enable._\n\n",
             );
             return;
         }
