@@ -676,7 +676,7 @@ Dominator Analysis._\n\n",
         "_Objects and class groups retaining the most heap, ranked by retained size — \
 the most likely accumulation points for excessive memory usage. To fix: follow the \
 dominator chain to the nearest object you control and drop or null out the reference \
-that keeps it alive. The path to GC root is shown for each suspect below._\n\n",
+that keeps it alive. GC root paths are shown for each suspect below._\n\n",
     );
 
     // Share overview: one proportional bar per suspect, keyed to the largest
