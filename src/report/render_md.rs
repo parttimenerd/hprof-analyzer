@@ -4114,10 +4114,14 @@ pub(crate) fn render_framework_analysis(
         return;
     }
     out.push_str("## Framework Analysis\n\n");
+    let detected = items
+        .iter()
+        .map(|i| i.framework.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     out.push_str(&format!(
-        "_Frameworks detected: {}. Framework-specific objects and their heap footprint — \
+        "_Frameworks detected: {detected}. Framework-specific objects and their heap footprint — \
 useful for spotting oversized caches or leaked request contexts._\n\n",
-        items.len()
     ));
     let mut t = Table::new(
         &["Framework", "Instances", "Retained"],
