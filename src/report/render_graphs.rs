@@ -13,6 +13,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_toc_graphs(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
+    render_waste_summary(r, &mut out);
     render_system_overview_graphs(
         &r.overview,
         r.leak_indicators.direct_byte_buffer_capacity_sum,
@@ -22,12 +23,16 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
     render_dominator_analysis(&r.dominator_analysis, true, &mut out);
     render_threads(&r.threads, true, &mut out);
+    render_thread_local_analysis(&r.thread_local_analysis, &mut out);
+    render_framework_analysis(&r.framework_analysis, &mut out);
     render_top_components(&r.top_components, true, &mut out);
     render_arrays_by_size(&r.arrays_by_size, true, &mut out);
     render_collections(&r.collections, &r.collection_attribution, true, &mut out);
     render_collection_attribution(&r.collection_attribution, true, &mut out);
+    render_collection_waste_budget(r, &mut out);
     render_fields_by_size(&r.fields_by_size, true, &mut out);
     render_biggest_collections(&r.biggest_collections, true, &mut out);
+    render_top_retainers(&r.top_retainers, &mut out);
     render_collection_contents(&r.collection_contents, true, &mut out);
     render_references(&r.references, true, &mut out);
     render_unreachable_histogram(&r.overview, true, &mut out);
@@ -50,11 +55,20 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
     out.push_str("- [Summary](#summary)\n");
     out.push_str("- [OOM Triage](#oom-triage)\n");
+    if waste_summary_present(r) {
+        out.push_str("- [Waste Summary](#waste-summary)\n");
+    }
     out.push_str("- [System Overview](#system-overview)\n");
     out.push_str("- [Leak Suspects](#leak-suspects)\n");
     out.push_str("- [Top Consumers](#top-consumers)\n");
     out.push_str("- [Dominator Analysis](#dominator-analysis)\n");
     out.push_str("- [Threads](#threads)\n");
+    if !r.thread_local_analysis.is_empty() {
+        out.push_str("- [ThreadLocal Analysis](#threadlocal-analysis)\n");
+    }
+    if !r.framework_analysis.is_empty() {
+        out.push_str("- [Framework Analysis](#framework-analysis)\n");
+    }
     if !r.top_components.components.is_empty() {
         out.push_str("- [Top Components](#top-components)\n");
     }
@@ -65,6 +79,24 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
             "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
         );
     }
+    {
+        let has_waste = r
+            .overview
+            .duplicate_strings
+            .as_ref()
+            .is_some_and(|d| d.approx_wasted_bytes > 0)
+            || r.overview
+                .duplicate_prim_arrays
+                .as_ref()
+                .is_some_and(|d| d.total_wasted_bytes > 0)
+            || r.overview.boxed_numbers.iter().any(|b| b.total_shallow > 0)
+            || r.collection_attribution
+                .as_ref()
+                .is_some_and(|ca| ca.tiny_overhead.iter().any(|t| t.overhead_bytes > 0));
+        if has_waste {
+            out.push_str("- [Collection Waste Budget](#collection-waste-budget)\n");
+        }
+    }
     if r.fields_by_size.is_some() {
         out.push_str(
             "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
@@ -72,6 +104,9 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     }
     if r.biggest_collections.is_some() {
         out.push_str("- [Biggest Collections](#biggest-collections)\n");
+    }
+    if !r.top_retainers.is_empty() {
+        out.push_str("- [Top Retainers](#top-retainers)\n");
     }
     if r.collection_contents.is_some() {
         out.push_str("- [Collection Contents by Type](#collection-contents-by-type)\n");
