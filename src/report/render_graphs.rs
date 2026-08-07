@@ -218,6 +218,11 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     // GC Roots by Type — with a proportional count bar.
     if o.gc_roots_by_type.len() > 1 {
         out.push_str("### GC Roots by Type\n\n");
+        out.push_str(
+            "_GC roots are the entry points where the JVM starts reachability scanning — \
+             anything reachable from a root stays alive. Common root types: thread-stack locals, \
+             JNI global references, static fields of loaded classes, and synchronized lock objects._\n\n",
+        );
         let max = o
             .gc_roots_by_type
             .iter()
@@ -242,6 +247,9 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     // Heap Composition — with a proportional shallow-heap bar.
     if o.heap_composition.by_kind.len() > 1 {
         out.push_str("### Heap Composition\n\n");
+        out.push_str(
+            "_Shallow heap broken down by object kind: instances, object arrays, primitive arrays, and class objects._\n\n",
+        );
         let max = o
             .heap_composition
             .by_kind
@@ -270,7 +278,8 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
-        "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
+        "_Every loaded class with instance count, shallow heap (own bytes), and retained heap \
+         (bytes freed when all instances become unreachable). Top 50 shown; full list in JSON._\n\n",
     );
     let hist_max = o
         .histogram
@@ -371,8 +380,10 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     if !o.duplicate_classes.is_empty() {
         out.push_str("### Duplicate Classes\n\n");
         out.push_str(
-            "_Class names loaded by more than one class loader — a classic class-loader-leak \
-             signature (the same class re-loaded repeatedly)._\n\n",
+            "_Class names loaded by more than one class loader. The same class loaded N times \
+             means N separate copies of its static state and N times the metaspace cost — \
+             a typical symptom of class-loader leaks (e.g. each web-app reload creates a new \
+             loader that never gets GC'd)._\n\n",
         );
         let mut t = Table::new(
             &["Class", "#Loaders", "Instances", "Retained Heap"],
