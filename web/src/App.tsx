@@ -3722,7 +3722,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(byClass.reduce((s, r) => s + r.objects, 0))}</span>
-              <span style={{ width: useKBArr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBArr(byClass.reduce((s, r) => s + r.shallow, 0))}</span>
+              <span style={{ width: useKBArr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(byClass.reduce((s, r) => s + r.shallow, 0))}>{fmtBArr(byClass.reduce((s, r) => s + r.shallow, 0))}</span></span>
             </div>
           </>
         )}
@@ -3831,7 +3831,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "142px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</span>
-              <span style={{ width: useKBcbs ? "140px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBcbs(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
+              <span style={{ width: useKBcbs ? "140px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}>{fmtBcbs(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}</span></span>
               <span style={{ flex: 1 }} />
             </div>
           </>
@@ -3867,7 +3867,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "130px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(mcrBuckets.reduce((s, b) => s + b.objects, 0))}</span>
-              <span style={{ width: useKBmcr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBmcr(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
+              <span style={{ width: useKBmcr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}>{fmtBmcr(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</span></span>
               <span style={{ flex: 1 }} />
             </div>
           </>
@@ -5547,13 +5547,14 @@ function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[]
                     return (
                       <td key={colCls} className="gc-heatmap-cell"
                         style={{ background: bg, color: textColor }}
-                        title={`${rowCls} → ${colCls}: ${fmtB(val)}`}
+                        title={`${rowCls} → ${colCls}: ${fmtB(val)} (${fmtExactBytes(val)})`}
                         onClick={() => fireInspect({ kind: "class", cls: colCls })}>
                         {fmtB(val)}
                       </td>
                     );
                   })}
-                  <td className="gc-heatmap-cell" style={{ color: "var(--muted)", fontSize: "0.7rem", background: "var(--code-bg, rgba(0,0,0,0.03))" }}>
+                  <td className="gc-heatmap-cell" style={{ color: "var(--muted)", fontSize: "0.7rem", background: "var(--code-bg, rgba(0,0,0,0.03))" }}
+                    title={fmtExactBytes(rowTotal)}>
                     {fmtB(rowTotal)}
                   </td>
                 </tr>
