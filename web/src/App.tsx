@@ -2166,7 +2166,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Duplicate Classes</h3>
           <p className="subtitle">
-            Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — typical symptom of class-loader leaks (each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all instances, the others are likely leaked copies.
+            Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — a typical symptom of class-loader leaks (e.g. each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all the instances, the others are likely leaked copies.
           </p>
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
@@ -10184,7 +10184,7 @@ function GlossarySection() {
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em> — in other words, if <em>A</em> becomes unreachable, so does <em>B</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Dominator Tree", <>a tree linking each object to its immediate dominator. Retained heap equals the shallow-size sum of each subtree.</>],
     ["Top-Level Dominator", <>an object directly held by a GC root — top of the dominator tree. Ranked in Top Consumers and Retention Concentration.</>],
-    ["Dominator Depth", <>dominator-tree hop count from an object to its GC root. Low depth: objects near roots; high depth: long retention chains.</>],
+    ["Dominator Depth", <>dominator-tree hop count from an object to its GC root. Low depth means objects are held close to a root; high depth means retention flows through long chains (nested collections, linked lists).</>],
     ["Accumulation Point", <>a single object (often a collection, cache, or map) that dominates many instances of the <em>same</em> class — where excess memory accumulates.</>],
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
@@ -10193,7 +10193,7 @@ function GlossarySection() {
     ["Collection Fill Ratio", <>fraction of a collection's backing-array capacity occupied by elements — <code>elements ÷ capacity</code>. Near 0 means mostly empty (wasted memory); near 1 means the collection is full.</>],
     ["Map Load Factor", <>for hash maps, the fraction of backing-array slots occupied — <code>occupied_slots ÷ capacity</code>. Low load factor = many empty buckets (wasted memory); high load factor (≥ 90%) increases hash-collision chains and lookup cost.</>],
     ["Compressed OOPs", <>a JVM optimization storing object references as 32-bit integers instead of 64-bit pointers, halving reference-field overhead on heaps ≤ ~32 GB. Shown in Heap Summary as "Compressed OOPs: yes".</>],
-    ["Class#field Notation", <>used throughout this report to identify a specific field: <code>HolderClass#fieldName</code> (e.g. <code>java.util.HashMap#table</code>). Indicates the dominant incoming reference path, not a guaranteed allocation site.</>],
+    ["Class#field Notation", <>used throughout this report to identify a specific field: <code>HolderClass#fieldName</code> (e.g. <code>java.util.HashMap#table</code>). Indicates the dominant incoming reference path, not a guaranteed allocation site — it is a hint, not a precise origin.</>],
   ];
   return (
     <section id="glossary">
