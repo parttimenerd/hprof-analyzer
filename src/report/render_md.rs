@@ -3369,8 +3369,8 @@ fn render_garbage_root_trees(roots: &[UnreachableGarbageRoot], graphs: bool, out
     let retained_max = roots.iter().map(|r| r.retained).max().unwrap_or(0);
     out.push_str("### Garbage-Root Dominator Trees\n\n");
     out.push_str(
-        "_Top garbage-root subtrees by retained heap (unreachable objects \
-                  with no reachable predecessor). Depth capped._\n\n",
+        "_Top garbage-root subtrees by retained heap — unreachable objects with no reachable \
+predecessor. Each node shows retained heap within its subtree. Tree depth is capped._\n\n",
     );
     for (i, root) in roots.iter().enumerate() {
         let label = if graphs {
