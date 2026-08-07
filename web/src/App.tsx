@@ -3488,7 +3488,15 @@ function ThreadsSection({ report }: { report: Report }) {
     );
   }, [threads, filter]);
   const isFiltering = filter.trim().length > 0;
-  const visible = isFiltering || showAll ? view : view.slice(0, CAP);
+  const visible = React.useMemo(() => {
+    if (isFiltering || showAll) return view;
+    const base = view.slice(0, CAP);
+    // Always include threads linked from the "by retained" table (retained > 0 threads
+    // may fall beyond CAP in the default stack-depth order).
+    const baseSerials = new Set(base.map(t => t.thread_serial));
+    const extra = view.filter(t => t.retained > 0 && !baseSerials.has(t.thread_serial));
+    return extra.length > 0 ? [...base, ...extra] : base;
+  }, [view, isFiltering, showAll]);
   return (
     <section id="threads">
       <h2>Threads</h2>
