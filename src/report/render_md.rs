@@ -2655,7 +2655,7 @@ pub(crate) fn render_collection_attribution(
     // ── Biggest Single ───────────────────────────────────────────────────────
     out.push_str("### Largest Single Container\n\n");
     if a.biggest_single.is_empty() {
-        out.push_str("_No single-element collections found._\n\n");
+        out.push_str("_No collections exceeded the size threshold._\n\n");
     } else {
         let el_max = a
             .biggest_single
@@ -3081,7 +3081,7 @@ pub(crate) fn render_collection_contents(
          or more specific collections. Requires `--collections`._\n\n",
     );
     if c.rows.is_empty() {
-        out.push_str("_No collection-contents data found._\n\n");
+        out.push_str("_None found in this dump._\n\n");
         return;
     }
     let mut t = Table::new(
@@ -3948,7 +3948,7 @@ pub(crate) fn render_boxed_numbers(
     out.push_str(
         "_Heap consumed by `Integer`, `Long`, `Double`, and other boxed wrapper types. \
 Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded \
-to 8-byte boundary) versus 4–8 bytes for an unboxed primitive. Replacing with \
+to 8-byte boundary) versus 4–8 bytes as an unboxed primitive. Replacing with \
 primitive fields or `int[]`/`long[]` arrays eliminates the per-object header._\n\n",
     );
     let mut t = Table::new(
