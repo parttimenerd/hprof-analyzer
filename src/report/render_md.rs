@@ -1589,7 +1589,7 @@ a handful of large objects dominate the heap or memory is scattered across many 
             format_bytes(d.total)
         ));
         let mut buckets = Table::new(
-            &["Size ≤", "Count", "% of Dom."],
+            &["Size ≤", "Count", "% of Dominators"],
             &[Align::Right, Align::Right, Align::Right],
         );
         for b in &d.buckets {
@@ -1618,7 +1618,7 @@ a handful of large objects dominate the heap or memory is scattered across many 
         t.threshold_bp as f64 / 100.0,
     ));
     let mut pkgs = Table::new(
-        &["Package", "Objects", "Shallow", "Retained"],
+        &["Package", "# Objects", "Shallow", "Retained"],
         &[Align::Left, Align::Right, Align::Right, Align::Right],
     );
     // Pre-order DFS; the displayed name is the full dotted path accumulated

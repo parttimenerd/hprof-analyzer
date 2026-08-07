@@ -956,7 +956,7 @@ a handful of large objects dominate the heap or memory is scattered across many 
         .max()
         .unwrap_or(0);
     let mut pkgs = Table::new(
-        &["Package", "Objects", "Shallow", "Retained", ""],
+        &["Package", "# Objects", "Shallow", "Retained", ""],
         &[
             Align::Left,
             Align::Right,
