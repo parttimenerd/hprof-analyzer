@@ -2790,7 +2790,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
 
     if f.truncated {
         out.push_str(
-            "_Field grouping was truncated (group or pointee cap hit); ranking is a bounded \
+            "_Field grouping was truncated (group or pointee cap hit) — ranking is a bounded \
              sample._\n\n",
         );
     }
