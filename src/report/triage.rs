@@ -189,7 +189,7 @@ pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
             "collections-not-analyzed",
             TriageSeverity::Info,
             "Collection Waste Not Analyzed",
-            "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
+            "Collection waste not analyzed — re-run with `--collections` to check for wasted capacity."
                 .to_string(),
             None,
         ));
@@ -404,7 +404,7 @@ impl Rule for Shape {
         let shape = if p90 <= 3 {
             "shallow (most objects are held within a few hops of a GC root)"
         } else {
-            "deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root"
+            "deep — long dominator chains suggest nested collections or linked structures; trace the chain back to the GC root to find what keeps the deep objects alive"
         };
         Some(signal(
             "shape",
