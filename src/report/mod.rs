@@ -499,10 +499,7 @@ mod tests {
             char_array_waste: None,
         });
         render_duplicate_strings(&mut out, &d, false);
-        assert!(
-            out.contains("Duplicate Strings (approximate)"),
-            "present header"
-        );
+        assert!(out.contains("Duplicate Strings"), "present header");
         assert!(out.contains("Total String instances: 100"), "present total");
         assert!(out.contains("Distinct values: 42"), "present distinct");
         assert!(out.contains("Duplicated values: 7"), "present duplicated");
@@ -538,10 +535,7 @@ mod tests {
         // Absent: the "not run" note appears under the same header.
         let mut out_none = String::new();
         render_duplicate_strings(&mut out_none, &None, false);
-        assert!(
-            out_none.contains("Duplicate Strings (approximate)"),
-            "none header"
-        );
+        assert!(out_none.contains("Duplicate Strings"), "none header");
         assert!(out_none.contains("not run"), "none note present");
     }
 

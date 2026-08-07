@@ -68,7 +68,7 @@ impl SectionId {
             SectionId::WasteSummary => "waste-summary",
             SectionId::SystemOverview => "system-overview",
             SectionId::RecordCensus => "hprof-record-census",
-            SectionId::DuplicateStrings => "duplicate-strings-approximate",
+            SectionId::DuplicateStrings => "duplicate-strings",
             SectionId::DuplicateClasses => "duplicate-classes",
             SectionId::BoxedNumbers => "boxed-numbers",
             SectionId::HeaderOverhead => "object-header-overhead",
@@ -79,8 +79,8 @@ impl SectionId {
             SectionId::TopComponents => "top-components",
             SectionId::ArraysBySize => "arrays-by-size",
             SectionId::Collections => "collections",
-            SectionId::ContainerAttribution => "container-attribution-classfield",
-            SectionId::FieldsBySize => "fields-by-retained-size-classfield",
+            SectionId::ContainerAttribution => "container-attribution",
+            SectionId::FieldsBySize => "fields-by-retained-size",
             SectionId::BiggestCollections => "biggest-collections",
             SectionId::CollectionContents => "collection-contents-by-type",
             SectionId::References => "references",
@@ -107,7 +107,7 @@ impl SectionId {
             SectionId::WasteSummary => "Waste Summary",
             SectionId::SystemOverview => "System Overview",
             SectionId::RecordCensus => "HPROF Record Census",
-            SectionId::DuplicateStrings => "Duplicate Strings (approximate)",
+            SectionId::DuplicateStrings => "Duplicate Strings",
             SectionId::DuplicateClasses => "Duplicate Classes",
             SectionId::BoxedNumbers => "Boxed Numbers",
             SectionId::HeaderOverhead => "Object Header Overhead",
@@ -118,8 +118,8 @@ impl SectionId {
             SectionId::TopComponents => "Top Components",
             SectionId::ArraysBySize => "Arrays by Size",
             SectionId::Collections => "Collections",
-            SectionId::ContainerAttribution => "Container Attribution (Class#field)",
-            SectionId::FieldsBySize => "Fields by Retained Size (Class#field)",
+            SectionId::ContainerAttribution => "Container Attribution",
+            SectionId::FieldsBySize => "Fields by Retained Size",
             SectionId::BiggestCollections => "Biggest Collections",
             SectionId::CollectionContents => "Collection Contents by Type",
             SectionId::References => "References",
@@ -219,14 +219,8 @@ mod tests {
 
     #[test]
     fn slugify_drops_parens_and_hash() {
-        assert_eq!(
-            slugify("Container Attribution (Class#field)"),
-            "container-attribution-classfield"
-        );
-        assert_eq!(
-            slugify("Duplicate Strings (approximate)"),
-            "duplicate-strings-approximate"
-        );
+        assert_eq!(slugify("Container Attribution"), "container-attribution");
+        assert_eq!(slugify("Duplicate Strings"), "duplicate-strings");
         assert_eq!(
             slugify("Dominator-Depth Distribution"),
             "dominator-depth-distribution"

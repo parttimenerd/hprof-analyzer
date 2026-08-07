@@ -331,7 +331,7 @@ function Nav({ report }: { report: Report }) {
     if (!dataGroupSet) { items.push([id, label, "Data", badge]); dataGroupSet = true; }
     else items.push([id, label, undefined, badge]);
   };
-  addData("duplicate-strings-approximate", "Duplicate Strings");
+  addData("duplicate-strings", "Duplicate Strings");
   addData("duplicate-prim-arrays", "Duplicate Primitive Arrays");
   if (report.overview.boxed_numbers?.length) addData("boxed-numbers", "Boxed Numbers");
   if (report.overview.header_overhead?.length) addData("object-header-overhead", "Header Overhead");
@@ -344,8 +344,8 @@ function Nav({ report }: { report: Report }) {
     (report.overview.boxed_numbers?.some(r => r.total_shallow > 0) ?? false) ||
     (report.collection_attribution?.tiny_overhead?.some(r => r.overhead_bytes > 0) ?? false);
   if (hasWasteBudget) addData("collection-waste-budget", "Waste Budget");
-  if (report.collection_attribution) addData("container-attribution-classfield", "Container Attribution");
-  if (report.fields_by_size) addData("fields-by-retained-size-classfield", "Fields by Size");
+  if (report.collection_attribution) addData("container-attribution", "Container Attribution");
+  if (report.fields_by_size) addData("fields-by-retained-size", "Fields by Size");
   if (report.top_retainers?.length) addData("top-retainers", "Top Retainers");
   if (report.biggest_collections) addData("biggest-collections", "Biggest Collections");
   if (report.collection_contents) addData("collection-contents-by-type", "Collection Contents");
@@ -457,11 +457,11 @@ const SECTION_LABELS: Record<string, string> = {
   "allocation-sites": "Allocation Sites",
   "unreachable-objects": "Unreachable Objects",
   "top-retainers": "Top Retainers",
-  "fields-by-retained-size-classfield": "Fields by Size",
-  "container-attribution-classfield": "Container Attribution",
+  "fields-by-retained-size": "Fields by Size",
+  "container-attribution": "Container Attribution",
   "collection-waste-budget": "Waste Budget",
   "biggest-collections": "Biggest Collections",
-  "duplicate-strings-approximate": "Duplicate Strings",
+  "duplicate-strings": "Duplicate Strings",
 };
 
 function NavBreadcrumb() {
@@ -1683,7 +1683,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   if (!d) {
     const wasRun = report.analysis_flags?.find_duplicates ?? false;
     return (
-      <section id="duplicate-strings-approximate">
+      <section id="duplicate-strings">
         <h2>Duplicate Strings</h2>
         <p className="subtitle">
           {wasRun
@@ -1698,7 +1698,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   }
   const w = d.char_array_waste;
   return (
-    <section id="duplicate-strings-approximate">
+    <section id="duplicate-strings">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
         String values seen more than once — reclaim by normalizing at parse time, using <code>-XX:+UseStringDeduplication</code> (G1 GC), or sharing a canonical instance per value. Deduplication is approximate (64-bit hash; rare collisions possible).{" "}
@@ -4017,7 +4017,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
   const mostOverall = data.most_overall ?? [];
   const biggestSingle = data.biggest_single ?? [];
   return (
-    <section id="container-attribution-classfield">
+    <section id="container-attribution">
       <h2>Container Attribution</h2>
       <p className="subtitle">
         Which <code>Class#field</code> holds the most collection memory — two rankings: total across all containers reached through a field, and the single largest container per field. To reduce waste: shrink the collection's initial capacity, evict unused entries, or null out the field when the holder is done.
@@ -4224,7 +4224,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
   ];
   return (
-    <section id="fields-by-retained-size-classfield">
+    <section id="fields-by-retained-size">
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
         Which <code>Class#field</code> retains the most memory, summed over every object the field points at.

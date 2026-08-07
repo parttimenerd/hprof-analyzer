@@ -52,7 +52,7 @@ pub(crate) fn render_duplicate_strings(
     graphs: bool,
 ) {
     use crate::md::{Align, Table, bar};
-    out.push_str("### Duplicate Strings (approximate)\n\n");
+    out.push_str("### Duplicate Strings\n\n");
     let d = match d {
         None => {
             out.push_str(
@@ -3955,7 +3955,7 @@ pub(crate) fn render_duplicate_prim_arrays(
     d: &Option<crate::pass2::DupPrimArrays>,
 ) {
     use crate::md::{Align, Table};
-    out.push_str("### Duplicate Primitive Arrays (approximate)\n\n");
+    out.push_str("### Duplicate Primitive Arrays\n\n");
     let d = match d {
         None => {
             out.push_str(
