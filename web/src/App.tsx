@@ -2161,6 +2161,7 @@ function ClassLoadersTable({ rows }: { rows: LoaderRollup[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<LoaderRollup>[] = [
     { id: "loader", name: "Loader", grow: 1, cell: (r) => <code title={r.loader_label ?? undefined}>{r.loader_label ? fmtLoader(r.loader_label) : `loader@${r.loader_id}`}</code>, selector: (r) => r.loader_label ?? "", sortable: true },
+    { id: "address", name: "Address", width: "130px", cell: (r) => <code style={{ fontSize: "0.78rem" }}>{r.loader_id === 0 ? "<boot>" : `0x${r.loader_id.toString(16)}`}</code>, selector: (r) => r.loader_id, sortable: true },
     { id: "classes", name: "Classes", right: true, width: "100px", format: (r) => fmtCount(r.class_count), selector: (r) => r.class_count, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
