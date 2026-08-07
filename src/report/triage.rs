@@ -1375,7 +1375,7 @@ impl Rule for InternedStringBloat {
             TriageSeverity::Warning,
             "Interned-String Bloat",
             format!(
-                "{} live `java.lang.String` instances with {} JNI Global roots — `String.intern()` may be called on dynamic values, causing the intern table to grow without bound. Avoid `String.intern()` on user-supplied or generated strings; use a bounded cache (e.g. `Interner` from Guava) instead.",
+                "{} live `java.lang.String` instances with {} JNI Global roots — the intern table may be growing without bound from calls to `String.intern()` on dynamic or user-supplied values. Replace with a bounded cache (e.g. Guava `Interner` or `ConcurrentHashMap`) and avoid `intern()` on strings that are not truly constants.",
                 fmt_count(string_count),
                 fmt_count(jni_global_count),
             ),
@@ -1560,8 +1560,9 @@ impl Rule for EmptyCollectionCemetery {
             format!(
                 "{} of {} tracked collections ({:.1}%) are empty — \
                  pre-allocated but never populated containers waste object-header \
-                 overhead. Consider lazy initialization, returning `Collections.emptyList()` \
-                 sentinels, or using `null` until the collection is first written.",
+                 overhead at scale. Use lazy initialization (allocate only when the \
+                 first element is added) or return `Collections.emptyList()` / \
+                 `List.of()` sentinels for the read-only empty case.",
                 fmt_count(cbs.empty_count),
                 fmt_count(cbs.tracked),
                 share_pct,
