@@ -1942,7 +1942,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
     }
     out.push_str(
         "_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. \
-Totals can exceed heap size because boot-loader classes are counted in every component that retains them._\n\n",
+Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each._\n\n",
     );
     let retained_max = tc.components.iter().map(|c| c.retained).max().unwrap_or(0);
     let mut headers: Vec<&str> = vec!["Component", "Retained", "% Heap", "Top Classes"];
