@@ -921,7 +921,7 @@ _Definitions for the heap analysis terms used throughout this report._
   sits at the top of the dominator tree. The \"Biggest Objects\" and \"Retention
   Concentration\" views rank these.
 - **Dominator depth**: how many dominator-tree hops an object sits below a GC root.
-  Shallow depth means most objects are held close to a root; deep depth means
+  Low depth means objects are held close to a root; high depth means
   retention flows through long chains (nested collections, linked lists).
 - **Accumulation point**: a single object (often a collection, cache, or map) that
   dominates many instances of the *same* class — where excess memory accumulates.
