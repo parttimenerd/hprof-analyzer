@@ -1543,6 +1543,19 @@ function RecordCensusSection({ report }: { report: Report }) {
     { id: "label", name: "Record Type", grow: 1, selector: (r) => r.label, sortable: true },
     { id: "count", name: "Count", right: true, width: "120px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
   ];
+
+  const gcRootTagLabel: Record<number, string> = {
+    0x00: "System Class", 0x01: "JNI Global", 0x02: "JNI Local",
+    0x03: "Java Frame", 0x04: "Native Stack", 0x05: "Sticky Class",
+    0x06: "Thread Block", 0x07: "Busy Monitor", 0x08: "Thread",
+    0x89: "Interned String", 0x8b: "Debugger", 0x8d: "VM Internal",
+    0x8e: "JNI Monitor",
+  };
+  const gcRootRows = (c.gc_root_tag_counts ?? []).map(([tag, count]) => ({
+    label: gcRootTagLabel[tag] ?? `0x${tag.toString(16)}`,
+    count,
+  }));
+
   return (
     <section id="hprof-record-census">
       <h2>Dump Completeness</h2>
@@ -1550,6 +1563,12 @@ function RecordCensusSection({ report }: { report: Report }) {
         Record-type counts from the raw HPROF file — useful for diagnosing truncated or unusual dumps. Zero stack frames means no allocation-site data (requires <code>-agentlib:hprof=heap=dump,depth=8</code>, removed in JDK 9); a mismatch between load-class and class-dump counts can indicate a partial write.
       </p>
       <StdTable columns={censusCols} data={rows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
+      {gcRootRows.length > 0 && (
+        <>
+          <h4>GC Root Records by Tag</h4>
+          <StdTable columns={censusCols} data={gcRootRows} searchKeys={["label"]} defaultSortFieldId="count" defaultSortAsc={false} />
+        </>
+      )}
     </section>
   );
 }
