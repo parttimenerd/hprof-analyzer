@@ -409,7 +409,7 @@ impl Rule for Shape {
         Some(signal(
             "shape",
             TriageSeverity::Info,
-            "Shape",
+            "Heap Shape",
             format!("{shape} — 90% of objects within depth {p90}, max depth {max_depth}."),
             Some((
                 "dominator-depth-distribution",
@@ -915,7 +915,7 @@ impl Rule for DuplicateStrings {
                 fmt_count(ds.total_string_instances),
                 example,
             ),
-            Some(("duplicate-strings-approximate", "Duplicate Strings")),
+            Some(("duplicate-strings", "Duplicate Strings")),
         ))
     }
 }
@@ -941,11 +941,11 @@ impl Rule for CharArraySlack {
             TriageSeverity::Info,
             "Char-Array Slack",
             format!(
-                "~{} slack in {} over-allocated char[]/byte[] String backing arrays — likely from `substring()` retaining a full backing array or repeated `StringBuilder.toString()` allocations. Use `new String(str)` to copy-compact, or rewrite to avoid creating large intermediate strings.",
+                "~{} slack in {} over-allocated char[]/byte[] String backing arrays — common from pre-sized `StringBuilder` allocations that are never fully filled, or `String(byte[], offset, length)` where the source array is larger than the result. Use `new String(str)` to copy-compact, or size StringBuilder capacity to the expected output length.",
                 format_bytes(caw.total_wasted_bytes),
                 fmt_count(caw.wasteful_arrays),
             ),
-            Some(("duplicate-strings-approximate", "Duplicate Strings")),
+            Some(("duplicate-strings", "Duplicate Strings")),
         ))
     }
 }
@@ -1147,7 +1147,7 @@ impl Rule for HeapCompositionSkew {
             TriageSeverity::Info,
             "Heap Composition Skew",
             format!(
-                "`{}` account for {:.1}% of reachable heap — unusual concentration in one category; check the Heap Composition breakdown for the dominant type.",
+                "`{}` account for {:.1}% of reachable heap — unusually skewed. Primitive Arrays: bulk-data buffers (NIO, image, audio). Instances: too many small objects, see Object Swarm. Object Arrays: sparse arrays or container backing stores. Class Objects: many dynamically generated classes.",
                 dominant.kind, pct,
             ),
             Some(("system-overview", "System Overview")),
