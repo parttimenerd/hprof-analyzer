@@ -655,6 +655,13 @@ that keeps it alive. The path to GC root is shown for each suspect below._\n\n",
                 s.pretty_class,
                 format_bytes(s.shallow),
             ));
+        } else {
+            out.push_str(&format!(
+                "{} instances of `{}` together retain this heap (combined shallow {}).\n\n",
+                fmt_count(s.instance_count),
+                s.pretty_class,
+                format_bytes(s.shallow),
+            ));
             if s.pretty_class == "java.lang.Class" {
                 out.push_str(
                     "_Note: `java.lang.Class` objects are normal — every loaded class has one. \
@@ -663,13 +670,6 @@ Investigate only if the instance count is unexpectedly high \
 (e.g. due to class-loader leaks)._\n\n",
                 );
             }
-        } else {
-            out.push_str(&format!(
-                "{} instances of `{}` together retain this heap (combined shallow {}).\n\n",
-                fmt_count(s.instance_count),
-                s.pretty_class,
-                format_bytes(s.shallow),
-            ));
         }
 
         if s.is_single {
@@ -738,15 +738,27 @@ Investigate only if the instance count is unexpectedly high \
         if !s.dominated_by_class.is_empty() {
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
-                &["Class", "Objects", "Shallow", "Retained"],
-                &[Align::Left, Align::Right, Align::Right, Align::Right],
+                &["Class", "Objects", "Shallow", "Retained", "% of suspect"],
+                &[
+                    Align::Left,
+                    Align::Right,
+                    Align::Right,
+                    Align::Right,
+                    Align::Right,
+                ],
             );
             for row in &s.dominated_by_class {
+                let pct_str = if s.retained > 0 {
+                    fmt_pct(pct_of_heap(row.retained, s.retained))
+                } else {
+                    "—".to_string()
+                };
                 t.row([
                     format!("`{}`", row.pretty_class),
                     fmt_count(row.instances),
                     format_bytes(row.shallow),
                     format_bytes(row.retained),
+                    pct_str,
                 ]);
             }
             t.render(out);
