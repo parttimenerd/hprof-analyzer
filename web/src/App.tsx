@@ -158,13 +158,10 @@ function useFmtBytes(): [(n: number) => string, React.ReactNode, boolean] {
 // Returns a DataTable `cell` renderer for a byte value column.
 // In KB mode: shows plain number (no suffix) with exact bytes as title tooltip.
 // In normal mode: shows auto-scaled value (e.g. "1.2 MB").
-function byteCell<T>(selector: (row: T) => number, fmtB: (n: number) => string, useKB: boolean): (row: T) => React.ReactNode {
+function byteCell<T>(selector: (row: T) => number, fmtB: (n: number) => string, _useKB: boolean): (row: T) => React.ReactNode {
   return (row: T) => {
     const raw = selector(row);
-    if (useKB) {
-      return <span title={fmtExactBytes(raw)}>{fmtB(raw)}</span>;
-    }
-    return fmtB(raw);
+    return <span title={fmtExactBytes(raw)}>{fmtB(raw)}</span>;
   };
 }
 
@@ -906,7 +903,7 @@ function KpiStrip({ report }: { report: Report }) {
     <>
       <div className="kpi-grid">
       <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
-        <div className="kpi-value">{fmtB(report.overview.total_shallow)}</div>
+        <div className="kpi-value" title={fmtExactBytes(report.overview.total_shallow)}>{fmtB(report.overview.total_shallow)}</div>
         <div className="kpi-label">Total Reachable Heap</div>
       </a>
       <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
@@ -1982,7 +1979,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
             </>
           )}
           <dt>File Size</dt>
-          <dd>{fmtB(o.file_size)}</dd>
+          <dd><span title={fmtExactBytes(o.file_size)}>{fmtB(o.file_size)}</span></dd>
           <dt>Identifier Size</dt>
           <dd>{o.identifier_size_bits}-bit</dd>
           {o.compressed_oops !== null && (
@@ -2000,7 +1997,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           <dt>Total Objects</dt>
           <dd>{fmtCount(o.total_objects)}</dd>
           <dt>Total Reachable Heap</dt>
-          <dd>{fmtB(o.total_shallow)}</dd>
+          <dd><span title={fmtExactBytes(o.total_shallow)}>{fmtB(o.total_shallow)}</span></dd>
           <dt>GC Roots</dt>
           <dd>{fmtCount(o.gc_roots)}</dd>
           <dt>Classes Loaded</dt>
@@ -2019,7 +2016,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
             <>
               <dt>Unreachable (Excluded)</dt>
               <dd>
-                {fmtCount(o.unreachable_count)} ({fmtB(o.unreachable_shallow)})
+                {fmtCount(o.unreachable_count)} (<span title={fmtExactBytes(o.unreachable_shallow)}>{fmtB(o.unreachable_shallow)}</span>)
               </dd>
             </>
           )}
@@ -2263,7 +2260,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
               <ListObjectsBtn cls={p.display_class} />
               <ExploreBtn denseIdx={p.obj_index_1based - 1} label={p.display_class} />
             </span>{" "}
-            <span className="path-ret">retains {fmtB(p.retained)}</span>
+            <span className="path-ret">retains <span title={fmtExactBytes(p.retained)}>{fmtB(p.retained)}</span></span>
           </li>
         ))}
       </ol>
@@ -2733,7 +2730,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
         <div style={{ fontFamily: "var(--mono, monospace)", fontSize: "0.75rem", fontWeight: 600, wordBreak: "break-all", marginBottom: "0.3rem" }}>{hoverPopover.name}</div>
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.1rem 0.5rem", color: "var(--fg)" }}>
           <span style={{ color: "var(--muted)" }}>Objects:</span><span>{fmtCount(hoverPopover.count)}</span>
-          <span style={{ color: "var(--muted)" }}>Retained:</span><span>{fmtB(hoverPopover.retained)}</span>
+          <span style={{ color: "var(--muted)" }}>Retained:</span><span title={fmtExactBytes(hoverPopover.retained)}>{fmtB(hoverPopover.retained)}</span>
         </div>
         <div style={{ marginTop: "0.3rem", fontSize: "0.72rem", color: "var(--muted)" }}>Click to view in navigator →</div>
       </div>
@@ -3280,7 +3277,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         <span className="thread-name">{name ? `"${name}"` : `Thread ${t.thread_serial}`}</span>
         {name && <span className="thread-serial"> · Thread {t.thread_serial}</span>}
         {" "}<span className="thread-meta-inline">
-          {fmtB(t.retained)} retained
+          <span title={fmtExactBytes(t.retained)}>{fmtB(t.retained)}</span> retained
           {stateLabel && <span className="thread-state-badge">{stateLabel}</span>}
           {t.is_daemon && <span className="thread-daemon-badge">Daemon</span>}
         </span>
@@ -3302,7 +3299,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
           <>
-            <p className="subtitle"><em>%: each frame's share of this thread's {fmtB(t.retained)} retained heap.</em></p>
+            <p className="subtitle"><em>%: each frame's share of this thread's <span title={fmtExactBytes(t.retained)}>{fmtB(t.retained)}</span> retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => {
               const frameCls = frameToClass(sf.frame);
@@ -3314,7 +3311,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
                         <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={loc.display_class}>{loc.display_class}</code><CopyBtn text={loc.display_class} /><PivotBtn cls={loc.display_class} /><OqlBtn cls={loc.display_class} /><ListObjectsBtn cls={loc.display_class} /></span>{" "}
-                        <span className="path-ret">retains {fmtB(loc.retained)} ({fmtPct(loc.pct)} of thread retained)</span>
+                        <span className="path-ret">retains <span title={fmtExactBytes(loc.retained)}>{fmtB(loc.retained)}</span> ({fmtPct(loc.pct)} of thread retained)</span>
                       </li>
                     ))}
                   </ul>
@@ -4016,7 +4013,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       </p>
       <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
-        <strong>Total: {fmtB(totalWasted)}</strong> wasted across{" "}
+        <strong>Total: <span title={fmtExactBytes(totalWasted)}>{fmtB(totalWasted)}</span></strong> wasted across{" "}
         <strong>{fmtCount(totalObjects)}</strong> objects
       </p>
       {showCollectionsNote && (
@@ -5450,12 +5447,12 @@ function DomGraphView({ pairs, idoms }: {
           <code style={{ wordBreak: "break-all", flex: "1 1 auto" }} title={selected}>{selected}</code>
           {retMap.has(selected) && totalHeap > 0 && (
             <span style={{ color: "var(--muted)", fontSize: "0.78rem", flexShrink: 0 }}>
-              retains {fmtB(retMap.get(selected)!)} ({(retMap.get(selected)! / totalHeap * 100).toFixed(1)}%)
+              retains <span title={fmtExactBytes(retMap.get(selected)!)}>{fmtB(retMap.get(selected)!)}</span> ({(retMap.get(selected)! / totalHeap * 100).toFixed(1)}%)
             </span>
           )}
           {retMap.has(selected) && totalHeap === 0 && (
             <span style={{ color: "var(--muted)", fontSize: "0.78rem", flexShrink: 0 }}>
-              retains {fmtB(retMap.get(selected)!)}
+              retains <span title={fmtExactBytes(retMap.get(selected)!)}>{fmtB(retMap.get(selected)!)}</span>
             </span>
           )}
           {/* Expand context: add dominators/dominated of this node from full dataset */}
@@ -6999,17 +6996,17 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 <table className="trg-stat-table trg-sidebar-stats">
                   <tbody>
                     <tr><th>Instances</th><td>{fmtCount(selInfo.hist.instances)}</td></tr>
-                    <tr><th>Shallow</th><td>{fmtB(selInfo.hist.shallow)}</td></tr>
-                    <tr><th>Retained</th><td><strong>{fmtB(selInfo.hist.retained)}</strong></td></tr>
+                    <tr><th>Shallow</th><td><span title={fmtExactBytes(selInfo.hist.shallow)}>{fmtB(selInfo.hist.shallow)}</span></td></tr>
+                    <tr><th>Retained</th><td><strong title={fmtExactBytes(selInfo.hist.retained)}>{fmtB(selInfo.hist.retained)}</strong></td></tr>
                     {parentClass && histMap.has(parentClass) && histMap.get(parentClass)!.retained > 0 && (
                       <>
                         <tr><th>Parent Dom.</th><td><button className="trg-link-btn" onClick={() => setSelected(parentClass)} title={parentClass}>{tpfgShortName(parentClass)}</button></td></tr>
                         <tr><th>% of Parent</th><td>{Math.round(selInfo.hist.retained / histMap.get(parentClass)!.retained * 100)}%</td></tr>
                       </>
                     )}
-                    <tr><th>Max Instance</th><td>{fmtB(selInfo.hist.max_instance_shallow)}</td></tr>
+                    <tr><th>Max Instance</th><td><span title={fmtExactBytes(selInfo.hist.max_instance_shallow)}>{fmtB(selInfo.hist.max_instance_shallow)}</span></td></tr>
                     {selInfo.hist.instances > 0 && (
-                      <tr><th>Avg Instance</th><td>{fmtB(Math.round(selInfo.hist.shallow / selInfo.hist.instances))}</td></tr>
+                      <tr><th>Avg Instance</th><td><span title={fmtExactBytes(Math.round(selInfo.hist.shallow / selInfo.hist.instances))}>{fmtB(Math.round(selInfo.hist.shallow / selInfo.hist.instances))}</span></td></tr>
                     )}
                     {selInfo.hist.incoming_ref_count != null && (
                       <tr><th>Incoming Refs</th><td>{fmtCount(selInfo.hist.incoming_ref_count)}</td></tr>
@@ -7492,7 +7489,7 @@ function RetentionChain({
                 </button>
               )}
               <span style={{ color: "var(--muted)", fontSize: "0.74rem", whiteSpace: "nowrap" }}>
-                {fmtB(node.retained)}
+                <span title={fmtExactBytes(node.retained)}>{fmtB(node.retained)}</span>
               </span>
               {node.isCurrent && (
                 <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← here</span>
@@ -7512,7 +7509,7 @@ function RetentionChain({
                       onClick={() => navigate(ref.denseIdx)}>
                       {ref.displayClass.split(".").pop()}
                     </button>
-                    <span style={{ color: "var(--muted)", fontSize: "0.72rem", whiteSpace: "nowrap" }}>{fmtB(ref.retained)}</span>
+                    <span style={{ color: "var(--muted)", fontSize: "0.72rem", whiteSpace: "nowrap" }} title={fmtExactBytes(ref.retained)}>{fmtB(ref.retained)}</span>
                     <button className="btn-link" style={{ fontSize: "0.72rem", opacity: 0.6 }}
                       title="Navigate to this object"
                       onClick={() => navigate(ref.denseIdx)}>→</button>
@@ -7746,11 +7743,11 @@ function OGEGraphView({ data, onNavigate }: {
               <tbody>
                 <tr>
                   <th style={{ textAlign: "left", color: "var(--muted)", fontWeight: 400, paddingRight: "0.5rem" }}>Shallow</th>
-                  <td style={{ textAlign: "right" }}>{fmtB(selectedNodeData.shallow)}</td>
+                  <td style={{ textAlign: "right" }}><span title={fmtExactBytes(selectedNodeData.shallow)}>{fmtB(selectedNodeData.shallow)}</span></td>
                 </tr>
                 <tr>
                   <th style={{ textAlign: "left", color: "var(--muted)", fontWeight: 400, paddingRight: "0.5rem" }}>Retained</th>
-                  <td style={{ textAlign: "right" }}><strong>{fmtB(selectedNodeData.retained)}</strong></td>
+                  <td style={{ textAlign: "right" }}><strong title={fmtExactBytes(selectedNodeData.retained)}>{fmtB(selectedNodeData.retained)}</strong></td>
                 </tr>
               </tbody>
             </table>
@@ -10107,7 +10104,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       onClick={() => navigate("domtree", srcIdx, sn?.display_class ?? `#${srcIdx}`, field_name || undefined)}>
                       ⌞
                     </button>
-                    {sn && <span style={{ color: "var(--muted)", flexShrink: 0, fontSize: "0.74rem" }}>{fmtB(sn.retained)}</span>}
+                    {sn && <span style={{ color: "var(--muted)", flexShrink: 0, fontSize: "0.74rem" }} title={fmtExactBytes(sn.retained)}>{fmtB(sn.retained)}</span>}
                   </div>
                 );
               })}
