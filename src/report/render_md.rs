@@ -1170,9 +1170,9 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
             "#",
             "Class",
             "Instances",
-            "Shallow Heap",
+            "Shallow",
             "Largest",
-            "Retained Heap",
+            "Retained",
             "% Heap",
         ],
         &[
@@ -1234,8 +1234,8 @@ The **Address** column distinguishes them._\n\n",
                 "Address",
                 "Classes",
                 "Instances",
-                "Shallow Heap",
-                "Retained Heap",
+                "Shallow",
+                "Retained",
             ],
             &[
                 Align::Left,
@@ -1277,7 +1277,7 @@ Check the per-loader breakdown: if one loader holds almost all the instances, \
 the others are likely leaked copies._\n\n",
         );
         let mut t = Table::new(
-            &["Class", "#Loaders", "Instances", "Retained Heap"],
+            &["Class", "# Loaders", "Instances", "Retained"],
             &[Align::Left, Align::Right, Align::Right, Align::Right],
         );
         for d in &o.duplicate_classes {
@@ -1298,7 +1298,7 @@ the others are likely leaked copies._\n\n",
             }
             out.push_str(&format!("**`{}`** — per loader:\n\n", d.pretty_class));
             let mut lt = Table::new(
-                &["Loader", "Instances", "Shallow", "Retained Heap"],
+                &["Loader", "Instances", "Shallow", "Retained"],
                 &[Align::Left, Align::Right, Align::Right, Align::Right],
             );
             // When two loaders share a display label (distinct instances of the
