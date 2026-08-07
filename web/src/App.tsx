@@ -3910,7 +3910,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       type: "Duplicate Primitive Arrays",
       wasted: dp.total_wasted_bytes,
       objects: objCount,
-      fix: "Deduplicate or use shared constants",
+      fix: "Deduplicate or replace with shared static final constants",
     });
   }
 
@@ -3935,7 +3935,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
           type: `Empty/Singleton ${row.container_kind.charAt(0).toUpperCase() + row.container_kind.slice(1)} (${row.holder_class}#${row.field})`,
           wasted: row.overhead_bytes,
           objects: row.empty_count + row.singleton_count,
-          fix: "Use null or Collections.emptyList()",
+          fix: "Use null or Collections.emptyList() sentinels until the collection is first written",
         });
       }
     }
