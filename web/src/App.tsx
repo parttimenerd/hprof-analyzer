@@ -7082,7 +7082,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                   {selAllOutEdges.length > EDGE_SHOW && (
                     <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
                       onClick={() => setShowAllOut(v => !v)}>
-                      {showAllOut ? "Show fewer" : `Show ${selAllOutEdges.length - EDGE_SHOW} more`}
+                      {showAllOut ? "Show fewer" : `Show ${fmtCount(selAllOutEdges.length - EDGE_SHOW)} more`}
                     </button>
                   )}
                 </>
@@ -7103,7 +7103,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                   {selAllInEdges.length > EDGE_SHOW && (
                     <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
                       onClick={() => setShowAllIn(v => !v)}>
-                      {showAllIn ? "Show fewer" : `Show ${selAllInEdges.length - EDGE_SHOW} more`}
+                      {showAllIn ? "Show fewer" : `Show ${fmtCount(selAllInEdges.length - EDGE_SHOW)} more`}
                     </button>
                   )}
                 </>
@@ -7126,7 +7126,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                   {siblingEdges.length > 6 && (
                     <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
                       onClick={() => setShowAllSiblings(v => !v)}>
-                      {showAllSiblings ? "Show fewer" : `Show ${siblingEdges.length - 6} more`}
+                      {showAllSiblings ? "Show fewer" : `Show ${fmtCount(siblingEdges.length - 6)} more`}
                     </button>
                   )}
                 </>
@@ -10114,7 +10114,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               {inboundRefs.length > 8 && (
                 <button className="btn-link" style={{ fontSize: "0.74rem", marginTop: "2px" }}
                   onClick={() => setShowAllInbound(v => !v)}>
-                  {showAllInbound ? "Show Fewer" : `+${inboundRefs.length - 8} More`}
+                  {showAllInbound ? "Show fewer" : `Show ${fmtCount(inboundRefs.length - 8)} more`}
                 </button>
               )}
             </div>
@@ -10693,7 +10693,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
       )}
       <div className="trg-edge-cols">
         <div>
-          <h4>Outbound References ({outEdges.length})</h4>
+          <h4>Outbound References ({fmtCount(outEdges.length)})</h4>
           <ul className="trg-edge-list">
             {(showAllOutInsp ? outEdges : outEdges.slice(0, 8)).map((e: any) => (
               <li key={e.dst_class}>
@@ -10714,12 +10714,12 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           {outEdges.length > 8 && (
             <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
               onClick={() => setShowAllOutInsp(v => !v)}>
-              {showAllOutInsp ? "Show fewer" : `Show ${outEdges.length - 8} more`}
+              {showAllOutInsp ? "Show fewer" : `Show ${fmtCount(outEdges.length - 8)} more`}
             </button>
           )}
         </div>
         <div>
-          <h4>Inbound References ({inEdges.length})</h4>
+          <h4>Inbound References ({fmtCount(inEdges.length)})</h4>
           <ul className="trg-edge-list">
             {(showAllInInsp ? inEdges : inEdges.slice(0, 8)).map((e: any) => (
               <li key={e.src_class}>
@@ -10740,7 +10740,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
           {inEdges.length > 8 && (
             <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
               onClick={() => setShowAllInInsp(v => !v)}>
-              {showAllInInsp ? "Show fewer" : `Show ${inEdges.length - 8} more`}
+              {showAllInInsp ? "Show fewer" : `Show ${fmtCount(inEdges.length - 8)} more`}
             </button>
           )}
         </div>
