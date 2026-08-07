@@ -3126,7 +3126,7 @@ function TopConsumersSection({ report }: { report: Report }) {
         <TopConsumersTreemap rows={t.biggest_classes} />
       )}
       {topView === "tables" && (<>
-      <h3>Biggest Objects</h3>
+      <h3>Biggest Objects (Top-Level Dominators)</h3>
       <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when the suspect you care about didn&apos;t cross the leak-suspect threshold. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
@@ -5499,7 +5499,7 @@ function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[]
   return (
     <div>
       <p className="subtitle" style={{ marginTop: 0 }}>
-        Rows: dominator class · Columns: dominated class · Cell: retained bytes flowing through that pair.
+        Rows: dominator class · Columns: dominated class · Cell: retained heap gated by that dominator→dominated pair.
         Click a cell to inspect the dominated class.
       </p>
       <div style={{ overflowX: "auto" }}>
@@ -5713,7 +5713,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it keeps alive — making it unreachable reclaims that memory). A wide right side means this class is a large memory holder. Click any node or row to refocus.
+            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it keeps alive — making it unreachable reclaims that memory). A wide right side means this class retains a large portion of the heap. Click any node or row to refocus.
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -6157,12 +6157,12 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
   type LeakRow = { indicator: React.ReactNode; value: string; hint: React.ReactNode };
   const leakRows: LeakRow[] = [
     ...(anonymous_class_count > 0 ? [{
-      indicator: "Anonymous/Generated Classes",
+      indicator: "Anonymous/generated classes",
       value: fmtCount(anonymous_class_count),
       hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" to find the biggest offenders.",
     }] : []),
     ...(thread_local_null_key_count > 0 ? [{
-      indicator: <><code>ThreadLocal</code> null-key entries</>,
+      indicator: <><code>ThreadLocal</code> null-key entries (cleared referent)</>,
       value: fmtCount(thread_local_null_key_count),
       hint: "A null key means the ThreadLocal object was GC'd while the thread still holds the value — classic leak in thread pools. Call ThreadLocal.remove() when done, or use try-finally to guarantee cleanup.",
     }] : []),
