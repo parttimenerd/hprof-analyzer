@@ -4063,7 +4063,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
           { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.total_elements), selector: (r) => r.total_elements, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.total_retained, fmtB, useKB), selector: (r) => r.total_retained, sortable: true },
-          { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "96px", cell: (r) => r.total_wasted_bytes != null ? (useKB ? <span title={fmtExactBytes(r.total_wasted_bytes)}>{fmtB(r.total_wasted_bytes)}</span> : fmtB(r.total_wasted_bytes)) : "—", selector: (r) => r.total_wasted_bytes ?? 0, sortable: true },
+          { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "120px" : "96px", cell: (r) => r.total_wasted_bytes != null ? <span title={fmtExactBytes(r.total_wasted_bytes)}>{fmtB(r.total_wasted_bytes)}</span> : "—", selector: (r) => r.total_wasted_bytes ?? 0, sortable: true },
         ];
         return <StdTable columns={overallCols} data={mostOverall} searchKeys={["holder_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />;
       })()}
@@ -4162,7 +4162,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
         : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", minWidth: 0, overflow: "hidden", whiteSpace: "normal", padding: "2px 0" }}>{r.value_type_breakdown.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", whiteSpace: "nowrap", minWidth: 0 }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "160px" }} title={s.type_name}>{s.type_name}</code><CopyBtn text={s.type_name} /><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span><span style={{ flexShrink: 0, color: "var(--muted)", fontSize: "0.85em" }}> ×{fmtCount(s.count)}</span></span>)}</div>,
     } as TableColumn<CoalescedRow>] : []),
     ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "240px", cell: ({ row: r }: CoalescedRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><CopyBtn text={r.owner} /><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
-    ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? (useKB ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : fmtB(r.retained)) : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0, sortable: true } as TableColumn<CoalescedRow>] : []),
+    ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0, sortable: true } as TableColumn<CoalescedRow>] : []),
   ];
   return (
     <>
@@ -5788,7 +5788,7 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
         const compCols: TableColumn<CompRow>[] = [
           { id: "kind", name: "Kind", grow: 1, cell: (r) => <span style={{ textTransform: "capitalize", ...(r.indent ? { paddingLeft: "1.5rem", fontSize: "0.88em", color: "var(--muted)" } : {}) }}>{r.kind}</span>, selector: (r) => r.kind, sortable: true },
           { id: "objects", name: "Objects", right: true, minWidth: "110px", cell: (r) => <span style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtCount(r.objects)}</span>, selector: (r) => r.objects, sortable: true },
-          { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, minWidth: useKB ? "130px" : "110px", cell: (r) => <span title={useKB ? fmtExactBytes(r.shallow_heap) : undefined} style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtB(r.shallow_heap)}</span>, selector: (r) => r.shallow_heap, sortable: true },
+          { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, minWidth: useKB ? "130px" : "110px", cell: (r) => <span title={fmtExactBytes(r.shallow_heap)} style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtB(r.shallow_heap)}</span>, selector: (r) => r.shallow_heap, sortable: true },
         ];
         return <StdTable columns={compCols} data={flatRows} searchKeys={["kind"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />;
       })()}
