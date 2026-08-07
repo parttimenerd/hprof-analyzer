@@ -9541,7 +9541,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 return (
                   <>
                     <p className="subtitle" style={{ fontSize: "0.82rem", margin: "0 0 0.4rem" }}>
-                      {currentDomChildren.length} children retaining {fmtB(childRetainedTotal)} ({childPct}%){" "}
+                      {currentDomChildren.length} {currentDomChildren.length === 1 ? "child" : "children"} retaining {fmtB(childRetainedTotal)} ({childPct}%){" "}
                       + {fmtB(shallowSelf)} ({shallowPct}%) in this object itself.
                       Click a child to descend.
                       {currentNode.dom_subtree_count != null && currentNode.dom_subtree_count > 1 && (

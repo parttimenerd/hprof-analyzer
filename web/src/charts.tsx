@@ -114,7 +114,8 @@ function FlatTreemap({
           const value = leaf.value ?? 0;
           const pct = ((value / total) * 100).toFixed(1);
           const origIdx = data.findIndex((d) => d.name === label);
-          const clickable = onSlice != null && origIdx !== -1 && origIdx < data.length - (data.length > positive.length ? 0 : 0);
+          const isRemainder = label === "(remainder)";
+          const clickable = onSlice != null && origIdx !== -1 && !isRemainder;
           return (
             <div
               key={i}
@@ -123,8 +124,8 @@ function FlatTreemap({
               style={{
                 position: "absolute",
                 left: x0, top: y0, width: lw, height: lh,
-                background: PALETTE[i % PALETTE.length],
-                opacity: 0.85,
+                background: isRemainder ? "#94a3b8" : PALETTE[i % PALETTE.length],
+                opacity: isRemainder ? 0.55 : 0.85,
                 boxSizing: "border-box",
                 overflow: "hidden",
                 cursor: clickable ? "pointer" : "default",
@@ -736,10 +737,65 @@ export function LoaderRollupChart({ data }: { data: LoaderRollup[] }) {
 
 export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect[]; total: number; onSlice?: (i: number) => void }) {
   if (suspects.length === 0 || total <= 0) return null;
-  const rows: Slice[] = suspects.map((s) => ({ name: s.pretty_class, value: s.retained }));
   const sum = suspects.reduce((s, x) => s + x.retained, 0);
-  if (total > sum) rows.push({ name: "(remainder)", value: total - sum });
-  return <FlatTreemap data={rows} fmt={formatBytes} height={220} onSlice={onSlice} />;
+  const remainder = total > sum ? total - sum : 0;
+
+  // Build segments: named suspects in order, then remainder
+  const segments = suspects.map((s, i) => ({
+    name: s.pretty_class,
+    value: s.retained,
+    pct: s.retained / total,
+    color: PALETTE[i % PALETTE.length],
+    idx: i,
+  }));
+
+  return (
+    <div style={{ display: "flex", height: 40, width: "100%", borderRadius: 4, overflow: "hidden", gap: 1 }}>
+      {segments.map((seg) => (
+        <div
+          key={seg.idx}
+          title={`${seg.name}: ${formatBytes(seg.value)} (${(seg.pct * 100).toFixed(1)}%)`}
+          onClick={onSlice ? () => onSlice(seg.idx) : undefined}
+          style={{
+            width: `${seg.pct * 100}%`,
+            minWidth: seg.pct > 0.01 ? 2 : 0,
+            background: seg.color,
+            opacity: 0.88,
+            cursor: onSlice ? "pointer" : "default",
+            overflow: "hidden",
+            display: "flex",
+            alignItems: "center",
+            paddingLeft: 6,
+            flexShrink: 0,
+          }}
+        >
+          {seg.pct >= 0.08 && (
+            <span style={{ color: "#fff", fontSize: "0.75rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 500 }}>
+              {seg.name.split(".").pop()} {(seg.pct * 100).toFixed(1)}%
+            </span>
+          )}
+        </div>
+      ))}
+      {remainder > 0 && (
+        <div
+          style={{
+            flex: 1,
+            background: "#94a3b8",
+            opacity: 0.45,
+            display: "flex",
+            alignItems: "center",
+            paddingLeft: 6,
+            overflow: "hidden",
+          }}
+          title={`(remainder): ${formatBytes(remainder)} (${((remainder / total) * 100).toFixed(1)}%)`}
+        >
+          <span style={{ color: "#fff", fontSize: "0.72rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {((remainder / total) * 100).toFixed(1)}% other
+          </span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ConcentrationChart({ rc }: { rc: RetentionSummary }) {
