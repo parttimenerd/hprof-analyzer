@@ -107,7 +107,7 @@ pub(crate) const GRAPH_BAR_WIDTH: usize = 16;
 fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mut String) {
     use crate::md::{Align, Table, bar};
     out.push_str("## System Overview\n\n");
-    out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
+    out.push_str("_JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and system properties._\n\n");
     out.push_str("### Heap Summary\n\n");
     let mut summary = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
     summary.row(["HPROF format".into(), o.format.clone()]);
@@ -754,7 +754,7 @@ fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut S
     out.push('\n');
 
     out.push_str("### Biggest Classes by Retained Heap\n\n");
-    out.push_str("_Classes whose instances together retain the most heap._\n\n");
+    out.push_str("_Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._\n\n");
     let cls_max = t
         .biggest_classes
         .iter()
