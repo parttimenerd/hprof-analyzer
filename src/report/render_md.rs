@@ -127,7 +127,9 @@ Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     if !d.length_histogram.is_empty() {
         out.push_str("#### String Length Distribution\n\n");
         out.push_str(&format!(
-            "_Distinct-value lengths (bytes): min {}, median {}, max {}; total {}._\n\n",
+            "_Length distribution of distinct string values — a peak at short lengths is normal; \
+a peak at unexpectedly long lengths may signal log buffers or URL strings worth truncating. \
+Min: {}, median: {}, max: {}, total: {}._\n\n",
             fmt_count(d.length_stats.min as u64),
             fmt_count(d.length_stats.median as u64),
             fmt_count(d.length_stats.max as u64),
@@ -175,13 +177,11 @@ Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     // ── Char[] backing-array waste ───────────────────────────────────────────
     if let Some(w) = &d.char_array_waste {
         out.push_str("#### `char[]` Waste\n\n");
-        out.push_str(
+        out.push_str(&format!(
             "_Strings whose `char[]` or `byte[]` backing array is larger than the character \
 data — typical of `substring()` retaining a full backing array (Java 6/7 shared-buffer \
-semantics) or repeated `StringBuilder.toString()` allocations._\n\n",
-        );
-        out.push_str(&format!(
-            "_{} arrays examined, {} wasteful, {} total wasted._\n\n",
+semantics) or repeated `StringBuilder.toString()` allocations. \
+{} arrays examined, {} wasteful, {} total wasted._\n\n",
             fmt_count(w.arrays_examined),
             fmt_count(w.wasteful_arrays),
             format_bytes(w.total_wasted_bytes),
