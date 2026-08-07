@@ -547,7 +547,7 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread Pinning",
             format!(
-                "thread `{}` retains {} ({:.1}% of heap) and holds {} thread-local GC roots alive — a live thread is keeping a disproportionate amount of memory reachable. Inspect the thread's stack frames and ThreadLocal values in the Threads section.",
+                "thread `{}` retains {} ({:.1}% of heap) via {} thread-local GC root references — a running thread is pinning a disproportionate share of the heap. Inspect its stack frames and ThreadLocal values in the Threads section.",
                 who,
                 format_bytes(t.retained),
                 share,
