@@ -2415,7 +2415,7 @@ few instances) are filtered as noise._",
         out.push_str(&format!("_({skipped} trivial groups hidden.)_\n\n"));
     }
     if interesting_rows.is_empty() {
-        out.push_str("_No constant primitive arrays found._\n\n");
+        out.push_str("_None found in this dump._\n\n");
     } else {
         let obj_max = interesting_rows
             .iter()
@@ -2497,10 +2497,10 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
         let has_fill = t.top_individual.iter().any(|r| r.non_null.is_some());
         // The Owner column is present when any row has an owner label.
         let has_owner = t.top_individual.iter().any(|r| r.owner.is_some());
-        let mut headers: Vec<&str> = vec!["Array class", "Length"];
+        let mut headers: Vec<&str> = vec!["Array Class", "Length"];
         let mut aligns = vec![Align::Left, Align::Right];
         if has_fill {
-            headers.push("Used/Length");
+            headers.push("Used / Length");
             aligns.push(Align::Right);
         }
         headers.push("Shallow");
@@ -2557,7 +2557,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
         out.push_str("_None found in this dump._\n\n");
     } else {
         let sh_max = t.top_by_class.iter().map(|r| r.shallow).max().unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Array class", "Instances", "Shallow"];
+        let mut headers: Vec<&str> = vec!["Array Class", "Instances", "Shallow"];
         let mut aligns = vec![Align::Left, Align::Right, Align::Right];
         if graphs {
             headers.push("");
