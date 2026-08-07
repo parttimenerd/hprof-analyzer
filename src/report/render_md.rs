@@ -10,10 +10,9 @@ pub(crate) fn render_record_census(out: &mut String, c: &crate::pass2::RecordCen
     use crate::md::{Align, Table};
     out.push_str("### HPROF Record Census\n\n");
     out.push_str(
-        "_Raw HPROF record-type composition of the dump (pass-1 counts). \
-Useful for diagnosing truncated or unusual dumps (e.g. zero stack frames means \
-no allocation-site data; a mismatch between load-class and class-dump counts \
-can indicate a partial write). Additive, not parity-compared._\n\n",
+        "_Record-type counts from the raw HPROF file — useful for diagnosing truncated or unusual dumps. \
+Zero stack frames means no allocation-site data (requires `-agentlib:hprof=heap=dump,depth=8`, removed in JDK 9); \
+a mismatch between load-class and class-dump counts can indicate a partial write._\n\n",
     );
     let mut t = Table::new(&["Record Type", "Count"], &[Align::Left, Align::Right]);
     t.row(["UTF8 strings".into(), fmt_count(c.utf8_records)]);
