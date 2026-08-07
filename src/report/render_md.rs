@@ -4008,7 +4008,7 @@ primitive fields or `int[]`/`long[]` arrays eliminates the per-object header._\n
     if !holders.is_empty() {
         out.push_str("#### Classes Holding the Most Boxed-Number References\n\n");
         let mut t = Table::new(
-            &["#", "Class", "Boxed refs"],
+            &["#", "Class", "Boxed Refs"],
             &[Align::Right, Align::Left, Align::Right],
         );
         for (i, h) in holders.iter().enumerate() {
