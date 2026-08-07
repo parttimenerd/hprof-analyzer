@@ -391,8 +391,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
              The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), \
              not an instance name — the hprof format does not record loader names. \
              Multiple rows with the same loader class are distinct loader instances; \
-             many such instances each holding significant heap can signal a class-loader leak. \
-             The **Address** column distinguishes them._\n\n",
+             many such instances each holding significant heap can signal a class-loader leak._\n\n",
         );
         let lmax = o
             .loader_rollup
