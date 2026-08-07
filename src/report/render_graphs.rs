@@ -313,7 +313,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
-        "_Every loaded class with instance count, shallow heap (own bytes), and retained heap \
+        "_Every loaded class with its instance count, shallow heap (own bytes), and retained heap \
          (bytes freed when all instances become unreachable). Top 50 shown; full list in JSON._\n\n",
     );
     let hist_max = o
