@@ -2930,7 +2930,10 @@ pub(crate) fn render_biggest_collections(
         }
     }
     if b.truncated {
-        out.push_str("_Collection value tally was truncated; ranking is a bounded sample._\n\n");
+        out.push_str(
+            "_Collection value tally truncated — some value groups dropped; \
+ranking is a bounded sample._\n\n",
+        );
     }
 }
 
