@@ -164,7 +164,8 @@ Min: {}, median: {}, max: {}, total: {}._\n\n",
     if !d.top_string_holders.is_empty() {
         out.push_str("#### Classes Holding the Most Strings\n\n");
         out.push_str(
-            "_Number of `java.lang.String` instances referenced by each class's instances._\n\n",
+            "_Which classes hold the most `java.lang.String` references — \
+likely candidates to benefit from deduplication or interning._\n\n",
         );
         let mut t = Table::new(&["Class", "String refs"], &[Align::Left, Align::Right]);
         for h in &d.top_string_holders {
