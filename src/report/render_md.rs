@@ -1153,7 +1153,7 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
         "_Every loaded class with its instance count, shallow heap (own bytes), and retained heap \
-(bytes freed when all instances become unreachable). Top 50 shown; full list in JSON._\n\n",
+(bytes freed when all instances become unreachable). Top 50 shown._\n\n",
     );
     let mut hist = Table::new(
         &[
