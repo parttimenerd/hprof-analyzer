@@ -704,20 +704,6 @@ Investigate only if the instance count is unexpectedly high \
         }
 
         if !s.dominated.is_empty() {
-            if s.dominated_total_count > s.dominated_shown {
-                out.push_str(&format!(
-                    "_Directly dominates {} {} (showing top {} by retained heap)._\n\n",
-                    fmt_count(s.dominated_total_count),
-                    plural_objects(s.dominated_total_count),
-                    fmt_count(s.dominated_shown),
-                ));
-            } else if s.dominated_total_count > 0 {
-                out.push_str(&format!(
-                    "_Directly dominates {} {}._\n\n",
-                    fmt_count(s.dominated_total_count),
-                    plural_objects(s.dominated_total_count),
-                ));
-            }
             out.push_str(&format!(
                 "**Accumulated objects (top {} by retained heap):**\n\n",
                 s.dominated.len(),
@@ -738,6 +724,20 @@ Investigate only if the instance count is unexpectedly high \
         }
 
         if !s.dominated_by_class.is_empty() {
+            if s.dominated_total_count > s.dominated_shown {
+                out.push_str(&format!(
+                    "_Directly dominates {} {} (showing top {} classes by retained heap)._\n\n",
+                    fmt_count(s.dominated_total_count),
+                    plural_objects(s.dominated_total_count),
+                    fmt_count(s.dominated_by_class.len() as u64),
+                ));
+            } else if s.dominated_total_count > 0 {
+                out.push_str(&format!(
+                    "_Directly dominates {} {}._\n\n",
+                    fmt_count(s.dominated_total_count),
+                    plural_objects(s.dominated_total_count),
+                ));
+            }
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
                 &["Class", "Objects", "Shallow", "Retained", "% of suspect"],
