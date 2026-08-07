@@ -4066,9 +4066,9 @@ pub(crate) fn render_header_overhead(
             "#",
             "Class",
             "Instances",
-            "Hdr/obj",
+            "Header / Obj",
             "Total Headers",
-            "Hdr %",
+            "% of Shallow",
             "Avg Size",
         ],
         &[
