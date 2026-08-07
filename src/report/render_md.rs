@@ -922,12 +922,10 @@ _Definitions for the heap analysis terms used throughout this report._
   Shallow depth means most objects are held close to a root; deep depth means
   retention flows through long chains (nested collections, linked lists).
 - **Accumulation point**: a single object (often a collection, cache, or map) that
-  dominates a large number of instances of the *same* class, meaning where a
-  [memory leak](https://en.wikipedia.org/wiki/Memory_leak) accumulates.
+  dominates many instances of the *same* class — where excess memory accumulates.
 - **Class loader**: the JVM component that defined a class. The same class name
   loaded by two different [class loaders](https://en.wikipedia.org/wiki/Java_Classloader)
-  is two distinct classes in the heap, so heap is attributed per (class, loader)
-  pair.
+  is two distinct heap classes — counts are per (class, loader) pair.
 - **Referent**: the object that a reference field points *to*. A
   [`WeakReference`](https://en.wikipedia.org/wiki/Weak_reference), for example, has
   a referent it does not keep alive.
@@ -938,7 +936,7 @@ _Definitions for the heap analysis terms used throughout this report._
   that is actually occupied by elements — `elements / capacity`. A fill ratio near
   0 means the backing array is mostly empty (wasted memory). A ratio near 1 means
   the collection is full.
-- **Map Load Factor**: for hash maps, the fraction of backing-array
+- **Map load factor**: for hash maps, the fraction of backing-array
   slots occupied — `occupied_slots / capacity`. A low load factor means many
   empty buckets (wasted memory); a high load factor (≥ 90%) increases hash
   collision chains and lookup cost.
@@ -3251,7 +3249,7 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
     use crate::md::{Align, Table, bar};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
-        out.push_str("_No unreachable objects. All heap objects are reachable from a GC root — normal when a full GC ran before the dump._\n\n");
+        out.push_str("_No unreachable objects. All heap objects are reachable from a GC root — normal when a full GC ran before the dump was taken._\n\n");
         return;
     }
     out.push_str(
@@ -3278,7 +3276,7 @@ one suggests the dump was taken mid-collection._\n\n",
             "_Unreachable objects are eligible for collection but have not yet been reclaimed. \
 At {} of heap total (reachable + unreachable) this is elevated — the dump was likely taken \
 before a full GC cycle completed. GC reclaims this memory automatically; it is not a leak. \
-Confirm: trigger a full GC (`jcmd <pid> GC.run`) then re-dump; if the count drops, \
+Confirm: trigger a full GC (`jcmd <pid> GC.run`) then re-dump; if the count drops sharply, \
 it was pre-GC garbage._\n\n",
             fmt_pct(unreachable_pct)
         ));
@@ -3331,7 +3329,7 @@ A small unreachable heap (< 5% of heap total) is normal between GC cycles._\n\n"
         headers.push("");
         aligns.push(Align::Left);
     }
-    out.push_str("_Shallow heap is additive; Retained sets overlap (nested subtrees are counted once per ancestor)._\n\n");
+    out.push_str("_Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates the total reclaimable memory._\n\n");
     let mut t = Table::new(&headers, &aligns);
     for r in &o.unreachable_histogram {
         let mut row = vec![
