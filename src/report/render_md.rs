@@ -1175,7 +1175,7 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
         ],
     );
     // The model carries the FULL histogram; the Markdown view shows the top 50
-    // rows for readability. The complete data lives in the JSON output.
+    // rows for readability. The full list appears in the HTML report.
     // Retained heap uses human-readable byte units (matching every other
     // retained/shallow column) so the scale is scannable at a glance.
     // "Largest" is the shallow size of the single biggest instance of the class.
