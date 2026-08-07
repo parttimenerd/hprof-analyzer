@@ -2278,7 +2278,8 @@ backing-array memory. {} collections analyzed ({} non-empty tracked)._\n\n",
     // ── Collections by Size ──────────────────────────────────────────────────
     out.push_str("### Collections by Size\n\n");
     out.push_str(&format!(
-        "_{} tracked; {} empty._\n\n",
+        "_Element-count distribution of collections, bucketed by size — \
+{} tracked; {} empty._\n\n",
         fmt_count(c.collections_by_size.tracked),
         fmt_count(c.collections_by_size.empty_count),
     ));
@@ -2385,7 +2386,7 @@ backing-array memory. {} collections analyzed ({} non-empty tracked)._\n\n",
     let mut note = String::from(
         "_Primitive arrays whose every element is identical — possible candidates for \
 deduplication or replacement with a shared constant. Short arrays (length < 8 with \
-few instances) are hidden as noise._",
+few instances) are filtered as noise._",
     );
     if c.constant_primitive_arrays.truncated {
         note.push_str(" _(list truncated; remaining groups folded into one row)._");
