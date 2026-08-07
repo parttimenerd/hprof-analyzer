@@ -528,12 +528,14 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
         fmt_pct(rc.top100_bp as f64 / 100.0),
         bar(rc.top100_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
-    t.row([
-        "Objects each >=1%".into(),
-        fmt_count(rc.num_objects_ge_1pct),
-        String::new(),
-    ]);
     t.render(out);
+    if rc.num_objects_ge_1pct > 0 {
+        out.push_str(&format!(
+            "\n_{} {} each hold ≥1% of the reachable heap._\n",
+            fmt_count(rc.num_objects_ge_1pct),
+            plural_objects(rc.num_objects_ge_1pct),
+        ));
+    }
     out.push('\n');
 }
 
