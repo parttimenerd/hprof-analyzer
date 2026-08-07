@@ -423,8 +423,10 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
         out.push_str(
             "_Class names loaded by more than one class loader. The same class loaded N times \
              means N separate copies of its static state and N times the metaspace cost — \
-             a typical symptom of class-loader leaks (e.g. each web-app reload creates a new \
-             loader that never gets GC'd)._\n\n",
+             a typical symptom of class-loader leaks (e.g. each web-app reload or plugin load creates a new \
+             loader that never gets GC'd). \
+             Check the per-loader breakdown: if one loader holds almost all the instances, \
+             the others are likely leaked copies._\n\n",
         );
         let mut t = Table::new(
             &["Class", "#Loaders", "Instances", "Retained Heap"],
