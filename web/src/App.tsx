@@ -1105,7 +1105,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         grow: 0,
         selector: (r: HistRow) => r.loader_label ?? "",
         cell: (r: HistRow) => (
-          <span title={r.loader_label ?? undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", width: "100%" }}>
+          <span title={r.loader_label ? fmtLoader(r.loader_label) : undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", width: "100%" }}>
             <LoaderCell label={r.loader_label} />
           </span>
         ),
@@ -1297,7 +1297,7 @@ function LoaderCell({ label }: { label?: string | null }) {
   if (short == null) return <span className="hint">—</span>;
   if (short === "<boot>") return <span className="hint">&lt;boot&gt;</span>;
   return (
-    <code className="loader" title={label ?? undefined}>
+    <code className="loader" title={label ? fmtLoader(label) : undefined}>
       {short}
     </code>
   );
@@ -2166,7 +2166,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                 root={loaderRoot}
                 getChildren={(n) => n._children ?? []}
                 getValue={(n) => n.retained}
-                getLabel={(n) => n.loader_label ?? `loader#${n.loader_id}`}
+                getLabel={(n) => n.loader_label ? fmtLoader(n.loader_label) : `loader#${n.loader_id}`}
                 fmt={formatBytes}
                 fmtExact={fmtExactBytes}
                 height={280}
@@ -2194,7 +2194,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
 function ClassLoadersTable({ rows }: { rows: LoaderRollup[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<LoaderRollup>[] = [
-    { id: "loader", name: "Loader", grow: 1, cell: (r) => <code title={r.loader_label ?? undefined}>{r.loader_label ? fmtLoader(r.loader_label) : `loader@${r.loader_id}`}</code>, selector: (r) => r.loader_label ?? "", sortable: true },
+    { id: "loader", name: "Loader", grow: 1, cell: (r) => <code title={r.loader_label ? fmtLoader(r.loader_label) : undefined}>{r.loader_label ? fmtLoader(r.loader_label) : `loader@${r.loader_id}`}</code>, selector: (r) => r.loader_label ?? "", sortable: true },
     { id: "address", name: "Address", width: "130px", cell: (r) => <code style={{ fontSize: "0.78rem" }}>{r.loader_id === 0 ? "<boot>" : `0x${r.loader_id.toString(16)}`}</code>, selector: (r) => r.loader_id, sortable: true },
     { id: "classes", name: "Classes", right: true, width: "100px", format: (r) => fmtCount(r.class_count), selector: (r) => r.class_count, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
@@ -2208,7 +2208,7 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const loaderDetailCols: TableColumn<typeof rows[0]["per_loader"][0]>[] = [
     { id: "loader", name: "Loader", grow: 1,
-      cell: pl => <code title={pl.loader_label ?? undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>,
+      cell: pl => <code title={pl.loader_label ? fmtLoader(pl.loader_label) : undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>,
       selector: pl => pl.loader_label ?? "", sortable: true },
     { id: "instances", name: "Instances", right: true, width: "110px",
       format: pl => fmtCount(pl.instances), selector: pl => pl.instances, sortable: true },
@@ -2221,7 +2221,7 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
     {
       id: "class", name: "Class", grow: 1, maxWidth: "600px",
       cell: (d) => (
-        <span title={d.loaders.join(", ")}>
+        <span title={d.loaders.map(fmtLoader).join(", ")}>
           {d.per_loader && d.per_loader.length > 0 ? (
             <details>
               <summary>
@@ -3294,7 +3294,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
           <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span><span title={fmtExactBytes(t.max_local_retained)}>{fmtB(t.max_local_retained)}</span></span>
           <span className="thread-meta-item"><span className="thread-meta-label">priority</span>{t.priority}</span>
           {t.context_class_loader && (
-            <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code title={t.context_class_loader}>{fmtLoader(t.context_class_loader)}</code></span>
+            <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code title={fmtLoader(t.context_class_loader)}>{fmtLoader(t.context_class_loader)}</code></span>
           )}
           {t.thread_state && (
             <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "").split(",").map(s => s.trim()).filter(Boolean).map(s => s.replace(/\b\w/g, c => c.toUpperCase())).join(", ")}</span>
@@ -3405,7 +3405,7 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "118px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained, sortable: true },
     { id: "max_local", name: useKB ? "Max Local Retained (KB)" : "Max Local Retained", right: true, width: useKB ? "225px" : "190px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained, sortable: true },
-    { id: "loader", name: "Context Class Loader", grow: 1, maxWidth: "155px", cell: (t) => t.context_class_loader ? <code title={t.context_class_loader}>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
+    { id: "loader", name: "Context Class Loader", grow: 1, maxWidth: "155px", cell: (t) => t.context_class_loader ? <code title={fmtLoader(t.context_class_loader)}>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
     { id: "daemon", name: "Daemon", width: "100px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "Yes" : "No", sortable: true },
     { id: "priority", name: "Priority", right: true, width: "95px", format: (t) => String(t.priority), selector: (t) => t.priority, sortable: true },
     { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state?.replace(/[\[\]]/g, "") || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state ? threadStateLabel(t.thread_state) : "—"}</span>, sortable: true },
@@ -3559,7 +3559,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
   const components = data?.components ?? [];
   if (components.length === 0) return null;
   const cols: TableColumn<Component>[] = [
-    { id: "component", name: "Component", grow: 1, minWidth: "200px", maxWidth: "280px", cell: (c) => <code title={c.loader_label ?? undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{fmtLoader(c.loader_label ?? "")}</code>, selector: (c) => c.loader_label ?? "", sortable: true },
+    { id: "component", name: "Component", grow: 1, minWidth: "200px", maxWidth: "280px", cell: (c) => <code title={c.loader_label ? fmtLoader(c.loader_label) : undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{fmtLoader(c.loader_label ?? "")}</code>, selector: (c) => c.loader_label ?? "", sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: "140px", sortable: true, cell: byteCell(c => c.retained, fmtB, useKB), selector: (c) => c.retained },
     { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
     {
