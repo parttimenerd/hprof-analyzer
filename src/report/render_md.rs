@@ -2710,7 +2710,7 @@ pub(crate) fn render_collection_attribution(
          Wrapper overhead per collection is one object header plus the backing-array pointer._\n\n",
     );
     if a.tiny_overhead.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No empty or singleton collections found._\n\n");
     } else {
         let oh_max = a
             .tiny_overhead
