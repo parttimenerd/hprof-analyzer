@@ -347,9 +347,9 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
             "#",
             "Class",
             "Instances",
-            "Shallow Heap",
+            "Shallow",
             "Largest",
-            "Retained Heap",
+            "Retained",
             "% Heap",
             "",
         ],
@@ -410,14 +410,7 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
             .max()
             .unwrap_or(0);
         let mut t = Table::new(
-            &[
-                "Loader",
-                "Classes",
-                "Instances",
-                "Shallow Heap",
-                "Retained Heap",
-                "",
-            ],
+            &["Loader", "Classes", "Instances", "Shallow", "Retained", ""],
             &[
                 Align::Left,
                 Align::Right,
@@ -454,7 +447,7 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
              the others are likely leaked copies._\n\n",
         );
         let mut t = Table::new(
-            &["Class", "#Loaders", "Instances", "Retained Heap"],
+            &["Class", "# Loaders", "Instances", "Retained"],
             &[Align::Left, Align::Right, Align::Right, Align::Right],
         );
         for d in &o.duplicate_classes {
@@ -488,7 +481,7 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
                 dup
             };
             let mut lt = Table::new(
-                &["Loader", "Instances", "Shallow", "Retained Heap", ""],
+                &["Loader", "Instances", "Shallow", "Retained", ""],
                 &[
                     Align::Left,
                     Align::Right,
@@ -759,7 +752,7 @@ Investigate only if the instance count is unexpectedly high \
             }
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
-                &["Class", "Objects", "Shallow", "Retained", "% of suspect"],
+                &["Class", "Objects", "Shallow", "Retained", "% of Suspect"],
                 &[
                     Align::Left,
                     Align::Right,
@@ -876,7 +869,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
         .max()
         .unwrap_or(0);
     let mut classes = Table::new(
-        &["#", "Class", "Instances", "Retained Heap", ""],
+        &["#", "Class", "Instances", "Retained", ""],
         &[
             Align::Right,
             Align::Left,
