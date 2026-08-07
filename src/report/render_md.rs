@@ -1355,7 +1355,7 @@ Dominator Analysis._\n\n",
 the most likely accumulation points for excessive memory usage. \
 To fix: follow the dominator chain to the nearest object you control \
 and drop or null out the reference that keeps it alive. \
-The path to GC root is shown for each suspect below._\n\n",
+GC root paths are shown for each suspect below._\n\n",
     );
 
     for (rank, s) in l.suspects.iter().enumerate() {
@@ -3483,7 +3483,7 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
     out.push_str(
         "_An object **dominates** another if every path from a GC root passes through it — \
 making it unreachable reclaims the entire dominated subtree. **Big Drops** shows objects \
-holding memory directly or across many small children; **Immediate Dominators** ranks classes \
+holding memory directly or across many small children. **Immediate Dominators** ranks classes \
 by how much dominated shallow heap they gate._\n\n",
     );
 
@@ -4259,7 +4259,7 @@ Fix the biggest category first for the highest impact. Figures are approximate._
     );
 
     let mut t = Table::new(
-        &["Waste Type", "Wasted", "Objects", "Fix"],
+        &["Waste Type", "Wasted", "Objects", "Fix Suggestion"],
         &[Align::Left, Align::Right, Align::Right, Align::Left],
     );
     for row in &rows {
