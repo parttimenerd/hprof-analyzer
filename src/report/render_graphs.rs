@@ -628,16 +628,12 @@ that keeps it alive. The path to GC root is shown for each suspect below._\n\n",
         ],
     );
     for (rank, s) in l.suspects.iter().enumerate() {
-        let pct = if l.total_shallow > 0 {
-            s.retained as f64 / l.total_shallow as f64 * 100.0
-        } else {
-            0.0
-        };
+        let pct = pct_of_heap(s.retained, l.total_shallow);
         share.row([
             (rank + 1).to_string(),
             format!("`{}`", s.pretty_class),
             format_bytes(s.retained),
-            format!("{pct:.1}%"),
+            fmt_pct(pct),
             bar(s.retained, max, GRAPH_BAR_WIDTH),
         ]);
     }
@@ -646,11 +642,7 @@ that keeps it alive. The path to GC root is shown for each suspect below._\n\n",
 
     // Per-suspect detail: identical to plain Markdown.
     for (rank, s) in l.suspects.iter().enumerate() {
-        let pct = if l.total_shallow > 0 {
-            s.retained as f64 / l.total_shallow as f64 * 100.0
-        } else {
-            0.0
-        };
+        let pct = pct_of_heap(s.retained, l.total_shallow);
 
         out.push_str(&format!(
             "### {}. `{}` — retains {} ({} of {HEAP_BASIS_LABEL})\n\n",
