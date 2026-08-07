@@ -374,6 +374,20 @@ function Nav({ report }: { report: Report }) {
   addDist("glossary", "Glossary");
 
   const [active, setActive] = React.useState<string>("");
+  const navRef = React.useRef<HTMLElement>(null);
+
+  React.useEffect(() => {
+    if (!navRef.current) return;
+    const nav = navRef.current;
+    const updateScrollPadding = () => {
+      const h = nav.getBoundingClientRect().height;
+      document.documentElement.style.scrollPaddingTop = `${h + 8}px`;
+    };
+    updateScrollPadding();
+    const ro = new ResizeObserver(updateScrollPadding);
+    ro.observe(nav);
+    return () => ro.disconnect();
+  }, []);
 
   React.useEffect(() => {
     const observer = new IntersectionObserver(
@@ -401,7 +415,7 @@ function Nav({ report }: { report: Report }) {
   }, []);
 
   return (
-    <nav className="toc">
+    <nav className="toc" ref={navRef}>
       {items.map(([id, label, group, badge]) => (
         <React.Fragment key={id}>
           {group && <span className="toc-group">{group}</span>}

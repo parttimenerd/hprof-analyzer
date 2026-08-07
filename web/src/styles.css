@@ -189,8 +189,10 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .show-more-btn { background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--accent); cursor: pointer; font-size: 0.82rem; padding: 0.2rem 0.7rem; }
 .show-more-btn:hover { background: var(--card); }
 
-/* Section scroll anchoring so the sticky nav does not hide headings. */
-section, .oom { scroll-margin-top: 3rem; }
+/* Section scroll anchoring so the sticky nav does not hide headings.
+   scroll-padding-top is set dynamically in JS (Nav ResizeObserver); this
+   fallback covers the initial anchor-on-load before JS fires. */
+section, .oom { scroll-margin-top: 9rem; }
 
 /* Filter/tool rows above tables and thread lists. */
 .tools { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: 0.5rem 0; }
