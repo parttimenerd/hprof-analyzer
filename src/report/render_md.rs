@@ -3555,7 +3555,7 @@ Multiple rows with the same class are distinct objects._\n\n",
     // ---- Immediate Dominators ----
     out.push_str("### Immediate Dominators\n\n");
     out.push_str(
-        "_One row per dominator class: how many other objects it immediately dominates \
+        "_Each row shows one dominator class: how many other objects it immediately dominates \
          and the total shallow heap of those dominated objects. A large dominated-shallow \
          figure means instances of that class are collectively gating large portions of \
          the live heap — making them unreachable reclaims that memory._\n\n",
