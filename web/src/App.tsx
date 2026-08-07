@@ -2479,7 +2479,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
         <ListObjectsBtn cls={node.display_class} />
       </span>{" "}
       <span className="path-ret">
-        {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {fmtB(node.retained)}
+        {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained <span title={fmtExactBytes(node.retained)}>{fmtB(node.retained)}</span>
       </span>
       {node.root_type_label && (
         <> — <strong>GC root: {node.root_type_label}</strong></>
@@ -7566,8 +7566,8 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree
                   <ListObjectsBtn cls={r.display_class} />
                 </span>
               </td>
-              <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
-              <td style={{ textAlign: "right" }}>{fmtB(r.retained)}</td>
+              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.shallow)}>{fmtB(r.shallow)}</span></td>
+              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span></td>
             </tr>
           ))}
         </tbody>
@@ -8482,8 +8482,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                       </span>
                     </td>
                     <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
-                    <td style={{ textAlign: "right" }}>{fmtB(r.totalShallow)}</td>
-                    <td style={{ textAlign: "right" }}>{fmtB(r.totalRetained)}</td>
+                    <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.totalShallow)}>{fmtB(r.totalShallow)}</span></td>
+                    <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.totalRetained)}>{fmtB(r.totalRetained)}</span></td>
                     <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (r.totalRetained / totalHeap * 100).toFixed(1) : "—"}%</td>
                   </tr>
                 ))}
@@ -8522,13 +8522,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <ListObjectsBtn cls={node.display_class} />
                 </td>
                 <td style={{ color: "var(--muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>{id}</td>
-                <td>{fmtB(node.shallow)}</td>
+                <td><span title={fmtExactBytes(node.shallow)}>{fmtB(node.shallow)}</span></td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
                     {totalHeap > 0 && node.retained / totalHeap > 0.01 && (
                       <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(node.retained / totalHeap * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} />
                     )}
-                    {fmtB(node.retained)}
+                    <span title={fmtExactBytes(node.retained)}>{fmtB(node.retained)}</span>
                   </span>
                 </td>
                 <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
@@ -8598,8 +8598,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             </span>
                           </td>
                           <td style={{ color: "var(--muted)", fontSize: "0.8rem" }}>{m.dense_idx}</td>
-                          <td style={{ textAlign: "right" }}>{fmtB(m.shallow)}</td>
-                          <td style={{ textAlign: "right" }}>{fmtB(m.retained)}</td>
+                          <td style={{ textAlign: "right" }}><span title={fmtExactBytes(m.shallow)}>{fmtB(m.shallow)}</span></td>
+                          <td style={{ textAlign: "right" }}><span title={fmtExactBytes(m.retained)}>{fmtB(m.retained)}</span></td>
                         </tr>
                       ))}
                     </tbody>
@@ -9720,13 +9720,13 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                   <ListObjectsBtn cls={cn.display_class} />
                                 </span>
                               </td>
-                              <td>{fmtB(cn.shallow)}</td>
+                              <td><span title={fmtExactBytes(cn.shallow)}>{fmtB(cn.shallow)}</span></td>
                               <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                                 <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.35rem" }}>
                                   {pct > 0.01 && (
                                     <span style={{ display: "inline-block", width: `${Math.max(3, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${(pct * 100).toFixed(1)}% of parent`} />
                                   )}
-                                  {fmtB(cn.retained)}
+                                  <span title={fmtExactBytes(cn.retained)}>{fmtB(cn.retained)}</span>
                                   {pct >= 0.005 && (
                                     <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
                                       {(pct * 100).toFixed(0)}%
@@ -10161,7 +10161,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                           <ListObjectsBtn cls={cn.display_class} />
                         </span>
                       </div>
-                      <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px" }} title={`${cn.retained} B`}>{fmtB(cn.retained)}</div>
+                      <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px" }} title={fmtExactBytes(cn.retained)}>{fmtB(cn.retained)}</div>
                       <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px", color: "var(--muted)", fontSize: "0.8rem" }}>
                         {currentNode.retained > 0 ? (() => {
                           const p = cn.retained / currentNode.retained;
@@ -10210,7 +10210,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         </span>
                       </div>
                       <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }}>{fmtCount(row.instance_count)}</div>
-                      <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }} title={`${row.total_shallow} B`}>{fmtB(row.total_shallow)}</div>
+                      <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }} title={fmtExactBytes(row.total_shallow)}>{fmtB(row.total_shallow)}</div>
                       <div style={{ textAlign: "right", padding: "1px 4px", color: "var(--muted)", fontSize: "0.78rem" }}>
                         {pct >= 0.001 ? `${(pct * 100).toFixed(pct >= 0.01 ? 0 : 1)}%` : "< 0.1%"}
                       </div>
