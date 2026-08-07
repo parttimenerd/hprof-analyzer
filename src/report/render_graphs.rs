@@ -75,9 +75,7 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("- [Arrays by Size](#arrays-by-size)\n");
     out.push_str("- [Collections](#collections)\n");
     if r.collection_attribution.is_some() {
-        out.push_str(
-            "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
-        );
+        out.push_str("- [Container Attribution](#container-attribution)\n");
     }
     {
         let has_waste = r
@@ -101,9 +99,7 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
         .as_ref()
         .is_some_and(|f| !f.rows.is_empty())
     {
-        out.push_str(
-            "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
-        );
+        out.push_str("- [Fields by Retained Size](#fields-by-retained-size)\n");
     }
     if r.biggest_collections
         .as_ref()
@@ -201,7 +197,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Dead object ratio (unreachable / heap total)".into(),
+            "Dead object ratio (unreachable / total)".into(),
             fmt_pct(o.heap_fragmentation_ratio * 100.0),
         ]);
     }
@@ -894,7 +890,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     // bar()-column bucket table (mirrors the dominator-depth graphs render).
     if t.size_distribution.count > 0 {
         let d = &t.size_distribution;
-        out.push_str("### Top-Dominator Size Distribution\n\n");
+        out.push_str("### Retained Size Distribution\n\n");
         out.push_str(&format!(
             "_Retained heap distributed across all {} top-level dominators. The shape reveals whether \
 a handful of large objects dominate the heap or memory is scattered across many small ones._\n\n",

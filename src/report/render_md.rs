@@ -1013,7 +1013,7 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Dead object ratio (unreachable / heap total)".into(),
+            "Dead object ratio (unreachable / total)".into(),
             fmt_pct(o.heap_fragmentation_ratio * 100.0),
         ]);
     }
@@ -1571,7 +1571,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     // md-graphs variant adds a sparkline and bar column).
     if t.size_distribution.count > 0 {
         let d = &t.size_distribution;
-        out.push_str("### Top-Dominator Size Distribution\n\n");
+        out.push_str("### Retained Size Distribution\n\n");
         out.push_str(&format!(
             "_Retained heap distributed across all {} top-level dominators. The shape reveals whether \
 a handful of large objects dominate the heap or memory is scattered across many small ones._\n\n",
@@ -2618,7 +2618,7 @@ pub(crate) fn render_collection_attribution(
         return;
     };
 
-    out.push_str("## Container Attribution (Class#field)\n\n");
+    out.push_str("## Container Attribution\n\n");
     out.push_str(
         "_Which `Class#field` holds the most collection memory — two rankings: total \
          across all containers reached through a field, and the single largest container per \
@@ -2809,7 +2809,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         return;
     };
 
-    out.push_str("## Fields by Retained Size (Class#field)\n\n");
+    out.push_str("## Fields by Retained Size\n\n");
     out.push_str(
         "_Which `Class#field` retains the most memory, summed over every object the \
          field points at. Runtime pointee type is the dominant concrete class reached through \
