@@ -166,7 +166,7 @@ Min: {}, median: {}, max: {}, total: {}._\n\n",
             "_Which classes hold the most `java.lang.String` references — \
 likely candidates to benefit from deduplication or interning._\n\n",
         );
-        let mut t = Table::new(&["Class", "String refs"], &[Align::Left, Align::Right]);
+        let mut t = Table::new(&["Class", "String Refs"], &[Align::Left, Align::Right]);
         for h in &d.top_string_holders {
             t.row([format!("`{}`", h.class_name), fmt_count(h.string_refs)]);
         }
