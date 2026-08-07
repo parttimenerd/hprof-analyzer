@@ -504,7 +504,7 @@ function NavBreadcrumb() {
     if (m) {
       const node = objNodes?.[m[2]];
       const shortCls = node ? (node.display_class.split(".").pop() ?? node.display_class) : `obj`;
-      return `${m[1] === "domtree" ? "⌞ " : "→ "}${shortCls}#${m[2]}`;
+      return `${m[1] === "domtree" ? "⌞ " : ""}${shortCls}#${m[2]}`;
     }
     return SECTION_LABELS[hash] ?? hash;
   }
@@ -5181,7 +5181,8 @@ function DomGraphView({ pairs, idoms }: {
 
     cyRef.current?.destroy();
     cyRef.current = cy;
-    return () => { cy.destroy(); cyRef.current = null; };
+    const detachCtrlZoom = attachCtrlZoom(cy, cyContainerRef.current!);
+    return () => { detachCtrlZoom(); cy.destroy(); cyRef.current = null; };
   }, [fdNodes, fdEdges, layoutKey, layoutMode, computeNodeColor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live recolor nodes when colorMode changes (without remounting graph)
@@ -6520,6 +6521,63 @@ function applyCyHighlight(cy: cytoscape.Core, nodeId: string | null): void {
   neighborhood.removeStyle("opacity");
 }
 
+/**
+ * Make Ctrl+wheel zoom and plain wheel scroll the page.
+ *
+ * Cytoscape registers its wheel handler on the container with capture=true, so it
+ * runs before any bubble-phase handlers. We counter this by attaching our handler
+ * to the *parent* element in capture phase — which fires before any handler on the
+ * container itself. When Ctrl is NOT held we call stopPropagation() so the event
+ * never reaches Cytoscape's handler, and we do NOT call preventDefault() so the
+ * browser can still scroll the page.
+ *
+ * A brief "Ctrl+scroll to zoom" toast appears to teach the gesture.
+ */
+function attachCtrlZoom(cy: cytoscape.Core, container: HTMLElement): () => void {
+  const parent = container.parentElement ?? document.body;
+  let toastEl: HTMLDivElement | null = null;
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function showToast() {
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.style.cssText = [
+        "position:absolute", "bottom:8px", "left:50%", "transform:translateX(-50%)",
+        "background:rgba(0,0,0,0.65)", "color:#fff", "font-size:0.78rem",
+        "padding:3px 10px", "border-radius:4px", "pointer-events:none",
+        "white-space:nowrap", "z-index:10", "opacity:0",
+        "transition:opacity 0.15s ease",
+      ].join(";");
+      toastEl.textContent = "Ctrl + scroll to zoom";
+      const pos = getComputedStyle(container).position;
+      if (pos === "static") container.style.position = "relative";
+      container.appendChild(toastEl);
+    }
+    void toastEl.offsetWidth;
+    toastEl.style.opacity = "1";
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      if (toastEl) toastEl.style.opacity = "0";
+    }, 1200);
+  }
+
+  function onWheel(e: WheelEvent) {
+    // Only intercept events targeting the cy container or its children
+    if (!container.contains(e.target as Node)) return;
+    if (e.ctrlKey || e.metaKey) return; // Ctrl held → let Cytoscape zoom
+    // No Ctrl → stop the event before it reaches Cytoscape's capture handler
+    e.stopPropagation();
+    showToast();
+  }
+
+  parent.addEventListener("wheel", onWheel, { capture: true });
+  return () => {
+    parent.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
+    if (toastEl) toastEl.remove();
+    if (toastTimer) clearTimeout(toastTimer);
+  };
+}
+
 // ── Type Reference Graph (TPFG, V13) ─────────────────────────────────────────
 // Rich interactive force-directed class-to-class reference topology.
 // Graph tab: SVG force graph with stable spring layout.
@@ -6767,7 +6825,8 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     });
     cyRef.current?.destroy();
     cyRef.current = cy;
-    return () => { cy.destroy(); cyRef.current = null; };
+    const detachCtrlZoom = attachCtrlZoom(cy, cyContainerRef.current!);
+    return () => { detachCtrlZoom(); cy.destroy(); cyRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeInfos, graphEdges, layoutKey, sizeBy, maxWeight, maxEdgeRet, view]);
 
@@ -6949,7 +7008,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               <div className="cy-graph-container" ref={cyContainerRef} />
               <p style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "0.25rem 0 0" }}>
                 Showing top {nodeInfos.length} classes by retained flow.
-                Scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect.
+                Ctrl+scroll to zoom · Drag background to pan · Drag nodes to reposition · Click node to inspect.
                 {(window as any).__wasmExploration
                   ? <> · <span className="trg-hint-wasm">Heap loaded — live instance browsing available</span></>
                   : !ogCtxForHint
@@ -7635,7 +7694,8 @@ function OGEGraphView({ data, onNavigate }: {
     });
     cyRef.current?.destroy();
     cyRef.current = cy;
-    return () => { cy.destroy(); cyRef.current = null; };
+    const detachCtrlZoom = attachCtrlZoom(cy, cyContainerRef.current!);
+    return () => { detachCtrlZoom(); cy.destroy(); cyRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cyElements, layoutKey]);
 
@@ -8415,13 +8475,14 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           </p>
         )}
         {!rootFilter && totalHeap > 0 && (() => {
-          const top3 = data.roots.slice(0, 3).map(id => data.nodes[String(id)]?.retained ?? 0);
-          const top3total = top3.reduce((s, r) => s + r, 0);
-          const pct = top3total / totalHeap * 100;
+          const topN = data.roots.slice(0, 3);
+          const topNretained = topN.map(id => data.nodes[String(id)]?.retained ?? 0);
+          const topNtotal = topNretained.reduce((s, r) => s + r, 0);
+          const pct = topNtotal / totalHeap * 100;
           if (pct < 50) return null;
           return (
             <div style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.75rem", background: "var(--warn-bg, #fef3c7)", border: "1px solid var(--warn-border, #fde68a)", borderRadius: 5, fontSize: "0.82rem", color: "var(--warn, #92400e)" }}>
-              ⚠ Top 3 objects hold <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(top3total)}) — a few large retainers dominate. Investigate these first.
+              ⚠ Top {topN.length} {topN.length === 1 ? "object holds" : "objects hold"} <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(topNtotal)}) — a few large retainers dominate. Investigate these first.
             </div>
           );
         })()}
@@ -8810,7 +8871,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         </button>
         <button
           className={tab === "graph" ? "btn-active" : "btn-link"}
-          title="Interactive force-directed graph — drag nodes, scroll to zoom. Best for visualising small clusters of 20–200 objects."
+          title="Interactive force-directed graph — drag nodes, Ctrl+scroll to zoom. Best for visualising small clusters of 20–200 objects."
           onClick={() => setTab("graph")}
         >
           Force Graph
