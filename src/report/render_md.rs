@@ -1676,7 +1676,7 @@ daemon flag, priority, and thread state for every recorded thread._\n\n",
         "Name",
         "Shallow",
         "Retained",
-        "Max. Locals' Retained",
+        "Max Local Retained",
         "Context Class Loader",
         "Daemon",
         "Priority",
@@ -1712,7 +1712,7 @@ daemon flag, priority, and thread state for every recorded thread._\n\n",
             format_bytes(th.retained),
             format_bytes(th.max_local_retained),
             format!("`{ctx}`"),
-            if th.is_daemon { "yes" } else { "no" }.into(),
+            if th.is_daemon { "Yes" } else { "No" }.into(),
             th.priority.to_string(),
             if th.thread_state.is_empty() {
                 "—".into()
@@ -3607,8 +3607,8 @@ Multiple rows with the same class are distinct objects._\n\n",
             .unwrap_or(0);
         let mut headers: Vec<&str> = vec![
             "Dominator Class",
-            "#Dominators",
-            "#Dominated",
+            "# Dominators",
+            "# Dominated",
             "Dominator Shallow",
             "Dominated Shallow",
         ];
