@@ -287,7 +287,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_thread_local_analysis(&r.thread_local_analysis, &mut out);
     render_framework_analysis(&r.framework_analysis, &mut out);
     render_top_components(&r.top_components, false, &mut out);
-    render_arrays_by_size(&r.arrays_by_size, false, &mut out);
+    render_arrays_by_size(&r.arrays_by_size, r.overview.total_shallow, false, &mut out);
     render_collections(&r.collections, &r.collection_attribution, false, &mut out);
     render_collection_attribution(&r.collection_attribution, false, &mut out);
     render_collection_waste_budget(r, &mut out);
@@ -1908,7 +1908,12 @@ Totals can exceed heap size because boot-loader classes are counted in every com
 /// `graphs` is set, an extra proportional bar column is appended on Objects.
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
-pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut String) {
+pub(crate) fn render_arrays_by_size(
+    a: &ArraysBySize,
+    total_shallow: u64,
+    graphs: bool,
+    out: &mut String,
+) {
     use crate::md::{Align, Table, bar};
     out.push_str("## Arrays by Size\n\n");
     if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
@@ -1929,8 +1934,8 @@ or a skewed distribution that explains outsized array heap._\n\n",
             return;
         }
         let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Max length", "Objects", "Shallow"];
-        let mut aligns = vec![Align::Right, Align::Right, Align::Right];
+        let mut headers: Vec<&str> = vec!["Max length", "Objects", "Shallow", "% Heap"];
+        let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
         if graphs {
             headers.push("");
             aligns.push(Align::Left);
@@ -1941,18 +1946,23 @@ or a skewed distribution that explains outsized array heap._\n\n",
                 format!("≤ {}", fmt_count(b.upper_len)),
                 fmt_count(b.objects),
                 format_bytes(b.shallow),
+                fmt_pct(pct_of_heap(b.shallow, total_shallow)),
             ];
             if graphs {
                 row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
             }
             t.row(row);
         }
-        let total_objects: u64 = buckets.iter().map(|b| b.objects).sum();
-        let total_shallow: u64 = buckets.iter().map(|b| b.shallow).sum();
+        let bucket_total_objects: u64 = buckets.iter().map(|b| b.objects).sum();
+        let bucket_total_shallow: u64 = buckets.iter().map(|b| b.shallow).sum();
         let mut total_row = vec![
             "**Total**".to_string(),
-            format!("**{}**", fmt_count(total_objects)),
-            format!("**{}**", format_bytes(total_shallow)),
+            format!("**{}**", fmt_count(bucket_total_objects)),
+            format!("**{}**", format_bytes(bucket_total_shallow)),
+            format!(
+                "**{}**",
+                fmt_pct(pct_of_heap(bucket_total_shallow, total_shallow))
+            ),
         ];
         if graphs {
             total_row.push(String::new());

@@ -26,7 +26,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_thread_local_analysis(&r.thread_local_analysis, &mut out);
     render_framework_analysis(&r.framework_analysis, &mut out);
     render_top_components(&r.top_components, true, &mut out);
-    render_arrays_by_size(&r.arrays_by_size, true, &mut out);
+    render_arrays_by_size(&r.arrays_by_size, r.overview.total_shallow, true, &mut out);
     render_collections(&r.collections, &r.collection_attribution, true, &mut out);
     render_collection_attribution(&r.collection_attribution, true, &mut out);
     render_collection_waste_budget(r, &mut out);
@@ -355,11 +355,7 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
         ],
     );
     for (rank, row) in o.histogram.iter().take(50).enumerate() {
-        let pct_heap = if o.total_shallow > 0 {
-            fmt_pct(row.retained as f64 / o.total_shallow as f64 * 100.0)
-        } else {
-            "—".to_string()
-        };
+        let pct_heap = fmt_pct(pct_of_heap(row.retained, o.total_shallow));
         hist.row([
             (rank + 1).to_string(),
             format!("`{}`", row.pretty_class),
