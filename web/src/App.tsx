@@ -5635,7 +5635,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       {domView === "tables" && (<>
       <h3>Big Drops</h3>
       <p className="subtitle">
-        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained (bytes freed when this object becomes unreachable, net of what its biggest child already accounts for). Threshold:{" "}
+        Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. <strong>Drop</strong> = object retained − largest child retained; the memory freed by dropping just this object, not counting what its largest dominated child already retains. Threshold:{" "}
         {thresholdMb} MB (1% of reachable heap). Multiple rows with the same class are distinct objects.
       </p>
       {drops.length === 0 ? (

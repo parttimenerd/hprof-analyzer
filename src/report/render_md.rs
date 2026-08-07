@@ -3446,8 +3446,8 @@ by how much dominated shallow heap they gate._\n\n",
     out.push_str(&format!(
         "_Objects retaining far more than their largest single child — memory held directly \
 in the object or spread across many small dominated children. \
-Drop = object retained − largest child retained (bytes freed when this object becomes unreachable, \
-net of what its biggest child already accounts for). \
+Drop = object retained − largest child retained; the memory freed by dropping just this \
+object, not counting what its largest dominated child already retains. \
 Threshold {:.1} MB (1% of reachable heap). \
 Multiple rows with the same class are distinct objects._\n\n",
         threshold_mb,
