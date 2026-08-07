@@ -15,7 +15,7 @@ import type {
   Suspect,
   VizSpec,
 } from "./types";
-import { fmtCount, formatBytes, shortLoader } from "./format";
+import { fmtCount, formatBytes, fmtExactBytes, shortLoader } from "./format";
 import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
 import { themeColors, useThemeKey } from "./chartSetup";
 import "./chartSetup";
@@ -266,6 +266,7 @@ export function ZoomableTreemap<T>({
   getValue,
   getLabel,
   fmt,
+  fmtExact,
   height = 320,
   renderLeaf,
   extraLeaves,
@@ -275,6 +276,7 @@ export function ZoomableTreemap<T>({
   getValue: (n: T) => number;
   getLabel: (n: T) => string;
   fmt: (n: number) => string;
+  fmtExact?: (n: number) => string;
   height?: number;
   renderLeaf?: (node: T, pathLabels: string[]) => React.ReactNode;
   /** Extra non-navigable tiles to mix into the treemap alongside real children (e.g. direct classes). */
@@ -402,7 +404,7 @@ export function ZoomableTreemap<T>({
               return (
                 <div
                   key={`x${i}`}
-                  title={`${ld.extra.label}: ${fmt(val)} (${pct}%) — class`}
+                  title={`${ld.extra.label}: ${fmt(val)} (${pct}%)${fmtExact ? ` [${fmtExact(val)}]` : ""} — class`}
                   style={{
                     position: "absolute", left: x0, top: y0, width: lw, height: lh,
                     background: bg, opacity: 0.55, boxSizing: "border-box", overflow: "hidden",
@@ -433,7 +435,7 @@ export function ZoomableTreemap<T>({
             return (
               <div
                 key={i}
-                title={`${getLabel(node)}: ${fmt(val)} (${pct}%)${hasKids ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
+                title={`${getLabel(node)}: ${fmt(val)} (${pct}%)${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
                 onClick={isClickable ? () => zoomTo(node) : undefined}
                 style={{
                   position: "absolute", left: x0, top: y0, width: lw, height: lh,
@@ -499,7 +501,7 @@ export function ZoomableTreemap<T>({
                     key={ci}
                     className={`flame-cell${!isClickable ? " flame-cell-leaf" : ""}`}
                     style={{ width: `${cell.pct}%`, background: PALETTE[cell.colorIdx % PALETTE.length] }}
-                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct}%)${hasKids && lvl > 0 ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
+                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct}%)${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids && lvl > 0 ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
                     onClick={isClickable ? () => zoomTo(cell.node) : undefined}
                   >
                     <span className="flame-label">{getLabel(cell.node)}</span>
@@ -518,7 +520,7 @@ export function ZoomableTreemap<T>({
                     key={ci}
                     className="flame-cell flame-cell-leaf"
                     style={{ width: `${((e.value / (getValue(currentNode) || 1)) * 100)}%`, background: bg, opacity: 0.6 }}
-                    title={`${e.label}: ${fmt(e.value)} (${pct}%) — class`}
+                    title={`${e.label}: ${fmt(e.value)} (${pct}%)${fmtExact ? ` [${fmtExact(e.value)}]` : ""} — class`}
                   >
                     <span className="flame-label">{e.label}</span>
                   </div>

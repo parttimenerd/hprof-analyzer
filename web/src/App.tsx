@@ -630,18 +630,18 @@ function ExecSummaryCard({ report }: { report: Report }) {
       <div style={rowStyle}>
         <span>
           <span style={labelStyle}>Reachable heap</span>
-          <strong>{formatBytes(total)}</strong>
+          <strong title={fmtExactBytes(total)}>{formatBytes(total)}</strong>
         </span>
         {unreachable > 0 && (
           <span>
             <span style={labelStyle}>Unreachable</span>
-            <strong>{formatBytes(unreachable)}</strong>
+            <strong title={fmtExactBytes(unreachable)}>{formatBytes(unreachable)}</strong>
           </span>
         )}
         {wasted > 0 && (
           <span>
             <span style={labelStyle}>Wasted</span>
-            <strong>{formatBytes(wasted)}</strong>
+            <strong title={fmtExactBytes(wasted)}>{formatBytes(wasted)}</strong>
           </span>
         )}
       </div>
@@ -661,7 +661,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
           <span style={labelStyle}>Top suspect</span>
           <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={top.pretty_class}>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /></span>
           {" "}holds{" "}
-          <strong>{formatBytes(top.retained)}</strong>
+          <strong title={fmtExactBytes(top.retained)}>{formatBytes(top.retained)}</strong>
           {" "}({fmtPct(topRetainsPct)})
           {top.root_type_label && top.root_type_label !== "System Class" &&
            !top.pretty_class.toLowerCase().includes(top.root_type_label.toLowerCase()) && (
@@ -679,7 +679,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
             <span>⚠ {fmtCount(li?.thread_local_null_key_count ?? 0)} stale ThreadLocal entr{(li?.thread_local_null_key_count ?? 0) === 1 ? "y" : "ies"}</span>
           )}
           {showOffHeap && (
-            <span>⚠ DirectByteBuffer off-heap: {formatBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}</span>
+            <span>⚠ DirectByteBuffer off-heap: <span title={fmtExactBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}>{formatBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}</span></span>
           )}
         </div>
       )}
@@ -790,7 +790,7 @@ function OomTriage({ report }: { report: Report }) {
       <h2>Memory Triage</h2>
       <p className="subtitle">
         Automated signals pointing to where memory concentrates and what to investigate first.
-        {totalHeap > 0 && <> Total reachable heap: <strong>{formatBytes(totalHeap)}</strong>.</>}
+        {totalHeap > 0 && <> Total reachable heap: <strong title={fmtExactBytes(totalHeap)}>{formatBytes(totalHeap)}</strong>.</>}
       </p>
       <ul>
         {signals.map((s, i) => {
@@ -1934,7 +1934,7 @@ function GcRootHeatmap({ rows }: { rows: GcRootRetainedRow[] }) {
                 return (
                   <td key={cls} className="gc-heatmap-cell"
                     style={{ background: bg, color: textColor }}
-                    title={`${row.root_type} → ${cls}: ${fmtB(val)}`}
+                    title={`${row.root_type} → ${cls}: ${fmtB(val)} (${fmtExactBytes(val)})`}
                     onClick={() => fireInspect({ kind: "class", cls })}>
                     {fmtB(val)}
                   </td>
@@ -2168,6 +2168,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                 getValue={(n) => n.retained}
                 getLabel={(n) => n.loader_label ?? `loader#${n.loader_id}`}
                 fmt={formatBytes}
+                fmtExact={fmtExactBytes}
                 height={280}
               />
             );
@@ -2655,7 +2656,7 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
     <>
     <details open className="merged-path-sankey">
       <summary>
-        Merged Retention Paths ({chainCount} chain{chainCount === 1 ? "" : "s"} · {fmtB(totalRetained)})
+        Merged Retention Paths ({chainCount} chain{chainCount === 1 ? "" : "s"} · <span title={fmtExactBytes(totalRetained)}>{fmtB(totalRetained)}</span>)
         {rawNodes.length > MAX_NODES && (
           <span style={{ color: "var(--muted)", fontSize: "0.78rem", marginLeft: "0.4rem" }}>
             (top {MAX_NODES} of {rawNodes.length} nodes)
@@ -3026,6 +3027,7 @@ function TopConsumersTreemap({ rows }: { rows: Array<{ pretty_class: string; ret
           return (
             <g key={i} style={{ cursor: "pointer" }}
                onClick={() => fireInspect({ kind: "class", cls: leaf.data.name })}>
+              <title>{leaf.data.name}{"\n"}{fmtExactBytes(leaf.data.value)} retained</title>
               <rect x={leaf.x0} y={leaf.y0} width={lw} height={lh}
                 fill={tpfgColor(leaf.data.name)} opacity={0.82} rx={2} />
               {lw > 36 && lh > 18 && (
@@ -3183,6 +3185,7 @@ function TopConsumersSection({ report }: { report: Report }) {
             getValue={(n) => n.retained_heap}
             getLabel={(n) => n.name || "(default)"}
             fmt={formatBytes}
+            fmtExact={fmtExactBytes}
             height={320}
             extraLeaves={(_node, pathLabels) => {
               const pkgPrefix = pathLabels.join(".");
@@ -3211,7 +3214,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               const leafCols: TableColumn<LeafRow>[] = [
                 { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: r => <span className="copy-cell"><code title={r.pretty_class}>{r.short}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: r => r.short, sortable: true },
                 { id: "instances", name: "Instances", right: true, width: "110px", format: r => fmtCount(r.instances), selector: r => r.instances, sortable: true },
-                { id: "retained", name: "Retained", right: true, width: "110px", format: r => formatBytes(r.retained), selector: r => r.retained, sortable: true },
+                { id: "retained", name: "Retained", right: true, width: "110px", cell: r => <span title={fmtExactBytes(r.retained)}>{formatBytes(r.retained)}</span>, selector: r => r.retained, sortable: true },
               ];
               return (
                 <div style={{ marginTop: "0.75rem" }}>
@@ -3457,7 +3460,7 @@ function FrameworkAnalysisSection({ items }: { items?: FrameworkAnalysis[] }) {
             <div className="framework-card-stats">
               <span>{item.instance_count.toLocaleString()} instances</span>
               <span className="muted"> · </span>
-              <span>{formatBytes(item.total_retained)} retained</span>
+              <span><span title={fmtExactBytes(item.total_retained)}>{formatBytes(item.total_retained)}</span> retained</span>
             </div>
           </div>
         ))}
@@ -5811,7 +5814,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects,{" "}
-            {fmtB(data?.unreachable_shallow ?? 0)} shallow heap.
+            <span title={fmtExactBytes(data?.unreachable_shallow ?? 0)}>{fmtB(data?.unreachable_shallow ?? 0)}</span> shallow heap.
             Showing top {fmtCount(rows.length)} classes by shallow size.
           </p>
           {unreachablePct >= 5 ? (
@@ -5834,6 +5837,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                 getValue={(n) => n.retained}
                 getLabel={(n) => n.pretty_class}
                 fmt={formatBytes}
+                fmtExact={fmtExactBytes}
                 height={240}
               />
               <UnreachableDomTreeSection roots={data.unreachable_garbage_roots} />
@@ -5884,11 +5888,8 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
       <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — not counted in JVM heap totals and invisible to the GC. Can trigger OS-level OOM if unbounded.</p>
       <div className="card">
         <p>
-          <strong>{formatBytes(capacity)}</strong>
+          <strong title={fmtExactBytes(capacity)}>{formatBytes(capacity)}</strong>
           {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
-        </p>
-        <p>
-          Check for unclosed <code>DirectByteBuffer</code> allocations — common sources include Netty's <code>PooledByteBufAllocator</code>, <code>FileChannel</code> mappings, and custom buffer pools. Use <code>-XX:MaxDirectMemorySize</code> to cap native allocation.
         </p>
         {isLarge && (
           <p className="subtitle">
@@ -6033,7 +6034,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
               if (retained == null) return <span style={{ color: "var(--muted)" }}>—</span>;
               const isHigh = retained > medRetained * 5;
               return (
-                <span title={`${cls} retains ${fmtB(retained)} currently in heap`}
+                <span title={`${cls} retains ${fmtExactBytes(retained)} currently in heap`}
                   style={isHigh ? { color: "#c87533", fontWeight: 600 } : {}}>
                   {fmtB(retained)}{isHigh ? " ⚠" : ""}
                 </span>
@@ -6055,6 +6056,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
                   getValue={(n) => n.retained}
                   getLabel={(n) => n.label}
                   fmt={fmtB}
+                  fmtExact={fmtExactBytes}
                   height={260}
                 />
               </>
@@ -6235,7 +6237,6 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
           }, selector: (r) => r.name, sortable: true },
           { id: "kind", name: "Kind", width: "115px", format: (r) => r.kind === "stack-frame" ? "Stack Frame" : r.kind === "field" ? "Field" : r.kind, selector: (r) => r.kind, sortable: true },
           { id: "retained", name: "Retained", right: true, width: "120px",
-            format: (r) => fmtB(r.retained),
             cell: byteCell(r => r.retained, fmtB, useKB),
             selector: (r) => r.retained, sortable: true },
         ];
@@ -7033,7 +7034,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                         <li key={i}>
                           <span className="trg-field-name-tag">{field}</span>
                           <span className="trg-field-dst">→ <button className="trg-link-btn" title={info.dst} onClick={() => setSelected(info.dst)}>{tpfgShortName(info.dst)}</button></span>
-                          <span className="trg-edge-stat">×{fmtCount(info.count)} · {fmtB(info.weight)}</span>
+                          <span className="trg-edge-stat">×{fmtCount(info.count)} · <span title={fmtExactBytes(info.weight)}>{fmtB(info.weight)}</span></span>
                         </li>
                       ))}
                     </ul>
@@ -7062,7 +7063,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                         <button className="trg-link-btn" title={e.dst_class} onClick={() => setSelected(e.dst_class)}>
                           {tpfgShortName(e.dst_class)}
                         </button>
-                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
+                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · <span title={fmtExactBytes(e.retained_weight)}>{fmtB(e.retained_weight)}</span></span>
                         {e.top_field_names && e.top_field_names.length > 0 && (
                           <span className="trg-field-names">via {e.top_field_names.join(", ")}</span>
                         )}
@@ -7086,7 +7087,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                         <button className="trg-link-btn" title={e.src_class} onClick={() => setSelected(e.src_class)}>
                           {tpfgShortName(e.src_class)}
                         </button>
-                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
+                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · <span title={fmtExactBytes(e.retained_weight)}>{fmtB(e.retained_weight)}</span></span>
                       </li>
                     ))}
                   </ul>
@@ -7109,7 +7110,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                         <button className="trg-link-btn" onClick={() => setSelected(e.dst_class)} style={e.dst_class === selected ? { fontWeight: 600 } : undefined}>
                           {tpfgShortName(e.dst_class)}{e.dst_class === selected ? " → this" : ""}
                         </button>
-                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · {fmtB(e.retained_weight)}</span>
+                        <span className="trg-edge-stat">×{fmtCount(e.edge_count)} · <span title={fmtExactBytes(e.retained_weight)}>{fmtB(e.retained_weight)}</span></span>
                       </li>
                     ))}
                   </ul>
@@ -8343,8 +8344,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
           <p className="subtitle" style={{ margin: 0 }}>
             {rootFilter
-              ? <>Searching all {Object.keys(data.nodes).length.toLocaleString()} captured objects (retained &ge; {fmtB(data.sig_floor_bytes)}).</>
-              : <>Top dominator roots (retained &ge; {fmtB(data.sig_floor_bytes)}).{" "}
+              ? <>Searching all {Object.keys(data.nodes).length.toLocaleString()} captured objects (retained &ge; <span title={fmtExactBytes(data.sig_floor_bytes)}>{fmtB(data.sig_floor_bytes)}</span>).</>
+              : <>Top dominator roots (retained &ge; <span title={fmtExactBytes(data.sig_floor_bytes)}>{fmtB(data.sig_floor_bytes)}</span>).{" "}
               <strong>&rarr;</strong> click class name to explore outbound references;{" "}
               <strong>⌞</strong> opens the dominator subtree.</>
             }
@@ -8416,7 +8417,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <p className="subtitle" style={{ marginBottom: "0.3rem", fontSize: "0.8rem" }}>
             {filtered.length} matches{filtered.length > 200 ? " (showing first 200)" : ""}{" "}
             {filtered.length > 0 && (
-              <>— total retained: <strong>{fmtB(filtered.reduce((s, [, n]) => s + n.retained, 0))}</strong>
+              <>— total retained: <strong title={fmtExactBytes(filtered.reduce((s, [, n]) => s + n.retained, 0))}>{fmtB(filtered.reduce((s, [, n]) => s + n.retained, 0))}</strong>
                 {totalHeap > 0 && (
                   <span style={{ color: "var(--muted)" }}>{" "}({(filtered.reduce((s, [, n]) => s + n.retained, 0) / totalHeap * 100).toFixed(1)}% of heap)</span>
                 )}
@@ -8432,7 +8433,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           if (pct < 50) return null;
           return (
             <div style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.75rem", background: "var(--warn-bg, #fef3c7)", border: "1px solid var(--warn-border, #fde68a)", borderRadius: 5, fontSize: "0.82rem", color: "var(--warn, #92400e)" }}>
-              ⚠ Top {topN.length} {topN.length === 1 ? "object holds" : "objects hold"} <strong>{pct.toFixed(0)}%</strong> of heap ({fmtB(topNtotal)}) — a few large retainers dominate. Investigate these first.
+              ⚠ Top {topN.length} {topN.length === 1 ? "object holds" : "objects hold"} <strong>{pct.toFixed(0)}%</strong> of heap (<span title={fmtExactBytes(topNtotal)}>{fmtB(topNtotal)}</span>) — a few large retainers dominate. Investigate these first.
             </div>
           );
         })()}
@@ -8680,7 +8681,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   ? <> via field <code>.{parent.edge}</code></> : null;
                 return <> from <strong>{parentShort}#{parent.nodeId}</strong>{field} but is</>;
               })() : " above but is"
-              } below the significance threshold (≥{fmtB(data.sig_floor_bytes)} retained).
+              } below the significance threshold (≥<span title={fmtExactBytes(data.sig_floor_bytes)}>{fmtB(data.sig_floor_bytes)}</span> retained).
               Re-run with <code>--top-n</code> to include it.
             </p>
           ) : (
@@ -9288,7 +9289,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                 onClick={() => navigate("explore", idx, node?.display_class ?? `obj#${idx}`)}>
                                 {node?.display_class ?? `obj#${idx}`}
                               </button>
-                              <span style={{ color: "var(--muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }}>{fmtB(node?.retained ?? 0)}</span>
+                              <span style={{ color: "var(--muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }} title={fmtExactBytes(node?.retained ?? 0)}>{fmtB(node?.retained ?? 0)}</span>
                             </div>
                           );
                         })}
@@ -10697,7 +10698,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                     ))}
                   </span>
                 )}
-                <span className="trg-edge-stat">{fmtCount(e.edge_count)} references · {formatBytes(e.retained_weight)}</span>
+                <span className="trg-edge-stat">{fmtCount(e.edge_count)} references · <span title={fmtExactBytes(e.retained_weight)}>{formatBytes(e.retained_weight)}</span></span>
               </li>
             ))}
           </ul>
@@ -10723,7 +10724,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                     ))}
                   </span>
                 )}
-                <span className="trg-edge-stat">{fmtCount(e.edge_count)} references · {formatBytes(e.retained_weight)}</span>
+                <span className="trg-edge-stat">{fmtCount(e.edge_count)} references · <span title={fmtExactBytes(e.retained_weight)}>{formatBytes(e.retained_weight)}</span></span>
               </li>
             ))}
           </ul>
@@ -10788,7 +10789,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
                   <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
                     <td><code>{f.field_name || "(all references)"}</code></td>
                     <td style={{ textAlign: "right" }}>{f.non_null_count.toLocaleString()}</td>
-                    <td style={{ textAlign: "right" }}>{formatBytes(f.total_retained)}</td>
+                    <td style={{ textAlign: "right" }}><span title={fmtExactBytes(f.total_retained)}>{formatBytes(f.total_retained)}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -10877,7 +10878,7 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
         <div style={{ marginBottom: "0.4rem" }}>
           <button className="show-more-btn"
             onClick={() => onNavigate({ kind: "instance", idx: slice[0].idx, cls: slice[0].cls })}>
-            Biggest Instance ({formatBytes(slice[0].retained)} retained) →
+            Biggest Instance (<span title={fmtExactBytes(slice[0].retained)}>{formatBytes(slice[0].retained)}</span> retained) →
           </button>
         </div>
       )}
@@ -10892,8 +10893,8 @@ function InspectorInstanceListPage({ cls, page, onNavigate }: {
                 onClick={() => onNavigate({ kind: "instance", idx: n.idx, cls: n.cls })}>
               <td>{page * TRG_PAGE_SIZE + i + 1}</td>
               <td><code>{n.idx}</code></td>
-              <td>{formatBytes(n.shallow)}</td>
-              <td>{formatBytes(n.retained)}</td>
+              <td><span title={fmtExactBytes(n.shallow)}>{formatBytes(n.shallow)}</span></td>
+              <td><span title={fmtExactBytes(n.retained)}>{formatBytes(n.retained)}</span></td>
             </tr>
           ))}
         </tbody>
@@ -11030,10 +11031,10 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
           {idomChain.map((item, i) => (
             <React.Fragment key={item.id}>
               <button className="trg-link-btn inspector-idom-item"
-                title={`${item.display_class} — retains ${formatBytes(item.retained)}`}
+                title={`${item.display_class} — retains ${fmtExactBytes(item.retained)}`}
                 onClick={() => onNavigate({ kind: "instance", idx: item.id, cls: item.display_class })}>
                 <span className="inspector-idom-cls">{item.display_class.split(".").pop()}</span>
-                <span className="inspector-idom-size">{formatBytes(item.retained)}</span>
+                <span className="inspector-idom-size" title={fmtExactBytes(item.retained)}>{formatBytes(item.retained)}</span>
               </button>
               <span className="inspector-idom-arrow">→</span>
             </React.Fragment>
@@ -11049,8 +11050,8 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
       {node && (
         <table className="trg-stat-table">
           <tbody>
-            <tr><th>Shallow</th><td>{formatBytes(node.shallow)}</td></tr>
-            <tr><th>Retained</th><td>{formatBytes(node.retained)}</td></tr>
+            <tr><th>Shallow</th><td><span title={fmtExactBytes(node.shallow)}>{formatBytes(node.shallow)}</span></td></tr>
+            <tr><th>Retained</th><td><span title={fmtExactBytes(node.retained)}>{formatBytes(node.retained)}</span></td></tr>
             {idomNode && (
               <tr>
                 <th>Dominated By</th>
@@ -11077,7 +11078,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
                   <button className="trg-link-btn" onClick={() => onNavigate({ kind: "instance", idx: f.idx, cls: f.cls })}>
                     {f.cls.split(".").pop()}
                   </button>
-                  <span className="trg-edge-stat">{formatBytes(f.retained)}</span>
+                  <span className="trg-edge-stat" title={fmtExactBytes(f.retained)}>{formatBytes(f.retained)}</span>
                 </div>
                 {retained > 0 && (
                   <div className="inspector-field-bar-track">
@@ -11101,7 +11102,7 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
                   onClick={() => onNavigate({ kind: "instance", idx: e.idx, cls: e.cls })}>
                   #{e.idx} {e.cls.split(".").pop()}
                 </button>
-                <span className="trg-edge-stat">{formatBytes(e.retained)} retained</span>
+                <span className="trg-edge-stat" title={fmtExactBytes(e.retained)}>{formatBytes(e.retained)} retained</span>
               </li>
             ))}
           </ul>
@@ -11280,7 +11281,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
                 <CopyBtn text={f.display_class ?? ""} />
                 {refSizes.has(f.dense_idx) && (
                   <span className="trg-edge-stat">
-                    {formatBytes(refSizes.get(f.dense_idx)!)} retained
+                    <span title={fmtExactBytes(refSizes.get(f.dense_idx)!)}>{formatBytes(refSizes.get(f.dense_idx)!)}</span> retained
                     {instanceRetained > 0 && (
                       <span style={{color:"var(--muted)",fontSize:"0.75em"}}>
                         {" "}({(refSizes.get(f.dense_idx)! / instanceRetained * 100).toFixed(1)}%)
@@ -11396,7 +11397,7 @@ function InspectorFieldScanPage({ cls, fieldName, onNavigate }: {
                       : String(row.field_value ?? "null")}
                   </td>
                 )}
-                <td>{formatBytes(row.retained)}</td>
+                <td><span title={fmtExactBytes(row.retained)}>{formatBytes(row.retained)}</span></td>
               </tr>
             ))}
           </tbody>
