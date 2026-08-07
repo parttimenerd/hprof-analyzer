@@ -1934,7 +1934,7 @@ or a skewed distribution that explains outsized array heap._\n\n",
             return;
         }
         let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Max length", "Objects", "Shallow", "% Heap"];
+        let mut headers: Vec<&str> = vec!["Max Length", "Objects", "Shallow", "% Heap"];
         let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
         if graphs {
             headers.push("");
@@ -2626,9 +2626,9 @@ pub(crate) fn render_collection_attribution(
             "Class#field",
             "Kind",
             "Containers",
-            "Holder Instances",
-            "Total Elements",
-            "Total Retained",
+            "Holders",
+            "Elements",
+            "Retained",
             "Wasted",
         ];
         let mut aligns = vec![
@@ -2822,7 +2822,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         headers.push("Elements");
         aligns.push(Align::Right);
     }
-    headers.extend_from_slice(&["Holder Instances", "Sharing", "Retained"]);
+    headers.extend_from_slice(&["Holders", "Sharing", "Retained"]);
     aligns.extend_from_slice(&[Align::Right, Align::Right, Align::Right]);
     if graphs {
         headers.push("");
@@ -2928,7 +2928,11 @@ pub(crate) fn render_biggest_collections(
             out.push_str(". See per-kind breakdown below._\n\n");
         }
         for k in &b.by_kind {
-            let title = format!("By Kind — {}", k.kind);
+            let mut kind_capitalized = k.kind.clone();
+            if let Some(c) = kind_capitalized.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            let title = format!("By Kind — {kind_capitalized}");
             render_biggest_collection_table(&k.rows, &title, graphs, out);
         }
     }
