@@ -1,10 +1,14 @@
 // Formatting helpers mirroring src/report.rs (format_bytes, fmt_count) so the
 // HTML matches the Markdown/JSON views.
 
+function stripDotZero(s: string): string {
+  return s.endsWith(".0") ? s.slice(0, -2) : s;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n < 1024 * 1024) return `${stripDotZero((n / 1024).toFixed(1))} KB`;
+  if (n < 1024 * 1024 * 1024) return `${stripDotZero((n / (1024 * 1024)).toFixed(1))} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
