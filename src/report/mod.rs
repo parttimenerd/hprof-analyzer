@@ -439,12 +439,12 @@ mod tests {
         );
         // Census renders in both markdown flavors.
         let md = render_markdown(&r);
-        assert!(md.contains("HPROF Record Census"), "plain md census header");
-        assert!(md.contains("Instance dumps"), "plain md census row");
+        assert!(md.contains("Dump Completeness"), "plain md census header");
+        assert!(md.contains("Instance Dumps"), "plain md census row");
         assert!(md.contains("JNI Global"), "plain md census root tag");
         let md_g = render_markdown_graphs(&r);
         assert!(
-            md_g.contains("HPROF Record Census"),
+            md_g.contains("Dump Completeness"),
             "graphs md census header"
         );
     }

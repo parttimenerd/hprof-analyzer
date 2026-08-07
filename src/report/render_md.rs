@@ -3,31 +3,31 @@
 
 use super::*;
 
-/// Render the "HPROF Record Census" subsection: a key/value table of raw
+/// Render the "Dump Completeness" subsection: a key/value table of raw
 /// record-type counts plus a per-GC-root-tag breakdown. Identical output in the
 /// plain-md and graphs-md renderers (plain counts, no bars). Additive.
 pub(crate) fn render_record_census(out: &mut String, c: &crate::pass2::RecordCensus) {
     use crate::md::{Align, Table};
-    out.push_str("### HPROF Record Census\n\n");
+    out.push_str("### Dump Completeness\n\n");
     out.push_str(
         "_Record-type counts from the raw HPROF file — useful for diagnosing truncated or unusual dumps. \
 Zero stack frames means no allocation-site data (requires `-agentlib:hprof=heap=dump,depth=8`, removed in JDK 9); \
 a mismatch between load-class and class-dump counts can indicate a partial write._\n\n",
     );
     let mut t = Table::new(&["Record Type", "Count"], &[Align::Left, Align::Right]);
-    t.row(["UTF8 strings".into(), fmt_count(c.utf8_records)]);
-    t.row(["Load class".into(), fmt_count(c.load_class_records)]);
-    t.row(["Unload class".into(), fmt_count(c.unload_class_records)]);
-    t.row(["Stack frames".into(), fmt_count(c.stack_frame_records)]);
-    t.row(["Stack traces".into(), fmt_count(c.stack_trace_records)]);
-    t.row(["Heap dump segments".into(), fmt_count(c.heap_dump_segments)]);
-    t.row(["Instance dumps".into(), fmt_count(c.instance_dumps)]);
-    t.row(["Object-array dumps".into(), fmt_count(c.obj_array_dumps)]);
+    t.row(["UTF-8 Strings".into(), fmt_count(c.utf8_records)]);
+    t.row(["Load Class".into(), fmt_count(c.load_class_records)]);
+    t.row(["Unload Class".into(), fmt_count(c.unload_class_records)]);
+    t.row(["Stack Frames".into(), fmt_count(c.stack_frame_records)]);
+    t.row(["Stack Traces".into(), fmt_count(c.stack_trace_records)]);
+    t.row(["Heap Dump Segments".into(), fmt_count(c.heap_dump_segments)]);
+    t.row(["Instance Dumps".into(), fmt_count(c.instance_dumps)]);
+    t.row(["Object Array Dumps".into(), fmt_count(c.obj_array_dumps)]);
     t.row([
-        "Primitive-array dumps".into(),
+        "Primitive Array Dumps".into(),
         fmt_count(c.prim_array_dumps),
     ]);
-    t.row(["Class dumps".into(), fmt_count(c.class_dumps)]);
+    t.row(["Class Dumps".into(), fmt_count(c.class_dumps)]);
     t.render(out);
     out.push('\n');
 
