@@ -866,8 +866,8 @@ kbd {
 .gc-heatmap-rowlabel { text-align: left; white-space: nowrap; color: var(--muted); font-size: 0.75rem; }
 .gc-heatmap-cell { text-align: center; cursor: pointer; font-size: 0.72rem; min-width: 58px; white-space: nowrap; transition: filter 0.1s; }
 .gc-heatmap-cell:hover { filter: brightness(1.1); }
-.gc-heatmap-empty { background: var(--code-bg, rgba(0,0,0,0.03)); }
-.ret-heatmap-table .gc-heatmap-rowlabel { min-width: 120px; }
+.gc-heatmap-empty { background: var(--code-bg, rgba(0,0,0,0.03)); cursor: default; }
+.ret-heatmap-table .gc-heatmap-rowlabel { min-width: 120px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 
 /* Leak Score Dashboard */
 .leak-score-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 0.5rem; }

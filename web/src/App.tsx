@@ -5564,14 +5564,14 @@ function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[]
                   </td>
                   {topCols.map(colCls => {
                     const val = cellMap.get(`${rowCls}|${colCls}`) ?? null;
-                    if (!val) return <td key={colCls} className="gc-heatmap-cell gc-heatmap-empty" />;
+                    if (!val) return <td key={colCls} className="gc-heatmap-cell gc-heatmap-empty" title={`${rowCls} → ${colCls}: no direct domination`} />;
                     const t = val / maxCell;
                     const bg = heatColor(t);
                     const textColor = t > 0.45 ? "#fff" : "var(--fg)";
                     return (
                       <td key={colCls} className="gc-heatmap-cell"
                         style={{ background: bg, color: textColor }}
-                        title={`${rowCls.split(".").pop()} → ${colCls.split(".").pop()}: ${fmtB(val)}`}
+                        title={`${rowCls} → ${colCls}: ${fmtB(val)}`}
                         onClick={() => fireInspect({ kind: "class", cls: colCls })}>
                         {fmtB(val)}
                       </td>
