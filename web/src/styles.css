@@ -213,7 +213,7 @@ th.sortable.active { color: var(--accent); }
 .accum-path li::after { content: ""; position: absolute; left: 0.2rem; top: 0.6rem; width: 0.55rem; height: 0.55rem; background: var(--accent); border-radius: 50%; }
 .accum-path li:first-child::before { top: 0.6rem; }
 .accum-path li:last-child::before { bottom: calc(100% - 0.6rem); }
-.path-ret { color: var(--muted); font-size: 0.78rem; margin-left: 0.5rem; }
+.path-ret { color: var(--muted); font-size: 0.78rem; margin-left: 0.5rem; white-space: nowrap; }
 .path-field { color: var(--muted); font-size: 0.85rem; }
 
 /* Exact retained byte + precise percent, MAT-report style ("509,972,304 (41.08%)"). */
