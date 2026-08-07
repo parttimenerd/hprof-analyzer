@@ -4097,10 +4097,11 @@ pub(crate) fn render_framework_analysis(
         return;
     }
     out.push_str("## Framework Analysis\n\n");
-    out.push_str(
-        "_Framework-specific objects and their heap footprint — \
+    out.push_str(&format!(
+        "_Frameworks detected: {}. Framework-specific objects and their heap footprint — \
 useful for spotting oversized caches or leaked request contexts._\n\n",
-    );
+        items.len()
+    ));
     let mut t = Table::new(
         &["Framework", "Instances", "Retained"],
         &[Align::Left, Align::Right, Align::Right],
