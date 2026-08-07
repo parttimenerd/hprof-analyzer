@@ -5824,9 +5824,13 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             {fmtB(data?.unreachable_shallow ?? 0)} shallow heap.
             Showing top {fmtCount(rows.length)} classes by shallow size.
           </p>
-          {unreachablePct >= 5 && (
+          {unreachablePct >= 5 ? (
             <p className="subtitle">
-              At {fmtPct(unreachablePct)} of heap total, this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if the count drops sharply, it was pre-GC garbage.
+              Unreachable objects are eligible for collection but have not yet been reclaimed. At {fmtPct(unreachablePct)} of heap total, this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is <em>not</em> a leak. Confirm: trigger a full GC (<code>jcmd &lt;pid&gt; GC.run</code>) then re-dump; if the count drops sharply, it was pre-GC garbage.
+            </p>
+          ) : (
+            <p className="subtitle">
+              Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (&lt; 5% of heap total) is normal between GC cycles.
             </p>
           )}
           {data?.unreachable_composition && (
@@ -6180,19 +6184,19 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     ...(anonymous_class_count > 0 ? [{
       indicator: "Anonymous/generated classes",
       value: fmtCount(anonymous_class_count),
-      hint: "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by \"$\" to find the biggest offenders.",
+      hint: <>High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by <code>$</code> to find the biggest offenders.</>,
     }] : []),
     ...(thread_local_null_key_count > 0 ? [{
       indicator: <><code>ThreadLocal</code> null-key entries (cleared referent)</>,
       value: fmtCount(thread_local_null_key_count),
-      hint: "A null key means the ThreadLocal object was GC'd while the thread still holds the value — classic leak in thread pools. Call ThreadLocal.remove() when done, or use try-finally to guarantee cleanup.",
+      hint: <>A null key means the <code>ThreadLocal</code> object was GC'd while the thread still holds the value — classic leak in thread pools. Call <code>ThreadLocal.remove()</code> when done, or use try-finally to guarantee cleanup.</>,
     }] : []),
     ...(direct_byte_buffer_capacity_sum > 0 ? [{
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
       value: fmtB(direct_byte_buffer_capacity_sum),
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
         ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). Invisible to GC — can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
-        : "Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.",
+        : <>Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.</>,
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
@@ -10174,7 +10178,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow Size", <>an object's header plus its fields (and, for an array, its elements). Does <em>not</em> include referenced objects.</>],
-    ["Retained Heap (Retained Size)", <>the total memory freed when this object becomes unreachable: its shallow size plus everything reachable <em>only</em> through it. The basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Retained Heap (Retained Size)", <>the total memory freed when this object becomes unreachable: its shallow size plus everything reachable <em>only</em> through it. This is the number that answers "how much memory does freeing this object release?" and it is the basis for all percentages. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
     ["Reachable Heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can reach from a GC root. Anything unreachable is excluded from all totals.</>],
     ["GC Root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
     ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em> — in other words, if <em>A</em> becomes unreachable, so does <em>B</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
@@ -10185,7 +10189,7 @@ function GlossarySection() {
     ["Class Loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> produces two distinct heap classes — counts are per (class, loader) pair.</>],
     ["Referent", <>the object a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
     ["Only-Weakly Retained", <>an object that has no incoming strong reference — reachable only through <code>WeakReference</code>, <code>SoftReference</code>, or <code>PhantomReference</code> chains. Weak-only referents are collected at the next GC cycle; soft-only referents are collected under memory pressure; phantom-only referents have been finalized and their references enqueued for post-mortem cleanup via a ReferenceQueue.</>],
-    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type.</>],
+    ["Instance vs. Class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
     ["Collection Fill Ratio", <>fraction of a collection's backing-array capacity occupied by elements — <code>elements ÷ capacity</code>. Near 0 means mostly empty (wasted memory); near 1 means the collection is full.</>],
     ["Map Load Factor", <>for hash maps, the fraction of backing-array slots occupied — <code>occupied_slots ÷ capacity</code>. Low load factor = many empty buckets (wasted memory); high load factor (≥ 90%) increases hash-collision chains and lookup cost.</>],
     ["Compressed OOPs", <>a JVM optimization storing object references as 32-bit integers instead of 64-bit pointers, halving reference-field overhead on heaps ≤ ~32 GB. Shown in Heap Summary as "Compressed OOPs: yes".</>],
