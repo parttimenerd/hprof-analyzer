@@ -97,18 +97,27 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
             out.push_str("- [Collection Waste Budget](#collection-waste-budget)\n");
         }
     }
-    if r.fields_by_size.is_some() {
+    if r.fields_by_size
+        .as_ref()
+        .is_some_and(|f| !f.rows.is_empty())
+    {
         out.push_str(
             "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
         );
     }
-    if r.biggest_collections.is_some() {
+    if r.biggest_collections
+        .as_ref()
+        .is_some_and(|b| !b.combined.is_empty() || !b.by_kind.is_empty())
+    {
         out.push_str("- [Biggest Collections](#biggest-collections)\n");
     }
     if !r.top_retainers.is_empty() {
         out.push_str("- [Top Retainers](#top-retainers)\n");
     }
-    if r.collection_contents.is_some() {
+    if r.collection_contents
+        .as_ref()
+        .is_some_and(|c| !c.rows.is_empty())
+    {
         out.push_str("- [Collection Contents by Type](#collection-contents-by-type)\n");
     }
     out.push_str("- [References](#references)\n");
