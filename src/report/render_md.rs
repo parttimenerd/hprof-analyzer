@@ -2661,9 +2661,13 @@ pub(crate) fn render_collection_attribution(
         }
         let mut t = Table::new(&headers, &aligns);
         for r in &a.most_overall {
+            let mut kind = r.container_kind.clone();
+            if let Some(c) = kind.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
             let mut row = vec![
                 format!("`{}#{}`", r.holder_class, r.field),
-                r.container_kind.clone(),
+                kind,
                 fmt_count(r.container_count),
                 fmt_count(r.holder_instances),
                 fmt_count(r.total_elements),
@@ -2716,10 +2720,14 @@ pub(crate) fn render_collection_attribution(
         }
         let mut t = Table::new(&headers, &aligns);
         for r in &a.biggest_single {
+            let mut kind = r.container_kind.clone();
+            if let Some(c) = kind.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
             let mut row = vec![
                 format!("`{}#{}`", r.holder_class, r.field),
                 format!("`{}`", r.container_class),
-                r.container_kind.clone(),
+                kind,
                 fmt_count(r.elements),
                 fmt_count(r.capacity),
                 format_bytes(r.retained),
