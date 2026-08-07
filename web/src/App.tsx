@@ -7819,7 +7819,7 @@ function OGEGraphView({ data, onNavigate }: {
   );
 }
 
-function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
+function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; totalHeapOverride?: number }) {
   const [tab, setTab] = React.useState<"explore" | "domtree" | "graph">("explore");
   const [nodeId, setNodeId] = React.useState<number | null>(null);
   const [breadcrumb, setBreadcrumb] = React.useState<{ nodeId: number; label: string; edge?: string; sourceTab?: "explore" | "domtree" }[]>([]);
@@ -8226,7 +8226,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [nodeId, classSiblings, tab]);
 
-  const totalHeap = Object.values(data.nodes).reduce(
+  const totalHeap = totalHeapOverride ?? Object.values(data.nodes).reduce(
     (s, n) => (n.idom == null ? s + n.retained : s), 0
   );
 
@@ -8442,7 +8442,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           if (pct < 50) return null;
           return (
             <div style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.75rem", background: "var(--warn-bg, #fef3c7)", border: "1px solid var(--warn-border, #fde68a)", borderRadius: 5, fontSize: "0.82rem", color: "var(--warn, #92400e)" }}>
-              ⚠ Top {topN.length} {topN.length === 1 ? "object holds" : "objects hold"} <strong>{pct.toFixed(0)}%</strong> of heap (<span title={fmtExactBytes(topNtotal)}>{fmtB(topNtotal)}</span>) — a few large retainers dominate. Investigate these first.
+              ⚠ Top {topN.length} {topN.length === 1 ? "object holds" : "objects hold"} <strong>{fmtPct(pct)}</strong> of heap (<span title={fmtExactBytes(topNtotal)}>{fmtB(topNtotal)}</span>) — a few large retainers dominate. Investigate these first.
             </div>
           );
         })()}
@@ -11756,7 +11756,7 @@ export default function App({ report }: { report: Report }) {
             Click a class to list its instances; click an instance to see its fields and inbound references.
             Start here after Dominator Analysis or Leak Suspects identifies a suspect class or object.
           </p>
-          <ObjectGraphExplorer data={report.obj_graph_flat} />
+          <ObjectGraphExplorer data={report.obj_graph_flat} totalHeapOverride={report.overview.total_shallow} />
         </section>
       )}
       {report.type_ref_graph && report.type_ref_graph.length > 0 && (
