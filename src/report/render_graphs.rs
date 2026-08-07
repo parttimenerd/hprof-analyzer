@@ -752,7 +752,7 @@ Investigate only if the instance count is unexpectedly high \
             }
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
-                &["Class", "Objects", "Shallow", "Retained", "% of Suspect"],
+                &["Class", "Instances", "Shallow", "Retained", "% of Suspect"],
                 &[
                     Align::Left,
                     Align::Right,
