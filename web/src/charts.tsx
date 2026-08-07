@@ -775,8 +775,13 @@ export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect
           }}
         >
           {seg.pct >= 0.08 && (
-            <span style={{ color: "#fff", fontSize: "0.75rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 500 }}>
-              {seg.name.split(".").pop()} {fmtPct(seg.pct * 100)}
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", minWidth: 0, overflow: "hidden" }}>
+              <span style={{ color: "#fff", fontSize: "0.75rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 500, minWidth: 0 }}>
+                {seg.name.split(".").pop()}
+              </span>
+              <span style={{ color: "#fff", fontSize: "0.75rem", whiteSpace: "nowrap", flexShrink: 0, fontWeight: 500 }}>
+                {fmtPct(seg.pct * 100)}
+              </span>
             </span>
           )}
         </div>
