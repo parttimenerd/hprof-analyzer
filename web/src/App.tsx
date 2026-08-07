@@ -2800,7 +2800,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <span className="mat-exact">
           {fmtExactBytes(s.retained)} ({fmtPct(share)})
         </span>
-        {s.shallow > 0 && <> · shallow {fmtB(s.shallow)}</>}.
+        {s.shallow > 0 && <> · shallow <span title={fmtExactBytes(s.shallow)}>{fmtB(s.shallow)}</span></>}.
       </p>
       {s.root_path && s.root_path.length >= 2 && (
         <LeakChainGraph steps={s.root_path} />
@@ -2839,7 +2839,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             {s.accumulation_obj_1based != null &&
               <ExploreBtn denseIdx={s.accumulation_obj_1based - 1} label={s.accumulation_class} />}
           </span>
-          {s.accumulation_retained != null && <> retaining {fmtB(s.accumulation_retained)}</>}.
+          {s.accumulation_retained != null && <> retaining <span title={fmtExactBytes(s.accumulation_retained)}>{fmtB(s.accumulation_retained)}</span></>}.
         </p>
       )}
       <DominatedByClass rows={s.dominated_by_class} suspectRetained={s.retained} />
@@ -2872,7 +2872,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem", listStyle: "disc" }}>
           <li>Click <span title="Open in Inspector">⬡</span> (Inspector) next to the class name above to browse field values, inbound references, and the path to the GC root.</li>
           {s.accumulation_class && (
-            <li>The accumulation point is <code>{s.accumulation_class}</code> — inspect it to find which field retains these objects.</li>
+            <li>The accumulation point is <code title={s.accumulation_class}>{s.accumulation_class}</code> — inspect it to find which field retains these objects.</li>
           )}
           {!s.is_single && s.instance_count > 10 && (
             <li>{fmtCount(s.instance_count)} instance{s.instance_count === 1 ? "" : "s"} {s.instance_count === 1 ? "suggests" : "suggest"} a pool, registry, or cache that accumulates without bound — check for a static field never cleared or a listener list missing deregistration.</li>
@@ -2945,12 +2945,12 @@ function PackageTreeRow({ node, depth, maxRetained, rowId, fmtB }: { node: Packa
           </span>
         </td>
         <td className="num">{fmtCount(node.top_dominator_count)}</td>
-        <td className="num">{fmtB(node.shallow_heap)}</td>
+        <td className="num"><span title={fmtExactBytes(node.shallow_heap)}>{fmtB(node.shallow_heap)}</span></td>
         <td className="num bar-cell">
           <span className="bar-bg">
             <span className="bar-fill" style={{ width: `${pct}%` }} />
           </span>
-          {fmtB(node.retained_heap)}
+          <span title={fmtExactBytes(node.retained_heap)}>{fmtB(node.retained_heap)}</span>
         </td>
       </tr>
       {open &&
@@ -3288,12 +3288,12 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
       <div className="thread-body">
         <div className="thread-meta-row">
           <span className="thread-meta-item"><span className="thread-meta-label">class</span><code title={cls}>{cls}</code><CopyBtn text={cls} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /></span>
-          <span className="thread-meta-item"><span className="thread-meta-label">shallow</span>{fmtB(t.shallow)}</span>
-          <span className="thread-meta-item"><span className="thread-meta-label">retained</span>{fmtB(t.retained)}</span>
-          <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span>{fmtB(t.max_local_retained)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">shallow</span><span title={fmtExactBytes(t.shallow)}>{fmtB(t.shallow)}</span></span>
+          <span className="thread-meta-item"><span className="thread-meta-label">retained</span><span title={fmtExactBytes(t.retained)}>{fmtB(t.retained)}</span></span>
+          <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span><span title={fmtExactBytes(t.max_local_retained)}>{fmtB(t.max_local_retained)}</span></span>
           <span className="thread-meta-item"><span className="thread-meta-label">priority</span>{t.priority}</span>
           {t.context_class_loader && (
-            <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code>{fmtLoader(t.context_class_loader)}</code></span>
+            <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code title={t.context_class_loader}>{fmtLoader(t.context_class_loader)}</code></span>
           )}
           {t.thread_state && (
             <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "").split(",").map(s => s.trim()).filter(Boolean).map(s => s.replace(/\b\w/g, c => c.toUpperCase())).join(", ")}</span>
@@ -3404,7 +3404,7 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(t => t.shallow, fmtB, useKB), selector: (t) => t.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "118px", cell: byteCell(t => t.retained, fmtB, useKB), selector: (t) => t.retained, sortable: true },
     { id: "max_local", name: useKB ? "Max Local Retained (KB)" : "Max Local Retained", right: true, width: useKB ? "225px" : "190px", cell: byteCell(t => t.max_local_retained, fmtB, useKB), selector: (t) => t.max_local_retained, sortable: true },
-    { id: "loader", name: "Context Class Loader", grow: 1, maxWidth: "155px", cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
+    { id: "loader", name: "Context Class Loader", grow: 1, maxWidth: "155px", cell: (t) => t.context_class_loader ? <code title={t.context_class_loader}>{fmtLoader(t.context_class_loader)}</code> : <span>—</span>, selector: (t) => t.context_class_loader ?? "", sortable: true },
     { id: "daemon", name: "Daemon", width: "100px", selector: (t) => t.is_daemon ? 1 : 0, format: (t) => t.is_daemon ? "Yes" : "No", sortable: true },
     { id: "priority", name: "Priority", right: true, width: "95px", format: (t) => String(t.priority), selector: (t) => t.priority, sortable: true },
     { id: "state", name: "State", width: "145px", selector: (t) => t.thread_state ?? "", cell: (t) => <span title={t.thread_state?.replace(/[\[\]]/g, "") || undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{t.thread_state ? threadStateLabel(t.thread_state) : "—"}</span>, sortable: true },
@@ -8696,7 +8696,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             </p>
           ) : (
             <p className="subtitle" style={{ margin: "0 0 0.4rem", fontSize: "0.8rem" }}>
-              <code>{wasmBelowInfo.display_class}</code> · shallow {fmtB(wasmBelowInfo.shallow)} · retained {fmtB(wasmBelowInfo.retained)} · below the significance threshold — data loaded from the live heap.
+              <code>{wasmBelowInfo.display_class}</code> · shallow <span title={fmtExactBytes(wasmBelowInfo.shallow)}>{fmtB(wasmBelowInfo.shallow)}</span> · retained <span title={fmtExactBytes(wasmBelowInfo.retained)}>{fmtB(wasmBelowInfo.retained)}</span> · below the significance threshold — data loaded from the live heap.
             </p>
           )}
           {effectiveCls && (
@@ -9880,11 +9880,11 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               <tr>
                 <th>Shallow</th>
-                <td>{fmtB(currentNode.shallow)}</td>
+                <td><span title={fmtExactBytes(currentNode.shallow)}>{fmtB(currentNode.shallow)}</span></td>
               </tr>
               <tr>
                 <th>Retained</th>
-                <td>{fmtB(currentNode.retained)}</td>
+                <td><span title={fmtExactBytes(currentNode.retained)}>{fmtB(currentNode.retained)}</span></td>
               </tr>
               <tr>
                 <th>% Heap</th>
@@ -10674,8 +10674,8 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         <table className="trg-stat-table">
           <tbody>
             <tr><th>Instances</th><td>{fmtCount(hist.instances)}</td></tr>
-            <tr><th>Shallow Heap</th><td>{formatBytes(hist.shallow)}</td></tr>
-            <tr><th>Retained Heap</th><td>{formatBytes(hist.retained)}</td></tr>
+            <tr><th>Shallow Heap</th><td><span title={fmtExactBytes(hist.shallow)}>{formatBytes(hist.shallow)}</span></td></tr>
+            <tr><th>Retained Heap</th><td><span title={fmtExactBytes(hist.retained)}>{formatBytes(hist.retained)}</span></td></tr>
             {parentDomClass && (
               <tr>
                 <th title="Most common immediate dominator class across instances of this class">Held by (most common)</th>
