@@ -4003,7 +4003,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       selector: (r) => r.objects,
       sortable: true,
     },
-    { id: "fix", name: "Fix Suggestion", grow: 2, maxWidth: "400px", selector: (r) => r.fix, sortable: true },
+    { id: "fix", name: "Fix Suggestion", grow: 2, maxWidth: "400px", selector: (r) => r.fix, sortable: true, cell: (r) => <span title={r.fix} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.fix}</span> },
   ];
 
   const showCollectionsNote = !ca && (hasDs || hasDp);
