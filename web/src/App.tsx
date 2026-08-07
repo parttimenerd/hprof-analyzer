@@ -9483,30 +9483,46 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         {" "}(single-child chain — each step retains ≥95% of this object)
                       </p>
                     )}
-                    {/* Parent / depth nav */}
-                    {(() => {
-                      const parentId = dominatorChain.length > 1 ? dominatorChain[1] : null;
-                      const parentNode = parentId != null ? data.nodes[String(parentId)] : null;
-                      const depth = dominatorChain.length - 1;
-                      return (parentNode || depth > 0) ? (
-                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.4rem" }}>
-                          {parentNode && (
-                            <button className="show-more-btn"
-                              title={`Up to parent: ${parentNode.display_class}`}
-                              onClick={() => navigate("domtree", parentId!, parentNode.display_class)}>
-                              ↑ Parent
-                            </button>
-                          )}
-                          {depth > 0 && (
-                            <span style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                              depth {depth}
-                            </span>
-                          )}
-                        </div>
-                      ) : null;
-                    })()}
                   </>
                 );
+              })()}
+              {/* Parent / sibling / depth nav — shown for all domtree nodes, not just those with children */}
+              {(() => {
+                const parentId = dominatorChain.length > 1 ? dominatorChain[1] : null;
+                const parentNode = parentId != null ? data.nodes[String(parentId)] : null;
+                const depth = dominatorChain.length - 1;
+                const prevSib = siblingIdx > 0 ? classSiblings[siblingIdx - 1] : null;
+                const nextSib = siblingIdx >= 0 && siblingIdx < classSiblings.length - 1 ? classSiblings[siblingIdx + 1] : null;
+                return (parentNode || depth > 0 || prevSib || nextSib) ? (
+                  <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.4rem" }}>
+                    {parentNode && (
+                      <button className="show-more-btn"
+                        title={`Up to parent: ${parentNode.display_class}`}
+                        onClick={() => navigate("domtree", parentId!, parentNode.display_class)}>
+                        ↑ Parent
+                      </button>
+                    )}
+                    {prevSib != null && (
+                      <button className="show-more-btn"
+                        title="Previous same-class instance ([ key)"
+                        onClick={() => navigate("domtree", prevSib.id, data.nodes[String(prevSib.id)]?.display_class ?? `#${prevSib.id}`)}>
+                        ← Prev
+                      </button>
+                    )}
+                    {nextSib != null && (
+                      <button className="show-more-btn"
+                        title="Next same-class instance (] key)"
+                        onClick={() => navigate("domtree", nextSib.id, data.nodes[String(nextSib.id)]?.display_class ?? `#${nextSib.id}`)}>
+                        Next →
+                      </button>
+                    )}
+                    {depth > 0 && (
+                      <span style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                        depth {depth}
+                      </span>
+                    )}
+                  </div>
+                ) : null;
               })()}
               {currentDomChildren.length > 0 && (
                 <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.4rem", fontSize: "0.82rem", alignItems: "center", flexWrap: "wrap" }}>
