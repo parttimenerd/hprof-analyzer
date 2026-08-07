@@ -706,14 +706,16 @@ Investigate only if the instance count is unexpectedly high \
         if !s.dominated.is_empty() {
             if s.dominated_total_count > s.dominated_shown {
                 out.push_str(&format!(
-                    "_Directly dominates {} objects (showing top {})._\n\n",
+                    "_Directly dominates {} {} (showing top {} by retained heap)._\n\n",
                     fmt_count(s.dominated_total_count),
+                    plural_objects(s.dominated_total_count),
                     fmt_count(s.dominated_shown),
                 ));
             } else if s.dominated_total_count > 0 {
                 out.push_str(&format!(
-                    "_Directly dominates {} objects._\n\n",
+                    "_Directly dominates {} {}._\n\n",
                     fmt_count(s.dominated_total_count),
+                    plural_objects(s.dominated_total_count),
                 ));
             }
             out.push_str(&format!(
@@ -1052,10 +1054,11 @@ fn render_merged_paths_graphs(root: &MergedPathNode, out: &mut String) {
             f.node.display_class.clone()
         };
         let mut line = format!(
-            "{}{} ({} objects, retained {})",
+            "{}{} ({} {}, retained {})",
             prefix,
             class_label,
             fmt_count(f.node.object_count),
+            plural_objects(f.node.object_count),
             format_bytes(f.node.retained),
         );
         if let Some(label) = &f.node.root_type_label {
