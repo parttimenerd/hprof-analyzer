@@ -654,11 +654,13 @@ function VBar({
   fmt,
   barColor,
   yMaxPct,
+  logScale,
 }: {
   data: { label: string; value: number }[];
   fmt: (n: number) => string;
   barColor?: number;
   yMaxPct?: number;
+  logScale?: boolean;
 }) {
   const max = yMaxPct ?? data.reduce((m, d) => Math.max(m, d.value), 0);
   if (max <= 0) return null;
@@ -683,7 +685,8 @@ function VBar({
         grid: { display: false },
       },
       y: {
-        min: 0,
+        type: logScale ? ("logarithmic" as const) : ("linear" as const),
+        min: logScale ? 1 : 0,
         max: yMaxPct,
         ticks: { color: t.muted, callback: (v: number | string) => fmt(Number(v)) },
         grid: { color: t.border },
@@ -843,9 +846,17 @@ export function DepthHistogramChart({ data }: { data: DepthBucket[] }) {
     }
   }
   const maxDepth = data[data.length - 1].depth;
+  // Use log scale when depth-1 spike is ≥5× the second bucket — otherwise the
+  // tail bars are invisible on a linear scale.
+  const useLog = bars.length >= 2 && bars[0].value >= 5 * (bars[1]?.value ?? 1);
   return (
     <>
-      <VBar data={bars} fmt={fmtCount} barColor={4} />
+      <VBar data={bars} fmt={fmtCount} barColor={4} logScale={useLog} />
+      {useLog && (
+        <p className="subtitle" style={{ fontSize: "0.78rem", marginTop: "0.2rem", marginBottom: 0 }}>
+          Log scale — depth 1 dominates ({fmtCount(bars[0].value)} objects); log scale used to show tail distribution.
+        </p>
+      )}
       <p className="subtitle" style={{ marginTop: "0.4rem" }}>
         Half of all live objects sit within {median} hop{median === 1 ? "" : "s"} of a GC root; the deepest chain is{" "}
         {maxDepth} hop{maxDepth === 1 ? "" : "s"}.
