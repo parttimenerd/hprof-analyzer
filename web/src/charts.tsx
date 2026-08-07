@@ -846,15 +846,20 @@ export function DepthHistogramChart({ data }: { data: DepthBucket[] }) {
     }
   }
   const maxDepth = data[data.length - 1].depth;
-  // Use log scale when depth-1 spike is ≥5× the second bucket — otherwise the
-  // tail bars are invisible on a linear scale.
-  const useLog = bars.length >= 2 && bars[0].value >= 5 * (bars[1]?.value ?? 1);
+  // Use log scale when any single bucket dominates ≥5× the second-highest —
+  // otherwise tail bars are invisible on a linear scale.
+  const maxVal = bars.length > 0 ? Math.max(...bars.map(b => b.value)) : 0;
+  const secondMax = bars.length > 1
+    ? Math.max(...bars.filter(b => b.value < maxVal).map(b => b.value))
+    : 0;
+  const useLog = bars.length >= 2 && maxVal >= 5 * (secondMax || 1);
+  const dominantBar = useLog ? bars.find(b => b.value === maxVal) : null;
   return (
     <>
       <VBar data={bars} fmt={fmtCount} barColor={4} logScale={useLog} />
-      {useLog && (
+      {useLog && dominantBar && (
         <p className="subtitle" style={{ fontSize: "0.78rem", marginTop: "0.2rem", marginBottom: 0 }}>
-          Log scale — depth 1 dominates ({fmtCount(bars[0].value)} objects); log scale used to show tail distribution.
+          Log scale — depth {dominantBar.label} dominates ({fmtCount(dominantBar.value)} objects); log scale used to show tail distribution.
         </p>
       )}
       <p className="subtitle" style={{ marginTop: "0.4rem" }}>
