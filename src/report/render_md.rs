@@ -179,8 +179,8 @@ likely candidates to benefit from deduplication or interning._\n\n",
         out.push_str("#### `char[]` Waste\n\n");
         out.push_str(&format!(
             "_Strings whose `char[]` or `byte[]` backing array is larger than the character \
-data — typical of `substring()` retaining a full backing array (Java 6/7 shared-buffer \
-semantics) or repeated `StringBuilder.toString()` allocations. \
+data — typical of `StringBuilder.toString()` leaving slack capacity, or oversized \
+pre-allocated buffers. \
 {} arrays examined, {} wasteful, {} total wasted._\n\n",
             fmt_count(w.arrays_examined),
             fmt_count(w.wasteful_arrays),

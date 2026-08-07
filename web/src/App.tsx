@@ -1761,7 +1761,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <>
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
-            Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>substring()</code> retaining a full backing array (Java 6/7 shared-buffer semantics) or repeated <code>StringBuilder.toString()</code> allocations. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
+            Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>StringBuilder.toString()</code> leaving slack capacity, or oversized pre-allocated buffers. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
             {fmtB(w.total_wasted_bytes)} total wasted.
           </p>
           {w.top.length > 0 && (
@@ -3566,7 +3566,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
-        Retained heap grouped by class loader (component). <strong>% Heap</strong> is the share of total reachable heap. Totals can exceed heap size because boot-loader classes are counted in every component that retains them.
+        Retained heap grouped by class loader (component). <strong>% Heap</strong> is the share of total reachable heap. Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each.
       </p>
       <details open>
         <summary>Components by Retained Heap ({fmtCount(components.length)} rows)</summary>
@@ -5628,7 +5628,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
-      <p className="subtitle">An object <em>dominates</em> another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. <strong>Big Drops</strong> shows objects holding memory directly or across many small children. <strong>Immediate Dominators</strong> ranks classes by how much dominated shallow heap they gate. <strong>Graph</strong> visualizes the dominator tree; <strong>Heatmap</strong> maps dominator → dominated by class.</p>
+      <p className="subtitle">An object <em>dominates</em> another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. <strong>Big Drops</strong> shows objects holding memory directly or across many small children. <strong>Immediate Dominators</strong> ranks classes by how much dominated shallow heap they gate. <strong>Graph</strong> shows a class-level dominator graph (top 50 classes by retained); <strong>Heatmap</strong> maps dominator → dominated by class.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         {(["tables", "graph", "heatmap"] as const).map(v => (
