@@ -3708,7 +3708,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>
               {hasFill && <span style={{ width: "165px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>}
-              <span style={{ width: useKBArr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBArr(totalIndivShallow)}</span>
+              <span style={{ width: useKBArr ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalIndivShallow)}>{fmtBArr(totalIndivShallow)}</span></span>
               {hasOwner && <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>}
             </div>
           </>
@@ -3753,8 +3753,8 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
           <span style={{ width: "130px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
           <span style={{ width: "124px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalItems)}</span>
-          <span style={{ width: useKBFill ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBFill(totalShallowFill)}</span>
-          <span style={{ width: useKBFill ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtBFill(totalWasted)}</span>
+          <span style={{ width: useKBFill ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalShallowFill)}>{fmtBFill(totalShallowFill)}</span></span>
+          <span style={{ width: useKBFill ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalWasted)}>{fmtBFill(totalWasted)}</span></span>
           <span style={{ flex: 1 }} />
         </div>
       </>
