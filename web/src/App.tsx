@@ -7065,7 +7065,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               )}
               {selAllOutEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">→ Outbound References ({selAllOutEdges.length} total)</p>
+                  <p className="trg-sidebar-section-label">→ Outbound References ({fmtCount(selAllOutEdges.length)} total)</p>
                   <ul className="trg-edge-list">
                     {(showAllOut ? selAllOutEdges : selOutEdges).map((e, i) => (
                       <li key={i}>
@@ -7089,7 +7089,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
               )}
               {selAllInEdges.length > 0 && (
                 <>
-                  <p className="trg-sidebar-section-label">← Inbound References ({selAllInEdges.length} total)</p>
+                  <p className="trg-sidebar-section-label">← Inbound References ({fmtCount(selAllInEdges.length)} total)</p>
                   <ul className="trg-edge-list">
                     {(showAllIn ? selAllInEdges : selInEdges).map((e, i) => (
                       <li key={i}>
@@ -7574,7 +7574,7 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree
           ))}
         </tbody>
       </table>
-      {total > refs.length && <p className="subtitle" style={{ fontSize: "0.78rem" }}>Showing {refs.length} of {total} inbound references.</p>}
+      {total > refs.length && <p className="subtitle" style={{ fontSize: "0.78rem" }}>Showing {fmtCount(refs.length)} of {fmtCount(total)} inbound references.</p>}
     </>
   );
 }
@@ -8575,7 +8575,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             {liveSearchResults !== null && (
               <>
                 <p className="subtitle" style={{ fontSize: "0.78rem", margin: "0.3rem 0" }}>
-                  {liveSearchTotal} match{liveSearchTotal === 1 ? "" : "es"}{liveSearchTruncated ? ` (showing top 50 by retained)` : ""}.
+                  {fmtCount(liveSearchTotal)} match{liveSearchTotal === 1 ? "" : "es"}{liveSearchTruncated ? ` (showing top 50 by retained)` : ""}.
                 </p>
                 {liveSearchResults.length > 0 && (
                   <table className="std-table">
@@ -9005,7 +9005,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
               )}
               {wasmOutboundEdges && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
-                  Live outbound references from loaded heap ({wasmOutboundTotal} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
+                  Live outbound references from loaded heap ({fmtCount(wasmOutboundTotal)} total{wasmOutboundTruncated ? ", showing first 200" : ""}).
                 </p>
               )}
               {currentNode.edges_truncated && !wasmOutboundEdges && (
@@ -9890,7 +9890,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <th>% Heap</th>
                 <td>
                   {totalHeap > 0
-                    ? (currentNode.retained / totalHeap * 100).toFixed(2)
+                    ? (currentNode.retained / totalHeap * 100).toFixed(1)
                     : "—"}%
                 </td>
               </tr>
@@ -10090,7 +10090,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {inboundRefs.length > 0 && (
             <div style={{ marginTop: "0.5rem" }}>
               <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
-                Inbound references from captured graph ({inboundRefs.length})
+                Inbound references from captured graph ({fmtCount(inboundRefs.length)})
               </div>
               {(showAllInbound ? inboundRefs : inboundRefs.slice(0, 8)).map(({ srcIdx, field_name }, i) => {
                 const sn = data.nodes[String(srcIdx)];
@@ -10122,7 +10122,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           {wasmPeerInstances && wasmPeerInstances.length > 0 && currentNode && (
             <div style={{ marginTop: "0.5rem" }}>
               <div style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600, marginBottom: "2px" }}>
-                Other {currentNode.display_class.split(".").pop()} instances ({wasmPeerTotal} total)
+                Other {currentNode.display_class.split(".").pop()} instances ({fmtCount(wasmPeerTotal)} total)
               </div>
               {wasmPeerInstances.map((m) => (
                 <div key={m.dense_idx} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem" }}>
