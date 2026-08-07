@@ -2167,7 +2167,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
 
       {o.duplicate_classes.length > 0 && (
         <>
-          <h3>Duplicate Classes</h3>
+          <h3 id="duplicate-classes">Duplicate Classes</h3>
           <p className="subtitle">
             Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — a typical symptom of class-loader leaks (e.g. each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all the instances, the others are likely leaked copies.
           </p>
@@ -6098,7 +6098,7 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       <h2>Retention Concentration</h2>
       <p className="subtitle">
         Share of the reachable heap retained by the few largest top-level dominators (a dominator&apos;s retained size is everything it keeps alive). Read it as a concentration curve: if{" "}
-        <strong>Top 1</strong> is already high, one object is the accumulation point — making it unreachable reclaims most of the heap; if the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
+        <strong>Top 1</strong> is already high, one object is the accumulation point — freeing it would reclaim most of the heap; if the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
         retention is spread across many peers (e.g. a big cache or collection of similar objects) and no single fix helps much.
       </p>
       <ConcentrationChart rc={rc} />

@@ -579,7 +579,7 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
         "_Share of the reachable heap retained by the few largest top-level dominators \
          (a dominator's retained size is everything it keeps alive). Read it as a \
          concentration curve: if **Top 1** is already high, one object is the accumulation \
-         point — making it unreachable reclaims most of the heap; if the share only climbs as you widen to \
+         point — freeing it would reclaim most of the heap; if the share only climbs as you widen to \
          **Top 10** / **Top 100**, retention is spread across many peers (e.g. a big cache \
          or collection of similar objects) and no single fix helps much._\n\n",
     );

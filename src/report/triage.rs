@@ -330,7 +330,7 @@ impl Rule for Concentration {
                     TriageSeverity::Critical,
                     "Concentration",
                     format!(
-                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap; making it unreachable reclaims most of the heap.",
+                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap; freeing this object would reclaim most of the heap.",
                         s.pretty_class,
                         kind,
                         held_by,
@@ -484,7 +484,7 @@ impl Rule for ClassloaderLeak {
                     dup.loader_count,
                     format_bytes(dup.total_retained),
                 ),
-                Some(("system-overview", "Duplicate Classes")),
+                Some(("duplicate-classes", "Duplicate Classes")),
                 &dup.pretty_class,
             ));
         }
@@ -498,7 +498,7 @@ impl Rule for ClassloaderLeak {
                 dup.loader_count,
                 format_bytes(dup.total_retained),
             ),
-            Some(("system-overview", "Duplicate Classes")),
+            Some(("duplicate-classes", "Duplicate Classes")),
             &dup.pretty_class,
         ))
     }
@@ -709,7 +709,7 @@ impl Rule for OverCapacityCollections {
             TriageSeverity::Info,
             "Over-Capacity Collections",
             format!(
-                "{} wasted by under-filled collections (≤50% full across {} tracked) — call `trimToSize()` after bulk loads, or right-size initial capacity to reduce backing-array slack.",
+                "{} wasted by under-filled collections (≤50% full across {} tracked) — for lists call `trimToSize()` after bulk population; for all types right-size initial capacity so the backing array is not over-allocated at construction.",
                 format_bytes(wasted),
                 fmt_count(cfr.tracked),
             ),
@@ -1432,9 +1432,9 @@ impl Rule for BigDropConcentration {
             "Dominator-Tree Big Drop",
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
-                 drops here in the dominator tree — almost all its retained memory \
-                 is not shared with any other top-level subtree. Navigate to Dominator Analysis \
-                 and trace the retaining chain to find the root cause.",
+                 drops here in the dominator tree, meaning this object uniquely retains \
+                 most of that memory with no sharing across other top-level subtrees. \
+                 Follow the retaining chain in Dominator Analysis to find the GC root.",
                 row.display_class,
                 pct,
                 format_bytes(row.drop_bytes),
