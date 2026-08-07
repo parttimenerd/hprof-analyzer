@@ -192,9 +192,9 @@ function ShowMoreRow({ extra, cols, showAll, setShowAll }: { extra: number; cols
     <tr>
       <td colSpan={cols} style={{ textAlign: "center", padding: "0.4rem 0" }}>
         {showAll ? (
-          <button className="show-more-btn" onClick={() => setShowAll(false)}>Collapse</button>
+          <button className="show-more-btn" onClick={() => setShowAll(false)}>Show fewer</button>
         ) : (
-          <button className="show-more-btn" onClick={() => setShowAll(true)}>Show {fmtCount(extra)} More</button>
+          <button className="show-more-btn" onClick={() => setShowAll(true)}>Show {fmtCount(extra)} more</button>
         )}
       </td>
     </tr>
@@ -287,7 +287,7 @@ function StdTable<T extends object>({
       </div>
       {extra > 0 && (
         <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
-          {showAll ? "Collapse" : `Show ${fmtCount(extra)} More`}
+          {showAll ? "Show fewer" : `Show ${fmtCount(extra)} more`}
         </button>
       )}
     </>
@@ -1246,12 +1246,12 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
         </button>
         {hiddenSmall > 0 && (
           <button className="show-more-btn" onClick={() => setShowAll(true)}>
-            + {fmtCount(hiddenSmall)} more rows (&lt; 0.1% each)
+            Show {fmtCount(hiddenSmall)} more rows (&lt; 0.1% each)
           </button>
         )}
         {showAll && !filter && (
           <button className="show-more-btn" onClick={() => setShowAll(false)}>
-            Hide rows &lt; 0.1%
+            Show fewer
           </button>
         )}
         {kbBtn}
@@ -3541,7 +3541,7 @@ function ThreadsSection({ report }: { report: Report }) {
               style={{ marginTop: "0.5rem" }}
               onClick={() => setShowAll(true)}
             >
-              Show {fmtCount(view.length - visible.length)} More Threads
+              Show {fmtCount(view.length - visible.length)} more threads
             </button>
           )}
         </>
@@ -10081,7 +10081,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 {hasMore && (
                   <button className="btn-link" style={{ fontSize: "0.74rem", marginTop: "2px" }}
                     onClick={() => setPathDepth(d => d + 20)}>
-                    ↑ … Show More
+                    ↑ … Show more
                   </button>
                 )}
               </div>

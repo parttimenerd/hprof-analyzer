@@ -227,7 +227,7 @@ function domTreeNodeToGen(n: DomTreeNode): GenNode {
       if (count > 1) {
         const totalRetained = rawChildren.slice(i, j).reduce((s, x) => s + x.retained, 0);
         const totalShallow = n.children.slice(i, j).reduce((s, x) => s + x.shallow, 0);
-        merged.push({ label: c.label, retained: totalRetained, sublabel: `×${count} · shallow ${formatBytes(totalShallow)}`, children: [], objIndex: rawChildren[i].objIndex });
+        merged.push({ label: c.label, retained: totalRetained, sublabel: `×${fmtCount(count)} · shallow ${formatBytes(totalShallow)}`, children: [], objIndex: rawChildren[i].objIndex });
         i = j;
         continue;
       }
