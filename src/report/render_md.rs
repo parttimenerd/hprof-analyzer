@@ -1739,8 +1739,9 @@ daemon flag, priority, and thread state for every recorded thread._\n\n",
         if let Some(objs) = &th.local_objects {
             if !objs.is_empty() && objs.len() < th.local_root_count as usize {
                 out.push_str(&format!(
-                    "_Showing top {} by retained heap (sizes overlap and do not sum to thread total)._\n\n",
+                    "_Showing top {} of {} by retained heap; retained sizes overlap, so totals may exceed thread total._\n\n",
                     fmt_count(objs.len() as u64),
+                    fmt_count(th.local_root_count),
                 ));
             }
             render_thread_locals(objs, out);
