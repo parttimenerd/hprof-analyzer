@@ -1922,7 +1922,7 @@ or a skewed distribution that explains outsized array heap._\n\n",
     let render_table = |title: &str, buckets: &[SizeHistogramBucket], out: &mut String| {
         out.push_str(&format!("### {title}\n\n"));
         if buckets.is_empty() {
-            out.push_str("_No data for this section._\n\n");
+            out.push_str("_None found in this dump._\n\n");
             return;
         }
         let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
@@ -1999,7 +1999,7 @@ fn render_fill_ratio_table(
 ) {
     use crate::md::{Align, Table, bar};
     if buckets.is_empty() {
-        out.push_str("_No data for this section._\n\n");
+        out.push_str("_None found in this dump._\n\n");
         return;
     }
     let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
@@ -2467,7 +2467,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
 
     // Largest individual arrays.
     if t.top_individual.is_empty() {
-        out.push_str("_No data for this section._\n\n");
+        out.push_str("_None found in this dump._\n\n");
     } else {
         let sh_max = t
             .top_individual
@@ -2537,7 +2537,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
     // Largest array classes by aggregate shallow.
     out.push_str(&format!("#### Top Array Classes ({kind})\n\n"));
     if t.top_by_class.is_empty() {
-        out.push_str("_No data for this section._\n\n");
+        out.push_str("_None found in this dump._\n\n");
     } else {
         let sh_max = t.top_by_class.iter().map(|r| r.shallow).max().unwrap_or(0);
         let mut headers: Vec<&str> = vec!["Array class", "Instances", "Shallow"];
@@ -2932,7 +2932,7 @@ fn render_biggest_collection_table(
     use crate::md::{Align, Table, bar};
     out.push_str(&format!("### {title}\n\n"));
     if rows.is_empty() {
-        out.push_str("_No data for this section._\n\n");
+        out.push_str("_None found in this dump._\n\n");
         return;
     }
     let has_retained = rows.iter().any(|r| r.retained.is_some());
