@@ -1147,7 +1147,11 @@ impl Rule for HeapCompositionSkew {
             TriageSeverity::Info,
             "Heap Composition Skew",
             format!(
-                "`{}` account for {:.1}% of reachable heap — unusually skewed. Primitive Arrays: bulk-data buffers (NIO, image, audio). Instances: too many small objects, see Object Swarm. Object Arrays: sparse arrays or container backing stores. Class Objects: many dynamically generated classes.",
+                "{} account for {:.1}% of reachable heap — unusually skewed. \
+                 Primitive Arrays dominate: check for bulk-data buffers (NIO, image, audio). \
+                 Instances dominate: too many small objects — see Object Swarm. \
+                 Object Arrays dominate: sparse arrays or container backing stores. \
+                 Class Objects dominate: many dynamically generated classes.",
                 dominant.kind, pct,
             ),
             Some(("system-overview", "System Overview")),
@@ -1320,7 +1324,7 @@ impl Rule for ParserOutputAccumulation {
             TriageSeverity::Info,
             "Parser-Output Accumulation",
             format!(
-                "{} live `{}` instances — XML/JSON parse results are accumulating. Parsed documents are not being discarded after processing; process and discard immediately, or use a streaming parser (SAX/StAX/Jackson streaming) instead of building a full in-memory tree.",
+                "{} live `{}` instances — XML/JSON parse results are accumulating; discard documents after processing, or use a streaming parser (SAX/StAX/Jackson streaming) instead of building a full in-memory tree.",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
