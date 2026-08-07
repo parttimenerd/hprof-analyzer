@@ -583,7 +583,7 @@ impl Rule for WeakRefEscape {
             TriageSeverity::Info,
             "Only-Weakly Retained Objects",
             format!(
-                "{} objects only weakly/softly/phantom retained, totaling {} — no strong path keeps them alive; GC can reclaim them (weak: at any collection; soft: under memory pressure). If they are not being reclaimed in practice, check that you are not also holding a strong reference elsewhere.",
+                "{} objects only weakly, softly, or phantom-retained, totaling {} — no strong path keeps them alive; GC can reclaim them (weak: at any collection; soft: under memory pressure). If they are not being reclaimed in practice, check that you are not also holding a strong reference elsewhere.",
                 fmt_count(only_weak_objects),
                 format_bytes(only_weak_retained),
             ),

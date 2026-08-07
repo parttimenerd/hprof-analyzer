@@ -4317,13 +4317,13 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             </p>
             <h4>Referent Classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
-            <h4>Only Weakly Retained</h4>
+            <h4>{stats.kind === "Soft" ? "Only Softly Retained" : stats.kind === "Weak" ? "Only Weakly Retained" : "Only Phantom-Retained"}</h4>
             <p className="subtitle">{
               stats.kind === "Soft"
                 ? "Referents reachable only through soft references — no strong path. GC clears these under memory pressure."
                 : stats.kind === "Weak"
                   ? "Referents reachable only through weak references — no strong or soft path. GC can reclaim them at any collection."
-                  : "Referents reachable only through phantom references — queued for post-cleanup resource release."
+                  : "Referents reachable only through phantom references — finalized and enqueued for post-mortem cleanup via a ReferenceQueue."
             }</p>
             {(stats.only_weakly_retained ?? []).length > 0
               ? <RefClassTable rows={stats.only_weakly_retained} />

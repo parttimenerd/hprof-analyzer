@@ -3213,7 +3213,12 @@ indicates native resources (file handles, off-heap buffers) not being released p
         }
         out.push_str("#### Referent Classes\n\n");
         render_class_table(&stats.referent_histogram, out);
-        out.push_str("#### Only Weakly Retained\n\n");
+        let only_heading = match stats.kind.as_str() {
+            "Soft" => "#### Only Softly Retained\n\n",
+            "Phantom" => "#### Only Phantom-Retained\n\n",
+            _ => "#### Only Weakly Retained\n\n",
+        };
+        out.push_str(only_heading);
         let only_caption = match stats.kind.as_str() {
             "Soft" => {
                 "_Referents reachable only through soft references — no strong path. GC clears these under memory pressure._"
@@ -3222,7 +3227,7 @@ indicates native resources (file handles, off-heap buffers) not being released p
                 "_Referents reachable only through weak references — no strong or soft path. GC can reclaim them at any collection._"
             }
             "Phantom" => {
-                "_Referents reachable only through phantom references — queued for post-cleanup resource release._"
+                "_Referents reachable only through phantom references — finalized and enqueued for post-mortem cleanup via a ReferenceQueue._"
             }
             _ => "_Objects reachable only via this reference kind — no incoming strong reference._",
         };
