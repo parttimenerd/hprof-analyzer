@@ -1609,7 +1609,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
         <span style={{ width: useKB ? "140px" : "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
         <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(d.count)}</span>
-        <span style={{ width: "155px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100.0%</span>
+        <span style={{ width: "155px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100%</span>
         <span style={{ flex: 1 }} />
       </div>
     </section>
@@ -5120,7 +5120,7 @@ function DomGraphView({ pairs, idoms }: {
         data: {
           id: n.id,
           label: n.id.split(".").pop() ?? n.id,
-          pctLabel: totalHeap > 0 ? `${(n.ret / totalHeap * 100).toFixed(1)}%` : "",
+          pctLabel: totalHeap > 0 ? fmtPct(n.ret / totalHeap * 100) : "",
           size: n.r * 2,
           color: computeNodeColor(n.id, n.ret),
           retained: n.ret,
@@ -5415,7 +5415,7 @@ function DomGraphView({ pairs, idoms }: {
         <div style={{ fontSize: "0.78rem", color: "var(--muted)", padding: "0.2rem 0" }}>
           📌 Critical retention path · {blamePath.size} classes ·{" "}
           {totalHeap > 0
-            ? `${([...blamePath].reduce((s, id) => s + (retMap.get(id) ?? 0), 0) / totalHeap * 100).toFixed(1)}% of heap`
+            ? `${fmtPct([...blamePath].reduce((s, id) => s + (retMap.get(id) ?? 0), 0) / totalHeap * 100)} of heap`
             : ""}
         </div>
       )}
@@ -5450,7 +5450,7 @@ function DomGraphView({ pairs, idoms }: {
           <code style={{ wordBreak: "break-all", flex: "1 1 auto" }} title={selected}>{selected}</code>
           {retMap.has(selected) && totalHeap > 0 && (
             <span style={{ color: "var(--muted)", fontSize: "0.78rem", flexShrink: 0 }}>
-              retains <span title={fmtExactBytes(retMap.get(selected)!)}>{fmtB(retMap.get(selected)!)}</span> ({(retMap.get(selected)! / totalHeap * 100).toFixed(1)}%)
+              retains <span title={fmtExactBytes(retMap.get(selected)!)}>{fmtB(retMap.get(selected)!)}</span> ({fmtPct(retMap.get(selected)! / totalHeap * 100)})
             </span>
           )}
           {retMap.has(selected) && totalHeap === 0 && (
@@ -8428,7 +8428,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             {filtered.length > 0 && (
               <>— total retained: <strong title={fmtExactBytes(filtered.reduce((s, [, n]) => s + n.retained, 0))}>{fmtB(filtered.reduce((s, [, n]) => s + n.retained, 0))}</strong>
                 {totalHeap > 0 && (
-                  <span style={{ color: "var(--muted)" }}>{" "}({(filtered.reduce((s, [, n]) => s + n.retained, 0) / totalHeap * 100).toFixed(1)}% of heap)</span>
+                  <span style={{ color: "var(--muted)" }}>{" "}({fmtPct(filtered.reduce((s, [, n]) => s + n.retained, 0) / totalHeap * 100)} of heap)</span>
                 )}
               </>
             )}
@@ -8486,7 +8486,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
                     <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.totalShallow)}>{fmtB(r.totalShallow)}</span></td>
                     <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.totalRetained)}>{fmtB(r.totalRetained)}</span></td>
-                    <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (r.totalRetained / totalHeap * 100).toFixed(1) : "—"}%</td>
+                    <td style={{ textAlign: "right" }}>{totalHeap > 0 ? fmtPct(r.totalRetained / totalHeap * 100) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -8533,7 +8533,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     <span title={fmtExactBytes(node.retained)}>{fmtB(node.retained)}</span>
                   </span>
                 </td>
-                <td style={{ textAlign: "right" }}>{totalHeap > 0 ? (node.retained / totalHeap * 100).toFixed(1) : "—"}%</td>
+                <td style={{ textAlign: "right" }}>{totalHeap > 0 ? fmtPct(node.retained / totalHeap * 100) : "—"}</td>
               </tr>
             );})}
           </tbody>
@@ -9447,7 +9447,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         .map(rootId => {
                           const rn = data.nodes[String(rootId)];
                           if (!rn) return null;
-                          const pct = totalHeap > 0 ? (rn.retained / totalHeap * 100).toFixed(1) : "—";
+                          const pct = totalHeap > 0 ? fmtPct(rn.retained / totalHeap * 100) : "—";
                           return (
                             <tr key={rootId}>
                               <td>
@@ -9463,7 +9463,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </td>
                               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(rn.shallow)}>{fmtB(rn.shallow)}</span></td>
                               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(rn.retained)}>{fmtB(rn.retained)}</span></td>
-                              <td style={{ textAlign: "right" }}>{pct}%</td>
+                              <td style={{ textAlign: "right" }}>{pct}</td>
                               <td style={{ textAlign: "right" }}>
                                 {rn.dom_subtree_count != null && rn.dom_subtree_count > 0
                                   ? fmtCount(rn.dom_subtree_count)
@@ -9739,8 +9739,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               </td>
                               <td style={{ textAlign: "right" }}>
                                 {totalHeap > 0
-                                  ? (cn.retained / totalHeap * 100).toFixed(1)
-                                  : "—"}%
+                                  ? fmtPct(cn.retained / totalHeap * 100)
+                                  : "—"}
                               </td>
                             </tr>
                           );
@@ -9890,8 +9890,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <th>% Heap</th>
                 <td>
                   {totalHeap > 0
-                    ? (currentNode.retained / totalHeap * 100).toFixed(1)
-                    : "—"}%
+                    ? fmtPct(currentNode.retained / totalHeap * 100)
+                    : "—"}
                 </td>
               </tr>
               {(() => {
@@ -10347,7 +10347,7 @@ function SeriesTable({
         const pct = (r.delta_retained / base) * 100;
         if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
         const sign = pct > 0 ? "+" : "";
-        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{pct.toFixed(1)}%</span>;
+        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{fmtPct(Math.abs(pct))}</span>;
       },
       selector: (r: SRow) => {
         const base = r.retained[0] ?? 0;
@@ -10435,9 +10435,9 @@ function diffVerdict(diff: SeriesDiffResult, fmtB: (n: number) => string): strin
       const driver = lead
         ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained, fmtB)} retained)`
         : "";
-      line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow)${driver}.`;
+      line = `Heap grew ${fmtPct(pct)} (${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow)${driver}.`;
     } else if (diff.delta_total_shallow < 0) {
-      line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow); no net growth.`;
+      line = `Heap shrank ${fmtPct(Math.abs(pct))} (${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow); no net growth.`;
     } else {
       line = "Heap size is unchanged.";
     }
@@ -10483,12 +10483,7 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
         const pct = (r.delta_retained / base) * 100;
         if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
         const sign = pct > 0 ? "+" : "";
-        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{pct.toFixed(1)}%</span>;
-      },
-      selector: (r: SeriesClassRow) => {
-        const base = r.retained[0] ?? 0;
-        if (base === 0) return 0;
-        return (r.delta_retained / base) * 100;
+        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{fmtPct(Math.abs(pct))}</span>;
       },
       sortable: true,
     },
@@ -11293,7 +11288,7 @@ function InspectorFieldsPage({ idx, cls, onNavigate }: {
                     <span title={fmtExactBytes(refSizes.get(f.dense_idx)!)}>{formatBytes(refSizes.get(f.dense_idx)!)}</span> retained
                     {instanceRetained > 0 && (
                       <span style={{color:"var(--muted)",fontSize:"0.75em"}}>
-                        {" "}({(refSizes.get(f.dense_idx)! / instanceRetained * 100).toFixed(1)}%)
+                        {" "}({fmtPct(refSizes.get(f.dense_idx)! / instanceRetained * 100)})
                       </span>
                     )}
                   </span>

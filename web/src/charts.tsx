@@ -15,7 +15,7 @@ import type {
   Suspect,
   VizSpec,
 } from "./types";
-import { fmtCount, formatBytes, fmtExactBytes, shortLoader } from "./format";
+import { fmtCount, formatBytes, fmtExactBytes, fmtPct, shortLoader } from "./format";
 import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
 import { themeColors, useThemeKey } from "./chartSetup";
 import "./chartSetup";
@@ -112,7 +112,7 @@ function FlatTreemap({
           if (lw < 1 || lh < 1) return null;
           const label = (leaf.data as { name: string }).name;
           const value = leaf.value ?? 0;
-          const pct = ((value / total) * 100).toFixed(1);
+          const pct = fmtPct((value / total) * 100);
           const origIdx = data.findIndex((d) => d.name === label);
           const isRemainder = label === "(remainder)";
           const clickable = onSlice != null && origIdx !== -1 && !isRemainder;
@@ -148,7 +148,7 @@ function FlatTreemap({
                   color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap",
                   overflow: "hidden", textOverflow: "ellipsis",
                 }}>
-                  {fmt(value)} ({pct}%)
+                  {fmt(value)} ({pct})
                 </span>
               )}
             </div>
@@ -399,12 +399,12 @@ export function ZoomableTreemap<T>({
             // Extra (class) tile
             if (ld.extra !== null) {
               const val = ld.extra.value;
-              const pct = ((val / total) * 100).toFixed(1);
+              const pct = fmtPct((val / total) * 100);
               const bg = getColor(currentNode);
               return (
                 <div
                   key={`x${i}`}
-                  title={`${ld.extra.label}: ${fmt(val)} (${pct}%)${fmtExact ? ` [${fmtExact(val)}]` : ""} — class`}
+                  title={`${ld.extra.label}: ${fmt(val)} (${pct})${fmtExact ? ` [${fmtExact(val)}]` : ""} — class`}
                   style={{
                     position: "absolute", left: x0, top: y0, width: lw, height: lh,
                     background: bg, opacity: 0.55, boxSizing: "border-box", overflow: "hidden",
@@ -428,14 +428,14 @@ export function ZoomableTreemap<T>({
             // Sub-package tile
             const node = ld.node as T;
             const val = ld.value;
-            const pct = ((val / total) * 100).toFixed(1);
+            const pct = fmtPct((val / total) * 100);
             const hasKids = getChildren(node).filter((c) => getValue(c) > 0).length > 0;
             const isClickable = hasKids || !!renderLeaf;
             const bg = getColor(node);
             return (
               <div
                 key={i}
-                title={`${getLabel(node)}: ${fmt(val)} (${pct}%)${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
+                title={`${getLabel(node)}: ${fmt(val)} (${pct})${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
                 onClick={isClickable ? () => zoomTo(node) : undefined}
                 style={{
                   position: "absolute", left: x0, top: y0, width: lw, height: lh,
@@ -495,13 +495,13 @@ export function ZoomableTreemap<T>({
                 const hasKids = getChildren(cell.node).filter((c) => getValue(c) > 0).length > 0;
                 const isClickable = lvl > 0 && (hasKids || !!renderLeaf);
                 const val = getValue(cell.node);
-                const pct = ((val / getValue(currentNode)) * 100).toFixed(1);
+                const pct = fmtPct((val / getValue(currentNode)) * 100);
                 return (
                   <div
                     key={ci}
                     className={`flame-cell${!isClickable ? " flame-cell-leaf" : ""}`}
                     style={{ width: `${cell.pct}%`, background: PALETTE[cell.colorIdx % PALETTE.length] }}
-                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct}%)${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids && lvl > 0 ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
+                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct})${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids && lvl > 0 ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
                     onClick={isClickable ? () => zoomTo(cell.node) : undefined}
                   >
                     <span className="flame-label">{getLabel(cell.node)}</span>
@@ -513,14 +513,14 @@ export function ZoomableTreemap<T>({
           {extras.length > 0 && (
             <div className="flame-level">
               {extras.map((e, ci) => {
-                const pct = ((e.value / (getValue(currentNode) || 1)) * 100).toFixed(1);
+                const pct = fmtPct((e.value / (getValue(currentNode) || 1)) * 100);
                 const bg = getColor(currentNode);
                 return (
                   <div
                     key={ci}
                     className="flame-cell flame-cell-leaf"
                     style={{ width: `${((e.value / (getValue(currentNode) || 1)) * 100)}%`, background: bg, opacity: 0.6 }}
-                    title={`${e.label}: ${fmt(e.value)} (${pct}%)${fmtExact ? ` [${fmtExact(e.value)}]` : ""} — class`}
+                    title={`${e.label}: ${fmt(e.value)} (${pct})${fmtExact ? ` [${fmtExact(e.value)}]` : ""} — class`}
                   >
                     <span className="flame-label">{e.label}</span>
                   </div>
@@ -580,7 +580,7 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
             const i = ctx.dataIndex;
             if (titles?.[i]) return titles[i];
             const v = data[i].value;
-            return `${data[i].name} — ${fmt(v)} (${((v / total) * 100).toFixed(1)}%)`;
+            return `${data[i].name} — ${fmt(v)} (${fmtPct((v / total) * 100)})`;
           },
         },
       },
@@ -759,7 +759,7 @@ export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect
       {segments.map((seg) => (
         <div
           key={seg.idx}
-          title={`${seg.name}: ${formatBytes(seg.value)} (${(seg.pct * 100).toFixed(1)}%)`}
+          title={`${seg.name}: ${formatBytes(seg.value)} (${fmtPct(seg.pct * 100)})`}
           onClick={onSlice ? () => onSlice(seg.idx) : undefined}
           style={{
             width: `${seg.pct * 100}%`,
@@ -776,7 +776,7 @@ export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect
         >
           {seg.pct >= 0.08 && (
             <span style={{ color: "#fff", fontSize: "0.75rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 500 }}>
-              {seg.name.split(".").pop()} {(seg.pct * 100).toFixed(1)}%
+              {seg.name.split(".").pop()} {fmtPct(seg.pct * 100)}
             </span>
           )}
         </div>
@@ -792,10 +792,10 @@ export function LeakShareChart({ suspects, total, onSlice }: { suspects: Suspect
             paddingLeft: 6,
             overflow: "hidden",
           }}
-          title={`(remainder): ${formatBytes(remainder)} (${((remainder / total) * 100).toFixed(1)}%)`}
+          title={`(remainder): ${formatBytes(remainder)} (${fmtPct((remainder / total) * 100)})`}
         >
           <span style={{ color: "#fff", fontSize: "0.72rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {((remainder / total) * 100).toFixed(1)}% other
+            {fmtPct((remainder / total) * 100)} other
           </span>
         </div>
       )}
@@ -925,7 +925,7 @@ function StackedBar({ segments, fmt }: {
       tooltip: {
         callbacks: {
           label: (ctx: { dataset: { label?: string }; parsed: { x: number } }) =>
-            `${ctx.dataset.label}: ${fmt(ctx.parsed.x)} (${((ctx.parsed.x / total) * 100).toFixed(1)}%)`,
+            `${ctx.dataset.label}: ${fmt(ctx.parsed.x)} (${fmtPct((ctx.parsed.x / total) * 100)})`,
         },
       },
     },
@@ -988,7 +988,7 @@ export function TreemapBar({ root, onSelect }: { root: PackageNode; onSelect: (i
             <div
               key={i}
               onClick={clickable ? () => onSelect(s.idx) : undefined}
-              title={`${s.name}: ${formatBytes(s.value)} (${pct.toFixed(1)}%)`}
+              title={`${s.name}: ${formatBytes(s.value)} (${fmtPct(pct)})`}
               style={{ width: `${pct}%`, background: color(i), cursor: clickable ? "pointer" : "default" }}
             />
           );
@@ -1002,7 +1002,7 @@ export function TreemapBar({ root, onSelect }: { root: PackageNode; onSelect: (i
               onClick={s.idx !== -1 ? () => onSelect(s.idx) : undefined}
               style={{ cursor: s.idx !== -1 ? "pointer" : "default" }}
             >
-              {s.name} — {formatBytes(s.value)} ({((s.value / total) * 100).toFixed(1)}%)
+              {s.name} — {formatBytes(s.value)} ({fmtPct((s.value / total) * 100)})
             </span>
           </li>
         ))}
@@ -1070,7 +1070,7 @@ export function RetainedTreemap({ root }: { root: PackageNode }) {
         return (
           <div
             key={i}
-            title={`${label}: ${formatBytes(retained)} (${((retained / totalRetained) * 100).toFixed(1)}%)`}
+            title={`${label}: ${formatBytes(retained)} (${fmtPct((retained / totalRetained) * 100)})`}
             onMouseEnter={(e) => {
               const rect = (e.currentTarget.closest("[data-treemap]") as HTMLElement | null)?.getBoundingClientRect();
               setTooltip({ name: label, retained, x: x0 + w / 2, y: y0 });
@@ -1125,7 +1125,7 @@ export function RetainedTreemap({ root }: { root: PackageNode }) {
         >
           <strong>{tooltip.name}</strong>
           <br />
-          {formatBytes(tooltip.retained)} ({((tooltip.retained / totalRetained) * 100).toFixed(1)}%)
+          {formatBytes(tooltip.retained)} ({fmtPct((tooltip.retained / totalRetained) * 100)})
         </div>
       )}
     </div>
@@ -1239,7 +1239,7 @@ function QueryTreemap({ data }: { data: Slice[] }) {
         return (
           <div
             key={i}
-            title={`${label}: ${value} (${((value / total) * 100).toFixed(1)}%)`}
+            title={`${label}: ${value} (${fmtPct((value / total) * 100)})`}
             style={{
               position: "absolute",
               left: x0,

@@ -34,9 +34,10 @@ export function pctOf(part: number, total: number): number {
 // Rust's `fmt_pct`. Use this wherever a "% Heap" or "% of total" figure is
 // displayed so all formats agree on precision and the floor.
 export function fmtPct(p: number): string {
-  if (p <= 0) return "0.0%";
+  if (p <= 0) return "0%";
   if (p < 0.1) return "< 0.1%";
-  return p.toFixed(1) + "%";
+  const s = p.toFixed(1);
+  return s.endsWith(".0") ? s.slice(0, -2) + "%" : s + "%";
 }
 
 // A dump-creation timestamp: millis since epoch -> ISO date (UTC, second res).
