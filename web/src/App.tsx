@@ -2854,8 +2854,8 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <summary>
               Directly Dominated Objects{" "}
               {s.dominated_total_count > s.dominated_shown
-                ? `(directly dominates ${fmtCount(s.dominated_total_count)}, showing top ${fmtCount(s.dominated_shown)})`
-                : `(directly dominates ${fmtCount(s.dominated_total_count)})`}
+                ? `(${fmtCount(s.dominated_total_count)} total, showing top ${fmtCount(s.dominated_shown)})`
+                : `(${fmtCount(s.dominated_total_count)} total)`}
             </summary>
             <StdTable columns={domCols} data={s.dominated} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
           </details>

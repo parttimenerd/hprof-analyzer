@@ -812,7 +812,7 @@ export function ConcentrationChart({ rc }: { rc: RetentionSummary }) {
         { label: "Top 10", value: rc.top10_bp / 100 },
         { label: "Top 100", value: rc.top100_bp / 100 },
       ]}
-      fmt={(v) => `${v.toFixed(1)}%`}
+      fmt={(v) => `${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}%`}
       yMaxPct={100}
     />
   );
@@ -950,7 +950,7 @@ export function ConcentrationStackedBar({ rc }: { rc: RetentionSummary }) {
   const next90 = Math.max(0, rc.top100_bp - rc.top10_bp);
   const rest = Math.max(0, 10000 - rc.top100_bp);
   if (rc.top1_bp === 0 && rc.top10_bp === 0 && rc.top100_bp === 0) return null;
-  const fmtPct = (bp: number) => `${(bp / 100).toFixed(1)}%`;
+  const fmtPct = (bp: number) => { const v = bp / 100; return `${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}%`; };
   return (
     <StackedBar
       segments={[
