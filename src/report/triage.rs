@@ -344,7 +344,7 @@ impl Rule for Concentration {
                 "concentration",
                 TriageSeverity::Info,
                 "Concentration",
-                "diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Explore the top classes in Leak Suspects to find the most impactful target.".to_string(),
+                "diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Inspect individual suspects to find the most impactful target.".to_string(),
                 Some(("leak-suspects", "Leak Suspects")),
             ),
             None => signal(
@@ -374,7 +374,7 @@ impl Rule for DominantGcRootType {
             TriageSeverity::Warning,
             "Dominant GC-Root Type",
             format!(
-                "{:.1}% of the heap is held by \"{}\" roots — see GC Roots by Type in System Overview for the per-class breakdown.",
+                "{:.1}% of the heap is held by \"{}\" roots — the GC Roots by Type table shows the per-class breakdown.",
                 pct, top.root_type,
             ),
             Some(("system-overview", "System Overview")),
@@ -547,7 +547,7 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread Pinning",
             format!(
-                "thread `{}` retains {} ({:.1}% of heap) via {} thread-local GC root references — a running thread is pinning a disproportionate share of the heap. Inspect its stack frames and ThreadLocal values in the Threads section.",
+                "thread `{}` retains {} ({:.1}% of heap) via {} thread-local GC root references — a running thread is pinning a disproportionate share of the heap. Inspect the thread's stack frames and ThreadLocal values.",
                 who,
                 format_bytes(t.retained),
                 share,
@@ -1446,8 +1446,7 @@ impl Rule for BigDropConcentration {
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
                  drops here in the dominator tree — every path from a GC root to those objects \
-                 passes through this one node. Follow the retaining chain in Dominator Analysis \
-                 to find the GC root that keeps it alive.",
+                 passes through this one node. Follow the retaining chain to find the GC root that keeps it alive.",
                 row.display_class,
                 pct,
                 format_bytes(row.drop_bytes),
