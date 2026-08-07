@@ -369,8 +369,14 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
     if !o.loader_rollup.is_empty() {
         out.push_str("### Class Loaders\n\n");
         out.push_str(
-            "_Retained heap attributed to each class loader. Growing loaders \
-             (e.g. web-app or plugin loaders) are a common source of metaspace and heap leaks._\n\n",
+            "_Classes grouped by the loader that defined them. \
+             Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common \
+             source of metaspace and heap leaks. \
+             The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), \
+             not an instance name — the hprof format does not record loader names. \
+             Multiple rows with the same loader class are distinct loader instances; \
+             many such instances each holding significant heap can signal a class-loader leak. \
+             The **Address** column distinguishes them._\n\n",
         );
         let lmax = o
             .loader_rollup

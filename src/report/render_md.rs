@@ -2592,7 +2592,7 @@ pub(crate) fn render_collection_attribution(
 
     out.push_str("## Container Attribution (Class#field)\n\n");
     out.push_str(
-        "_Which holder `Class#field` points at the most container memory. Two rankings: total \
+        "_Which `Class#field` holds the most collection memory — two rankings: total \
          across all containers reached through a field, and the single largest container per \
          field. To reduce waste: shrink the collection's initial capacity, evict unused entries, \
          or null out the field when the holder is done._\n\n",
@@ -2772,7 +2772,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
 
     out.push_str("## Fields by Retained Size (Class#field)\n\n");
     out.push_str(
-        "_Which holder `Class#field` retains the most memory, summed over every object the \
+        "_Which `Class#field` retains the most memory, summed over every object the \
          field points at. Runtime pointee type is the dominant concrete class reached through \
          the field (`varies` when no single type dominates). A field retaining unexpectedly \
          large memory is a good candidate to null out after use or wrap in a lazy-initialized \
