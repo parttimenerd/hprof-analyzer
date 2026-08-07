@@ -659,9 +659,11 @@ kbd {
 .trg-stat-table th { font-weight: 500; color: var(--muted); }
 .trg-edge-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .trg-edge-list { margin: 4px 0; padding-left: 0; list-style: none; }
-.trg-edge-list li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border); }
-.trg-link-btn { background: none; border: none; cursor: pointer; color: var(--accent); text-align: left; }
-.trg-edge-stat { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.trg-edge-list li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; padding: 3px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.trg-link-btn { background: none; border: none; cursor: pointer; color: var(--accent); text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trg-sidebar .trg-edge-list li { flex-wrap: nowrap; }
+.trg-sidebar .trg-edge-list .trg-link-btn { flex-shrink: 1; }
+.trg-edge-stat { font-size: 0.8rem; color: var(--muted); white-space: nowrap; flex-shrink: 0; margin-left: auto; padding-left: 4px; }
 .trg-field-names { font-size: 0.72rem; color: var(--muted); font-style: italic; flex-basis: 100%; padding-left: 2px; margin-top: -2px; }
 .trg-page-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .trg-dom-ctx { font-size: 0.85rem; color: var(--muted); background: var(--card); padding: 6px 10px; border-radius: 4px; }
