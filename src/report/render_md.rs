@@ -1884,7 +1884,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
 Totals can exceed heap size because boot-loader classes are counted in every component that retains them._\n\n",
     );
     let retained_max = tc.components.iter().map(|c| c.retained).max().unwrap_or(0);
-    let mut headers: Vec<&str> = vec!["Component", "Retained", "% Heap", "Top classes"];
+    let mut headers: Vec<&str> = vec!["Component", "Retained", "% Heap", "Top Classes"];
     let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Left];
     if graphs {
         headers.push("");
@@ -1986,8 +1986,8 @@ or a skewed distribution that explains outsized array heap._\n\n",
         t.render(out);
         out.push('\n');
     };
-    render_table("Object arrays", &a.obj_array_buckets, out);
-    render_table("Primitive arrays", &a.prim_array_buckets, out);
+    render_table("Object Arrays", &a.obj_array_buckets, out);
+    render_table("Primitive Arrays", &a.prim_array_buckets, out);
     out.push_str(&format!(
         "Zero-length arrays: {}\n\n",
         fmt_count(a.zero_length_count)
@@ -2436,7 +2436,7 @@ few instances) are filtered as noise._",
         // The Owner column (dominant `Class#field` referrer) is present only when
         // attribution data exists (i.e. `--collections` was passed).
         let has_owner = interesting_rows.iter().any(|r| r.owner.is_some());
-        let mut headers: Vec<&str> = vec!["Array class", "Length", "Value", "Objects", "Shallow"];
+        let mut headers: Vec<&str> = vec!["Array Class", "Length", "Value", "Objects", "Shallow"];
         let mut aligns = vec![
             Align::Left,
             Align::Right,
