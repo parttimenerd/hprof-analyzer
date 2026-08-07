@@ -2629,10 +2629,12 @@ pub(crate) fn render_collection_attribution(
             "Holder Instances",
             "Total Elements",
             "Total Retained",
+            "Wasted",
         ];
         let mut aligns = vec![
             Align::Left,
             Align::Left,
+            Align::Right,
             Align::Right,
             Align::Right,
             Align::Right,
@@ -2651,6 +2653,7 @@ pub(crate) fn render_collection_attribution(
                 fmt_count(r.holder_instances),
                 fmt_count(r.total_elements),
                 format_bytes(r.total_retained),
+                format_bytes(r.total_wasted_bytes),
             ];
             if graphs {
                 row.push(bar(
