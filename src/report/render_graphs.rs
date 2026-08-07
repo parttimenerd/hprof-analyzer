@@ -817,17 +817,13 @@ or to see the full retention picture._\n\n",
         ],
     );
     for (rank, row) in t.biggest_objects.iter().enumerate() {
-        let pct = if total_shallow > 0 {
-            row.retained as f64 / total_shallow as f64 * 100.0
-        } else {
-            0.0
-        };
+        let pct = pct_of_heap(row.retained, total_shallow);
         objs.row([
             (rank + 1).to_string(),
             format!("`{}`", row.display_class),
             format_bytes(row.shallow),
             format_bytes(row.retained),
-            format!("{pct:.1}%"),
+            fmt_pct(pct),
             bar(row.retained, obj_max, GRAPH_BAR_WIDTH),
         ]);
     }
