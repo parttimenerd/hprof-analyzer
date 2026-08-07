@@ -404,7 +404,7 @@ impl Rule for Shape {
         let shape = if p90 <= 3 {
             "shallow (most objects are held within a few hops of a GC root)"
         } else {
-            "deep — long dominator chains suggest nested collections or linked structures; trace the chain back to the GC root to find what keeps the deep objects alive"
+            "deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects"
         };
         Some(signal(
             "shape",
