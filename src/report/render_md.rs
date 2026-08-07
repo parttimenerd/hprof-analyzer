@@ -3917,8 +3917,11 @@ Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     ));
     if !d.rows.is_empty() {
         out.push_str("#### Waste by Array Element Type\n\n");
+        out.push_str(
+            "_Reclaimable bytes grouped by array element type — focus on the highest-waste type first._\n\n",
+        );
         let mut t = Table::new(
-            &["#", "Array type", "Dup groups", "Wasted"],
+            &["#", "Array Type", "Dup Groups", "Wasted"],
             &[Align::Right, Align::Left, Align::Right, Align::Right],
         );
         for (i, row) in d.rows.iter().enumerate() {
@@ -3935,7 +3938,7 @@ Deduplication is approximate (64-bit hash; rare collisions possible)._\n\n",
     if !d.top_array_holders.is_empty() {
         out.push_str("#### Classes Holding the Most Duplicate Arrays\n\n");
         let mut t = Table::new(
-            &["#", "Class", "Array refs"],
+            &["#", "Class", "Array Refs"],
             &[Align::Right, Align::Left, Align::Right],
         );
         for (i, h) in d.top_array_holders.iter().enumerate() {
