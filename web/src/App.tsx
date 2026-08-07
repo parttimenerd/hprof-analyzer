@@ -3786,7 +3786,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
         Fraction of each collection's capacity in use — low fill wastes backing-array memory.
-        {cfr && <>{" "}{fmtCount(cfr.total)} collections analyzed ({fmtCount(cfr.tracked)} non-empty shown).</>}
+        {cfr && <>{" "}{fmtCount(cfr.total)} collections analyzed ({fmtCount(cfr.tracked)} non-empty tracked).</>}
       </p>
       {cfrBuckets.length === 0 ? (
         <p className="subtitle">None found in this dump.</p>
@@ -4329,7 +4329,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
               {stats.null_referent_count != null && stats.null_referent_count > 0 && (
                 <> {fmtCount(stats.null_referent_count)} {stats.null_referent_count === 1 ? "instance has" : "instances have"} a null referent — referent collected, not yet processed.
                   {stats.null_referent_count / stats.reference_instances > 0.5 && (
-                    <span style={{color: 'var(--warn-border)'}}> Over 50% — reference queue processor is likely stalled.</span>
+                    <strong style={{color: 'var(--warn-border)'}}> ⚠ Over 50% null — reference queue processor is likely stalled.</strong>
                   )}
                 </>
               )}
