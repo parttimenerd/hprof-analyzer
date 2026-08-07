@@ -574,9 +574,9 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
     stats.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
     stats.row(["Objects".into(), fmt_count(o.total_objects)]);
     stats.row(["Classes".into(), fmt_count(o.classes_loaded)]);
-    stats.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
+    stats.row(["Class Loaders".into(), fmt_count(o.classloaders_loaded)]);
     stats.row(["Threads".into(), fmt_count(r.threads.threads.len() as u64)]);
-    stats.row(["GC roots".into(), fmt_count(o.gc_roots)]);
+    stats.row(["GC Roots".into(), fmt_count(o.gc_roots)]);
     stats.render(out);
     out.push('\n');
 
@@ -966,25 +966,25 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     out.push_str("_JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and system properties._\n\n");
     out.push_str("### Heap Summary\n\n");
     let mut summary = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
-    summary.row(["HPROF format".into(), o.format.clone()]);
-    summary.row(["File size".into(), format_bytes(o.file_size)]);
+    summary.row(["HPROF Format".into(), o.format.clone()]);
+    summary.row(["File Size".into(), format_bytes(o.file_size)]);
     summary.row([
-        "Identifier size".into(),
+        "Identifier Size".into(),
         format!("{}-bit", o.identifier_size_bits),
     ]);
     if let Some(coops) = o.compressed_oops {
         summary.row([
             "Compressed OOPs".into(),
-            if coops { "yes" } else { "no" }.into(),
+            if coops { "Yes" } else { "No" }.into(),
         ]);
     }
     if let Some(ms) = o.dump_creation {
-        summary.row(["Dump created".into(), format_epoch_ms(ms)]);
+        summary.row(["Dump Created".into(), format_epoch_ms(ms)]);
     }
     if let Some(ver) = &o.jvm_version {
-        summary.row(["JVM version".into(), ver.clone()]);
+        summary.row(["JVM Version".into(), ver.clone()]);
     }
-    summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
+    summary.row(["Total Objects".into(), fmt_count(o.total_objects)]);
     summary.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
     if off_heap_cap > 0 {
         let ratio_str = if o.total_shallow > 0 {
@@ -996,14 +996,14 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
         } else {
             format!("{} off-heap", format_bytes(off_heap_cap))
         };
-        summary.row(["Off-heap / on-heap".into(), ratio_str]);
+        summary.row(["Off-Heap / On-Heap".into(), ratio_str]);
     }
-    summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
-    summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
-    summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
+    summary.row(["GC Roots".into(), fmt_count(o.gc_roots)]);
+    summary.row(["Classes Loaded".into(), fmt_count(o.classes_loaded)]);
+    summary.row(["Class Loaders".into(), fmt_count(o.classloaders_loaded)]);
     if o.unreachable_count > 0 {
         summary.row([
-            "Unreachable objects (excluded)".into(),
+            "Unreachable (Excluded)".into(),
             format!(
                 "{} ({})",
                 fmt_count(o.unreachable_count),
@@ -1013,13 +1013,13 @@ pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out:
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Dead object ratio (unreachable / total)".into(),
+            "Dead Object Ratio (unreachable / total)".into(),
             fmt_pct(o.heap_fragmentation_ratio * 100.0),
         ]);
     }
     if o.top_class_concentration_bp > 0 {
         summary.row([
-            "Top-class retained concentration".into(),
+            "Top-Class Retained Concentration".into(),
             fmt_pct(o.top_class_concentration_bp as f64 / 100.0),
         ]);
     }

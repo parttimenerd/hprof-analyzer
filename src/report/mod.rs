@@ -782,7 +782,7 @@ mod tests {
 
         // Markdown surfaces the Class loaders line.
         let md = render_markdown(&r);
-        assert!(md.contains("Class loaders"), "missing Class loaders line");
+        assert!(md.contains("Class Loaders"), "missing Class Loaders line");
     }
 
     /// A boot-only heap (all loaders 0) reports exactly one class loader.
