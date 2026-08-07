@@ -4138,7 +4138,7 @@ pub(crate) fn render_collection_waste_budget(r: &crate::report::Report, out: &mu
                 kind: "Duplicate Strings".into(),
                 wasted: ds.approx_wasted_bytes,
                 objects: ds.total_string_instances.saturating_sub(ds.distinct_values),
-                fix: "Intern at parse time or use a canonical-instance registry",
+                fix: "Intern at parse time (e.g. map.computeIfAbsent(s, k -> k)) or use Guava Interner",
             });
         }
     }
@@ -4168,7 +4168,7 @@ pub(crate) fn render_collection_waste_budget(r: &crate::report::Report, out: &mu
                 kind: "Boxed Primitives (footprint)".into(),
                 wasted: total_shallow,
                 objects: total_instances,
-                fix: "Use primitive arrays; or Eclipse Collections / Koloboke for typed collections",
+                fix: "Use primitive arrays, or Eclipse Collections / Koloboke for primitive-typed collections",
             });
         }
     }
