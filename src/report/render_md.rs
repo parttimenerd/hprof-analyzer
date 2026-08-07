@@ -1095,18 +1095,25 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
                 .map(|r| r.retained)
                 .max()
                 .unwrap_or(0);
-            let mut t = Table::new(
-                &["Root Type", "Count", "% of Roots", "Retained", ""],
-                &[
-                    Align::Left,
-                    Align::Right,
-                    Align::Right,
-                    Align::Right,
-                    Align::Left,
-                ],
-            );
+            let has_top = o
+                .gc_roots_retained_by_type
+                .iter()
+                .any(|r| !r.top_classes.is_empty());
+            let mut headers: Vec<&str> = vec!["Root Type", "Count", "% of Roots", "Retained", ""];
+            let mut aligns = vec![
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Left,
+            ];
+            if has_top {
+                headers.push("Top Retained Classes");
+                aligns.push(Align::Left);
+            }
+            let mut t = Table::new(&headers, &aligns);
             for row in &o.gc_roots_retained_by_type {
-                t.row([
+                let mut cells = vec![
                     row.root_type.clone(),
                     fmt_count(row.count),
                     fmt_pct(if total_count > 0 {
@@ -1116,7 +1123,25 @@ JNI global references, static fields of loaded classes, and synchronized lock ob
                     }),
                     format_bytes(row.retained),
                     bar(row.retained, max_retained, 16),
-                ]);
+                ];
+                if has_top {
+                    let top = row
+                        .top_classes
+                        .iter()
+                        .take(3)
+                        .map(|c| {
+                            format!(
+                                "`{}` ×{} ({})",
+                                c.class_name,
+                                fmt_count(c.count),
+                                format_bytes(c.retained)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    cells.push(top);
+                }
+                t.row(cells);
             }
             t.render(out);
             out.push('\n');
