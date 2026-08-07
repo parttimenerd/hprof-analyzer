@@ -854,7 +854,7 @@ function WasteSummarySection({ report }: { report: Report }) {
     <section className="section" id="waste-summary" tabIndex={-1}>
       <h2>Waste Summary</h2>
       <p className="subtitle">
-        <strong>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
+        <strong title={fmtExactBytes(w.total_bytes)}>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
       </p>
       <div className="waste-summary-table">
         <StdTable columns={wasteCols} data={w.sources} searchKeys={["label"]} fmtBtn={kbBtn} defaultSortFieldId="reclaimable" defaultSortAsc={false} />
@@ -2048,7 +2048,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
         const compCols: TableColumn<KindStat>[] = [
           { id: "kind", name: "Kind", grow: 1, cell: (k) => <span style={{ textTransform: "capitalize" }}>{k.kind}</span>, selector: (k) => k.kind, sortable: true },
           { id: "objects", name: "Objects", right: true, width: "120px", format: (k) => fmtCount(k.objects), selector: (k) => k.objects, sortable: true },
-          { id: "shallow", name: "Shallow Heap", right: true, width: "138px", format: (k) => fmtB(k.shallow_heap), selector: (k) => k.shallow_heap, sortable: true },
+          { id: "shallow", name: "Shallow Heap", right: true, width: "138px", cell: (k) => <span title={fmtExactBytes(k.shallow_heap)}>{fmtB(k.shallow_heap)}</span>, selector: (k) => k.shallow_heap, sortable: true },
         ];
         return (
           <>
@@ -2083,7 +2083,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           { id: "type", name: "Root Type", width: "210px", selector: (r) => r.root_type, sortable: true },
           { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count, sortable: true },
           { id: "pct", name: "% of Roots", right: true, width: "104px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count, sortable: true },
-          { id: "retained", name: "Retained", right: true, width: "128px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained, sortable: true },
+          { id: "retained", name: "Retained", right: true, width: "128px", cell: (r: GcRow) => <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span>, selector: (r: GcRow) => r.retained, sortable: true },
           {
             id: "top_classes", name: "Top Retained Classes", grow: 1, maxWidth: "408px", wrap: true,
             cell: (r: GcRow) => {
@@ -2094,7 +2094,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                   {top.map((cc, j) => (
                     <span key={cc.class_name} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap", marginRight: j < top.length - 1 ? "0.4em" : 0 }}>
                       {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 2 }}>·</span> : null}
-                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={cc.class_name} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.class_name}</code><CopyBtn text={cc.class_name} /><PivotBtn cls={cc.class_name} /><OqlBtn cls={cc.class_name} /><ListObjectsBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} ({fmtB(cc.retained)})
+                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={cc.class_name} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.class_name}</code><CopyBtn text={cc.class_name} /><PivotBtn cls={cc.class_name} /><OqlBtn cls={cc.class_name} /><ListObjectsBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} (<span title={fmtExactBytes(cc.retained)}>{fmtB(cc.retained)}</span>)
                     </span>
                   ))}
                 </div>
@@ -2115,7 +2115,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
               <span style={{ width: "210px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalCount)}</span>
               <span style={{ width: "104px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>100%</span>
-              <span style={{ width: "128px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
+              <span style={{ width: "128px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalRetained)}>{fmtB(totalRetained)}</span></span>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }} />
             </div>
             {o.gc_roots_retained_by_type?.some(r => r.root_type.toLowerCase().includes('jni') && r.retained > 100 * 1024 * 1024) && (
@@ -2410,6 +2410,7 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
                 textAnchor="end"
                 fill="var(--muted)"
               >
+                {!isLast && <title>{fmtExactBytes(step.retained)} retained</title>}
                 {isLast
                   ? (step.root_type_label ? `GC Root: ${step.root_type_label}` : "GC Root")
                   : `retains ${fmtB(step.retained)}`}
@@ -3566,7 +3567,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
           {c.top_classes.map((cc, j) => (
             <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap", minWidth: 0 }}>
               {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 2 }}>·</span> : null}
-              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code title={cc.pretty_class} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.pretty_class}</code><CopyBtn text={cc.pretty_class} /><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
+              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code title={cc.pretty_class} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.pretty_class}</code><CopyBtn text={cc.pretty_class} /><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> <span title={fmtExactBytes(cc.retained)} style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
             </span>
           ))}
         </div>
@@ -3618,7 +3619,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ width: "120px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalObjects)}</span>
-              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalBytes)}</span>
+              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalBytes)}>{fmtB(totalBytes)}</span></span>
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</span>
               <span style={{ flex: 1 }} />
             </div>
@@ -3791,7 +3792,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.count, 0))}</span>
               <span style={{ width: "148px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.total_elements, 0))}</span>
               <span style={{ width: "140px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}></span>
-              <span style={{ width: useKB ? "172px" : "136px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(kindRows.reduce((s, r) => s + r.total_shallow, 0))}</span>
+              <span style={{ width: useKB ? "172px" : "136px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{(() => { const t = kindRows.reduce((s, r) => s + r.total_shallow, 0); return <span title={fmtExactBytes(t)}>{fmtB(t)}</span>; })()}</span>
             </div>
           </>
         );
@@ -3917,7 +3918,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   if (!hasDs && !hasDp && !hasBn && !hasTiny) return null;
 
   interface WasteRow {
-    id: number;
     type: string;
     wasted: number;
     objects: number;
@@ -3928,7 +3928,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
 
   if (hasDs && ds) {
     rows.push({
-      id: rows.length,
       type: "Duplicate Strings",
       wasted: ds.approx_wasted_bytes,
       objects: ds.total_string_instances - ds.distinct_values,
@@ -3939,7 +3938,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   if (hasDp && dp) {
     const objCount = dp.rows.reduce((s, r) => s + r.duplicated_groups, 0);
     rows.push({
-      id: rows.length,
       type: "Duplicate Primitive Arrays",
       wasted: dp.total_wasted_bytes,
       objects: objCount,
@@ -3952,7 +3950,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     const totalWasted = bn.reduce((s, r) => s + r.total_shallow, 0);
     const totalObjs = bn.reduce((s, r) => s + r.instances, 0);
     rows.push({
-      id: rows.length,
       type: "Boxed Primitives (footprint)*",
       wasted: totalWasted,
       objects: totalObjs,
@@ -3964,7 +3961,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
     for (const row of ca.tiny_overhead) {
       if (row.overhead_bytes > 0) {
         rows.push({
-          id: rows.length,
           type: `Empty/Singleton ${row.container_kind.charAt(0).toUpperCase() + row.container_kind.slice(1)} (${row.holder_class}#${row.field})`,
           wasted: row.overhead_bytes,
           objects: row.empty_count + row.singleton_count,
@@ -3980,29 +3976,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   const totalWasted = rows.reduce((s, r) => s + r.wasted, 0);
   const totalObjects = rows.reduce((s, r) => s + r.objects, 0);
 
-  const cols: TableColumn<WasteRow>[] = [
-    { id: "type", name: "Waste Type", grow: 2, maxWidth: "400px", selector: (r) => r.type, cell: (r) => <span>{r.type}</span>, sortable: true },
-    {
-      id: "wasted",
-      name: useKB ? "Wasted (KB)" : "Wasted",
-      right: true,
-      width: useKB ? "135px" : "120px",
-      cell: byteCell(r => r.wasted, fmtB, useKB),
-      selector: (r) => r.wasted,
-      sortable: true,
-    },
-    {
-      id: "objects",
-      name: "Objects",
-      right: true,
-      width: "120px",
-      format: (r) => fmtCount(r.objects),
-      selector: (r) => r.objects,
-      sortable: true,
-    },
-    { id: "fix", name: "Fix Suggestion", grow: 2, maxWidth: "400px", selector: (r) => r.fix, sortable: true, cell: (r) => <span title={r.fix} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.fix}</span> },
-  ];
-
   const showCollectionsNote = !ca && (hasDs || hasDp);
 
   return (
@@ -4011,7 +3984,26 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
       <p className="subtitle">
         Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate.
       </p>
-      <StdTable columns={cols} data={rows} keyField="id" defaultSortFieldId="wasted" defaultSortAsc={false} />
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem", marginBottom: "0.25rem" }}>
+        <thead>
+          <tr style={{ borderBottom: "2px solid var(--border)", textAlign: "left" }}>
+            <th style={{ padding: "4px 8px", fontWeight: 600 }}>Waste Type</th>
+            <th style={{ padding: "4px 8px", fontWeight: 600, textAlign: "right", whiteSpace: "nowrap" }}>↓ {useKB ? "Wasted (KB)" : "Wasted"}</th>
+            <th style={{ padding: "4px 8px", fontWeight: 600, textAlign: "right" }}>Objects</th>
+            <th style={{ padding: "4px 8px", fontWeight: 600 }}>Fix Suggestion</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.type} style={{ borderBottom: "1px solid var(--border)" }}>
+              <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{r.type}</td>
+              <td style={{ padding: "5px 8px", textAlign: "right", whiteSpace: "nowrap" }}><span title={fmtExactBytes(r.wasted)}>{fmtB(r.wasted)}</span></td>
+              <td style={{ padding: "5px 8px", textAlign: "right", whiteSpace: "nowrap" }}>{fmtCount(r.objects)}</td>
+              <td style={{ padding: "5px 8px", color: "var(--muted)", fontSize: "0.82rem" }}>{r.fix}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <p className="subtitle" style={{ textAlign: "right", marginTop: "4px" }}>
         <strong>Total: <span title={fmtExactBytes(totalWasted)}>{fmtB(totalWasted)}</span></strong> wasted across{" "}
         <strong>{fmtCount(totalObjects)}</strong> objects
@@ -4180,7 +4172,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
         {hasValue && <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>}
         {hasBreakdown && <span style={{ flex: 2, paddingLeft: 5, paddingRight: 5 }}></span>}
         {hasOwner && <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>}
-        {hasRetained && <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>}
+        {hasRetained && <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalRetained)}>{fmtB(totalRetained)}</span></span>}
       </div>
     </>
   );
@@ -4280,7 +4272,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
             <span style={{ width: "96px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalPointees)}</span>
             {hasElements && <span style={{ width: "80px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + (r.elements ?? 0), 0))}</span>}
             <span style={{ width: "96px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
-            <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalRetained)}</span>
+            <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalRetained)}>{fmtB(totalRetained)}</span></span>
           </div>
         </>
       )}
@@ -4305,8 +4297,8 @@ function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
         <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
         <span style={{ width: "100px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</span>
-        <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + r.shallow, 0))}</span>
-        <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</span>
+        <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{(() => { const t = rows.reduce((s, r) => s + r.shallow, 0); return <span title={fmtExactBytes(t)}>{fmtB(t)}</span>; })()}</span>
+        <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{(() => { const t = rows.reduce((s, r) => s + (r.retained ?? 0), 0); return <span title={fmtExactBytes(t)}>{fmtB(t)}</span>; })()}</span>
       </div>
     </>
   );
@@ -5379,7 +5371,7 @@ function DomGraphView({ pairs, idoms }: {
                     onClick={() => { setSelected(cls); const cy = cyRef.current; if (cy) applyCyHighlight(cy, cls); }}>
                     <code>{cls.split(".").pop()}</code>
                   </button>
-                  {retMap.has(cls) && <span style={{ color: "var(--muted)", fontSize: "0.70rem" }}>{fmtB(retMap.get(cls)!)}</span>}
+                  {retMap.has(cls) && <span title={fmtExactBytes(retMap.get(cls)!)} style={{ color: "var(--muted)", fontSize: "0.70rem" }}>{fmtB(retMap.get(cls)!)}</span>}
                 </React.Fragment>
               ))}
             </div>
@@ -5433,7 +5425,7 @@ function DomGraphView({ pairs, idoms }: {
                 {cls.split(".").pop()}
               </button>
               {retMap.has(cls) && (
-                <span style={{ color: "var(--muted)", fontSize: "0.72rem" }}>{fmtB(retMap.get(cls)!)}</span>
+                <span title={fmtExactBytes(retMap.get(cls)!)} style={{ color: "var(--muted)", fontSize: "0.72rem" }}>{fmtB(retMap.get(cls)!)}</span>
               )}
             </React.Fragment>
           ))}
@@ -5678,10 +5670,10 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               rowClickTitle={hasPairs ? "Click to view in Who Holds sankey" : undefined}            />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
-              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropRetained)}</span>
+              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalDropRetained)}>{fmtB(totalDropRetained)}</span></span>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}></span>
-              <span style={{ width: useKB ? "150px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalChildRetained)}</span>
-              <span style={{ width: useKB ? "120px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDropBytes)}</span>
+              <span style={{ width: useKB ? "150px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalChildRetained)}>{fmtB(totalChildRetained)}</span></span>
+              <span style={{ width: useKB ? "120px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalDropBytes)}>{fmtB(totalDropBytes)}</span></span>
             </div>
           </>
         );
@@ -5719,8 +5711,8 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "132px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalDomCount)}</span>
               <span style={{ width: "128px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalDominatedCount)}</span>
-              <span style={{ width: useKB ? "205px" : "195px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDomShallow)}</span>
-              <span style={{ width: useKB ? "210px" : "195px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalDominatedShallow)}</span>
+              <span style={{ width: useKB ? "205px" : "195px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalDomShallow)}>{fmtB(totalDomShallow)}</span></span>
+              <span style={{ width: useKB ? "210px" : "195px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalDominatedShallow)}>{fmtB(totalDominatedShallow)}</span></span>
             </div>
           </>
         );
@@ -5863,8 +5855,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                   <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
                     <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
                     <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(data?.unreachable_count ?? 0)}</span>
-                    <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(data?.unreachable_shallow ?? 0)}</span>
-                    <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(data?.unreachable_retained ?? 0)}</span>
+                    <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(data?.unreachable_shallow ?? 0)}>{fmtB(data?.unreachable_shallow ?? 0)}</span></span>
+                    <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(data?.unreachable_retained ?? 0)}>{fmtB(data?.unreachable_retained ?? 0)}</span></span>
                   </div>
                 </>
               );
@@ -6071,7 +6063,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
               <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalObjects)}</span>
-              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtB(totalShallow)}</span>
+              <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalShallow)}>{fmtB(totalShallow)}</span></span>
               <span style={{ width: useKB ? "135px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5 }}></span>
             </div>
           </>
@@ -6177,7 +6169,7 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
   if (anonymous_class_count === 0 && thread_local_null_key_count === 0 && direct_byte_buffer_capacity_sum === 0) {
     return null;
   }
-  type LeakRow = { indicator: React.ReactNode; value: string; hint: React.ReactNode };
+  type LeakRow = { indicator: React.ReactNode; value: React.ReactNode; hint: React.ReactNode };
   const leakRows: LeakRow[] = [
     ...(anonymous_class_count > 0 ? [{
       indicator: "Anonymous/generated classes",
@@ -6191,15 +6183,15 @@ function LeakIndicatorsSection({ data, totalHeap = 0 }: { data?: LeakIndicators;
     }] : []),
     ...(direct_byte_buffer_capacity_sum > 0 ? [{
       indicator: <><code>DirectByteBuffer</code> off-heap capacity</>,
-      value: fmtB(direct_byte_buffer_capacity_sum),
+      value: <span title={fmtExactBytes(direct_byte_buffer_capacity_sum)}>{fmtB(direct_byte_buffer_capacity_sum)}</span>,
       hint: totalHeap > 0 && direct_byte_buffer_capacity_sum > totalHeap
-        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO ({fmtB(direct_byte_buffer_capacity_sum)}) exceeds the entire JVM heap ({fmtB(totalHeap)}). Invisible to GC — can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
+        ? <strong style={{ color: "var(--warn, #c84)" }}>⚠ Off-Heap NIO (<span title={fmtExactBytes(direct_byte_buffer_capacity_sum)}>{fmtB(direct_byte_buffer_capacity_sum)}</span>) exceeds the entire JVM heap (<span title={fmtExactBytes(totalHeap)}>{fmtB(totalHeap)}</span>). Invisible to GC — can trigger OS-level OOM. See <a href="#off-heap-nio">Off-Heap NIO</a>.</strong>
         : <>Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.</>,
     }] : []),
   ];
   const leakCols: TableColumn<LeakRow>[] = [
     { id: "indicator", name: "Indicator", grow: 1, maxWidth: "300px", cell: (r) => <span>{r.indicator}</span> },
-    { id: "value", name: "Value", right: true, width: "120px", selector: (r) => r.value, sortable: true },
+    { id: "value", name: "Value", right: true, width: "120px", cell: (r) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.value}</span> },
     { id: "hint", name: "What to Check", grow: 2, maxWidth: "620px", wrap: true, cell: (r) => <span style={{ fontSize: "0.82rem", color: "var(--muted)", whiteSpace: "normal" }}>{r.hint}</span> },
   ];
   return (
@@ -6846,7 +6838,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code title={r.src_class}>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
     { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code title={r.dst_class}>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
     { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, width: "110px", format: r => fmtCount(r.edge_count) },
-    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, width: "130px", format: r => fmtB(r.retained_weight) },
+    { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, width: "130px", cell: r => <span title={fmtExactBytes(r.retained_weight)}>{fmtB(r.retained_weight)}</span> },
   ];
 
   // Popover data for selected node
@@ -8644,7 +8636,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   {(() => {
                     const n = data.nodes[String(b.nodeId)];
                     if (!n) return null;
-                    return <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(n.retained)}</span>;
+                    return <span title={fmtExactBytes(n.retained)} style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(n.retained)}</span>;
                   })()}
                   {b.sourceTab !== "domtree" && b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
                     <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.8em" }}>
@@ -8657,7 +8649,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
             <span className="breadcrumb-sep">/</span>
             <span style={{ fontWeight: 600 }}>
               {shortCls ? `${shortCls}#${nodeId}` : `obj#${nodeId}`}
-              {wasmBelowInfo && <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(wasmBelowInfo.retained)}</span>}
+              {wasmBelowInfo && <span title={fmtExactBytes(wasmBelowInfo.retained)} style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(wasmBelowInfo.retained)}</span>}
             </span>
           </div>
         )}
@@ -8713,7 +8705,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                   <button key={idxStr} className="btn-link"
                     style={{ fontSize: "0.78rem", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 5px", background: "var(--hover-bg, rgba(0,0,0,0.04))" }}
                     onClick={() => navigate(tab === "graph" ? "explore" : tab, parseInt(idxStr, 10), n.display_class)}>
-                    #{idxStr} <span style={{ color: "var(--muted)" }}>{fmtB(n.retained)}</span>
+                    #{idxStr} <span title={fmtExactBytes(n.retained)} style={{ color: "var(--muted)" }}>{fmtB(n.retained)}</span>
                   </button>
                 ))}
               </div>
@@ -8730,7 +8722,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 <button className="btn-link" title="Open in dominator tree" style={{ opacity:0.6,flexShrink:0 }} onClick={() => navigate("domtree",idx,cls,field||undefined)}>⌞</button>
                 <PivotBtn cls={cls}/><OqlBtn cls={cls}/><ListObjectsBtn cls={cls} />
               </span></td>
-              <td style={{ textAlign:"right" }}>{fmtB(ret)}</td>
+              <td style={{ textAlign:"right" }}><span title={fmtExactBytes(ret)}>{fmtB(ret)}</span></td>
             </tr>
           );
           return (
@@ -8795,8 +8787,9 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 {(() => {
                   const n = data.nodes[String(b.nodeId)];
                   if (!n) return null;
-                  return <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(n.retained)}</span>;
+                  return <span title={fmtExactBytes(n.retained)} style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(n.retained)}</span>;
                 })()}
+
                 {b.sourceTab !== "domtree" && b.edge && b.edge !== b.label && !b.edge.includes(".") && /^[a-zA-Z_$]/.test(b.edge) && (
                   <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: "0.8em" }}>
                     {" "}.{b.edge}
@@ -8808,7 +8801,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
           <span className="breadcrumb-sep">/</span>
           <span style={{ fontWeight: 600 }}>
             {(currentNode.display_class.split(".").pop() ?? currentNode.display_class)}#{nodeId}
-            <span style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(currentNode.retained)}</span>
+            <span title={fmtExactBytes(currentNode.retained)} style={{ color: "var(--muted)", fontSize: "0.72em", marginLeft: "0.2em" }}>{fmtB(currentNode.retained)}</span>
           </span>
         </div>
       )}
@@ -9106,7 +9099,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                               {pct > 0.001 && (
                                 <span style={{ display: "inline-block", width: `${Math.max(2, Math.round(pct * 48))}px`, height: "6px", borderRadius: 2, background: "var(--accent, #3b82f6)", opacity: 0.55, flexShrink: 0 }} title={`${pct < 0.01 ? (pct * 100).toFixed(1) : (pct * 100).toFixed(0)}% of parent retained`} />
                               )}
-                              {fmtB(edge.total_retained)}
+                              <span title={fmtExactBytes(edge.total_retained)}>{fmtB(edge.total_retained)}</span>
                               {pct >= 0.0005 && (
                                 <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
                                   {pct < 0.01 ? `${(pct * 100).toFixed(1)}%` : `${(pct * 100).toFixed(0)}%`}
@@ -9158,7 +9151,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                   <ListObjectsBtn cls={m.child_class} />
                                 </span>
                               </td>
-                              <td style={{ textAlign: "right", whiteSpace: "nowrap", fontSize: "0.8rem" }}>{fmtB(m.child_retained)}</td>
+                              <td style={{ textAlign: "right", whiteSpace: "nowrap", fontSize: "0.8rem" }}><span title={fmtExactBytes(m.child_retained)}>{fmtB(m.child_retained)}</span></td>
                               <td>
                                 {mShared && <span className="shared-badge" style={{ fontSize: "0.75rem" }}>&#8635;</span>}
                                 {breadcrumbIdSet.has(m.child_idx) && (
@@ -9201,7 +9194,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 const pct = currentNode.retained > 0 ? Math.round(childTotal / currentNode.retained * 100) : 0;
                 return (
                   <p className="subtitle" style={{ fontSize: "0.78rem", marginTop: "0.4rem" }}>
-                    {currentEdges.length} reference{currentEdges.length === 1 ? "" : "s"} · children retain {fmtB(childTotal)} ({pct}%) · self shallow {fmtB(selfOnly)}
+                    {currentEdges.length} reference{currentEdges.length === 1 ? "" : "s"} · children retain <span title={fmtExactBytes(childTotal)}>{fmtB(childTotal)}</span> ({pct}%) · self shallow <span title={fmtExactBytes(selfOnly)}>{fmtB(selfOnly)}</span>
                   </p>
                 );
               })()}
@@ -9240,8 +9233,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                   <ListObjectsBtn cls={e.src_class} />
                                 </span>
                               </td>
-                              <td style={{ textAlign: "right" }}>{fmtB(e.src_shallow)}</td>
-                              <td style={{ textAlign: "right" }}>{fmtB(e.src_retained)}</td>
+                              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(e.src_shallow)}>{fmtB(e.src_shallow)}</span></td>
+                              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(e.src_retained)}>{fmtB(e.src_retained)}</span></td>
                             </tr>
                           ))}
                         </tbody>
@@ -9458,8 +9451,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                   <ListObjectsBtn cls={rn.display_class} />
                                 </span>
                               </td>
-                              <td style={{ textAlign: "right" }}>{fmtB(rn.shallow)}</td>
-                              <td style={{ textAlign: "right" }}>{fmtB(rn.retained)}</td>
+                              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(rn.shallow)}>{fmtB(rn.shallow)}</span></td>
+                              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(rn.retained)}>{fmtB(rn.retained)}</span></td>
                               <td style={{ textAlign: "right" }}>{pct}%</td>
                               <td style={{ textAlign: "right" }}>
                                 {rn.dom_subtree_count != null && rn.dom_subtree_count > 0
@@ -9499,8 +9492,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                 return (
                   <>
                     <p className="subtitle" style={{ fontSize: "0.82rem", margin: "0 0 0.4rem" }}>
-                      {currentDomChildren.length} {currentDomChildren.length === 1 ? "child" : "children"} retaining {fmtB(childRetainedTotal)} ({childPct}%){" "}
-                      + {fmtB(shallowSelf)} ({shallowPct}%) in this object itself.
+                      {currentDomChildren.length} {currentDomChildren.length === 1 ? "child" : "children"} retaining <span title={fmtExactBytes(childRetainedTotal)}>{fmtB(childRetainedTotal)}</span> ({childPct}%){" "}
+                      + <span title={fmtExactBytes(shallowSelf)}>{fmtB(shallowSelf)}</span> ({shallowPct}%) in this object itself.
                       Click a child to descend.
                       {currentNode.dom_subtree_count != null && currentNode.dom_subtree_count > 1 && (
                         <> · <strong>{fmtCount(currentNode.dom_subtree_count)}</strong> objects total in subtree.</>
@@ -9625,8 +9618,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                             <tr key={r.cls}>
                               <td><span className="copy-cell"><code title={r.cls}>{r.cls}</code><CopyBtn text={r.cls} /><PivotBtn cls={r.cls} /><OqlBtn cls={r.cls} /><ListObjectsBtn cls={r.cls} /></span></td>
                               <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
-                              <td style={{ textAlign: "right" }}>{fmtB(r.total_retained)}</td>
-                              <td style={{ textAlign: "right" }}>{fmtB(r.max_retained)}</td>
+                              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.total_retained)}>{fmtB(r.total_retained)}</span></td>
+                              <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.max_retained)}>{fmtB(r.max_retained)}</span></td>
                             </tr>
                           ))}
                         </tbody>
@@ -9673,8 +9666,8 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                                   </span>
                                 </td>
                                 <td style={{ textAlign: "right", color: "var(--muted)", fontSize: "0.8rem" }}>{r.depth}</td>
-                                <td style={{ textAlign: "right" }}>{fmtB(r.shallow)}</td>
-                                <td style={{ textAlign: "right" }}>{fmtB(r.retained)}</td>
+                                <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.shallow)}>{fmtB(r.shallow)}</span></td>
+                                <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span></td>
                               </tr>
                             ))}
                           </tbody>
@@ -10018,7 +10011,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                         onClick={() => navigate("explore", step.dense_idx, step.display_class)}>
                         {step.display_class.split(".").pop()}#{step.dense_idx}
                       </button>
-                      <span style={{ color: "var(--muted)", fontSize: "0.74rem" }}>{fmtB(step.retained)}</span>
+                      <span title={fmtExactBytes(step.retained)} style={{ color: "var(--muted)", fontSize: "0.74rem" }}>{fmtB(step.retained)}</span>
                       {i === 0 && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← source</span>}
                       {i === pathBetweenResult.length - 1 && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontStyle: "italic" }}>← target</span>}
                     </div>
@@ -10127,7 +10120,7 @@ function ObjectGraphExplorer({ data }: { data: ObjGraphFlat }) {
                     onClick={() => navigate("explore", m.dense_idx, m.display_class)}>
                     #{m.dense_idx}
                   </button>
-                  <span style={{ color: "var(--muted)", fontSize: "0.74rem" }}>{fmtB(m.retained)}</span>
+                  <span title={fmtExactBytes(m.retained)} style={{ color: "var(--muted)", fontSize: "0.74rem" }}>{fmtB(m.retained)}</span>
                 </div>
               ))}
             </div>

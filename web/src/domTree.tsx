@@ -8,7 +8,7 @@
 import React from "react";
 import { graphHierarchy, sugiyama, coordGreedy, decrossDfs, layeringLongestPath } from "d3-dag";
 import type { DomTreeNode, UnreachableGarbageRoot } from "./types";
-import { formatBytes, fmtCount } from "./format";
+import { formatBytes, fmtCount, fmtExactBytes } from "./format";
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const NODE_W = 180;
@@ -182,6 +182,7 @@ function TreeSvg({ root, maxRetained, ariaLabel, onNavigate }: { root: GenNode; 
           const navigable = onNavigate != null && node.node.objIndex != null;
           return (
             <g key={node.id} transform={`translate(${x},${y})`} style={{ cursor: navigable ? "pointer" : "default" }} onClick={navigable ? () => onNavigate!(node.node.objIndex!) : undefined}>
+              <title>{node.node.label}{"\n"}{fmtExactBytes(node.node.retained)} retained</title>
               <rect width={NODE_W} height={NODE_H} rx={5} fill="var(--card, #f7f7f8)" stroke={col} strokeWidth={2} />
               <rect x={4} y={NODE_H - 8} width={barW} height={4} rx={2} fill={col} opacity={0.6} />
               <text x={NODE_W / 2} y={16} textAnchor="middle" fontSize={FONT_SIZE} fontWeight="bold" fill={col} fontFamily="monospace">
@@ -259,7 +260,7 @@ export function UnreachableDomTreeSection({ roots }: { roots: UnreachableGarbage
         <details key={i} open={i < 3}>
           <summary>
             <strong>{root.pretty_class}</strong>
-            {" — "}{formatBytes(root.retained)} retained, {fmtCount(root.objects)} {root.objects === 1 ? "object" : "objects"}
+            {" — "}<span title={fmtExactBytes(root.retained)}>{formatBytes(root.retained)}</span> retained, {fmtCount(root.objects)} {root.objects === 1 ? "object" : "objects"}
           </summary>
           <div style={{ overflowX: "auto", margin: "8px 0" }}>
             <TreeSvg
