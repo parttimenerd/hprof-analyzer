@@ -864,8 +864,8 @@ or to see the full retention picture._\n\n",
     );
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(
-        "_All top-level dominators ranked by retained heap — every object directly held by a GC root. \
-         Use it when the suspect you care about didn't cross the leak-suspect threshold._\n\n",
+        "_All top-level dominators ranked by retained heap — every object \
+         directly held by a GC root, sorted largest first._\n\n",
     );
     let obj_has_owner = t.biggest_objects.iter().any(|r| r.owner.is_some());
     if obj_has_owner {

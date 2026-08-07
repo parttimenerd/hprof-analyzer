@@ -583,7 +583,7 @@ impl Rule for WeakRefEscape {
             TriageSeverity::Info,
             "Only-Weakly Retained Objects",
             format!(
-                "{} objects only weakly, softly, or phantom-retained, totaling {} — no strong path keeps them alive; GC can reclaim them (weak: at any collection; soft: under memory pressure). If they are not being reclaimed in practice, check that you are not also holding a strong reference elsewhere.",
+                "{} objects only weakly, softly, or phantom-retained, totaling {} — no strong path keeps them alive; GC will reclaim weak referents at the next collection and soft referents under memory pressure. If the count is unexpectedly high, check that no strong reference is silently held alongside the weak one.",
                 fmt_count(only_weak_objects),
                 format_bytes(only_weak_retained),
             ),
@@ -1142,17 +1142,26 @@ impl Rule for HeapCompositionSkew {
         if pct < HEAP_SKEW_PCT {
             return None;
         }
+        let hint = match dominant.kind.as_str() {
+            "Primitive Arrays" => {
+                "check for bulk-data buffers (NIO, image, audio) or oversized backing stores"
+            }
+            "Instances" => "too many small objects — see Object Swarm or Boxed-Primitive Bloat",
+            "Object Arrays" => {
+                "sparse arrays or container backing stores; check collection fill ratios"
+            }
+            "Class Objects" => {
+                "many dynamically generated classes — see Class-Loader Explosion or Metaspace Pressure"
+            }
+            _ => "inspect the Class Histogram for the dominant contributors",
+        };
         Some(signal(
             "heap-composition-skew",
             TriageSeverity::Info,
             "Heap Composition Skew",
             format!(
-                "{} account for {:.1}% of reachable heap — unusually skewed. \
-                 Primitive Arrays dominate: check for bulk-data buffers (NIO, image, audio). \
-                 Instances dominate: too many small objects — see Object Swarm. \
-                 Object Arrays dominate: sparse arrays or container backing stores. \
-                 Class Objects dominate: many dynamically generated classes.",
-                dominant.kind, pct,
+                "{} account for {:.1}% of reachable heap — unusually skewed; {}.",
+                dominant.kind, pct, hint,
             ),
             Some(("system-overview", "System Overview")),
         ))

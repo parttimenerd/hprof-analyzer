@@ -3150,7 +3150,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects (Top-Level Dominators)</h3>
-      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when the suspect you care about didn&apos;t cross the leak-suspect threshold. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
+      <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root, sorted largest first. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes by Retained Heap</h3>
