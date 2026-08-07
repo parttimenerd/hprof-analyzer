@@ -1831,7 +1831,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
     { id: "class", name: "Class", grow: 1, maxWidth: "450px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Total Shallow (KB)" : "Total Shallow", right: true, width: useKB ? "172px" : "138px", cell: byteCell(r => r.total_shallow, fmtB, useKB), selector: (r) => r.total_shallow, sortable: true },
-    { id: "pct", name: "% of Heap", right: true, width: "115px", format: (r) => total > 0 ? fmtPct(r.pct_of_heap_bp / 100) : "—", selector: (r) => r.pct_of_heap_bp, sortable: true },
+    { id: "pct", name: "% of Heap", right: true, width: "115px", format: (r) => total > 0 ? (r.pct_of_heap_bp === 0 && r.total_shallow > 0 ? "< 0.1%" : fmtPct(r.pct_of_heap_bp / 100)) : "—", selector: (r) => r.pct_of_heap_bp, sortable: true },
     { id: "avg", name: useKB ? "Avg Size (KB)" : "Avg Size", right: true, width: useKB ? "140px" : "105px", cell: byteCell(r => r.avg_shallow, fmtB, useKB), selector: (r) => r.avg_shallow, sortable: true },
   ];
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
