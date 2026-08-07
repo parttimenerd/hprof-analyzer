@@ -368,6 +368,17 @@ fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mu
         ]);
     }
     hist.render(out);
+    if o.histogram.len() > 50 {
+        let remaining = o.histogram.len() - 50;
+        let tail_shallow: u64 = o.histogram[50..].iter().map(|r| r.shallow).sum();
+        let tail_retained: u64 = o.histogram[50..].iter().map(|r| r.retained).sum();
+        out.push_str(&format!(
+            "_… {} more classes, {} shallow / {} retained (see HTML report for full list)._\n",
+            fmt_count(remaining as u64),
+            format_bytes(tail_shallow),
+            format_bytes(tail_retained),
+        ));
+    }
     out.push('\n');
 
     // Class Loaders (F2) — with a proportional retained-heap bar.
