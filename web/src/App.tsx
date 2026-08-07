@@ -4768,6 +4768,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
           <svg
             width={w} height={svgHeight}
             role="img" aria-label={`Who holds ${target}`}
+            style={{ overflow: "hidden" }}
           >
             {/* Links */}
             {graph.links.map((link, i) => (
@@ -4797,9 +4798,8 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
                 labelEl = <text x={x1 + 4} y={midY} dy="0.35em" textAnchor="start" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>;
               } else if (isRight) {
                 labelEl = <text x={x0 - 4} y={midY} dy="0.35em" textAnchor="end" fontSize={11} fill="var(--fg)">{shortClass(n.cls)}</text>;
-              } else {
-                labelEl = <text x={(x0 + x1) / 2} y={y0 - 4} textAnchor="middle" fontSize={11} fontWeight={600} fill="var(--fg)">{shortClass(n.cls)}</text>;
               }
+              // no label for the center node — the header row already shows it
 
               return (
                 <g key={n.id}>
