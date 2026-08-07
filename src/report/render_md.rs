@@ -1910,9 +1910,9 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
         return;
     }
     out.push_str(
-        "_Array-length distribution bucketed by power-of-two element length. \
-Helps spot unexpectedly large arrays or many tiny zero-length allocations. \
-`Max length` is the inclusive upper bound of each bucket._\n\n",
+        "_Array length distribution bucketed by powers of two — `Max length` is the inclusive \
+upper bound of each bucket. Spot unexpectedly large arrays, many tiny zero-length allocations, \
+or a skewed distribution that explains outsized array heap._\n\n",
     );
 
     let render_table = |title: &str, buckets: &[SizeHistogramBucket], out: &mut String| {
