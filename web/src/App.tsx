@@ -3346,7 +3346,7 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       grow: 1,
       minWidth: "120px",
       maxWidth: "360px",
-      cell: (t) => <code>{t.name?.trim() || "(unnamed)"}</code>,
+      cell: (t) => <a href={`#thread-${t.thread_serial}`}><code>{t.name?.trim() || "(unnamed)"}</code></a>,
       selector: (t) => t.name ?? "",
       sortable: true,
     },
