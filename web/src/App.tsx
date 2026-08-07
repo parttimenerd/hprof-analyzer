@@ -1603,7 +1603,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
       <h2>Retained Size Distribution</h2>
       <p className="subtitle">
         Retained heap distributed across {fmtCount(d.count)} top-level dominators. The shape reveals whether a handful of large objects dominate the heap or memory is scattered across many small ones.
-        Min / Max: {fmtB(d.min)} / {fmtB(d.max)} · Median: {fmtB(d.median)} · Total: {fmtB(d.total)}.
+        Min / Max: <span title={fmtExactBytes(d.min)}>{fmtB(d.min)}</span> / <span title={fmtExactBytes(d.max)}>{fmtB(d.max)}</span> · Median: <span title={fmtExactBytes(d.median)}>{fmtB(d.median)}</span> · Total: <span title={fmtExactBytes(d.total)}>{fmtB(d.total)}</span>.
       </p>
       <StdTable columns={sizeCols} data={d.buckets} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="upper" />
       <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
@@ -1735,7 +1735,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
         String values seen more than once — reclaim by normalizing at parse time, using <code>-XX:+UseStringDeduplication</code> (G1 GC), or sharing a canonical instance per value. Deduplication is approximate (64-bit hash; rare collisions possible).{" "}
-        Approximate wasted: <strong>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
+        Approximate wasted: <strong title={fmtExactBytes(d.approx_wasted_bytes)}>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
 
@@ -1757,7 +1757,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
           <>
             <h3>String Length Distribution</h3>
             <p className="subtitle">
-              Length distribution of distinct string values (in chars/bytes) — a peak at short lengths is normal; a peak at unexpectedly long lengths may signal log buffers or URL strings worth truncating. Min: {fmtCount(d.length_stats.min)} · Median: {fmtCount(d.length_stats.median)} · Max: {fmtCount(d.length_stats.max)} · Total: {fmtB(d.length_stats.total)}.
+              Length distribution of distinct string values (in chars/bytes) — a peak at short lengths is normal; a peak at unexpectedly long lengths may signal log buffers or URL strings worth truncating. Min: {fmtCount(d.length_stats.min)} · Median: {fmtCount(d.length_stats.median)} · Max: {fmtCount(d.length_stats.max)} · Total: <span title={fmtExactBytes(d.length_stats.total)}>{fmtB(d.length_stats.total)}</span>.
             </p>
             <StdTable columns={lenCols} data={d.length_histogram} searchKeys={[]} defaultSortFieldId="upper" />
           </>
@@ -1773,7 +1773,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
             Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>StringBuilder.toString()</code> leaving slack capacity, or oversized pre-allocated buffers. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
-            {fmtB(w.total_wasted_bytes)} total wasted.
+            <span title={fmtExactBytes(w.total_wasted_bytes)}>{fmtB(w.total_wasted_bytes)}</span> total wasted.
           </p>
           {w.top.length > 0 && (
             <CharArrayWasteTopTable rows={w.top} />
@@ -1808,7 +1808,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
       <h2>Duplicate Primitive Arrays</h2>
       <p className="subtitle">
         Primitive arrays with identical content — each group wastes memory holding redundant copies. Replace with a shared <code>static final</code> constant, use a canonical-instance registry, or intern at creation time.
-        Approximate wasted: <strong>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
+        Approximate wasted: <strong title={fmtExactBytes(d.total_wasted_bytes)}>{fmtB(d.total_wasted_bytes)}</strong>. Deduplication is approximate (64-bit hash; rare collisions possible).
       </p>
       {d.rows.length > 0 && (
         <DupPrimArrayRowsTable rows={d.rows} />
