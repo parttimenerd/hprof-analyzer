@@ -1445,7 +1445,7 @@ Investigate only if the instance count is unexpectedly high \
             }
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
-                &["Class", "Objects", "Shallow", "Retained", "% of suspect"],
+                &["Class", "Objects", "Shallow", "Retained", "% of Suspect"],
                 &[
                     Align::Left,
                     Align::Right,
@@ -1553,7 +1553,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     out.push_str("### Biggest Classes by Retained Heap\n\n");
     out.push_str("_Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._\n\n");
     let mut classes = Table::new(
-        &["#", "Class", "Instances", "Retained Heap"],
+        &["#", "Class", "Instances", "Retained"],
         &[Align::Right, Align::Left, Align::Right, Align::Right],
     );
     for (rank, row) in t.biggest_classes.iter().enumerate() {
@@ -2321,7 +2321,7 @@ backing-array memory. {} collections analyzed ({} non-empty tracked)._\n\n",
             .map(|b| b.objects)
             .max()
             .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Size ≤", "Collections", "Total Shallow"];
+        let mut headers: Vec<&str> = vec!["Size ≤", "Collections", "Shallow"];
         let mut aligns = vec![Align::Right, Align::Right, Align::Right];
         if graphs {
             headers.push("");
@@ -2417,7 +2417,7 @@ deduplication or replacement with a shared constant. Short arrays (length < 8 wi
 few instances) are filtered as noise._",
     );
     if c.constant_primitive_arrays.truncated {
-        note.push_str(" _(list truncated; remaining groups folded into one row)._");
+        note.push_str(" _List truncated — remaining groups folded into one row._");
     }
     out.push_str(&note);
     out.push_str("\n\n");
