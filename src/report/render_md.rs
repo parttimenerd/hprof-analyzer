@@ -1595,13 +1595,17 @@ a handful of large objects dominate the heap or memory is scattered across many 
 
     out.push_str("### Biggest Packages by Retained Heap\n\n");
     if t.biggest_packages.children.is_empty() {
-        out.push_str("_No package retains more than 1% of the total retained heap._\n");
+        out.push_str(&format!(
+            "_No package retains more than {}% of the total retained heap._\n",
+            t.threshold_bp as f64 / 100.0,
+        ));
         out.push('\n');
         return;
     }
-    out.push_str(
-        "_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned)._\n\n",
-    );
+    out.push_str(&format!(
+        "_Retained heap aggregated by package prefix — only packages retaining ≥{}% of the heap are shown._\n\n",
+        t.threshold_bp as f64 / 100.0,
+    ));
     let mut pkgs = Table::new(
         &["Package", "Objects", "Shallow", "Retained"],
         &[Align::Left, Align::Right, Align::Right, Align::Right],
@@ -2770,8 +2774,8 @@ pub(crate) fn render_collection_attribution(
 
     if a.truncated {
         out.push_str(
-            "_Attribution data was truncated (holder-edge or container-record cap hit); \
-             rankings are a bounded sample._\n\n",
+            "_Attribution data was truncated — some holder or container records were capped; \
+             totals may undercount the full heap._\n\n",
         );
     }
 }
@@ -3136,7 +3140,7 @@ pub(crate) fn render_collection_contents(
     t.render(out);
     out.push('\n');
     if c.truncated {
-        out.push_str("_Truncated; a bounded sample of collection classes is shown._\n\n");
+        out.push_str("_Results truncated — some collection classes dropped._\n\n");
     }
 }
 /// referent histograms plus (where present) an approximate only-weakly-retained

@@ -933,13 +933,17 @@ a handful of large objects dominate the heap or memory is scattered across many 
 
     out.push_str("### Biggest Packages by Retained Heap\n\n");
     if t.biggest_packages.children.is_empty() {
-        out.push_str("_No package retains more than 1% of the total retained heap._\n");
+        out.push_str(&format!(
+            "_No package retains more than {}% of the total retained heap._\n",
+            t.threshold_bp as f64 / 100.0,
+        ));
         out.push('\n');
         return;
     }
-    out.push_str(
-        "_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned); the tree shows nesting._\n\n",
-    );
+    out.push_str(&format!(
+        "_Retained heap aggregated by package prefix — only packages retaining ≥{}% of the heap are shown; the tree shows nesting._\n\n",
+        t.threshold_bp as f64 / 100.0,
+    ));
     // Bar is keyed to the largest top-level package's retained heap.
     let pkg_max = t
         .biggest_packages
