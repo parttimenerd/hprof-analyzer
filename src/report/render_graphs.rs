@@ -54,7 +54,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
 fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
     out.push_str("- [Summary](#summary)\n");
-    out.push_str("- [OOM Triage](#oom-triage)\n");
+    out.push_str("- [Memory Triage](#memory-triage)\n");
     if waste_summary_present(r) {
         out.push_str("- [Waste Summary](#waste-summary)\n");
     }
