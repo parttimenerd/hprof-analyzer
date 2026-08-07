@@ -3130,7 +3130,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when the suspect you care about didn&apos;t cross the leak-suspect threshold. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
       <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
-      <h3>Biggest Classes</h3>
+      <h3>Biggest Classes by Retained Heap</h3>
       <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis.</p>
       <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
         extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
@@ -3138,7 +3138,7 @@ function TopConsumersSection({ report }: { report: Report }) {
 
       {pkgRoot.children.length > 0 && (
         <>
-          <h3>Biggest Packages</h3>
+          <h3>Biggest Packages by Retained Heap</h3>
           <p className="subtitle">
             Expand a package to see its sub-packages. Totals roll up through the subtree. Only classes retaining ≥{fmtPct(t.threshold_bp / 100)} of the heap are shown.
           </p>
@@ -4058,8 +4058,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <>
           <h3>Tiny Collection Overhead</h3>
           <p className="subtitle">
-            Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — use null or <code>Collections.emptyList()</code> sentinels until the collection is first written.
-            Overhead is the wrapper-object count × reference pointer size (4 B with compressed OOPs, 8 B without).
+            Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — replace with <code>null</code> or <code>Collections.emptyList()</code> until the collection is first written. Wrapper overhead per collection is one object header plus the backing-array pointer.
           </p>
           <TinyCollectionTable rows={data.tiny_overhead} />
         </>
@@ -4229,7 +4228,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       <h2>Fields by Retained Size</h2>
       <p className="subtitle">
         Which <code>Class#field</code> retains the most memory, summed over every object the field points at.
-        Runtime pointee type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field with unexpectedly large retention is a good candidate to null out after use or wrap in a lazy-initialized reference.
+        Runtime pointee type is the dominant concrete class reached through the field (<code>varies</code> when no single type dominates). A field retaining unexpectedly large memory is a good candidate to null out after use or wrap in a lazy-initialized reference.
 </p>
       {data.truncated && (
         <p className="subtitle">

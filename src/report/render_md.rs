@@ -2698,9 +2698,9 @@ pub(crate) fn render_collection_attribution(
     // ── Tiny Collection Overhead ─────────────────────────────────────────────
     out.push_str("### Tiny Collection Overhead\n\n");
     out.push_str(
-        "_Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary. \
-         Replace with `null` or a direct field reference; wrapper overhead per collection is \
-         one object header plus backing-array pointer._\n\n",
+        "_Empty (size-0) and singleton (size-1) collections whose wrapper objects are unnecessary — \
+         replace with `null` or `Collections.emptyList()` until the collection is first written. \
+         Wrapper overhead per collection is one object header plus the backing-array pointer._\n\n",
     );
     if a.tiny_overhead.is_empty() {
         out.push_str("_None._\n\n");
