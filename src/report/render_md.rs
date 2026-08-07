@@ -2826,19 +2826,14 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
     let ret_max = f.rows.iter().map(|r| r.total_retained).max().unwrap_or(0);
     // Only show Elements when at least one row is a collection (elements > 0).
     let has_elements = f.rows.iter().any(|r| r.elements > 0);
-    let mut headers: Vec<&str> = vec![
-        "Class#field",
-        "Runtime Pointee Type",
-        "Category",
-        "Pointees",
-    ];
+    let mut headers: Vec<&str> = vec!["Class#field", "Pointee Type", "Kind", "Pointees"];
     let mut aligns = vec![Align::Left, Align::Left, Align::Left, Align::Right];
     if has_elements {
         headers.push("Elements");
         aligns.push(Align::Right);
     }
-    headers.extend_from_slice(&["Holders", "Sharing", "Retained"]);
-    aligns.extend_from_slice(&[Align::Right, Align::Right, Align::Right]);
+    headers.extend_from_slice(&["Holders", "Retained"]);
+    aligns.extend_from_slice(&[Align::Right, Align::Right]);
     if graphs {
         headers.push("");
         aligns.push(Align::Left);
@@ -2854,19 +2849,19 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         let mut row = vec![
             format!("`{}#{}`", r.holder_class, r.field),
             format!("`{}`", r.pointee_type),
-            r.category.clone(),
+            {
+                let mut cat = r.category.clone();
+                if let Some(c) = cat.get_mut(0..1) {
+                    c.make_ascii_uppercase();
+                }
+                cat
+            },
             fmt_count(r.pointees),
         ];
         if has_elements {
             row.push(fmt_count(r.elements));
         }
         row.push(fmt_count(r.holder_instances));
-        let sharing = if r.holder_instances > 0 {
-            format!("{:.1}×", r.pointees as f64 / r.holder_instances as f64)
-        } else {
-            "—".into()
-        };
-        row.push(sharing);
         row.push(format_bytes(r.total_retained));
         if graphs {
             row.push(bar(
@@ -2886,8 +2881,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
     if has_elements {
         total_row.push(fmt_count(total_elements));
     }
-    total_row.push(String::new()); // Holder Instances (already empty)
-    total_row.push(String::new()); // Sharing (no total)
+    total_row.push(String::new()); // Holders (no total)
     total_row.push(format_bytes(total_retained));
     if graphs {
         total_row.push(String::new());
