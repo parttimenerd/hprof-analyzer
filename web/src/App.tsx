@@ -4164,7 +4164,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
       <BiggestCollectionsTable rows={data.combined} title="Combined" />
       {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}`} />)}
       {data.truncated && (
-        <p className="subtitle">Collection value tally truncated — some value groups dropped.</p>
+        <p className="subtitle">Collection value tally truncated — some value groups dropped; ranking is a bounded sample.</p>
       )}
     </section>
   );
@@ -6061,6 +6061,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
 
 // ── Retention Concentration ─────────────────────────────────────────────────
 function RetentionConcentrationSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn, useKB] = useFmtBytes();
   const rc = report.overview.retention_concentration;
   if (!rc || (rc.top1_bp === 0 && rc.top10_bp === 0 && rc.top100_bp === 0 && rc.num_objects_ge_1pct === 0)) {
     return null;
@@ -6076,17 +6077,18 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       <ConcentrationChart rc={rc} />
       <ConcentrationStackedBar rc={rc} />
       {(() => {
-        type RcRow = { scope: string; bp: number };
+        type RcRow = { scope: string; bp: number; retained: number };
         const rcRows: RcRow[] = [
-          { scope: "Top 1 object", bp: rc.top1_bp },
-          { scope: "Top 10 objects", bp: rc.top10_bp },
-          { scope: "Top 100 objects", bp: rc.top100_bp },
+          { scope: "Top 1 object", bp: rc.top1_bp, retained: rc.top1_retained ?? 0 },
+          { scope: "Top 10 objects", bp: rc.top10_bp, retained: rc.top10_retained ?? 0 },
+          { scope: "Top 100 objects", bp: rc.top100_bp, retained: rc.top100_retained ?? 0 },
         ];
         const rcCols: TableColumn<RcRow>[] = [
           { id: "scope", name: "Scope", grow: 1, selector: (r) => r.scope, sortable: true },
           { id: "share", name: "Retained Share", right: true, width: "150px", selector: (r) => r.bp, format: (r) => fmtPct(r.bp / 100), sortable: true },
+          { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
         ];
-        return <StdTable columns={rcCols} data={rcRows} searchKeys={[]} defaultSortFieldId="share" defaultSortAsc={true} />;
+        return <StdTable columns={rcCols} data={rcRows} searchKeys={[]} defaultSortFieldId="share" defaultSortAsc={true} fmtBtn={kbBtn} />;
       })()}
       {rc.num_objects_ge_1pct > 0 && (
         <p className="subtitle"><em>{fmtCount(rc.num_objects_ge_1pct)} {rc.num_objects_ge_1pct === 1 ? "object" : "objects"} each hold ≥1% of the reachable heap.</em></p>
