@@ -10572,6 +10572,10 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
   const outEdges = edges.filter((e: any) => e.src_class === cls).sort((a: any, b: any) => b.retained_weight - a.retained_weight);
   const inEdges  = edges.filter((e: any) => e.dst_class === cls).sort((a: any, b: any) => b.retained_weight - a.retained_weight);
 
+  const [showAllOutInsp, setShowAllOutInsp] = React.useState(false);
+  const [showAllInInsp, setShowAllInInsp] = React.useState(false);
+  React.useEffect(() => { setShowAllOutInsp(false); setShowAllInInsp(false); }, [cls]);
+
   const wasm = (window as any).__wasmExploration;
   const wasmSession = (window as any).__wasmSession;
   // WASM loaded but full analysis not yet run (no retained sizes)
@@ -10638,7 +10642,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         <div>
           <h4>Outbound References ({outEdges.length})</h4>
           <ul className="trg-edge-list">
-            {outEdges.slice(0, 8).map((e: any) => (
+            {(showAllOutInsp ? outEdges : outEdges.slice(0, 8)).map((e: any) => (
               <li key={e.dst_class}>
                 <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.dst_class })}>
                   {e.dst_class.split(".").pop()}
@@ -10654,11 +10658,17 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
               </li>
             ))}
           </ul>
+          {outEdges.length > 8 && (
+            <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
+              onClick={() => setShowAllOutInsp(v => !v)}>
+              {showAllOutInsp ? "Show fewer" : `Show ${outEdges.length - 8} more`}
+            </button>
+          )}
         </div>
         <div>
           <h4>Inbound References ({inEdges.length})</h4>
           <ul className="trg-edge-list">
-            {inEdges.slice(0, 8).map((e: any) => (
+            {(showAllInInsp ? inEdges : inEdges.slice(0, 8)).map((e: any) => (
               <li key={e.src_class}>
                 <button className="trg-link-btn" onClick={() => onNavigate({ kind: "class", cls: e.src_class })}>
                   {e.src_class.split(".").pop()}
@@ -10674,6 +10684,12 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
               </li>
             ))}
           </ul>
+          {inEdges.length > 8 && (
+            <button className="show-more-btn" style={{ fontSize: "0.78rem", marginTop: "0.25rem" }}
+              onClick={() => setShowAllInInsp(v => !v)}>
+              {showAllInInsp ? "Show fewer" : `Show ${inEdges.length - 8} more`}
+            </button>
+          )}
         </div>
       </div>
       <div className="trg-page-actions">
