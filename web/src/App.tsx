@@ -3741,7 +3741,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 
       <h3>Collections by Kind</h3>
       {kindRows.length === 0 ? (
-        <p className="subtitle">None found in this dump.</p>
+        <p className="subtitle">No collection kinds found in this heap.</p>
       ) : (() => {
         const kindCols: TableColumn<import("./types").CollectionKindStat>[] = [
           { id: "kind", name: "Kind", grow: 1, cell: (s) => <span style={{ textTransform: "capitalize" }}>{s.kind}</span>, selector: (s) => s.kind, sortable: true },
