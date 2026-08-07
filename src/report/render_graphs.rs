@@ -642,11 +642,11 @@ that keeps it alive. The path to GC root is shown for each suspect below._\n\n",
         };
 
         out.push_str(&format!(
-            "### {}. `{}` — retains {} ({:.1}% of reachable heap)\n\n",
+            "### {}. `{}` — retains {} ({} of {HEAP_BASIS_LABEL})\n\n",
             rank + 1,
             s.pretty_class,
             format_bytes(s.retained),
-            pct,
+            fmt_pct(pct),
         ));
 
         if s.is_single {
