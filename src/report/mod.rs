@@ -650,7 +650,7 @@ mod tests {
             md.contains("### Heap Composition"),
             "missing heap composition table"
         );
-        assert!(md.contains("**Shape:**"), "missing shape line");
+        assert!(md.contains("**Heap Shape:**"), "missing shape line");
         assert!(
             md.contains("**Concentration:**"),
             "missing concentration line"
