@@ -152,8 +152,27 @@ impl HprofReader {
         // entry stream; the small archive wrapper struct (<1 KB) is the only
         // memory that is permanently leaked per call.
         let archive: &'static mut tar::Archive<_> = Box::leak(Box::new(tar::Archive::new(gz)));
-        for entry in archive.entries()? {
-            let entry = entry?;
+        let entries = match archive.entries() {
+            Ok(e) => e,
+            Err(_) if truncated.load(std::sync::atomic::Ordering::Relaxed) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "tar archive truncated before any entries",
+                ));
+            }
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) if truncated.load(std::sync::atomic::Ordering::Relaxed) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "tar archive truncated mid-entry",
+                    ));
+                }
+                Err(e) => return Err(e),
+            };
             let ends_with_hprof = entry.path_bytes().to_ascii_lowercase().ends_with(b".hprof");
             if ends_with_hprof {
                 let inner: Box<dyn Read> = Box::new(entry);
@@ -171,6 +190,12 @@ impl HprofReader {
                 r.read_header()?;
                 return Ok(r);
             }
+        }
+        if truncated.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "tar archive truncated before .hprof entry",
+            ));
         }
         Err(io::Error::new(
             io::ErrorKind::InvalidData,

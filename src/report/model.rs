@@ -1620,7 +1620,9 @@ pub struct FieldStats {
 }
 
 /// Full report data model: only bounded aggregates, never a per-object Vec.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct Report {
     pub schema_version: u32,
     pub generated: String,

@@ -35,12 +35,12 @@ _At-a-glance digest; see the sections below for full detail._
 
 | Metric               |   Value |
 | -------------------- | ------: |
-| Total reachable heap | 19.2 MB |
+| Total Reachable Heap | 19.2 MB |
 | Objects              | 517,791 |
 | Classes              |   2,336 |
-| Class loaders        |       5 |
+| Class Loaders        |       5 |
 | Threads              |      30 |
-| GC roots             |   1,619 |
+| GC Roots             |   1,619 |
 
 **Top suspects by retained heap**
 
@@ -57,18 +57,18 @@ _At-a-glance digest; see the sections below for full detail._
 _Automated signals pointing to where memory concentrates and what to investigate first. Total reachable heap: 19.2 MB_
 
 - **Headline Retainer:** `java.util.concurrent.ForkJoinWorkerThread` (a single object) retains 8.9 MB (46.3% of reachable heap). See [Leak Suspects](#leak-suspects).
-- **Concentration:** diffuse — retention is spread across multiple roots, so there is no single holder to target. See [Leak Suspects](#leak-suspects).
-- **Shape:** deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 9, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
+- **Concentration:** diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Inspect individual suspects to find the most impactful target. See [Leak Suspects](#leak-suspects).
+- **Heap Shape:** deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects — 90% of objects within depth 9, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.util.concurrent.ForkJoinWorkerThread`, retains 46.3% and the top 10 retain 89.9% of the heap; 7 objects each hold ≥1%. See [Top Consumers](#top-consumers).
-- **Thread Pinning:** thread `ForkJoinPool.commonPool-worker-16` retains 8.9 MB (46.3% of heap) and pins 316 thread-local roots — a live thread is holding a disproportionate amount of memory alive. Inspect the thread's stack frames and ThreadLocal values in the Threads section. See [Threads](#threads).
+- **Thread Pinning:** thread `ForkJoinPool.commonPool-worker-16` retains 8.9 MB (46.3% of heap) via 316 thread-local GC root references — a running thread is pinning a disproportionate share of the heap. Inspect the thread's stack frames and ThreadLocal values. See [Threads](#threads).
 - **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
 - **Fixed per-Object Header Overhead:** 5.9 MB (30.9% of heap) consumed by JVM object headers alone (517,791 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
-- **Empty-Collection Cemetery:** 2,950 of 3,982 tracked collections (74.1%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written. See [Collections](#collections).
-- **Collection Waste Not Analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
+- **Empty-Collection Cemetery:** 2,950 of 3,982 tracked collections (74.1%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
+- **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
 
-_Approximately **2.3 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap._
+**2.3 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
 
 | Source                                     | Reclaimable |
 | ------------------------------------------ | ----------: |
@@ -81,22 +81,22 @@ _JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and 
 
 ### Heap Summary
 
-| Property                                      | Value                            |
-| --------------------------------------------- | -------------------------------- |
-| HPROF format                                  | JAVA PROFILE 1.0.2               |
-| File size                                     | 31.2 MB                          |
-| Identifier size                               | 64-bit                           |
-| Compressed OOPs                               | yes                              |
-| Dump created                                  | 2026-07-08T12:44:39Z             |
-| Total objects                                 | 517,791                          |
-| Total reachable heap                          | 19.2 MB                          |
-| Off-heap / on-heap                            | 134.3 MB off-heap (7.0× on-heap) |
-| GC roots                                      | 1,619                            |
-| Classes loaded                                | 2,336                            |
-| Class loaders                                 | 5                                |
-| Unreachable objects (excluded)                | 3,908 (1.1 MB)                   |
-| Heap fragmentation (unreachable / heap total) | 5.6%                             |
-| Top-class retained concentration              | 73.5%                            |
+| Property                                | Value                            |
+| --------------------------------------- | -------------------------------- |
+| HPROF Format                            | JAVA PROFILE 1.0.2               |
+| File Size                               | 31.2 MB                          |
+| Identifier Size                         | 64-bit                           |
+| Compressed OOPs                         | Yes                              |
+| Dump Created                            | 2026-07-08T12:44:39Z             |
+| Total Objects                           | 517,791                          |
+| Total Reachable Heap                    | 19.2 MB                          |
+| Off-Heap / On-Heap                      | 134.3 MB off-heap (7.0× on-heap) |
+| GC Roots                                | 1,619                            |
+| Classes Loaded                          | 2,336                            |
+| Class Loaders                           | 5                                |
+| Unreachable (Excluded)                  | 3,908 (1.1 MB)                   |
+| Dead Object Ratio (unreachable / total) | 5.6%                             |
+| Top-Class Retained Concentration        | 73.5%                            |
 
 - **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader
 
@@ -104,11 +104,12 @@ _JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and 
 
 _GC roots are the entry points where the JVM starts reachability scanning — anything reachable from a root stays alive. Common root types: thread-stack locals, JNI global references, static fields of loaded classes, and synchronized lock objects._
 
-| Root Type    | Count |                  |
-| ------------ | ----: | ---------------- |
-| Sticky Class | 1,478 | ████████████████ |
-| JNI Global   |   108 | █▏               |
-| Thread       |    33 | ▎                |
+| Root Type    | Count | % of Roots | Retained |                  | Top Retained Classes                                                                                                                             |
+| ------------ | ----: | ---------: | -------: | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Thread       |    33 |       2.0% |   9.2 MB | ████████████████ | `java.util.concurrent.ForkJoinWorkerThread` ×26 (8.9 MB), `java.lang.Thread` ×4 (302.3 KB), `java.lang.ref.Finalizer$FinalizerThread` ×1 (208 B) |
+| Sticky Class | 1,478 |      90.8% | 887.1 KB | █▌               | `java.lang.Class` ×1,478 (887.1 KB)                                                                                                              |
+| JNI Global   |   108 |       6.6% | 125.8 KB | ▏                | `java.lang.Object[]` ×2 (105.7 KB), `java.lang.invoke.MethodType` ×53 (9.0 KB), `java.lang.Thread` ×21 (5.4 KB)                                  |
+| System Class |     8 |       0.5% |      0 B |                  | `java.lang.Class` ×8 (0 B)                                                                                                                       |
 
 ### Heap Composition
 
@@ -121,22 +122,22 @@ _Shallow heap broken down by object kind: instances, object arrays, primitive ar
 | Primitive Arrays | 122,460 |       8.5 MB | ███████████████▏ |
 | Class Objects    |   2,336 |      30.1 KB | ▏                |
 
-### HPROF Record Census
+### Dump Completeness
 
-_Raw HPROF record-type composition of the dump (pass-1 counts). Useful for diagnosing truncated or unusual dumps (e.g. zero stack frames means no allocation-site data; a mismatch between load-class and class-dump counts can indicate a partial write). Additive, not parity-compared._
+_Record-type counts from the raw HPROF file — useful for diagnosing truncated or unusual dumps. Zero stack frames means no allocation-site data (requires `-agentlib:hprof=heap=dump,depth=8`, removed in JDK 9); a mismatch between load-class and class-dump counts can indicate a partial write._
 
 | Record Type           |   Count |
 | --------------------- | ------: |
-| UTF8 strings          |  60,941 |
-| Load class            |   2,444 |
-| Unload class          |       0 |
-| Stack frames          |     467 |
-| Stack traces          |      34 |
-| Heap dump segments    |      33 |
-| Instance dumps        | 389,412 |
-| Object-array dumps    |   4,849 |
-| Primitive-array dumps | 124,993 |
-| Class dumps           |   2,444 |
+| UTF-8 Strings         |  60,941 |
+| Load Class            |   2,444 |
+| Unload Class          |       0 |
+| Stack Frames          |     467 |
+| Stack Traces          |      34 |
+| Heap Dump Segments    |      33 |
+| Instance Dumps        | 389,412 |
+| Object Array Dumps    |   4,849 |
+| Primitive Array Dumps | 124,993 |
+| Class Dumps           |   2,444 |
 
 #### GC Root Records by Tag
 
@@ -147,17 +148,17 @@ _Raw HPROF record-type composition of the dump (pass-1 counts). Useful for diagn
 | JNI Global   |   108 |
 | Thread       |    33 |
 
-### Duplicate Strings (approximate)
+### Duplicate Strings
 
-_Duplicate-string analysis not run (pass `--find-duplicates`)._
+_Duplicate-string analysis not run — pass `--find-duplicates` to enable._
 
-### Duplicate Primitive Arrays (approximate)
+### Duplicate Primitive Arrays
 
-_Duplicate primitive-array analysis not run (pass `--find-duplicates`)._
+_Duplicate primitive-array analysis not run — pass `--find-duplicates` to enable._
 
 ### Boxed Numbers
 
-_Heap consumed by `Integer`, `Long`, `Double`, and other boxed wrapper types. Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded to 8-byte boundary) versus 4–8 bytes for an unboxed primitive. Replacing with primitive fields or `int[]`/`long[]` arrays eliminates the per-object header._
+_Heap consumed by `Integer`, `Long`, `Double`, and other boxed wrapper types. Each boxed value costs 16–24 bytes (12-byte object header + primitive field, padded to 8-byte boundary) versus 4–8 bytes as an unboxed primitive. Replacing with primitive fields or `int[]`/`long[]` arrays eliminates the per-object header._
 
 |  # | Class                 | Instances | Total Shallow | % of Heap | Avg Size |
 | -: | --------------------- | --------: | ------------: | --------: | -------: |
@@ -174,112 +175,112 @@ _Heap consumed by `Integer`, `Long`, `Double`, and other boxed wrapper types. Ea
 
 _Classes where object headers (12 bytes with compressed OOPs, 16 without) consume a large share of shallow heap. The practical action is to reduce object *count*: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields. Value types (Project Valhalla) eliminate headers entirely._
 
-|  # | Class                                                 | Instances | Hdr/obj | Total Headers | Hdr % | Avg Size |
-| -: | ----------------------------------------------------- | --------: | ------: | ------------: | ----: | -------: |
-|  1 | `java.lang.Object`                                    |   133,001 |    12 B |        1.5 MB | 75.0% |     16 B |
-|  2 | `byte[]`                                              |   121,297 |    12 B |        1.4 MB | 16.7% |     71 B |
-|  3 | `java.lang.String`                                    |   120,581 |    12 B |        1.4 MB | 50.0% |     24 B |
-|  4 | `java.util.HashMap$Node`                              |   108,445 |    12 B |        1.2 MB | 37.5% |     32 B |
-|  5 | `java.util.concurrent.ConcurrentHashMap$Node`         |     6,000 |    12 B |       70.3 KB | 37.5% |     32 B |
-|  6 | `java.util.jar.Attributes`                            |     2,895 |    12 B |       33.9 KB | 75.0% |     16 B |
-|  7 | `java.lang.Class`                                     |     2,345 |    12 B |       27.5 KB | 89.4% |     13 B |
-|  8 | `java.util.LinkedHashMap$Entry`                       |     1,179 |    12 B |       13.8 KB | 30.0% |     40 B |
-|  9 | `java.lang.invoke.MemberName`                         |       814 |    12 B |        9.5 KB | 30.0% |     40 B |
-| 10 | `jdk.internal.util.WeakReferenceKey`                  |       709 |    12 B |        8.3 KB | 37.5% |     32 B |
-| 11 | `java.lang.invoke.MethodType`                         |       692 |    12 B |        8.1 KB | 30.0% |     40 B |
-| 12 | `java.lang.invoke.ResolvedMethodName`                 |       619 |    12 B |        7.3 KB | 75.0% |     16 B |
-| 13 | `java.util.ArrayList`                                 |       607 |    12 B |        7.1 KB | 50.0% |     24 B |
-| 14 | `java.lang.Class[]`                                   |       553 |    12 B |        6.5 KB | 40.9% |     29 B |
-| 15 | `java.lang.String[]`                                  |       450 |    12 B |        5.3 KB | 30.7% |     39 B |
-| 16 | `java.lang.invoke.LambdaForm$Name`                    |       406 |    12 B |        4.8 KB | 37.5% |     32 B |
-| 17 | `java.lang.module.ModuleDescriptor$Exports`           |       367 |    12 B |        4.3 KB | 50.0% |     24 B |
-| 18 | `jdk.internal.math.FDBigInteger`                      |       341 |    12 B |        4.0 KB | 37.5% |     32 B |
-| 19 | `java.lang.Integer`                                   |       277 |    12 B |        3.2 KB | 75.0% |     16 B |
-| 20 | `sun.security.util.KnownOIDs`                         |       264 |    12 B |        3.1 KB | 30.0% |     40 B |
-| 21 | `java.lang.Long`                                      |       256 |    12 B |        3.0 KB | 50.0% |     24 B |
-| 22 | `java.lang.Byte`                                      |       256 |    12 B |        3.0 KB | 75.0% |     16 B |
-| 23 | `java.lang.Short`                                     |       256 |    12 B |        3.0 KB | 75.0% |     16 B |
-| 24 | `java.util.HashSet`                                   |       255 |    12 B |        3.0 KB | 75.0% |     16 B |
-| 25 | `java.util.ImmutableCollections$Set12`                |       245 |    12 B |        2.9 KB | 50.0% |     24 B |
-| 26 | `java.lang.invoke.DirectMethodHandle`                 |       197 |    12 B |        2.3 KB | 30.0% |     40 B |
-| 27 | `jdk.internal.module.ServicesCatalog$ServiceProvider` |       190 |    12 B |        2.2 KB | 50.0% |     24 B |
-| 28 | `java.lang.invoke.MethodTypeForm`                     |       171 |    12 B |        2.0 KB | 37.5% |     32 B |
-| 29 | `java.lang.invoke.LambdaForm$NamedFunction`           |       158 |    12 B |        1.9 KB | 50.0% |     24 B |
-| 30 | `java.lang.ref.SoftReference`                         |       149 |    12 B |        1.7 KB | 30.0% |     40 B |
+|  # | Class                                                 | Instances | Header / Obj | Total Headers | % of Shallow | Avg Size |
+| -: | ----------------------------------------------------- | --------: | -----------: | ------------: | -----------: | -------: |
+|  1 | `java.lang.Object`                                    |   133,001 |         12 B |        1.5 MB |        75.0% |     16 B |
+|  2 | `byte[]`                                              |   121,297 |         12 B |        1.4 MB |        16.7% |     71 B |
+|  3 | `java.lang.String`                                    |   120,581 |         12 B |        1.4 MB |        50.0% |     24 B |
+|  4 | `java.util.HashMap$Node`                              |   108,445 |         12 B |        1.2 MB |        37.5% |     32 B |
+|  5 | `java.util.concurrent.ConcurrentHashMap$Node`         |     6,000 |         12 B |       70.3 KB |        37.5% |     32 B |
+|  6 | `java.util.jar.Attributes`                            |     2,895 |         12 B |       33.9 KB |        75.0% |     16 B |
+|  7 | `java.lang.Class`                                     |     2,345 |         12 B |       27.5 KB |        89.4% |     13 B |
+|  8 | `java.util.LinkedHashMap$Entry`                       |     1,179 |         12 B |       13.8 KB |        30.0% |     40 B |
+|  9 | `java.lang.invoke.MemberName`                         |       814 |         12 B |        9.5 KB |        30.0% |     40 B |
+| 10 | `jdk.internal.util.WeakReferenceKey`                  |       709 |         12 B |        8.3 KB |        37.5% |     32 B |
+| 11 | `java.lang.invoke.MethodType`                         |       692 |         12 B |        8.1 KB |        30.0% |     40 B |
+| 12 | `java.lang.invoke.ResolvedMethodName`                 |       619 |         12 B |        7.3 KB |        75.0% |     16 B |
+| 13 | `java.util.ArrayList`                                 |       607 |         12 B |        7.1 KB |        50.0% |     24 B |
+| 14 | `java.lang.Class[]`                                   |       553 |         12 B |        6.5 KB |        40.9% |     29 B |
+| 15 | `java.lang.String[]`                                  |       450 |         12 B |        5.3 KB |        30.7% |     39 B |
+| 16 | `java.lang.invoke.LambdaForm$Name`                    |       406 |         12 B |        4.8 KB |        37.5% |     32 B |
+| 17 | `java.lang.module.ModuleDescriptor$Exports`           |       367 |         12 B |        4.3 KB |        50.0% |     24 B |
+| 18 | `jdk.internal.math.FDBigInteger`                      |       341 |         12 B |        4.0 KB |        37.5% |     32 B |
+| 19 | `java.lang.Integer`                                   |       277 |         12 B |        3.2 KB |        75.0% |     16 B |
+| 20 | `sun.security.util.KnownOIDs`                         |       264 |         12 B |        3.1 KB |        30.0% |     40 B |
+| 21 | `java.lang.Long`                                      |       256 |         12 B |        3.0 KB |        50.0% |     24 B |
+| 22 | `java.lang.Byte`                                      |       256 |         12 B |        3.0 KB |        75.0% |     16 B |
+| 23 | `java.lang.Short`                                     |       256 |         12 B |        3.0 KB |        75.0% |     16 B |
+| 24 | `java.util.HashSet`                                   |       255 |         12 B |        3.0 KB |        75.0% |     16 B |
+| 25 | `java.util.ImmutableCollections$Set12`                |       245 |         12 B |        2.9 KB |        50.0% |     24 B |
+| 26 | `java.lang.invoke.DirectMethodHandle`                 |       197 |         12 B |        2.3 KB |        30.0% |     40 B |
+| 27 | `jdk.internal.module.ServicesCatalog$ServiceProvider` |       190 |         12 B |        2.2 KB |        50.0% |     24 B |
+| 28 | `java.lang.invoke.MethodTypeForm`                     |       171 |         12 B |        2.0 KB |        37.5% |     32 B |
+| 29 | `java.lang.invoke.LambdaForm$NamedFunction`           |       158 |         12 B |        1.9 KB |        50.0% |     24 B |
+| 30 | `java.lang.ref.SoftReference`                         |       149 |         12 B |        1.7 KB |        30.0% |     40 B |
 
 ### Class Histogram (by Retained Heap)
 
-_Every loaded class with its instance count, shallow heap (own bytes), and retained heap (what would be reclaimed if all instances became unreachable). Top 50 shown; full list in JSON._
+_Every loaded class with its instance count, shallow heap (own bytes), and retained heap (bytes freed when all instances become unreachable). Top 50 shown._
 
-|  # | Class                                             | Instances | Shallow Heap |  Largest | Retained Heap | % Heap |
-| -: | ------------------------------------------------- | --------: | -----------: | -------: | ------------: | -----: |
-|  1 | `java.util.HashMap$Node[]`                        |       422 |     875.0 KB | 512.0 KB |       14.1 MB |  73.5% |
-|  2 | `java.util.HashMap`                               |       422 |      19.8 KB |     48 B |       14.0 MB |  73.2% |
-|  3 | `java.util.HashMap$Node`                          |   108,445 |       3.3 MB |     32 B |       13.3 MB |  69.2% |
-|  4 | `java.util.HashSet`                               |       255 |       4.0 KB |     16 B |       13.1 MB |  68.1% |
-|  5 | `java.util.stream.ReduceOps$3ReducingSink`        |        25 |        800 B |     32 B |       13.0 MB |  67.8% |
-|  6 | `java.lang.String`                                |   120,581 |       2.8 MB |     24 B |       10.5 MB |  54.7% |
-|  7 | `java.util.concurrent.ForkJoinWorkerThread`       |        26 |       2.8 KB |    112 B |        8.9 MB |  46.3% |
-|  8 | `byte[]`                                          |   121,297 |       8.3 MB | 255.1 KB |        8.3 MB |  43.3% |
-|  9 | `java.util.stream.ReduceOps$ReduceTask`           |         9 |        576 B |     64 B |        4.2 MB |  22.0% |
-| 10 | `java.lang.Class`                                 |     2,345 |      30.7 KB |   1.1 KB |        3.5 MB |  18.1% |
-| 11 | `java.lang.Object[]`                              |     2,410 |     726.9 KB | 512.0 KB |        2.9 MB |  15.2% |
-| 12 | `scala.runtime.LazyVals$`                         |         1 |         16 B |     16 B |        2.5 MB |  13.0% |
-| 13 | `java.lang.Object`                                |   133,001 |       2.0 MB |     16 B |        2.0 MB |  10.6% |
-| 14 | `java.lang.ref.SoftReference`                     |       149 |       5.8 KB |     40 B |      605.3 KB |   3.1% |
-| 15 | `java.util.jar.JarFile`                           |         7 |        448 B |     64 B |      593.3 KB |   3.0% |
-| 16 | `java.util.jar.Manifest`                          |         6 |        144 B |     24 B |      590.3 KB |   3.0% |
-| 17 | `java.util.concurrent.ConcurrentHashMap`          |       118 |       7.4 KB |     64 B |      527.8 KB |   2.7% |
-| 18 | `java.util.concurrent.ConcurrentHashMap$Node[]`   |        93 |      54.1 KB |   8.0 KB |      525.0 KB |   2.7% |
-| 19 | `java.util.zip.ZipFile$Source`                    |         7 |        560 B |     80 B |      446.6 KB |   2.3% |
-| 20 | `java.util.concurrent.ConcurrentHashMap$Node`     |     6,000 |     187.5 KB |     32 B |      395.1 KB |   2.0% |
-| 21 | `java.util.LinkedHashMap`                         |     2,935 |     183.4 KB |     64 B |      338.1 KB |   1.7% |
-| 22 | `java.lang.Thread`                                |        27 |       2.7 KB |    104 B |      308.4 KB |   1.6% |
-| 23 | `java.util.jar.Attributes`                        |     2,895 |      45.2 KB |     16 B |      238.4 KB |   1.2% |
-| 24 | `java.time.zone.ZoneRulesProvider`                |         0 |          0 B |      0 B |      198.4 KB |   1.0% |
-| 25 | `org.renaissance.core.ModuleLoader`               |         2 |         48 B |     24 B |      149.8 KB |   0.8% |
-| 26 | `sun.util.calendar.ZoneInfoFile`                  |         0 |          0 B |      0 B |      145.4 KB |   0.7% |
-| 27 | `java.util.LinkedHashMap$Entry`                   |     1,179 |      46.1 KB |     40 B |      145.1 KB |   0.7% |
-| 28 | `java.util.LinkedHashSet`                         |        38 |        608 B |     16 B |      144.6 KB |   0.7% |
-| 29 | `java.lang.invoke.MethodType`                     |       692 |      27.0 KB |     40 B |      134.6 KB |   0.7% |
-| 30 | `java.time.zone.TzdbZoneRulesProvider`            |         1 |         24 B |     24 B |      118.2 KB |   0.6% |
-| 31 | `int[]`                                           |       899 |     106.8 KB |  34.3 KB |      106.8 KB |   0.5% |
-| 32 | `byte[][]`                                        |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.5% |
-| 33 | `java.util.ImmutableCollections$SetN`             |       149 |       3.5 KB |     24 B |       91.5 KB |   0.5% |
-| 34 | `sun.security.util.KnownOIDs`                     |       264 |      10.3 KB |     40 B |       88.5 KB |   0.5% |
-| 35 | `java.util.ArrayList`                             |       607 |      14.2 KB |     24 B |       82.0 KB |   0.4% |
-| 36 | `java.net.URLClassLoader`                         |         2 |        176 B |     88 B |       81.0 KB |   0.4% |
-| 37 | `org.renaissance.core.BenchmarkSuite`             |         1 |         32 B |     32 B |       77.0 KB |   0.4% |
-| 38 | `java.util.Optional`                              |         4 |         64 B |     16 B |       73.9 KB |   0.4% |
-| 39 | `java.lang.Module`                                |        70 |       3.3 KB |     48 B |       65.5 KB |   0.3% |
-| 40 | `sun.util.cldr.CLDRLocaleProviderAdapter`         |         1 |         80 B |     80 B |       62.6 KB |   0.3% |
-| 41 | `sun.util.locale.provider.LocaleProviderAdapter`  |         0 |          0 B |      0 B |       62.3 KB |   0.3% |
-| 42 | `java.lang.invoke.MemberName`                     |       814 |      31.8 KB |     40 B |       58.3 KB |   0.3% |
-| 43 | `char[]`                                          |       223 |      55.7 KB |  16.0 KB |       55.7 KB |   0.3% |
-| 44 | `sun.security.provider.Sun`                       |         1 |        104 B |    104 B |       53.7 KB |   0.3% |
-| 45 | `jdk.internal.loader.ClassLoaders$AppClassLoader` |         1 |         96 B |     96 B |       53.0 KB |   0.3% |
-| 46 | `java.lang.invoke.LambdaForm`                     |       140 |       6.6 KB |     48 B |       52.6 KB |   0.3% |
-| 47 | `sun.util.resources.Bundles`                      |         0 |          0 B |      0 B |       49.2 KB |   0.3% |
-| 48 | `jdk.internal.util.ReferencedKeyMap`              |         1 |         24 B |     24 B |       48.8 KB |   0.2% |
-| 49 | `jdk.internal.util.ReferencedKeySet`              |         1 |         16 B |     16 B |       48.7 KB |   0.2% |
-| 50 | `java.lang.module.ModuleDescriptor`               |        62 |       3.9 KB |     64 B |       40.1 KB |   0.2% |
-_… 2,394 more classes, 388.8 KB shallow / 1.5 MB retained (full list in JSON)._
+|  # | Class                                             | Instances |  Shallow |  Largest | Retained | % Heap |
+| -: | ------------------------------------------------- | --------: | -------: | -------: | -------: | -----: |
+|  1 | `java.util.HashMap$Node[]`                        |       422 | 875.0 KB | 512.0 KB |  14.1 MB |  73.5% |
+|  2 | `java.util.HashMap`                               |       422 |  19.8 KB |     48 B |  14.0 MB |  73.2% |
+|  3 | `java.util.HashMap$Node`                          |   108,445 |   3.3 MB |     32 B |  13.3 MB |  69.2% |
+|  4 | `java.util.HashSet`                               |       255 |   4.0 KB |     16 B |  13.1 MB |  68.1% |
+|  5 | `java.util.stream.ReduceOps$3ReducingSink`        |        25 |    800 B |     32 B |  13.0 MB |  67.8% |
+|  6 | `java.lang.String`                                |   120,581 |   2.8 MB |     24 B |  10.5 MB |  54.7% |
+|  7 | `java.util.concurrent.ForkJoinWorkerThread`       |        26 |   2.8 KB |    112 B |   8.9 MB |  46.3% |
+|  8 | `byte[]`                                          |   121,297 |   8.3 MB | 255.1 KB |   8.3 MB |  43.3% |
+|  9 | `java.util.stream.ReduceOps$ReduceTask`           |         9 |    576 B |     64 B |   4.2 MB |  22.0% |
+| 10 | `java.lang.Class`                                 |     2,345 |  30.7 KB |   1.1 KB |   3.5 MB |  18.1% |
+| 11 | `java.lang.Object[]`                              |     2,410 | 726.9 KB | 512.0 KB |   2.9 MB |  15.2% |
+| 12 | `scala.runtime.LazyVals$`                         |         1 |     16 B |     16 B |   2.5 MB |  13.0% |
+| 13 | `java.lang.Object`                                |   133,001 |   2.0 MB |     16 B |   2.0 MB |  10.6% |
+| 14 | `java.lang.ref.SoftReference`                     |       149 |   5.8 KB |     40 B | 605.3 KB |   3.1% |
+| 15 | `java.util.jar.JarFile`                           |         7 |    448 B |     64 B | 593.3 KB |   3.0% |
+| 16 | `java.util.jar.Manifest`                          |         6 |    144 B |     24 B | 590.3 KB |   3.0% |
+| 17 | `java.util.concurrent.ConcurrentHashMap`          |       118 |   7.4 KB |     64 B | 527.8 KB |   2.7% |
+| 18 | `java.util.concurrent.ConcurrentHashMap$Node[]`   |        93 |  54.1 KB |   8.0 KB | 525.0 KB |   2.7% |
+| 19 | `java.util.zip.ZipFile$Source`                    |         7 |    560 B |     80 B | 446.6 KB |   2.3% |
+| 20 | `java.util.concurrent.ConcurrentHashMap$Node`     |     6,000 | 187.5 KB |     32 B | 395.1 KB |   2.0% |
+| 21 | `java.util.LinkedHashMap`                         |     2,935 | 183.4 KB |     64 B | 338.1 KB |   1.7% |
+| 22 | `java.lang.Thread`                                |        27 |   2.7 KB |    104 B | 308.4 KB |   1.6% |
+| 23 | `java.util.jar.Attributes`                        |     2,895 |  45.2 KB |     16 B | 238.4 KB |   1.2% |
+| 24 | `java.time.zone.ZoneRulesProvider`                |         0 |      0 B |      0 B | 198.4 KB |   1.0% |
+| 25 | `org.renaissance.core.ModuleLoader`               |         2 |     48 B |     24 B | 149.8 KB |   0.8% |
+| 26 | `sun.util.calendar.ZoneInfoFile`                  |         0 |      0 B |      0 B | 145.4 KB |   0.7% |
+| 27 | `java.util.LinkedHashMap$Entry`                   |     1,179 |  46.1 KB |     40 B | 145.1 KB |   0.7% |
+| 28 | `java.util.LinkedHashSet`                         |        38 |    608 B |     16 B | 144.6 KB |   0.7% |
+| 29 | `java.lang.invoke.MethodType`                     |       692 |  27.0 KB |     40 B | 134.6 KB |   0.7% |
+| 30 | `java.time.zone.TzdbZoneRulesProvider`            |         1 |     24 B |     24 B | 118.2 KB |   0.6% |
+| 31 | `int[]`                                           |       899 | 106.8 KB |  34.3 KB | 106.8 KB |   0.5% |
+| 32 | `byte[][]`                                        |         1 |   1.4 KB |   1.4 KB |  94.1 KB |   0.5% |
+| 33 | `java.util.ImmutableCollections$SetN`             |       149 |   3.5 KB |     24 B |  91.5 KB |   0.5% |
+| 34 | `sun.security.util.KnownOIDs`                     |       264 |  10.3 KB |     40 B |  88.5 KB |   0.5% |
+| 35 | `java.util.ArrayList`                             |       607 |  14.2 KB |     24 B |  82.0 KB |   0.4% |
+| 36 | `java.net.URLClassLoader`                         |         2 |    176 B |     88 B |  81.0 KB |   0.4% |
+| 37 | `org.renaissance.core.BenchmarkSuite`             |         1 |     32 B |     32 B |  77.0 KB |   0.4% |
+| 38 | `java.util.Optional`                              |         4 |     64 B |     16 B |  73.9 KB |   0.4% |
+| 39 | `java.lang.Module`                                |        70 |   3.3 KB |     48 B |  65.5 KB |   0.3% |
+| 40 | `sun.util.cldr.CLDRLocaleProviderAdapter`         |         1 |     80 B |     80 B |  62.6 KB |   0.3% |
+| 41 | `sun.util.locale.provider.LocaleProviderAdapter`  |         0 |      0 B |      0 B |  62.3 KB |   0.3% |
+| 42 | `java.lang.invoke.MemberName`                     |       814 |  31.8 KB |     40 B |  58.3 KB |   0.3% |
+| 43 | `char[]`                                          |       223 |  55.7 KB |  16.0 KB |  55.7 KB |   0.3% |
+| 44 | `sun.security.provider.Sun`                       |         1 |    104 B |    104 B |  53.7 KB |   0.3% |
+| 45 | `jdk.internal.loader.ClassLoaders$AppClassLoader` |         1 |     96 B |     96 B |  53.0 KB |   0.3% |
+| 46 | `java.lang.invoke.LambdaForm`                     |       140 |   6.6 KB |     48 B |  52.6 KB |   0.3% |
+| 47 | `sun.util.resources.Bundles`                      |         0 |      0 B |      0 B |  49.2 KB |   0.3% |
+| 48 | `jdk.internal.util.ReferencedKeyMap`              |         1 |     24 B |     24 B |  48.8 KB |   0.2% |
+| 49 | `jdk.internal.util.ReferencedKeySet`              |         1 |     16 B |     16 B |  48.7 KB |   0.2% |
+| 50 | `java.lang.module.ModuleDescriptor`               |        62 |   3.9 KB |     64 B |  40.1 KB |   0.2% |
+_… 2,394 more classes, 388.8 KB shallow / 1.5 MB retained (see HTML report for full list)._
 
 ### Class Loaders
 
 _Classes grouped by the loader that defined them. Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common source of metaspace and heap leaks. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak. The **Address** column distinguishes them._
 
-| Loader                                               | Address    | Classes | Instances | Shallow Heap | Retained Heap |
-| ---------------------------------------------------- | ---------- | ------: | --------: | -----------: | ------------: |
-| <boot>                                               | <boot>     |   1,748 |   517,340 |      19.2 MB |      115.7 MB |
-| java/net/URLClassLoader                              | 0xce800048 |     575 |       330 |      18.0 KB |        2.6 MB |
-| jdk/internal/loader/ClassLoaders$AppClassLoader      | 0xffeecf48 |      90 |        68 |       1.4 KB |      238.0 KB |
-| java/net/URLClassLoader                              | 0xc040b670 |      30 |        52 |       1.0 KB |       11.6 KB |
-| jdk/internal/loader/ClassLoaders$PlatformClassLoader | 0xffeec828 |       1 |         1 |         16 B |        7.4 KB |
+| Loader                                               | Address    | Classes | Instances | Shallow | Retained |
+| ---------------------------------------------------- | ---------- | ------: | --------: | ------: | -------: |
+| <boot>                                               | <boot>     |   1,748 |   517,340 | 19.2 MB | 115.7 MB |
+| java/net/URLClassLoader                              | 0xce800048 |     575 |       330 | 18.0 KB |   2.6 MB |
+| jdk/internal/loader/ClassLoaders$AppClassLoader      | 0xffeecf48 |      90 |        68 |  1.4 KB | 238.0 KB |
+| java/net/URLClassLoader                              | 0xc040b670 |      30 |        52 |  1.0 KB |  11.6 KB |
+| jdk/internal/loader/ClassLoaders$PlatformClassLoader | 0xffeec828 |       1 |         1 |    16 B |   7.4 KB |
 
 ## Leak Suspects
 
-_Objects and class groups retaining the most heap, ranked by retained size. These are the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference that keeps it alive. The path to GC root is shown for each suspect below._
+_Objects and class groups retaining the most heap, ranked by retained size — the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control and drop or null out the reference that keeps it alive. GC root paths are shown for each suspect below._
 
 ### 1. `java.util.concurrent.ForkJoinWorkerThread` — retains 8.9 MB (46.3% of reachable heap)
 
@@ -293,9 +294,9 @@ _Directly dominates 51,370 objects (showing top 1 classes by retained heap)._
 
 **Accumulated objects by class:**
 
-| Class                    | Objects | Shallow | Retained | % of suspect |
-| ------------------------ | ------: | ------: | -------: | -----------: |
-| `java.util.HashMap$Node` |  51,370 |  1.6 MB |   7.9 MB |        89.1% |
+| Class                    | Instances | Shallow | Retained | % of Suspect |
+| ------------------------ | --------: | ------: | -------: | -----------: |
+| `java.util.HashMap$Node` |    51,370 |  1.6 MB |   7.9 MB |        89.1% |
 
 **Dominator chain to GC root:**
 
@@ -312,9 +313,9 @@ _Directly dominates 51,370 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 512 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
           - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
-            _… (2 deeper — full data in JSON)_
+            _… (2 deeper — see HTML report for full tree)_
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -326,9 +327,9 @@ _Directly dominates 51,370 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
           - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -340,9 +341,9 @@ _Directly dominates 51,370 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 376 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 248 B)
           - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
           - `java.lang.String` (shallow 24 B, retained 88 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -354,7 +355,7 @@ _Directly dominates 51,370 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -366,14 +367,14 @@ _Directly dominates 51,370 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 248 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 88 B)
           - `byte[]` (shallow 64 B, retained 64 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
         - `byte[]` (shallow 72 B, retained 72 B)
     - `java.lang.String` (shallow 24 B, retained 96 B)
       - `byte[]` (shallow 72 B, retained 72 B)
-  _… (272 more siblings — full data in JSON)_
+  _… (272 more siblings — see HTML report for full list)_
 
 </details>
 
@@ -387,9 +388,9 @@ _Directly dominates 25,551 objects (showing top 1 classes by retained heap)._
 
 **Accumulated objects by class:**
 
-| Class                    | Objects |  Shallow | Retained | % of suspect |
-| ------------------------ | ------: | -------: | -------: | -----------: |
-| `java.util.HashMap$Node` |  25,551 | 798.5 KB |   4.0 MB |        94.1% |
+| Class                    | Instances |  Shallow | Retained | % of Suspect |
+| ------------------------ | --------: | -------: | -------: | -----------: |
+| `java.util.HashMap$Node` |    25,551 | 798.5 KB |   4.0 MB |        94.1% |
 
 **Dominator chain to GC root:**
 
@@ -406,9 +407,9 @@ _Directly dominates 25,551 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 512 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
           - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
-            _… (2 deeper — full data in JSON)_
+            _… (2 deeper — see HTML report for full tree)_
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -420,9 +421,9 @@ _Directly dominates 25,551 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
           - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -434,7 +435,7 @@ _Directly dominates 25,551 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 96 B)
           - `byte[]` (shallow 72 B, retained 72 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -446,7 +447,7 @@ _Directly dominates 25,551 objects (showing top 1 classes by retained heap)._
       - `java.util.HashMap$Node` (shallow 32 B, retained 248 B)
         - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
           - `java.lang.String` (shallow 24 B, retained 96 B)
-            _… (1 deeper — full data in JSON)_
+            _… (1 deeper — see HTML report for full tree)_
         - `java.lang.String` (shallow 24 B, retained 88 B)
           - `byte[]` (shallow 64 B, retained 64 B)
       - `java.lang.String` (shallow 24 B, retained 96 B)
@@ -475,9 +476,9 @@ _Directly dominates 131,072 objects (showing top 1 classes by retained heap)._
 
 **Accumulated objects by class:**
 
-| Class              | Objects | Shallow | Retained | % of suspect |
-| ------------------ | ------: | ------: | -------: | -----------: |
-| `java.lang.Object` | 131,072 |  2.0 MB |   2.0 MB |        80.0% |
+| Class              | Instances | Shallow | Retained | % of Suspect |
+| ------------------ | --------: | ------: | -------: | -----------: |
+| `java.lang.Object` |   131,072 |  2.0 MB |   2.0 MB |        80.0% |
 
 **Dominator chain to GC root:**
 
@@ -499,7 +500,7 @@ _Biggest objects, classes, and packages by retained heap. Unlike Leak Suspects, 
 
 ### Biggest Objects (Top-Level Dominators)
 
-_All top-level dominators ranked by retained heap — every object directly held by a GC root. Use it when the suspect you care about didn't cross the leak-suspect threshold._
+_All top-level dominators ranked by retained heap — every object directly held by a GC root, sorted largest first._
 
 |  # | Class                                                  | Shallow | Retained | % Heap |
 | -: | ------------------------------------------------------ | ------: | -------: | -----: |
@@ -528,30 +529,30 @@ _All top-level dominators ranked by retained heap — every object directly held
 
 _Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._
 
-|  # | Class                                                  | Instances | Retained Heap |
-| -: | ------------------------------------------------------ | --------: | ------------: |
-|  1 | `java.util.concurrent.ForkJoinWorkerThread`            |        26 |        8.9 MB |
-|  2 | `java.util.stream.ReduceOps$ReduceTask`                |         5 |        4.2 MB |
-|  3 | `java.lang.Class`                                      |     1,665 |        3.4 MB |
-|  4 | `java.util.jar.JarFile`                                |         7 |      592.8 KB |
-|  5 | `java.lang.String`                                     |     8,924 |      591.7 KB |
-|  6 | `java.util.zip.ZipFile$Source`                         |         7 |      446.2 KB |
-|  7 | `java.lang.Thread`                                     |        25 |      307.7 KB |
-|  8 | `java.lang.Object[]`                                   |         5 |      105.8 KB |
-|  9 | `java.lang.invoke.MethodType`                          |       686 |       85.6 KB |
-| 10 | `java.net.URLClassLoader`                              |         2 |       80.8 KB |
-| 11 | `java.lang.Module`                                     |        61 |       63.1 KB |
-| 12 | `sun.security.provider.Sun`                            |         1 |       53.7 KB |
-| 13 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |       53.0 KB |
-| 14 | `java.lang.invoke.LambdaForm`                          |       104 |       41.9 KB |
-| 15 | `java.lang.module.ModuleDescriptor`                    |        62 |       40.0 KB |
-| 16 | `java.util.concurrent.ConcurrentHashMap`               |         2 |       34.1 KB |
-| 17 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |       32.8 KB |
-| 18 | `java.lang.invoke.MethodTypeForm`                      |       107 |       29.0 KB |
-| 19 | `java.io.PrintStream`                                  |         1 |       17.3 KB |
-| 20 | `java.net.URI`                                         |        61 |       11.8 KB |
+|  # | Class                                                  | Instances | Retained |
+| -: | ------------------------------------------------------ | --------: | -------: |
+|  1 | `java.util.concurrent.ForkJoinWorkerThread`            |        26 |   8.9 MB |
+|  2 | `java.util.stream.ReduceOps$ReduceTask`                |         5 |   4.2 MB |
+|  3 | `java.lang.Class`                                      |     1,665 |   3.4 MB |
+|  4 | `java.util.jar.JarFile`                                |         7 | 592.8 KB |
+|  5 | `java.lang.String`                                     |     8,924 | 591.7 KB |
+|  6 | `java.util.zip.ZipFile$Source`                         |         7 | 446.2 KB |
+|  7 | `java.lang.Thread`                                     |        25 | 307.7 KB |
+|  8 | `java.lang.Object[]`                                   |         5 | 105.8 KB |
+|  9 | `java.lang.invoke.MethodType`                          |       686 |  85.6 KB |
+| 10 | `java.net.URLClassLoader`                              |         2 |  80.8 KB |
+| 11 | `java.lang.Module`                                     |        61 |  63.1 KB |
+| 12 | `sun.security.provider.Sun`                            |         1 |  53.7 KB |
+| 13 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |  53.0 KB |
+| 14 | `java.lang.invoke.LambdaForm`                          |       104 |  41.9 KB |
+| 15 | `java.lang.module.ModuleDescriptor`                    |        62 |  40.0 KB |
+| 16 | `java.util.concurrent.ConcurrentHashMap`               |         2 |  34.1 KB |
+| 17 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |  32.8 KB |
+| 18 | `java.lang.invoke.MethodTypeForm`                      |       107 |  29.0 KB |
+| 19 | `java.io.PrintStream`                                  |         1 |  17.3 KB |
+| 20 | `java.net.URI`                                         |        61 |  11.8 KB |
 
-### Top-Dominator Size Distribution
+### Retained Size Distribution
 
 _Retained heap distributed across all 12,887 top-level dominators. The shape reveals whether a handful of large objects dominate the heap or memory is scattered across many small ones._
 
@@ -560,59 +561,59 @@ _Retained heap distributed across all 12,887 top-level dominators. The shape rev
 - Median retained: 64 B
 - Total retained (top-level): 19.2 MB
 
-|   Size ≤ | Count | % of Dom. |
-| -------: | ----: | --------: |
-|      1 B |   464 |      3.6% |
-|      8 B |    99 |      0.8% |
-|     16 B |   184 |      1.4% |
-|     32 B |   752 |      5.8% |
-|     64 B | 6,793 |     52.7% |
-|    128 B | 3,380 |     26.2% |
-|    256 B |   621 |      4.8% |
-|    512 B |   346 |      2.7% |
-|   1.0 KB |   118 |      0.9% |
-|   2.0 KB |    48 |      0.4% |
-|   4.0 KB |    27 |      0.2% |
-|   8.0 KB |    21 |      0.2% |
-|  16.0 KB |     8 |      0.1% |
-|  32.0 KB |     6 |     <0.1% |
-|  64.0 KB |     8 |      0.1% |
-| 128.0 KB |     4 |     <0.1% |
-| 256.0 KB |     2 |     <0.1% |
-| 512.0 KB |     2 |     <0.1% |
-|   1.0 MB |     1 |     <0.1% |
-|   4.0 MB |     1 |     <0.1% |
-|   8.0 MB |     1 |     <0.1% |
-|  16.0 MB |     1 |     <0.1% |
+|   Size ≤ | Count | % of Dominators |
+| -------: | ----: | --------------: |
+|      1 B |   464 |            3.6% |
+|      8 B |    99 |            0.8% |
+|     16 B |   184 |            1.4% |
+|     32 B |   752 |            5.8% |
+|     64 B | 6,793 |           52.7% |
+|    128 B | 3,380 |           26.2% |
+|    256 B |   621 |            4.8% |
+|    512 B |   346 |            2.7% |
+|   1.0 KB |   118 |            0.9% |
+|   2.0 KB |    48 |            0.4% |
+|   4.0 KB |    27 |            0.2% |
+|   8.0 KB |    21 |            0.2% |
+|  16.0 KB |     8 |            0.1% |
+|  32.0 KB |     6 |           <0.1% |
+|  64.0 KB |     8 |            0.1% |
+| 128.0 KB |     4 |           <0.1% |
+| 256.0 KB |     2 |           <0.1% |
+| 512.0 KB |     2 |           <0.1% |
+|   1.0 MB |     1 |           <0.1% |
+|   4.0 MB |     1 |           <0.1% |
+|   8.0 MB |     1 |           <0.1% |
+|  16.0 MB |     1 |           <0.1% |
 
 ### Biggest Packages by Retained Heap
 
-_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned)._
+_Retained heap aggregated by package prefix — only packages retaining ≥1% of the heap are shown._
 
-| Package                | Objects |  Shallow | Retained |
-| ---------------------- | ------: | -------: | -------: |
-| `java`                 |  12,014 | 346.2 KB |  16.0 MB |
-| `java.util`            |     716 |  16.9 KB |  14.2 MB |
-| `java.util.concurrent` |     124 |   7.4 KB |   8.9 MB |
-| `java.util.stream`     |     166 |   1.7 KB |   4.2 MB |
-| `java.util.jar`        |      30 |    952 B | 594.8 KB |
-| `java.util.zip`        |      62 |   2.1 KB | 453.0 KB |
-| `java.lang`            |  10,816 | 314.7 KB |   1.4 MB |
-| `java.lang.invoke`     |   1,290 |  46.9 KB | 246.1 KB |
-| `java.time`            |     153 |   3.8 KB | 230.7 KB |
-| `java.time.zone`       |      11 |    208 B | 205.6 KB |
-| `scala`                |      67 |    760 B |   2.5 MB |
-| `scala.runtime`        |       8 |     96 B |   2.5 MB |
-| `sun`                  |     265 |   6.9 KB | 465.7 KB |
-| `sun.util`             |      87 |   1.9 KB | 288.3 KB |
+| Package                | # Objects |  Shallow | Retained |
+| ---------------------- | --------: | -------: | -------: |
+| `java`                 |    12,014 | 346.2 KB |  16.0 MB |
+| `java.util`            |       716 |  16.9 KB |  14.2 MB |
+| `java.util.concurrent` |       124 |   7.4 KB |   8.9 MB |
+| `java.util.stream`     |       166 |   1.7 KB |   4.2 MB |
+| `java.util.jar`        |        30 |    952 B | 594.8 KB |
+| `java.util.zip`        |        62 |   2.1 KB | 453.0 KB |
+| `java.lang`            |    10,816 | 314.7 KB |   1.4 MB |
+| `java.lang.invoke`     |     1,290 |  46.9 KB | 246.1 KB |
+| `java.time`            |       153 |   3.8 KB | 230.7 KB |
+| `java.time.zone`       |        11 |    208 B | 205.6 KB |
+| `scala`                |        67 |    760 B |   2.5 MB |
+| `scala.runtime`        |         8 |     96 B |   2.5 MB |
+| `sun`                  |       265 |   6.9 KB | 465.7 KB |
+| `sun.util`             |        87 |   1.9 KB | 288.3 KB |
 
 ## Dominator Analysis
 
-_An object **dominates** another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. **Big Drops** shows objects holding memory directly or across many small children; **Immediate Dominators** ranks classes by how much dominated shallow heap they gate._
+_An object **dominates** another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. **Big Drops** shows objects holding memory directly or across many small children. **Immediate Dominators** ranks classes by how much dominated shallow heap they gate._
 
 ### Big Drops
 
-_Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. Drop = object retained − largest child retained (memory reclaimed if this object became unreachable, net of what the biggest child already accounts for). Threshold 0.2 MB (1% of reachable heap). Multiple rows with the same class are distinct objects._
+_Objects retaining far more than their largest single child — memory held directly in the object or spread across many small dominated children. Drop = object retained − largest child retained; the memory freed by dropping just this object, not counting what its largest dominated child already retains. Threshold 0.2 MB (1% of reachable heap). Multiple rows with the same class are distinct objects._
 
 | Object                                      |      # |    Retained | Largest Child                              | Child Retained |        Drop |
 | ------------------------------------------- | -----: | ----------: | ------------------------------------------ | -------------: | ----------: |
@@ -638,41 +639,41 @@ _Objects retaining far more than their largest single child — memory held dire
 
 ### Immediate Dominators
 
-_One row per dominator class: how many other objects it immediately dominates and the total shallow heap of those dominated objects. A large dominated-shallow figure means instances of that class are collectively gating large portions of the live heap — making them unreachable would allow that memory to be reclaimed._
+_Each row shows one dominator class: how many other objects it immediately dominates and the total shallow heap of those dominated objects. A large dominated-shallow figure means instances of that class are collectively gating large portions of the live heap — making them unreachable reclaims that memory._
 
-| Dominator Class                                   | #Dominators |  #Dominated | Dominator Shallow | Dominated Shallow |
-| ------------------------------------------------- | ----------: | ----------: | ----------------: | ----------------: |
-| `java.lang.String`                                |     120,467 |     120,467 |            2.8 MB |            7.7 MB |
-| `java.util.HashMap$Node`                          |     105,949 |     132,553 |            3.2 MB |            3.2 MB |
-| `java.util.HashMap$Node[]`                        |         377 |      85,360 |          865.5 KB |            2.6 MB |
-| `java.lang.Object[]`                              |         235 |     134,018 |          557.3 KB |            2.1 MB |
-| `java.util.HashMap`                               |         376 |         428 |           17.6 KB |          861.7 KB |
-| `java.lang.Class`                                 |       1,494 |       4,436 |           28.0 KB |          739.4 KB |
-| `java.util.zip.ZipFile$Source`                    |           7 |          21 |             560 B |          445.6 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`   |          91 |       4,950 |           54.0 KB |          185.2 KB |
-| `java.util.jar.Attributes`                        |       2,895 |       2,895 |           45.2 KB |          180.9 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`     |       4,090 |       5,102 |          127.8 KB |          177.7 KB |
-| `byte[][]`                                        |           1 |         346 |            1.4 KB |           92.8 KB |
-| `java.util.LinkedHashMap`                         |          45 |       1,228 |            2.8 KB |           55.6 KB |
-| `java.util.concurrent.ConcurrentHashMap`          |          93 |         102 |            5.8 KB |           54.1 KB |
-| `java.util.ArrayList`                             |         588 |         588 |           13.8 KB |           33.4 KB |
-| `java.io.BufferedWriter`                          |           2 |           4 |              80 B |           32.1 KB |
-| `java.util.LinkedHashMap$Entry`                   |       1,125 |       1,142 |           43.9 KB |           26.8 KB |
-| `jdk.internal.math.FDBigInteger`                  |         341 |         341 |           10.7 KB |           24.2 KB |
-| `java.util.ImmutableCollections$SetN`             |         149 |         149 |            3.5 KB |           23.3 KB |
-| `java.lang.invoke.MethodType`                     |         575 |         823 |           22.5 KB |           22.4 KB |
-| `java.lang.invoke.MethodTypeForm`                 |         137 |         274 |            4.3 KB |           20.3 KB |
-| `java.util.concurrent.ForkJoinWorkerThread`       |          26 |         422 |            2.8 KB |           19.5 KB |
-| `java.lang.invoke.MemberName`                     |         502 |         808 |           19.6 KB |           14.4 KB |
-| `java.lang.invoke.LambdaForm`                     |         140 |         306 |            6.6 KB |           12.4 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor` |         132 |         453 |            6.2 KB |           12.4 KB |
-| `java.util.HashSet`                               |         255 |         255 |            4.0 KB |           12.0 KB |
-| `java.lang.invoke.LambdaForm$Name[]`              |         134 |         371 |            5.7 KB |           11.6 KB |
-| `java.lang.invoke.LambdaForm$Name`                |         311 |         420 |            9.7 KB |           11.2 KB |
-| `jdk.internal.math.FDBigInteger[]`                |           1 |         341 |            1.3 KB |           10.6 KB |
-| `java.util.concurrent.ForkJoinPool$WorkQueue`     |          27 |          27 |            1.5 KB |            7.2 KB |
-| `java.lang.invoke.DirectMethodHandle`             |         171 |         172 |            6.7 KB |            6.7 KB |
-| **Total**                                         | **240,736** | **498,802** |        **7.8 MB** |       **18.6 MB** |
+| Dominator Class                                   | # Dominators | # Dominated | Dominator Shallow | Dominated Shallow |
+| ------------------------------------------------- | -----------: | ----------: | ----------------: | ----------------: |
+| `java.lang.String`                                |      120,467 |     120,467 |            2.8 MB |            7.7 MB |
+| `java.util.HashMap$Node`                          |      105,949 |     132,553 |            3.2 MB |            3.2 MB |
+| `java.util.HashMap$Node[]`                        |          377 |      85,360 |          865.5 KB |            2.6 MB |
+| `java.lang.Object[]`                              |          235 |     134,018 |          557.3 KB |            2.1 MB |
+| `java.util.HashMap`                               |          376 |         428 |           17.6 KB |          861.7 KB |
+| `java.lang.Class`                                 |        1,494 |       4,436 |           28.0 KB |          739.4 KB |
+| `java.util.zip.ZipFile$Source`                    |            7 |          21 |             560 B |          445.6 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`   |           91 |       4,950 |           54.0 KB |          185.2 KB |
+| `java.util.jar.Attributes`                        |        2,895 |       2,895 |           45.2 KB |          180.9 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`     |        4,090 |       5,102 |          127.8 KB |          177.7 KB |
+| `byte[][]`                                        |            1 |         346 |            1.4 KB |           92.8 KB |
+| `java.util.LinkedHashMap`                         |           45 |       1,228 |            2.8 KB |           55.6 KB |
+| `java.util.concurrent.ConcurrentHashMap`          |           93 |         102 |            5.8 KB |           54.1 KB |
+| `java.util.ArrayList`                             |          588 |         588 |           13.8 KB |           33.4 KB |
+| `java.io.BufferedWriter`                          |            2 |           4 |              80 B |           32.1 KB |
+| `java.util.LinkedHashMap$Entry`                   |        1,125 |       1,142 |           43.9 KB |           26.8 KB |
+| `jdk.internal.math.FDBigInteger`                  |          341 |         341 |           10.7 KB |           24.2 KB |
+| `java.util.ImmutableCollections$SetN`             |          149 |         149 |            3.5 KB |           23.3 KB |
+| `java.lang.invoke.MethodType`                     |          575 |         823 |           22.5 KB |           22.4 KB |
+| `java.lang.invoke.MethodTypeForm`                 |          137 |         274 |            4.3 KB |           20.3 KB |
+| `java.util.concurrent.ForkJoinWorkerThread`       |           26 |         422 |            2.8 KB |           19.5 KB |
+| `java.lang.invoke.MemberName`                     |          502 |         808 |           19.6 KB |           14.4 KB |
+| `java.lang.invoke.LambdaForm`                     |          140 |         306 |            6.6 KB |           12.4 KB |
+| `java.lang.invoke.DirectMethodHandle$Constructor` |          132 |         453 |            6.2 KB |           12.4 KB |
+| `java.util.HashSet`                               |          255 |         255 |            4.0 KB |           12.0 KB |
+| `java.lang.invoke.LambdaForm$Name[]`              |          134 |         371 |            5.7 KB |           11.6 KB |
+| `java.lang.invoke.LambdaForm$Name`                |          311 |         420 |            9.7 KB |           11.2 KB |
+| `jdk.internal.math.FDBigInteger[]`                |            1 |         341 |            1.3 KB |           10.6 KB |
+| `java.util.concurrent.ForkJoinPool$WorkQueue`     |           27 |          27 |            1.5 KB |            7.2 KB |
+| `java.lang.invoke.DirectMethodHandle`             |          171 |         172 |            6.7 KB |            6.7 KB |
+| **Total**                                         |  **240,736** | **498,802** |        **7.8 MB** |       **18.6 MB** |
 
 ## Threads
 
@@ -682,38 +683,38 @@ _Per-thread call stacks and retained heap. A thread keeps everything on its stac
 
 _Name, shallow/retained heap, max single-local retained, context class loader, daemon flag, priority, and thread state for every recorded thread._
 
-| Name                                            | Shallow | Retained | Max. Locals' Retained | Context Class Loader                                           | Daemon | Priority | State                                                  |
-| ----------------------------------------------- | ------: | -------: | --------------------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ |
-| [main](#thread-1)                               |   104 B | 301.5 KB |                4.2 MB | `java/net/URLClassLoader @ 0xc040b670`                         | no     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Reference Handler](#thread-2)                  |   104 B |    200 B |                   0 B | `—`                                                            | yes    |       10 | [alive, runnable]                                      |
-| [Finalizer](#thread-3)                          |   112 B |    208 B |                  40 B | `—`                                                            | yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
-| [Common-Cleaner](#thread-6)                     |   112 B |    168 B |                 128 B | `—`                                                            | yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
-| [ForkJoinPool.commonPool-worker-1](#thread-7)   |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-2](#thread-8)   |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-3](#thread-9)   |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-4](#thread-10)  |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-5](#thread-11)  |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-6](#thread-12)  |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-7](#thread-13)  |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-8](#thread-14)  |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-9](#thread-15)  |   112 B |    240 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-10](#thread-16) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-11](#thread-17) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-12](#thread-18) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-13](#thread-19) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-14](#thread-20) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-15](#thread-21) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-16](#thread-22) |   112 B |   8.9 MB |                2.8 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, runnable]                                      |
-| [ForkJoinPool.commonPool-worker-17](#thread-23) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-18](#thread-24) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-19](#thread-25) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-20](#thread-26) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-21](#thread-27) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-22](#thread-28) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-23](#thread-29) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-24](#thread-30) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-25](#thread-31) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [ForkJoinPool.commonPool-worker-26](#thread-32) |   112 B |    248 B |                1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| Name                                            | Shallow | Retained | Max Local Retained | Context Class Loader                                           | Daemon | Priority | State                                                  |
+| ----------------------------------------------- | ------: | -------: | -----------------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ |
+| [main](#thread-1)                               |   104 B | 301.5 KB |             4.2 MB | `java/net/URLClassLoader @ 0xc040b670`                         | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Reference Handler](#thread-2)                  |   104 B |    200 B |                0 B | `—`                                                            | Yes    |       10 | [alive, runnable]                                      |
+| [Finalizer](#thread-3)                          |   112 B |    208 B |               40 B | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
+| [Common-Cleaner](#thread-6)                     |   112 B |    168 B |              128 B | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
+| [ForkJoinPool.commonPool-worker-1](#thread-7)   |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-2](#thread-8)   |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-3](#thread-9)   |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-4](#thread-10)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-5](#thread-11)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-6](#thread-12)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-7](#thread-13)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-8](#thread-14)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-9](#thread-15)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-10](#thread-16) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-11](#thread-17) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-12](#thread-18) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-13](#thread-19) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-14](#thread-20) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-15](#thread-21) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-16](#thread-22) |   112 B |   8.9 MB |             2.8 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, runnable]                                      |
+| [ForkJoinPool.commonPool-worker-17](#thread-23) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-18](#thread-24) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-19](#thread-25) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-20](#thread-26) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-21](#thread-27) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-22](#thread-28) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-23](#thread-29) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-24](#thread-30) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-25](#thread-31) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [ForkJoinPool.commonPool-worker-26](#thread-32) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
 
 <a id="thread-1"></a>
 
@@ -721,7 +722,7 @@ _Name, shallow/retained heap, max single-local retained, context class loader, d
 
 _Local roots: 98._
 
-_Showing top 20 by retained heap (sizes overlap and do not sum to thread total)._
+_Showing top 20 of 98 by retained heap; retained sizes overlap, so totals may exceed thread total._
 
 **Local root objects:**
 
@@ -1263,7 +1264,7 @@ _Frame percentages are of this thread's 248 B retained heap._
 
 _Local roots: 316._
 
-_Showing top 20 by retained heap (sizes overlap and do not sum to thread total)._
+_Showing top 20 of 316 by retained heap; retained sizes overlap, so totals may exceed thread total._
 
 **Local root objects:**
 
@@ -1593,9 +1594,9 @@ _Frame percentages are of this thread's 248 B retained heap._
 
 ## Top Components
 
-_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. Totals can exceed heap size because boot-loader classes are counted in every component that retains them._
+_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each._
 
-| Component                                              | Retained | % Heap | Top classes                                                                                                                                                                                                                                                                                                                                                                  |
+| Component                                              | Retained | % Heap | Top Classes                                                                                                                                                                                                                                                                                                                                                                  |
 | ------------------------------------------------------ | -------: | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `<boot>`                                               | 115.7 MB |  97.6% | `java.util.HashMap$Node[]` (14.1 MB), `java.util.HashMap` (14.0 MB), `java.util.HashMap$Node` (13.3 MB), `java.util.HashSet` (13.1 MB), `java.util.stream.ReduceOps$3ReducingSink` (13.0 MB)                                                                                                                                                                                 |
 | `java/net/URLClassLoader`                              |   2.6 MB |   2.2% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scopt.ORunner$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB)                                                                                                                                                                                       |
@@ -1605,53 +1606,53 @@ _Retained heap grouped by class loader (component). `% Heap` is the share of tot
 
 ## Arrays by Size
 
-_Array-length distribution bucketed by power-of-two element length. Helps spot unexpectedly large arrays or many tiny zero-length allocations. `Max length` is the inclusive upper bound of each bucket._
+_Array length distribution bucketed by powers of two — **Max Length** is the inclusive upper bound of each bucket. Spot unexpectedly large arrays, many tiny zero-length allocations, or a skewed distribution that explains outsized array heap._
 
-### Object arrays
+### Object Arrays
 
-| Max length |   Objects |    Shallow |
-| ---------: | --------: | ---------: |
-|        ≤ 1 |       704 |    16.5 KB |
-|        ≤ 2 |       558 |    13.1 KB |
-|        ≤ 4 |       674 |    21.1 KB |
-|        ≤ 8 |       657 |    27.3 KB |
-|       ≤ 16 |     1,314 |    85.3 KB |
-|       ≤ 32 |       341 |    39.2 KB |
-|       ≤ 64 |       157 |    34.6 KB |
-|      ≤ 128 |        64 |    23.2 KB |
-|      ≤ 256 |        28 |    25.3 KB |
-|      ≤ 512 |        10 |    15.4 KB |
-|    ≤ 1,024 |        18 |    62.2 KB |
-|    ≤ 2,048 |         5 |    32.8 KB |
-|    ≤ 4,096 |         5 |    57.3 KB |
-|    ≤ 8,192 |         1 |    31.0 KB |
-|   ≤ 65,536 |         1 |   256.0 KB |
-|  ≤ 131,072 |         2 |     1.0 MB |
-|  **Total** | **4,539** | **1.7 MB** |
+| Max Length |   Objects |    Shallow |   % Heap |
+| ---------: | --------: | ---------: | -------: |
+|        ≤ 1 |       704 |    16.5 KB |     0.1% |
+|        ≤ 2 |       558 |    13.1 KB |     0.1% |
+|        ≤ 4 |       674 |    21.1 KB |     0.1% |
+|        ≤ 8 |       657 |    27.3 KB |     0.1% |
+|       ≤ 16 |     1,314 |    85.3 KB |     0.4% |
+|       ≤ 32 |       341 |    39.2 KB |     0.2% |
+|       ≤ 64 |       157 |    34.6 KB |     0.2% |
+|      ≤ 128 |        64 |    23.2 KB |     0.1% |
+|      ≤ 256 |        28 |    25.3 KB |     0.1% |
+|      ≤ 512 |        10 |    15.4 KB |     0.1% |
+|    ≤ 1,024 |        18 |    62.2 KB |     0.3% |
+|    ≤ 2,048 |         5 |    32.8 KB |     0.2% |
+|    ≤ 4,096 |         5 |    57.3 KB |     0.3% |
+|    ≤ 8,192 |         1 |    31.0 KB |     0.2% |
+|   ≤ 65,536 |         1 |   256.0 KB |     1.3% |
+|  ≤ 131,072 |         2 |     1.0 MB |     5.2% |
+|  **Total** | **4,539** | **1.7 MB** | **9.0%** |
 
-### Primitive arrays
+### Primitive Arrays
 
-| Max length |     Objects |    Shallow |
-| ---------: | ----------: | ---------: |
-|        ≤ 1 |         502 |    11.8 KB |
-|        ≤ 2 |         685 |    16.1 KB |
-|        ≤ 4 |       1,421 |    33.7 KB |
-|        ≤ 8 |       2,455 |    59.0 KB |
-|       ≤ 16 |       4,350 |   143.8 KB |
-|       ≤ 32 |       5,819 |   260.5 KB |
-|       ≤ 64 |     106,511 |     7.2 MB |
-|      ≤ 128 |         875 |    87.3 KB |
-|      ≤ 256 |         185 |    42.0 KB |
-|      ≤ 512 |         269 |   102.7 KB |
-|    ≤ 1,024 |          73 |    53.8 KB |
-|    ≤ 2,048 |          15 |    50.4 KB |
-|    ≤ 4,096 |           3 |     9.6 KB |
-|    ≤ 8,192 |           7 |    66.2 KB |
-|   ≤ 16,384 |           3 |    61.2 KB |
-|   ≤ 65,536 |           2 |   104.0 KB |
-|  ≤ 131,072 |           2 |     1.0 MB |
-|  ≤ 262,144 |           1 |   255.1 KB |
-|  **Total** | **123,178** | **9.5 MB** |
+| Max Length |     Objects |    Shallow |    % Heap |
+| ---------: | ----------: | ---------: | --------: |
+|        ≤ 1 |         502 |    11.8 KB |      0.1% |
+|        ≤ 2 |         685 |    16.1 KB |      0.1% |
+|        ≤ 4 |       1,421 |    33.7 KB |      0.2% |
+|        ≤ 8 |       2,455 |    59.0 KB |      0.3% |
+|       ≤ 16 |       4,350 |   143.8 KB |      0.7% |
+|       ≤ 32 |       5,819 |   260.5 KB |      1.3% |
+|       ≤ 64 |     106,511 |     7.2 MB |     37.7% |
+|      ≤ 128 |         875 |    87.3 KB |      0.4% |
+|      ≤ 256 |         185 |    42.0 KB |      0.2% |
+|      ≤ 512 |         269 |   102.7 KB |      0.5% |
+|    ≤ 1,024 |          73 |    53.8 KB |      0.3% |
+|    ≤ 2,048 |          15 |    50.4 KB |      0.3% |
+|    ≤ 4,096 |           3 |     9.6 KB |     <0.1% |
+|    ≤ 8,192 |           7 |    66.2 KB |      0.3% |
+|   ≤ 16,384 |           3 |    61.2 KB |      0.3% |
+|   ≤ 65,536 |           2 |   104.0 KB |      0.5% |
+|  ≤ 131,072 |           2 |     1.0 MB |      5.2% |
+|  ≤ 262,144 |           1 |   255.1 KB |      1.3% |
+|  **Total** | **123,178** | **9.5 MB** | **49.8%** |
 
 Zero-length arrays: 2,125
 
@@ -1669,7 +1670,7 @@ _Collection fill ratios, map load factors, and constant-value primitive array gr
 
 ### Collection Fill Ratio
 
-_1,138 tracked of 3,982 collections._
+_Fraction of each collection's capacity in use — low fill wastes backing-array memory. 3,982 collections analyzed (1,138 non-empty tracked)._
 
 |      Fill % | Collections |     Shallow |       Wasted |
 | ----------: | ----------: | ----------: | -----------: |
@@ -1688,29 +1689,29 @@ _1,138 tracked of 3,982 collections._
 
 ### Collections by Size
 
-_3,982 tracked; 2,950 empty._
+_Element-count distribution of collections, bucketed by size — 3,982 tracked; 2,950 empty._
 
-|    Size ≤ | Collections | Total Shallow |
-| --------: | ----------: | ------------: |
-|       ≤ 1 |         576 |       17.8 KB |
-|       ≤ 2 |         191 |        5.9 KB |
-|       ≤ 4 |         137 |        5.0 KB |
-|       ≤ 8 |          38 |        1.9 KB |
-|      ≤ 16 |          31 |        1.5 KB |
-|      ≤ 32 |          30 |        1.4 KB |
-|      ≤ 64 |           8 |         392 B |
-|     ≤ 128 |           5 |         272 B |
-|     ≤ 256 |           5 |         304 B |
-|     ≤ 512 |           4 |         168 B |
-|   ≤ 1,024 |           3 |         144 B |
-|   ≤ 4,096 |           2 |          96 B |
-|  ≤ 32,768 |           1 |          48 B |
-|  ≤ 65,536 |           1 |          48 B |
-| **Total** |   **1,032** |   **34.9 KB** |
+|    Size ≤ | Collections |     Shallow |
+| --------: | ----------: | ----------: |
+|       ≤ 1 |         576 |     17.8 KB |
+|       ≤ 2 |         191 |      5.9 KB |
+|       ≤ 4 |         137 |      5.0 KB |
+|       ≤ 8 |          38 |      1.9 KB |
+|      ≤ 16 |          31 |      1.5 KB |
+|      ≤ 32 |          30 |      1.4 KB |
+|      ≤ 64 |           8 |       392 B |
+|     ≤ 128 |           5 |       272 B |
+|     ≤ 256 |           5 |       304 B |
+|     ≤ 512 |           4 |       168 B |
+|   ≤ 1,024 |           3 |       144 B |
+|   ≤ 4,096 |           2 |        96 B |
+|  ≤ 32,768 |           1 |        48 B |
+|  ≤ 65,536 |           1 |        48 B |
+| **Total** |   **1,032** | **34.9 KB** |
 
 ### Array Fill Ratio
 
-_4,539 tracked object arrays._
+_Non-null element fraction of object arrays — low fill leaves most slots empty. 4,539 tracked._
 
 |      Fill % |    Arrays |    Shallow |     Wasted |
 | ----------: | --------: | ---------: | ---------: |
@@ -1729,7 +1730,7 @@ _4,539 tracked object arrays._
 
 ### Map Load Factor
 
-_520 tracked of 3,372 maps (occupied slots ÷ capacity; high values ≥ 90% increase collision chains)._
+_Load factor (occupied slots ÷ capacity) for 520 of 3,372 maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup._
 
 |      Load % |    Maps |     Shallow |
 | ----------: | ------: | ----------: |
@@ -1748,11 +1749,11 @@ _520 tracked of 3,372 maps (occupied slots ÷ capacity; high values ≥ 90% incr
 
 ### Constant Primitive Arrays
 
-_Primitive arrays whose every element is identical — possible candidates for deduplication or replacement with a shared constant. Short arrays (length < 8 with few instances) are hidden as noise._
+_Primitive arrays whose every element is identical — possible candidates for deduplication or replacement with a shared constant. Short arrays (length < 8 with few instances) are filtered as noise._
 
 _(33 trivial groups hidden.)_
 
-| Array class |  Length | Value | Objects |  Shallow |
+| Array Class |  Length | Value | Objects |  Shallow |
 | ----------- | ------: | ----: | ------: | -------: |
 | `int[]`     | 131,064 |     0 |       1 | 512.0 KB |
 | `char[]`    |   8,192 |     0 |       1 |  16.0 KB |
@@ -1778,9 +1779,9 @@ _(33 trivial groups hidden.)_
 
 ### Top Arrays (primitive)
 
-_The largest primitive arrays by shallow size, individually and aggregated by array class._
+_Largest primitive arrays by shallow size — individual instances and class totals._
 
-| Array class |  Length |    Shallow | Owner (Class#field)                    |
+| Array Class |  Length |    Shallow | Owner (Class#field)                    |
 | ----------- | ------: | ---------: | -------------------------------------- |
 | `int[]`     | 131,064 |   512.0 KB | —                                      |
 | `int[]`     | 131,064 |   512.0 KB | —                                      |
@@ -1796,7 +1797,7 @@ _The largest primitive arrays by shallow size, individually and aggregated by ar
 
 #### Top Array Classes (primitive)
 
-| Array class |   Instances |    Shallow |
+| Array Class |   Instances |    Shallow |
 | ----------- | ----------: | ---------: |
 | `byte[]`    |     122,254 |     8.4 MB |
 | `int[]`     |       2,475 |     1.1 MB |
@@ -1810,9 +1811,9 @@ _The largest primitive arrays by shallow size, individually and aggregated by ar
 
 ### Top Arrays (object)
 
-_The largest object arrays by shallow size, individually and aggregated by array class._
+_Largest object arrays by shallow size — individual instances and class totals._
 
-| Array class                                     |  Length |     Used/Length |    Shallow | Owner (Class#field)                            |
+| Array Class                                     |  Length |   Used / Length |    Shallow | Owner (Class#field)                            |
 | ----------------------------------------------- | ------: | --------------: | ---------: | ---------------------------------------------- |
 | `java.lang.Object[]`                            | 131,072 | 131,072/131,072 |   512.0 KB | —                                              |
 | `java.util.HashMap$Node[]`                      | 131,072 |  51,370/131,072 |   512.0 KB | `java.util.HashMap#table`                      |
@@ -1828,7 +1829,7 @@ _The largest object arrays by shallow size, individually and aggregated by array
 
 #### Top Array Classes (object)
 
-| Array class                                     | Instances |    Shallow |
+| Array Class                                     | Instances |    Shallow |
 | ----------------------------------------------- | --------: | ---------: |
 | `java.util.HashMap$Node[]`                      |       423 |   875.0 KB |
 | `java.lang.Object[]`                            |     2,391 |   726.6 KB |
@@ -1846,10 +1847,10 @@ _The largest object arrays by shallow size, individually and aggregated by array
 
 _Memory tied up in avoidable objects — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate._
 
-| Waste Type                   |      Wasted |   Objects | Fix                                                                           |
-| ---------------------------- | ----------: | --------: | ----------------------------------------------------------------------------- |
-| Boxed Primitives (footprint) |     20.4 KB |     1,177 | Use primitive arrays; or Eclipse Collections / Koloboke for typed collections |
-| **Total**                    | **20.4 KB** | **1,177** |                                                                               |
+| Waste Type                   |      Wasted |   Objects | Fix Suggestion                                                                          |
+| ---------------------------- | ----------: | --------: | --------------------------------------------------------------------------------------- |
+| Boxed Primitives (footprint) |     20.4 KB |     1,177 | Use primitive arrays, or Eclipse Collections / Koloboke for primitive-typed collections |
+| **Total**                    | **20.4 KB** | **1,177** |                                                                                         |
 
 ## Top Retainers
 
@@ -1910,7 +1911,7 @@ _220 reference instances._
 | `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |  20.0 KB |
 | `sun.util.resources.Bundles$1`           |       1 |    40 B |     40 B |
 
-#### Only Weakly Retained
+#### Only Softly Retained
 
 _Referents reachable only through soft references — no strong path. GC clears these under memory pressure._
 
@@ -1974,9 +1975,9 @@ _29 reference instances. 1 instance has a null referent — referent collected, 
 | `sun.net.www.protocol.jar.URLJarFile` |       1 |    80 B |    344 B |
 | `sun.nio.fs.NativeBuffer`             |       1 |    32 B |     64 B |
 
-#### Only Weakly Retained
+#### Only Phantom-Retained
 
-_Referents reachable only through phantom references — queued for post-cleanup resource release._
+_Referents reachable only through phantom references — finalized and enqueued for post-mortem cleanup via a ReferenceQueue._
 
 _None found — no objects are exclusively reachable via this reference kind._
 
@@ -1986,7 +1987,7 @@ _Objects that are no longer reachable from any GC root but have not yet been col
 
 _3,908 unreachable objects, 1.1 MB shallow heap. Top 30 classes by shallow heap._
 
-_Unreachable objects are eligible for collection but have not yet been reclaimed. At 5.6% of heap total (reachable + unreachable) this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is not a leak. Confirm: trigger a full GC (`jcmd <pid> GC.run`) then re-dump; if the count drops, it was pre-GC garbage._
+_Unreachable objects are eligible for collection but have not yet been reclaimed. At 5.6% of heap total (reachable + unreachable) this is elevated — the dump was likely taken before a full GC cycle completed. GC reclaims this memory automatically; it is not a leak. Confirm: trigger a full GC (`jcmd <pid> GC.run`) then re-dump; if the count drops sharply, it was pre-GC garbage._
 
 | Kind             | Objects | Shallow |
 | ---------------- | ------: | ------: |
@@ -1995,7 +1996,7 @@ _Unreachable objects are eligible for collection but have not yet been reclaimed
 | Primitive Arrays |   2,533 |  1.1 MB |
 | Class Objects    |     108 |     0 B |
 
-_Shallow heap is additive; Retained sets overlap (nested subtrees are counted once per ancestor)._
+_Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates the total reclaimable memory._
 
 | Class                                                  | Objects | Shallow | Retained |
 | ------------------------------------------------------ | ------: | ------: | -------: |
@@ -2032,7 +2033,7 @@ _Shallow heap is additive; Retained sets overlap (nested subtrees are counted on
 
 ### Garbage-Root Dominator Trees
 
-_Top garbage-root subtrees by retained heap (unreachable objects with no reachable predecessor). Depth capped._
+_Top garbage-root subtrees by retained heap — unreachable objects with no reachable predecessor. Each node shows retained heap within its subtree. Tree depth is capped._
 
 1. **int[]** — 512.0 KB (1 object in subtree)
 
@@ -2182,7 +2183,7 @@ _Allocation-site records are present but contain no per-frame data. The HPROF ag
 
 ## Retention Concentration
 
-_Share of the reachable heap retained by the few largest top-level dominators (a dominator's retained size is everything it keeps alive). Read it as a concentration curve: if **Top 1** is already high, one object is the accumulation point — making it unreachable reclaims most of the heap; if the share only climbs as you widen to **Top 10** / **Top 100**, retention is spread across many peers (e.g. a big cache or collection of similar objects) and no single fix helps much._
+_Share of the reachable heap retained by the few largest top-level dominators (a dominator's retained size is everything it keeps alive). Read it as a concentration curve: if **Top 1** is already high, one object is the accumulation point — freeing it would reclaim most of the heap; if the share only climbs as you widen to **Top 10** / **Top 100**, retention is spread across many peers (e.g. a big cache or collection of similar objects) and no single fix helps much._
 
 | Scope           | Retained Share | Retained |
 | --------------- | -------------: | -------: |
@@ -2213,7 +2214,7 @@ _Half of all live objects sit within 7 hops of a GC root; the deepest chain is 2
 |    11 |   2,206 |      0.4% |        99.8% |
 |    12 |     780 |      0.2% |        99.9% |
 
-_… (+16 deeper buckets, 339 objects, 100.0% cumulative — full data in JSON)_
+_… (+16 deeper buckets, 339 objects, 100.0% cumulative — see HTML report for full depth data)_
 
 ## Leak Indicators
 
@@ -2231,11 +2232,11 @@ _Definitions for the heap analysis terms used throughout this report._
 - **Shallow size**: the memory an object occupies by itself, meaning its header
   plus its own fields (and, for an array, its elements). It does *not* include the
   objects it points to.
-- **Retained heap (retained size)**: the total memory that would be reclaimed if this
-  object became unreachable — its own shallow size plus everything
-  reachable *only* through it. This is the number that answers "how much would
-  making it unreachable reclaim?" and it is the basis for every percentage in this
-  report. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
+- **Retained heap (retained size)**: the total memory freed when this object becomes
+  unreachable — its own shallow size plus everything reachable *only* through it.
+  This is the number that answers "how much memory does freeing this object release?"
+  and it is the basis for every percentage in this report.
+  See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Reachable heap**: all objects the [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) can still
   reach from a GC root. Anything unreachable is already collectible and is excluded
   from the totals here.
@@ -2244,8 +2245,7 @@ _Definitions for the heap analysis terms used throughout this report._
   [JNI](https://en.wikipedia.org/wiki/Java_Native_Interface) references, and
   similar. Every retained-size chain ends at a GC root.
 - **Dominator**: object *A* dominates object *B* if every path from a GC root to
-  *B* passes through *A*. In other words, if *A* became unreachable, *B* would become
-  unreachable too. An object's retained heap is exactly the set of objects it
+  *B* passes through *A*. In other words, if *A* becomes unreachable, *B* does too. An object's retained heap is exactly the set of objects it
   dominates. See [dominator (graph theory)](https://en.wikipedia.org/wiki/Dominator_(graph_theory)).
 - **Dominator tree**: the tree formed by linking each object to its immediate
   dominator. Retained sizes are computed by summing shallow sizes up this tree.
@@ -2253,15 +2253,13 @@ _Definitions for the heap analysis terms used throughout this report._
   sits at the top of the dominator tree. The "Biggest Objects" and "Retention
   Concentration" views rank these.
 - **Dominator depth**: how many dominator-tree hops an object sits below a GC root.
-  Shallow depth means most objects are held close to a root; deep depth means
+  Low depth means objects are held close to a root; high depth means
   retention flows through long chains (nested collections, linked lists).
 - **Accumulation point**: a single object (often a collection, cache, or map) that
-  dominates a large number of instances of the *same* class, meaning where a
-  [memory leak](https://en.wikipedia.org/wiki/Memory_leak) accumulates.
+  dominates many instances of the *same* class — where excess memory accumulates.
 - **Class loader**: the JVM component that defined a class. The same class name
   loaded by two different [class loaders](https://en.wikipedia.org/wiki/Java_Classloader)
-  is two distinct classes in the heap, so heap is attributed per (class, loader)
-  pair.
+  is two distinct heap classes — counts are per (class, loader) pair.
 - **Referent**: the object that a reference field points *to*. A
   [`WeakReference`](https://en.wikipedia.org/wiki/Weak_reference), for example, has
   a referent it does not keep alive.
@@ -2272,18 +2270,19 @@ _Definitions for the heap analysis terms used throughout this report._
   that is actually occupied by elements — `elements / capacity`. A fill ratio near
   0 means the backing array is mostly empty (wasted memory). A ratio near 1 means
   the collection is full.
-- **Map Load Factor**: for hash maps, the fraction of backing-array
+- **Map load factor**: for hash maps, the fraction of backing-array
   slots occupied — `occupied_slots / capacity`. A low load factor means many
   empty buckets (wasted memory); a high load factor (≥ 90%) increases hash
   collision chains and lookup cost.
 - **Only-weakly retained**: an object that has no incoming strong reference — it is
   reachable only through one or more `WeakReference`, `SoftReference`, or
   `PhantomReference` chains. Weak-only referents are collected at the next GC cycle;
-  soft-only referents are collected under memory pressure; phantom-only referents are
-  already unreachable and queued for resource cleanup.
-- **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimisation
+  soft-only referents are collected under memory pressure; phantom-only referents have
+  been finalized and their references enqueued for post-mortem cleanup via a
+  ReferenceQueue.
+- **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimization
   where object references are stored as 32-bit integers instead of 64-bit pointers,
-  halving reference-field overhead on heaps <= ~32 GB. Visible in the Heap Summary
+  halving reference-field overhead on heaps ≤ ~32 GB. Visible in the Heap Summary
   as `Compressed OOPs: yes`.
 - **Class#field**: the notation used throughout this report to identify a specific
   field — `HolderClass#fieldName`. For example `java.util.HashMap#table` names the

@@ -194,6 +194,7 @@ impl Pass1 {
         let mut utf8_records = 0u64;
         let mut load_class_records = 0u64;
         let mut unload_class_records = 0u64;
+        let mut plain_truncated = false;
         let mut stack_frame_records = 0u64;
         let mut stack_trace_records = 0u64;
         let mut heap_dump_segments = 0u64;
@@ -312,14 +313,17 @@ impl Pass1 {
             match result {
                 Ok(()) => {}
                 Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
-                Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                    plain_truncated = true;
+                    break;
+                }
                 Err(e) => return Err(e),
             }
         }
 
         crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
         // Capture truncation flag before dropping the reader.
-        let truncated_input = r.is_truncated();
+        let truncated_input = r.is_truncated() || plain_truncated;
         // Free the reader buffer and no-longer-needed intern map before the
         // sort to trim the working set as much as possible before allocating order.
         drop(r);

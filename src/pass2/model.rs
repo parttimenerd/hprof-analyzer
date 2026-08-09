@@ -1065,8 +1065,14 @@ impl InboundBuilder {
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
                     other => other?,
                 };
-                let _ts = r.u4()?;
-                let length = r.u4()? as u64;
+                let _ts = match r.u4() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                };
+                let length = match r.u4() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                } as u64;
                 match tag {
                     tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                         Pass2::fill_heap_2b(
@@ -1090,9 +1096,10 @@ impl InboundBuilder {
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
-                    _ => {
-                        r.skip(length)?;
-                    }
+                    _ => match r.skip(length) {
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                        other => other?,
+                    },
                 }
             }
         }
@@ -1325,8 +1332,14 @@ impl InboundBuilder {
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
                     other => other?,
                 };
-                let _ts = r.u4()?;
-                let length = r.u4()? as u64;
+                let _ts = match r.u4() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                };
+                let length = match r.u4() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                } as u64;
                 match tag {
                     tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                         Self::scan_inb_and_outbound(
@@ -1345,9 +1358,10 @@ impl InboundBuilder {
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
-                    _ => {
-                        r.skip(length)?;
-                    }
+                    _ => match r.skip(length) {
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                        other => other?,
+                    },
                 }
             }
         }
@@ -1392,8 +1406,17 @@ impl InboundBuilder {
             };
         }
 
+        macro_rules! try_read {
+            ($e:expr) => {
+                match $e {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                    other => other?,
+                }
+            };
+        }
+
         while remaining > 0 {
-            let sub_tag = r.u1()?;
+            let sub_tag = try_read!(r.u1());
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
@@ -1404,19 +1427,19 @@ impl InboundBuilder {
                 | heap::ROOT_INTERNED_STRING
                 | heap::ROOT_DEBUGGER
                 | heap::ROOT_VM_INTERNAL => {
-                    r.skip(ids)?;
+                    try_read!(r.skip(ids));
                     checked_sub!(remaining, ids);
                 }
                 heap::ROOT_JNI_GLOBAL => {
-                    r.skip(2 * ids)?;
+                    try_read!(r.skip(2 * ids));
                     checked_sub!(remaining, 2 * ids);
                 }
                 heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
-                    r.skip(ids + 8)?;
+                    try_read!(r.skip(ids + 8));
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                    r.skip(ids + 4)?;
+                    try_read!(r.skip(ids + 4));
                     checked_sub!(remaining, ids + 4);
                 }
                 heap::ROOT_STICKY_CLASS | heap::ROOT_THREAD_OBJ => {
@@ -1425,7 +1448,7 @@ impl InboundBuilder {
                     } else {
                         ids
                     };
-                    r.skip(skip)?;
+                    try_read!(r.skip(skip));
                     checked_sub!(remaining, skip);
                 }
                 heap::CLASS_DUMP => {
@@ -1433,7 +1456,7 @@ impl InboundBuilder {
                     // For class objects we still need inbound edges (class→fields).
                     // Outbound from class dumps: skip for MAT outbound (MAT doesn't
                     // include static fields in outbound the same way).
-                    let consumed = Pass2::fill_class_dump_edges(
+                    let consumed = match Pass2::fill_class_dump_edges(
                         r,
                         id_size,
                         id_map,
@@ -1444,15 +1467,18 @@ impl InboundBuilder {
                         &mut None,
                         inb_flat,
                         in_cursors,
-                    )?;
+                    ) {
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                        other => other?,
+                    };
                     checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?; // stack_trace_serial
-                    let class_id = r.id()?;
-                    let data_len = r.u4()? as u64;
-                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4)); // stack_trace_serial
+                    let class_id = try_read!(r.id());
+                    let data_len = try_read!(r.u4()) as u64;
+                    try_read!(r.read_bytes_reuse(scratch, data_len as usize));
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
                     let src_idx = match id_map.index_of(addr) {
@@ -1490,12 +1516,12 @@ impl InboundBuilder {
                     on_outbound(src_idx, fwd)?;
                 }
                 heap::OBJ_ARRAY_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?; // stack_trace_serial
-                    let count = r.u4()? as u64;
-                    let _elem_class_id = r.id()?;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4)); // stack_trace_serial
+                    let count = try_read!(r.u4()) as u64;
+                    let _elem_class_id = try_read!(r.id());
                     let byte_len = count.saturating_mul(ids);
-                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
 
                     let src_idx = match id_map.index_of(addr) {
@@ -1521,28 +1547,28 @@ impl InboundBuilder {
                 }
                 heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
-                    r.skip(ids + 4 + 4 + 1)?;
+                    try_read!(r.skip(ids + 4 + 4 + 1));
                     checked_sub!(remaining, ids + 4 + 4 + 1);
                 }
 
                 heap::PRIM_ARRAY_DUMP => {
                     // No reference edges in primitive arrays.
-                    let addr = r.id()?;
-                    r.skip(4)?;
-                    let count = r.u4()? as u64;
-                    let elem_type = r.u1()?;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let count = try_read!(r.u4()) as u64;
+                    let elem_type = try_read!(r.u1());
                     let elem_size = crate::types::HprofType::from_code(elem_type)
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
                     let byte_len = count.saturating_mul(elem_size);
-                    r.skip(byte_len)?;
+                    try_read!(r.skip(byte_len));
                     checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
                     if let Some(src_idx) = id_map.index_of(addr) {
                         on_outbound(src_idx, Vec::new())?;
                     }
                 }
                 heap::HEAP_DUMP_INFO => {
-                    r.skip(4 + ids)?;
+                    try_read!(r.skip(4 + ids));
                     checked_sub!(remaining, 4 + ids);
                 }
                 _ => {

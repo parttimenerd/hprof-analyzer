@@ -1013,6 +1013,7 @@ fn analyze_to_report_inner(
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     let p1 = pass1::Pass1::run(source, false)?;
+    let truncated_input = p1.truncated_input;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -1189,7 +1190,7 @@ fn analyze_to_report_inner(
         Some(a)
     };
 
-    let report = report::build_model(
+    let mut report = report::build_model(
         &mut g,
         dc_off,
         dc_tgt,
@@ -1200,6 +1201,7 @@ fn analyze_to_report_inner(
         precomputed_field_stats,
     );
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
+    report.truncated_input = truncated_input;
 
     // Extract the per-object retained-size array before g is dropped.
     // The caller (analyze_to_report_with_retained) stores this for OQL reuse.
@@ -1345,6 +1347,33 @@ fn looks_like_hprof(path: &str) -> bool {
     };
     let mut head = [0u8; 12];
     matches!(f.read_exact(&mut head), Ok(())) && head.starts_with(b"JAVA PROFILE")
+}
+
+/// Returns true when a file could plausibly be a truncated (or tiny) HPROF dump,
+/// .hprof.gz, or .hprof.tar.gz — i.e. `UnexpectedEof` is a truncation symptom
+/// rather than a format error.  Excludes files whose first bytes clearly
+/// identify them as a different format (e.g. JSON `{`).
+fn could_be_truncated_hprof(path: &str) -> bool {
+    use std::io::Read;
+    if path == "-" {
+        return false;
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 4];
+    let n = f.read(&mut head).unwrap_or(0);
+    if n == 0 {
+        // Zero-byte file — could be an empty truncated dump.
+        return true;
+    }
+    let h = &head[..n];
+    // Clearly non-HPROF formats: JSON, HTML, XML, plain text
+    if matches!(h[0], b'{' | b'[' | b'<' | b'"') {
+        return false;
+    }
+    // gzip magic or HPROF "JAVA" prefix → plausibly truncated
+    true
 }
 
 /// Read current process RSS from /proc/self/status (Linux only).
@@ -2070,6 +2099,41 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
     Ok(())
 }
 
+/// Produce a minimal empty report with `truncated_input=true` and write it to
+/// `output` in the requested `format`.  Used when the file is too small to
+/// contain even the HPROF magic / header, so no heap objects can be recovered.
+fn emit_truncated_header_report(
+    input: &str,
+    output: Option<&str>,
+    format: OutputFormat,
+) -> io::Result<()> {
+    use report::{Report, SCHEMA_VERSION, SystemOverview};
+    let source_name = std::path::Path::new(input)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(input)
+        .to_string();
+    let r = Report {
+        schema_version: SCHEMA_VERSION,
+        generated: report::format::now_iso8601(),
+        truncated_input: true,
+        overview: SystemOverview {
+            file_path: input.to_string(),
+            source_name,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let text = match format {
+        OutputFormat::Md => report::render_markdown(&r),
+        OutputFormat::MdGraphs => report::render_markdown_graphs(&r),
+        OutputFormat::Json => serde_json::to_string_pretty(&r).map_err(io::Error::other)?,
+        OutputFormat::Html => html::render_html(&r),
+    };
+    progress::done();
+    write_output(output, &text)
+}
+
 /// Run the full `analyze` pipeline end-to-end and write the report.
 /// Phase order and the interleaved allocation/free/compress steps are tuned
 /// for the peak-RSS budget; the inline comments flag the load-bearing points.
@@ -2087,7 +2151,18 @@ fn run(
     let t = Instant::now();
     progress::phase("scanning dump (pass 1)");
     let source = crate::source::HprofSource::from(input);
-    let p1 = pass1::Pass1::run(&source, mat.is_some())?;
+    let p1 = match pass1::Pass1::run(&source, mat.is_some()) {
+        Ok(p1) => p1,
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof && could_be_truncated_hprof(input) => {
+            // File ended before or during the HPROF header — too truncated to
+            // parse any objects. Emit a minimal report with truncated_input=true
+            // so callers see exit 0 + a valid report with the warning rather than
+            // a hard error.
+            return emit_truncated_header_report(input, output, format);
+        }
+        Err(e) => return Err(e),
+    };
+    let truncated_input = p1.truncated_input;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -3340,6 +3415,7 @@ fn run(
     finalize_query_labels(&mut query_results, &query_texts, &parsed_queries);
     attach_viz(&mut query_results, &collected);
     report.queries = std::mem::take(&mut query_results);
+    report.truncated_input = truncated_input;
     let out_text = match format {
         OutputFormat::Md => {
             let md = report::render_markdown(&report);

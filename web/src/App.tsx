@@ -11689,8 +11689,8 @@ export default function App({ report }: { report: Report }) {
         <div style={{ background: "var(--warn-bg, #fefce8)", border: "1px solid var(--warn-border, #fde047)", borderRadius: 6, padding: "0.5rem 0.75rem", margin: "0.5rem 0", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.875rem" }}>
           <span style={{ fontSize: "1.1em" }}>⚠</span>
           <span style={{ flex: 1 }}>
-            <strong>Truncated input:</strong> the heap dump file was incomplete (the gzip stream ended prematurely).
-            This report covers only the objects and classes that were successfully read before the stream ended.
+            <strong>Truncated input:</strong> the heap dump file was incomplete (the file ended mid-record).
+            This report covers only the objects and classes that were successfully read before the file ended.
             Totals, leak suspects, and top consumers may be understated. Re-copy the dump to get a complete analysis.
           </span>
         </div>

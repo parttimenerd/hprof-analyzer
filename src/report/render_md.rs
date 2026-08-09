@@ -265,8 +265,8 @@ pub fn render_markdown(r: &Report) -> String {
     if r.truncated_input {
         out.push_str(
             "> **Warning — truncated input:** the heap dump file was incomplete \
-             (the gzip stream ended prematurely). This report covers only the \
-             objects and classes that were successfully read before the stream \
+             (the file ended mid-record). This report covers only the \
+             objects and classes that were successfully read before the file \
              ended. Totals, leak suspects, and top consumers may be understated. \
              Re-copy the dump to get a complete analysis.\n\n",
         );

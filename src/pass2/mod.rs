@@ -1395,6 +1395,18 @@ impl Pass2 {
             };
         }
 
+        // On truncated input, reads inside the heap segment may hit UnexpectedEof
+        // mid-subrecord. Treat that as end-of-segment (break) rather than an error,
+        // so we report everything successfully parsed before the cut-off.
+        macro_rules! try_read {
+            ($e:expr) => {
+                match $e {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                    other => other?,
+                }
+            };
+        }
+
         macro_rules! checked_sub {
             ($remaining:expr, $sz:expr) => {
                 $remaining = $remaining
@@ -1404,7 +1416,7 @@ impl Pass2 {
         }
 
         while remaining > 0 {
-            let sub_tag = r.u1()?;
+            let sub_tag = try_read!(r.u1());
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
@@ -1414,31 +1426,31 @@ impl Pass2 {
                 | heap::ROOT_INTERNED_STRING
                 | heap::ROOT_DEBUGGER
                 | heap::ROOT_VM_INTERNAL => {
-                    r.skip(ids)?;
+                    try_read!(r.skip(ids));
                     checked_sub!(remaining, ids);
                 }
                 heap::ROOT_JNI_GLOBAL => {
-                    r.skip(2 * ids)?;
+                    try_read!(r.skip(2 * ids));
                     checked_sub!(remaining, 2 * ids);
                 }
                 heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
-                    r.skip(ids + 8)?;
+                    try_read!(r.skip(ids + 8));
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                    r.skip(ids + 4)?;
+                    try_read!(r.skip(ids + 4));
                     checked_sub!(remaining, ids + 4);
                 }
                 heap::ROOT_STICKY_CLASS => {
-                    r.skip(ids)?;
+                    try_read!(r.skip(ids));
                     checked_sub!(remaining, ids);
                 }
                 heap::ROOT_THREAD_OBJ => {
-                    r.skip(ids + 8)?;
+                    try_read!(r.skip(ids + 8));
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
-                    let consumed = Self::count_class_dump_edges(
+                    let consumed = match Self::count_class_dump_edges(
                         r,
                         id_size,
                         id_map,
@@ -1447,21 +1459,24 @@ impl Pass2 {
                         system_class_addr,
                         props_name_id,
                         captured_props_addr,
-                    )?;
+                    ) {
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                        other => other?,
+                    };
                     checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?;
-                    let class_id = r.id()?;
-                    let data_len = r.u4()? as u64;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let class_id = try_read!(r.id());
+                    let data_len = try_read!(r.u4()) as u64;
                     if data_len > remaining {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "array too large",
                         ));
                     }
-                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    try_read!(r.read_bytes_reuse(scratch, data_len as usize));
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
                     // Capture blob for wanted addresses (e.g. thread objects).
@@ -1505,10 +1520,10 @@ impl Pass2 {
                     }
                 }
                 heap::OBJ_ARRAY_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?;
-                    let count = r.u4()? as u64;
-                    let elem_class_id = r.id()?;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let count = try_read!(r.u4()) as u64;
+                    let elem_class_id = try_read!(r.id());
                     let byte_len = count.saturating_mul(ids);
                     if byte_len > remaining {
                         return Err(io::Error::new(
@@ -1516,7 +1531,7 @@ impl Pass2 {
                             "array too large",
                         ));
                     }
-                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
 
                     // Capture obj-array blob for wanted addresses (e.g. Hashtable table).
@@ -1568,23 +1583,23 @@ impl Pass2 {
                 }
                 heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
-                    r.skip(ids + 4 + 4 + 1)?;
+                    try_read!(r.skip(ids + 4 + 4 + 1));
                     checked_sub!(remaining, ids + 4 + 4 + 1);
                 }
 
                 heap::PRIM_ARRAY_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?;
-                    let count = r.u4()? as u64;
-                    let elem_type = r.u1()?;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let count = try_read!(r.u4()) as u64;
+                    let elem_type = try_read!(r.u1());
                     let esz = HprofType::from_code(elem_type)
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
                     let byte_len = count * esz;
                     if fd.is_some() {
-                        r.read_bytes_reuse(scratch, byte_len as usize)?;
+                        try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     } else {
-                        r.skip(byte_len)?;
+                        try_read!(r.skip(byte_len));
                     }
                     checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
                     // No object edges; shallow already set by Phase 0b.
@@ -1605,6 +1620,11 @@ impl Pass2 {
                             }
                         }
                     }
+                }
+                heap::HEAP_DUMP_INFO => {
+                    // Android ART: u4 heap_id + id heap_name_string_id — no edges, just skip.
+                    try_read!(r.skip(4 + ids));
+                    checked_sub!(remaining, 4 + ids);
                 }
                 other => {
                     return Err(io::Error::new(
@@ -1685,8 +1705,17 @@ impl Pass2 {
             };
         }
 
+        macro_rules! try_read {
+            ($e:expr) => {
+                match $e {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                    other => other?,
+                }
+            };
+        }
+
         while remaining > 0 {
-            let sub_tag = r.u1()?;
+            let sub_tag = try_read!(r.u1());
             checked_sub!(remaining, 1u64);
 
             match sub_tag {
@@ -1696,31 +1725,31 @@ impl Pass2 {
                 | heap::ROOT_INTERNED_STRING
                 | heap::ROOT_DEBUGGER
                 | heap::ROOT_VM_INTERNAL => {
-                    r.skip(ids)?;
+                    try_read!(r.skip(ids));
                     checked_sub!(remaining, ids);
                 }
                 heap::ROOT_JNI_GLOBAL => {
-                    r.skip(2 * ids)?;
+                    try_read!(r.skip(2 * ids));
                     checked_sub!(remaining, 2 * ids);
                 }
                 heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_JNI_MONITOR => {
-                    r.skip(ids + 8)?;
+                    try_read!(r.skip(ids + 8));
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                    r.skip(ids + 4)?;
+                    try_read!(r.skip(ids + 4));
                     checked_sub!(remaining, ids + 4);
                 }
                 heap::ROOT_STICKY_CLASS => {
-                    r.skip(ids)?;
+                    try_read!(r.skip(ids));
                     checked_sub!(remaining, ids);
                 }
                 heap::ROOT_THREAD_OBJ => {
-                    r.skip(ids + 8)?;
+                    try_read!(r.skip(ids + 8));
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
-                    let consumed = Self::fill_class_dump_edges(
+                    let consumed = match Self::fill_class_dump_edges(
                         r,
                         id_size,
                         id_map,
@@ -1731,21 +1760,24 @@ impl Pass2 {
                         fwd_field_name_idx,
                         inb_flat,
                         in_degree,
-                    )?;
+                    ) {
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                        other => other?,
+                    };
                     checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?;
-                    let class_id = r.id()?;
-                    let data_len = r.u4()? as u64;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let class_id = try_read!(r.id());
+                    let data_len = try_read!(r.u4()) as u64;
                     if data_len > remaining {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "array too large",
                         ));
                     }
-                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    try_read!(r.read_bytes_reuse(scratch, data_len as usize));
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
                     let src_idx = match id_map.index_of(addr) {
@@ -1791,10 +1823,10 @@ impl Pass2 {
                     }
                 }
                 heap::OBJ_ARRAY_DUMP => {
-                    let addr = r.id()?;
-                    r.skip(4)?;
-                    let count = r.u4()? as u64;
-                    let elem_class_id = r.id()?;
+                    let addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let count = try_read!(r.u4()) as u64;
+                    let elem_class_id = try_read!(r.id());
                     let byte_len = count.saturating_mul(ids);
                     if byte_len > remaining {
                         return Err(io::Error::new(
@@ -1802,7 +1834,7 @@ impl Pass2 {
                             "array too large",
                         ));
                     }
-                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
 
                     let src_idx = match id_map.index_of(addr) {
@@ -1821,19 +1853,19 @@ impl Pass2 {
                 }
                 heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
-                    r.skip(ids + 4 + 4 + 1)?;
+                    try_read!(r.skip(ids + 4 + 4 + 1));
                     checked_sub!(remaining, ids + 4 + 4 + 1);
                 }
 
                 heap::PRIM_ARRAY_DUMP => {
-                    let _addr = r.id()?;
-                    r.skip(4)?;
-                    let count = r.u4()? as u64;
-                    let elem_type = r.u1()?;
+                    let _addr = try_read!(r.id());
+                    try_read!(r.skip(4));
+                    let count = try_read!(r.u4()) as u64;
+                    let elem_type = try_read!(r.u1());
                     let esz = HprofType::from_code(elem_type)
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
-                    r.skip(count * esz)?;
+                    try_read!(r.skip(count * esz));
                     checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
                     // No object edges from prim arrays
                 }
