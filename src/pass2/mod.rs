@@ -1505,14 +1505,16 @@ impl Pass2 {
                     // Edges from Object-type fields (dense Vec by class histogram idx,
                     // no HashMap lookup — Phase 0b already precomputed the per-class plan).
                     if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
-                            let off = off as usize;
-                            if off + id_size as usize <= scratch.len() {
-                                let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                if ref_val != 0 {
-                                    if let Some(dst) = cache.index_of(id_map, ref_val) {
-                                        out_degree[src_idx] += 1;
-                                        in_degree[dst] += 1;
+                        if (cidx as usize) < field_plans_dense.len() {
+                            for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                                let off = off as usize;
+                                if off + id_size as usize <= scratch.len() {
+                                    let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                    if ref_val != 0 {
+                                        if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                            out_degree[src_idx] += 1;
+                                            in_degree[dst] += 1;
+                                        }
                                     }
                                 }
                             }
@@ -1977,8 +1979,9 @@ impl Pass2 {
         // Instance fields (just skip)
         let ic = r.u2()? as u64;
         consumed += 2;
-        r.skip(ic * (ids + 1))?;
-        consumed += ic * (ids + 1);
+        let ic_skip = ic.saturating_mul(ids.saturating_add(1));
+        r.skip(ic_skip)?;
+        consumed += ic_skip;
 
         Ok(consumed)
     }
@@ -2075,8 +2078,9 @@ impl Pass2 {
 
         let ic = r.u2()? as u64;
         consumed += 2;
-        r.skip(ic * (ids + 1))?;
-        consumed += ic * (ids + 1);
+        let ic_skip = ic.saturating_mul(ids.saturating_add(1));
+        r.skip(ic_skip)?;
+        consumed += ic_skip;
 
         Ok(consumed)
     }
