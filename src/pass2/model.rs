@@ -1618,8 +1618,14 @@ pub fn rescan_outbound(
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
             other => other?,
         };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
+        let _ts = match r.u4() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let length = match r.u4() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        } as u64;
         match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 scan_fwd_segment(
@@ -1637,9 +1643,10 @@ pub fn rescan_outbound(
                 )?;
             }
             tags::HEAP_DUMP_END => break,
-            _ => {
-                r.skip(length)?;
-            }
+            _ => match r.skip(length) {
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                other => other?,
+            },
         }
     }
     Ok(())
@@ -1680,8 +1687,9 @@ fn skip_class_dump(r: &mut HprofReader, id_size: u8, ids: u64) -> io::Result<u64
     // instance fields (just descriptors, no values)
     let ic = r.u2()? as u64;
     consumed += 2;
-    r.skip(ic * (ids + 1))?;
-    consumed += ic * (ids + 1);
+    let ic_skip = ic.saturating_mul(ids + 1);
+    r.skip(ic_skip)?;
+    consumed += ic_skip;
     Ok(consumed)
 }
 

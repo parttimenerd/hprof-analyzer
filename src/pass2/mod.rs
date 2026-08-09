@@ -1595,7 +1595,7 @@ impl Pass2 {
                     let esz = HprofType::from_code(elem_type)
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
-                    let byte_len = count * esz;
+                    let byte_len = count.saturating_mul(esz);
                     if fd.is_some() {
                         try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     } else {
@@ -1865,8 +1865,9 @@ impl Pass2 {
                     let esz = HprofType::from_code(elem_type)
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
-                    try_read!(r.skip(count * esz));
-                    checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
+                    let byte_len = count.saturating_mul(esz);
+                    try_read!(r.skip(byte_len));
+                    checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
                     // No object edges from prim arrays
                 }
                 other => {
