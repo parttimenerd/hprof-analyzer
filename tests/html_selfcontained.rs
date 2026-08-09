@@ -204,10 +204,7 @@ fn html_all_flags_philosophers() {
 
     // Verify the bundle always has the flag-gated section IDs.
     let bundle = bundle_js();
-    for id in &[
-        "duplicate-strings-approximate",
-        "container-attribution-classfield",
-    ] {
+    for id in &["duplicate-strings", "container-attribution"] {
         assert!(
             bundle_contains_section_id(&bundle, id),
             "bundle missing flag-gated section id:\"{id}\""
