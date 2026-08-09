@@ -426,3 +426,49 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test 7: larger random byte buffers (up to 256 KB) → no panic
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 200, max_shrink_iters: 10, ..Default::default() })]
+    #[test]
+    fn prop_random_bytes_large(
+        bytes in prop::collection::vec(any::<u8>(), 4096..=262144usize),
+    ) {
+        let f = write_temp(&bytes, ".hprof");
+        let (ok, stdout, stderr) = run_json(f.path());
+        assert_no_panic(&(stdout.clone() + &stderr));
+        if ok {
+            prop_assert!(json_is_valid_report(&stdout), "exit 0 but bad JSON\nstdout: {:.200}", stdout);
+        }
+        for bad in &["eof in read_into", "eof in skip", "failed to fill whole buffer"] {
+            prop_assert!(!stderr.contains(bad), "raw internal error {bad:?} in stderr:\n{stderr}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: larger random bytes in gz / tar.gz (up to 256 KB)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 100, max_shrink_iters: 10, ..Default::default() })]
+    #[test]
+    fn prop_random_bytes_large_gz(
+        bytes in prop::collection::vec(any::<u8>(), 4096..=262144usize),
+    ) {
+        for ext in &[".hprof.gz", ".hprof.tar.gz"] {
+            let f = write_temp(&bytes, ext);
+            let (ok, stdout, stderr) = run_json(f.path());
+            assert_no_panic(&(stdout.clone() + &stderr));
+            if ok {
+                prop_assert!(
+                    json_is_valid_report(&stdout),
+                    "exit 0 but bad JSON for {ext}\nstdout: {:.200}", stdout
+                );
+            }
+        }
+    }
+}
