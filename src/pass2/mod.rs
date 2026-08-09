@@ -1798,28 +1798,30 @@ impl Pass2 {
                             } else {
                                 &[][..]
                             };
-                        for (fi, &(off, excluded)) in
-                            field_plans_dense[cidx as usize].iter().enumerate()
-                        {
-                            let off = off as usize;
-                            if off + id_size as usize <= scratch.len() {
-                                let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                let name_idx = if do_names && fi < named_plan.len() {
-                                    let fname = &named_plan[fi].2;
-                                    if fname.is_empty() {
-                                        0u16
-                                    } else if let Some(&idx) = field_name_pool_idx.get(fname) {
-                                        idx
+                        if (cidx as usize) < field_plans_dense.len() {
+                            for (fi, &(off, excluded)) in
+                                field_plans_dense[cidx as usize].iter().enumerate()
+                            {
+                                let off = off as usize;
+                                if off + id_size as usize <= scratch.len() {
+                                    let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                    let name_idx = if do_names && fi < named_plan.len() {
+                                        let fname = &named_plan[fi].2;
+                                        if fname.is_empty() {
+                                            0u16
+                                        } else if let Some(&idx) = field_name_pool_idx.get(fname) {
+                                            idx
+                                        } else {
+                                            let new_idx = field_name_pool.len() as u16;
+                                            field_name_pool.push(fname.clone());
+                                            field_name_pool_idx.insert(fname.clone(), new_idx);
+                                            new_idx
+                                        }
                                     } else {
-                                        let new_idx = field_name_pool.len() as u16;
-                                        field_name_pool.push(fname.clone());
-                                        field_name_pool_idx.insert(fname.clone(), new_idx);
-                                        new_idx
-                                    }
-                                } else {
-                                    0u16
-                                };
-                                add_edge!(src_idx, ref_val, excluded, name_idx);
+                                        0u16
+                                    };
+                                    add_edge!(src_idx, ref_val, excluded, name_idx);
+                                }
                             }
                         }
                     }

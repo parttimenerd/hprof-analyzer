@@ -1498,15 +1498,18 @@ impl InboundBuilder {
 
                     // Object-type instance fields
                     if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
-                            let off = off as usize;
-                            if off + id_size as usize <= scratch.len() {
-                                let ref_val = super::read_ref(&scratch[off..], id_size as usize);
-                                if ref_val != 0 {
-                                    if let Some(dst) = cache.index_of(id_map, ref_val) {
-                                        inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
-                                        in_cursors[dst] += 1;
-                                        fwd.push(dst as u32);
+                        if (cidx as usize) < field_plans_dense.len() {
+                            for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                                let off = off as usize;
+                                if off + id_size as usize <= scratch.len() {
+                                    let ref_val =
+                                        super::read_ref(&scratch[off..], id_size as usize);
+                                    if ref_val != 0 {
+                                        if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                            inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
+                                            in_cursors[dst] += 1;
+                                            fwd.push(dst as u32);
+                                        }
                                     }
                                 }
                             }
