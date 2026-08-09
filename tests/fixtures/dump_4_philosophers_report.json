@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-06T20:20:34.473760000Z",
+  "generated": "2026-08-09T08:12:50.774586000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/fixtures/dump_4_philosophers.hprof",
@@ -105565,15 +105565,15 @@
       "id": "concentration",
       "severity": "info",
       "title": "Concentration",
-      "detail": "diffuse — retention is spread across multiple roots, so there is no single holder to target.",
+      "detail": "diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Inspect individual suspects to find the most impactful target.",
       "anchor": "leak-suspects",
       "anchor_label": "Leak Suspects"
     },
     {
       "id": "shape",
       "severity": "info",
-      "title": "Shape",
-      "detail": "deep — long dominator chains suggest nested collections or linked structures; trace the chain to find the retaining root — 90% of objects within depth 7, max depth 28.",
+      "title": "Heap Shape",
+      "detail": "deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects — 90% of objects within depth 7, max depth 28.",
       "anchor": "dominator-depth-distribution",
       "anchor_label": "Dominator-Depth Distribution"
     },
@@ -105606,7 +105606,7 @@
       "id": "empty-collection-cemetery",
       "severity": "info",
       "title": "Empty-Collection Cemetery",
-      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead. Consider lazy initialization, returning `Collections.emptyList()` sentinels, or using `null` until the collection is first written.",
+      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case.",
       "anchor": "collections",
       "anchor_label": "Collections"
     },
@@ -105614,7 +105614,7 @@
       "id": "collections-not-analyzed",
       "severity": "info",
       "title": "Collection Waste Not Analyzed",
-      "detail": "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
+      "detail": "Collection waste not analyzed — re-run with `--collections` to check for wasted capacity."
     }
   ],
   "top_retainers": [
