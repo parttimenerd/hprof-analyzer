@@ -1251,12 +1251,13 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
         );
     }
     // A file with a .hprof extension that lacks the HPROF magic is almost certainly
-    // a saved report JSON misnamed as a dump.
+    // a saved report JSON misnamed as a dump. Suppress the raw IO error string and
+    // give a clean actionable message instead.
     if input != "-" && std::fs::metadata(input).is_ok() && !looks_like_hprof(input) {
         return format!(
-            "{msg}\n(hint: '{input}' does not start with the HPROF magic; \
+            "'{input}' does not start with the HPROF magic; \
              if it is a saved report JSON, rename it without the .hprof \
-             extension to re-render it)"
+             extension to re-render it"
         );
     }
     msg
@@ -2755,7 +2756,11 @@ fn run(
                 "o2hprof",
                 std::iter::once(0i64).chain(mm.sorted().iter().map(|&old_id| {
                     let lo = old_id as usize * 8;
-                    i64::from_le_bytes(offsets_bytes[lo..lo + 8].try_into().unwrap())
+                    offsets_bytes
+                        .get(lo..lo + 8)
+                        .and_then(|s| s.try_into().ok())
+                        .map(i64::from_le_bytes)
+                        .unwrap_or(0)
                 })),
             )?;
             drop(offsets_bytes);

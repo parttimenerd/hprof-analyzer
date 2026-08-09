@@ -799,7 +799,9 @@ fn value_size(type_code: u8, id_size: u8) -> u64 {
     match HprofType::from_code(type_code) {
         Some(HprofType::Object) => id_size as u64,
         Some(t) => t.byte_size() as u64,
-        None => 0,
+        // Unknown type code: skip 1 byte to ensure stream progress and avoid
+        // reading the next record's header as a value on corrupt class dumps.
+        None => 1,
     }
 }
 
