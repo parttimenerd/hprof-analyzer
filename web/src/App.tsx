@@ -10359,6 +10359,15 @@ function SeriesTable({
       },
       sortable: true,
     },
+    ...(n >= 3 ? [{
+      id: "peakOverBaseline",
+      name: "Peak−r1",
+      right: true,
+      width: "110px",
+      cell: (r: SRow) => "peak_over_baseline" in r ? fmtDeltaBytes((r as SeriesClassRow).peak_over_baseline, fmtB) : "",
+      selector: (r: SRow) => "peak_over_baseline" in r ? (r as SeriesClassRow).peak_over_baseline : 0,
+      sortable: true,
+    } as TableColumn<SRow>] : []),
     ...(showNew ? [{
       id: "new",
       name: "New?",
