@@ -272,9 +272,27 @@ fn analyze_to_report_inner(
     progress: &mut dyn FnMut(&str, f32),
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
+    // Wall-clock timing of the post-pass2 "dark phase" (dominators/retained/leak/
+    // build_model) to localize the runtime sink. Gated on HPROF_TIMING like the
+    // pass2 t_phase! markers; zero cost otherwise. Wall-relative to this fn's start.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _t_pipe = std::time::Instant::now();
+    macro_rules! t_pipe {
+        ($label:expr) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            if std::env::var_os("HPROF_TIMING").is_some() {
+                eprintln!(
+                    "[timing] {}: {:.3}s",
+                    $label,
+                    _t_pipe.elapsed().as_secs_f64()
+                );
+            }
+        };
+    }
     let p1 = pass1::Pass1::run(source, false)?;
     let truncated_input = p1.truncated_input;
     progress("pass1", 1.0);
+    t_pipe!("pass1 done");
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -312,11 +330,13 @@ fn analyze_to_report_inner(
         &mut no_exists_bools,
     )?;
     progress("pass2", 1.0);
+    t_pipe!("pass2 done");
 
     inbound.compress_id_map(compress)?;
 
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     progress("rpo", 1.0);
+    t_pipe!("rpo done");
 
     {
         g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
@@ -331,6 +351,7 @@ fn analyze_to_report_inner(
             &g.class_names,
         )?;
     }
+    t_pipe!("unreachable_retained done");
 
     // ── Normal path ─────────────────────────────────────────────────────────────
 
@@ -365,6 +386,7 @@ fn analyze_to_report_inner(
         &rpo.dfn,
     )?;
     progress("inbound", 1.0);
+    t_pipe!("inbound done");
 
     // Rebuild vertex while dfn is still live; then free dfn.
     let count = parent_pre_count;
@@ -382,6 +404,7 @@ fn analyze_to_report_inner(
     drop(inb_data);
 
     let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+    t_pipe!("dominators+dom_csr done");
 
     if compress != cvec::Codec::None {
         g.shallow = shallow_c.restore()?;
@@ -403,6 +426,7 @@ fn analyze_to_report_inner(
     progress("retained", 1.0);
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
+    t_pipe!("retained done");
 
     // If --field-stats was requested, compute field_stats now using the saved fwd
     // copy, then drop the copy immediately. This frees the ~2 GB clone before
@@ -421,6 +445,7 @@ fn analyze_to_report_inner(
         } else {
             None
         };
+    t_pipe!("field_stats done");
 
     let alloc_sites = if let Some(c) = alloc_serial_c {
         let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
@@ -434,6 +459,7 @@ fn analyze_to_report_inner(
         g.alloc_frames_by_serial = None;
         Some(a)
     };
+    t_pipe!("alloc_sites done");
 
     let mut report = report::build_model(
         &mut g,
@@ -446,6 +472,7 @@ fn analyze_to_report_inner(
         precomputed_field_stats,
     );
     report.truncated_input = truncated_input;
+    t_pipe!("build_model done");
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
 
     // Extract the per-object retained-size array before g is dropped.

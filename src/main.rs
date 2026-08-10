@@ -1012,8 +1012,26 @@ fn analyze_to_report_inner(
     source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
+    // Wall-clock timing of the post-pass2 "dark phase" (obj-graph capture,
+    // dominators, retained, build_model) to localize the runtime sink. The pass2
+    // t_phase! markers reset to 0 at Pass2::build start, so "2b scan done" is
+    // pass2-relative, not wall — these markers close that gap. Gated on
+    // HPROF_TIMING like the pass2 markers; zero cost otherwise.
+    let _t_pipe = std::time::Instant::now();
+    macro_rules! t_pipe {
+        ($label:expr) => {
+            if std::env::var_os("HPROF_TIMING").is_some() {
+                eprintln!(
+                    "[timing] {}: {:.3}s",
+                    $label,
+                    _t_pipe.elapsed().as_secs_f64()
+                );
+            }
+        };
+    }
     let p1 = pass1::Pass1::run(source, false)?;
     let truncated_input = p1.truncated_input;
+    t_pipe!("pass1 done");
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -1050,10 +1068,12 @@ fn analyze_to_report_inner(
         &mut no_in_sets,
         &mut no_exists_bools,
     )?;
+    t_pipe!("pass2 done");
 
     inbound.compress_id_map(compress)?;
 
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    t_pipe!("rpo done");
 
     {
         g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
@@ -1068,7 +1088,7 @@ fn analyze_to_report_inner(
             &g.class_names,
         )?;
     }
-
+    t_pipe!("unreachable_retained done");
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
@@ -2148,6 +2168,21 @@ fn run(
     mat: Option<mat::MatEmitter>,
 ) -> io::Result<()> {
     let t_total = Instant::now();
+    // Wall-clock markers for the post-2b "dark phase" (build_dom_children_csr,
+    // compute_retained, build_model, render). The pass2 t_phase! markers reset at
+    // Pass2::build start, so "2b scan done" is pass2-relative; these are relative
+    // to run() start (~wall). Gated on HPROF_TIMING like the pass2 markers.
+    macro_rules! t_dark {
+        ($label:expr) => {
+            if std::env::var_os("HPROF_TIMING").is_some() {
+                eprintln!(
+                    "[timing] {}: {:.3}s",
+                    $label,
+                    t_total.elapsed().as_secs_f64()
+                );
+            }
+        };
+    }
 
     let t = Instant::now();
     progress::phase("scanning dump (pass 1)");
@@ -2630,6 +2665,7 @@ fn run(
         )?
     };
     log(verbose, "inbound", t.elapsed().as_secs_f64());
+    t_dark!("inbound done");
 
     crate::trace::trim();
 
@@ -2682,7 +2718,7 @@ fn run(
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
-
+    t_dark!("dominator done");
     crate::trace::probe("main: after dominator");
     // inb_block_off is only needed by compute_dominators; free it now.
     drop(inb_block_off);
@@ -3032,23 +3068,13 @@ fn run(
     crate::trace::probe("main: before build_dom_children_csr");
     let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
     crate::trace::probe("main: after build_dom_children_csr");
+    t_dark!("dom_children_csr done");
 
-    // For the non-MAT path compress g.idom (~2 GB) now that the CSR is built.
-    // compute_retained no longer reads idom (uses the stack for parent lookups).
-    // Saves ~2 GB during the compute_retained window; decompressed before build_model.
-    let non_mat_idom_c: Option<cvec::CompressedU32> =
-        if mat.is_none() && compress != cvec::Codec::None {
-            let c = cvec::CompressedU32::compress(&g.idom, compress)?;
-            g.idom = Vec::new();
-            crate::trace::trim();
-            Some(c)
-        } else {
-            None
-        };
-    crate::trace::probe(
-        "main: after compress idom (non-MAT path, before restore shallow/class_idx)",
-    );
-
+    // g.idom is kept live (uncompressed) across compute_retained + build_model.
+    // A prior version Deflate9-compressed it here (~2 GB) and restored it before
+    // build_model to save ~1.7 GB in this window — but profiling showed the global
+    // peak RSS is set much earlier (inbound CSR build), so this window is nowhere
+    // near the peak; the compress cost ~208s for zero peak-RSS benefit. Removed.
     // MAT: emit the `domOut` IntArray1N (unsorted) in MAT id order.
     // Layout: entry[0] = vroot's dom-children (= MAT GC roots), entry[1] = dom-
     // children of mat-id 0 (synthetic root, always empty), entries[2..mc+1] =
@@ -3128,7 +3154,7 @@ fn run(
     drop(shallow_c);
     drop(class_idx_c);
     crate::trace::probe("main: after restore shallow/class_idx");
-
+    t_dark!("restore shallow/class_idx done");
     let t = Instant::now();
     progress::phase("computing retained sizes");
     let class_count = g.class_names.len();
@@ -3144,6 +3170,7 @@ fn run(
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
+    t_dark!("compute_retained done");
 
     // Compute field_stats now (while the saved fwd clone is live and retained is populated),
     // then immediately free the clone to avoid carrying it through build_model's allocations.
@@ -3158,6 +3185,7 @@ fn run(
         } else {
             None
         };
+    t_dark!("field_stats done");
 
     // Finalize cross-phase (@retainedHeapSize) queries now that retained sizes
     // exist. Phase-1 results pass through; carried indices are joined against
@@ -3391,10 +3419,6 @@ fn run(
 
     let t = Instant::now();
     progress::phase("building report");
-    // Restore g.idom (compressed after build_dom_children_csr in the non-MAT path).
-    if let Some(c) = non_mat_idom_c {
-        g.idom = c.restore()?;
-    }
     crate::trace::probe("report: before build_model");
     // build_model reads has_same_class_ancestor (system-overview group) and
     // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
@@ -3412,6 +3436,7 @@ fn run(
         precomputed_field_stats_main,
     );
     crate::trace::probe("report: after build_model");
+    t_dark!("build_model done");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
     crate::trace::trim();
@@ -3452,6 +3477,7 @@ fn run(
         }
     };
     log(verbose, "report", t.elapsed().as_secs_f64());
+    t_dark!("render done");
 
     // Clear the progress line before emitting output, so it does not linger on
     // stderr next to the report (or leak into a piped tail).
@@ -3464,6 +3490,7 @@ fn run(
     })?;
 
     log(verbose, "total", t_total.elapsed().as_secs_f64());
+    t_dark!("write+total done");
     Ok(())
 }
 
