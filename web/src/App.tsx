@@ -10344,7 +10344,9 @@ function SeriesTable({
       width: "80px",
       cell: (r: SRow) => {
         const base = r.retained[0] ?? 0;
+        const last = r.retained[r.retained.length - 1] ?? 0;
         if (base === 0) return <span style={{ color: "var(--muted)" }}>new</span>;
+        if (last === 0) return <span style={{ color: "var(--muted)" }}>removed</span>;
         const pct = (r.delta_retained / base) * 100;
         if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
         const sign = pct > 0 ? "+" : pct < 0 ? MINUS : "";
