@@ -14,7 +14,20 @@ readme = "README.md"
 authors = ["Johannes Bechberger"]
 keywords = ["hprof", "heap-dump", "java", "memory", "oom"]
 categories = ["command-line-utilities", "development-tools::profiling"]
-exclude = ["tests/fixtures/*.hprof", ".git-worktrees/*", "docs/*", "*.png"]
+exclude = [
+    "tests/fixtures/*.hprof",
+    "tests/fixtures/*.hprof.gz",
+    "tests/fixtures/*.hprof.zip",
+    "tests/fixtures/*.json",
+    "tests/fixtures/*.md",
+    "tests/fixtures/*.index",
+    "tests/fixtures/*.threads",
+    "web/dist/*",
+    "dist/*",
+    ".git-worktrees/*",
+    "docs/*",
+    "*.png",
+]
 
 [[bin]]
 name = "hprof-analyzer"
