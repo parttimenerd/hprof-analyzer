@@ -754,23 +754,24 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         "- **Δ Shallow heap (r1→rN):** {}\n",
         fmt_delta_bytes(d.delta_total_shallow)
     ));
-    out.push_str(&format!(
-        "- **Gross growth (classes that grew, r1→rN):** {}\n",
-        fmt_delta_bytes(d.gross_growth_retained)
-    ));
-    out.push_str(&format!(
-        "- **Gross reclaimed (classes that shrank, r1→rN):** {}\n",
-        fmt_delta_bytes(d.gross_shrink_retained)
-    ));
-    // Combined gross-churn line (§37.2): total bytes that churned direction.
-    let churn = d
-        .gross_growth_retained
-        .unsigned_abs()
-        .saturating_add(d.gross_shrink_retained.unsigned_abs()) as i64;
-    out.push_str(&format!(
-        "- **Gross Retained churn (growth + reclaimed, r1→rN):** {}\n",
-        fmt_delta_bytes(churn)
-    ));
+    if d.gross_growth_retained != 0 || d.gross_shrink_retained != 0 {
+        out.push_str(&format!(
+            "- **Gross growth (classes that grew, r1→rN):** {}\n",
+            fmt_delta_bytes(d.gross_growth_retained)
+        ));
+        out.push_str(&format!(
+            "- **Gross reclaimed (classes that shrank, r1→rN):** {}\n",
+            fmt_delta_bytes(d.gross_shrink_retained)
+        ));
+        let churn = d
+            .gross_growth_retained
+            .unsigned_abs()
+            .saturating_add(d.gross_shrink_retained.unsigned_abs()) as i64;
+        out.push_str(&format!(
+            "- **Gross Retained churn (growth + reclaimed, r1→rN):** {}\n",
+            fmt_delta_bytes(churn)
+        ));
+    }
     out.push_str(&format!(
         "- **Net Δ Retained (all classes, r1→rN):** {}\n\n",
         fmt_delta_bytes(d.net_delta_retained)
