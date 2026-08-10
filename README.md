@@ -156,13 +156,9 @@ multi-gigabyte ones (see [Performance](#performance)).
   Android ART. Handles all standard and JVM-specific HPROF sub-tags, including
   `ROOT_SYSTEM_CLASS` (IBM J9) and the five Android ART-specific root and array
   tags.
-- **Resilient against bad files.** Truncated dumps (killed JVM, incomplete copy,
-  short-read over a network mount), corrupt gzip streams, unknown/corrupt heap
-  sub-records, and malformed length fields all produce a partial report with a
-  warning rather than a crash or hard error. Property-based fuzzing (via
-  `proptest`) and a 100-worker parallel campaign on an AMD Threadripper PRO
-  3995WX continuously validate that no input causes a panic or leaks raw internal
-  error messages. OOM-inducing corrupt length fields are capped before allocation.
+- **Resilient against bad files.** Truncated dumps, corrupt gzip streams, and
+  malformed heap records all produce a partial report with a warning rather than
+  a crash or error. Corrupt length fields are capped before allocation to prevent OOM.
 - **Scriptable and CI-friendly.** Never prompts, never opens a window. Emit
   JSON, diff two dumps to catch memory growth in a pipeline, or gate a build on
   retained-size regressions.
