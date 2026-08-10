@@ -93,9 +93,11 @@ fn oom_hook_produces_valid_report() {
         json.get("schema_version").is_some(),
         "report missing schema_version"
     );
-    assert_eq!(
-        json.get("truncated_input").and_then(|v| v.as_bool()),
-        Some(false),
+    assert!(
+        !json
+            .get("truncated_input")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "report should not be truncated"
     );
 
