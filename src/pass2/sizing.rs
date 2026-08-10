@@ -85,8 +85,12 @@ pub(crate) fn instance_shallow_size(
 
 /// MAT shallow size of an Object[] array: header + length + `num_elem` refs.
 pub(crate) fn obj_array_shallow(num_elem: u64, ptr_size: usize, ref_size: usize) -> u32 {
+    let body = (num_elem as usize).saturating_mul(ref_size);
     shallow_u32(align_up(
-        ptr_size + ref_size + 4 + num_elem as usize * ref_size,
+        ptr_size
+            .saturating_add(ref_size)
+            .saturating_add(4)
+            .saturating_add(body),
         8,
     ))
 }
@@ -99,7 +103,8 @@ pub(crate) fn prim_array_shallow(
     ref_size: usize,
 ) -> u32 {
     let header = align_up(ptr_size + ref_size + 4, ref_size);
-    shallow_u32(align_up(header + num_elem as usize * elem_size, 8))
+    let body = (num_elem as usize).saturating_mul(elem_size);
+    shallow_u32(align_up(header.saturating_add(body), 8))
 }
 
 /// MAT shallow size of a class object (java.lang.Class): its static-field bytes
@@ -257,7 +262,9 @@ pub(crate) fn detect_ref_size(id_size: u8, array_addr_counts: &[(u64, u64)]) -> 
         }
         prev_start = addr;
         // header (16) + elements*8 for uncompressed
-        prev_uncomp_end = addr + 16 + count * 8;
+        prev_uncomp_end = addr
+            .saturating_add(16)
+            .saturating_add(count.saturating_mul(8));
     }
     id_size
 }
