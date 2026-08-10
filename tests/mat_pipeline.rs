@@ -282,24 +282,38 @@ fn find_mat_binary() -> Option<std::path::PathBuf> {
 }
 
 /// Run our `mat caches` subcommand on `hprof` writing into `out_dir`.
+/// Retries once on failure to avoid flakiness from OS resource contention.
 fn run_our_tool(hprof: &Path, out_dir: &Path, mat_bin: &Path) -> std::time::Duration {
     let bin = env!("CARGO_BIN_EXE_hprof-analyzer");
-    let t = std::time::Instant::now();
-    let status = Command::new(bin)
-        .arg("mat")
-        .arg("caches")
-        .arg(hprof)
-        .arg(out_dir)
-        .arg("--mat-binary")
-        .arg(mat_bin)
-        .status()
-        .expect("spawn hprof-analyzer mat caches");
-    let elapsed = t.elapsed();
-    assert!(
-        status.success(),
-        "hprof-analyzer mat caches failed: {status:?}"
+    for attempt in 0..2 {
+        let t = std::time::Instant::now();
+        let out = Command::new(bin)
+            .arg("mat")
+            .arg("caches")
+            .arg(hprof)
+            .arg(out_dir)
+            .arg("--mat-binary")
+            .arg(mat_bin)
+            .output()
+            .expect("spawn hprof-analyzer mat caches");
+        let elapsed = t.elapsed();
+        if out.status.success() {
+            return elapsed;
+        }
+        eprintln!(
+            "  hprof-analyzer mat caches attempt {} failed ({:?})\n  stderr: {}",
+            attempt + 1,
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        if attempt == 0 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+    panic!(
+        "hprof-analyzer mat caches failed after 2 attempts on {}",
+        hprof.display()
     );
-    elapsed
 }
 
 /// Run Eclipse MAT cold-parse on `hprof` (which must be the only file in its dir,

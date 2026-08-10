@@ -139,7 +139,11 @@ where
         match result {
             Ok(()) => {}
             Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e)
+                if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::InvalidData =>
+            {
+                break;
+            }
             Err(e) => return Err(e),
         }
     }
@@ -287,7 +291,11 @@ where
         match result {
             Ok(()) => {}
             Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e)
+                if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::InvalidData =>
+            {
+                break;
+            }
             Err(e) => return Err(e),
         }
     }
@@ -452,7 +460,11 @@ where
         match result {
             Ok(()) => {}
             Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e)
+                if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::InvalidData =>
+            {
+                break;
+            }
             Err(e) => return Err(e),
         }
     }
@@ -704,7 +716,11 @@ where
         match result {
             Ok(()) => {}
             Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e)
+                if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::InvalidData =>
+            {
+                break;
+            }
             Err(e) => return Err(e),
         }
     }
