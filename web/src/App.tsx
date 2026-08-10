@@ -10477,16 +10477,15 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
     { id: "peakOverBaseline", name: "Peak−r1", right: true, width: "110px", cell: (r) => fmtDeltaBytes(r.peak_over_baseline, fmtB), selector: (r) => r.peak_over_baseline, sortable: true },
     {
       id: "deltaPct",
-      name: "Δ %",
+      name: "Peak %",
       right: true,
       width: "80px",
       cell: (r: SeriesClassRow) => {
         const base = r.retained[0] ?? 0;
         if (base === 0) return <span style={{ color: "var(--muted)" }}>new</span>;
-        const pct = (r.delta_retained / base) * 100;
+        const pct = (r.peak_over_baseline / base) * 100;
         if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
-        const sign = pct > 0 ? "+" : pct < 0 ? MINUS : "";
-        return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{fmtPct(Math.abs(pct))}</span>;
+        return <span style={{ color: "var(--ok, #22c55e)" }}>+{fmtPct(pct)}</span>;
       },
       sortable: true,
     },
