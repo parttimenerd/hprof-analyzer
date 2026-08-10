@@ -153,6 +153,7 @@ pub struct PerReportSummary {
     pub label: String,
     pub total_objects: u64,
     pub total_shallow: u64,
+    pub total_retained: u64,
     pub gc_roots: u64,
     /// Dump creation timestamp (epoch ms), if present in the HPROF header.
     pub dump_creation: Option<i64>,
@@ -532,6 +533,7 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
                 label: labels[i].clone(),
                 total_objects: r.overview.total_objects,
                 total_shallow: r.overview.total_shallow,
+                total_retained: r.overview.retention_concentration.total_retained,
                 gc_roots: r.overview.gc_roots,
                 dump_creation: r.overview.dump_creation,
                 jvm_version: r.overview.jvm_version.clone(),
@@ -712,9 +714,15 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         out.push_str("### Per-Dump Summaries\n\n");
         for s in &d.per_report {
             out.push_str(&format!("**{}**\n\n", s.label));
+            let retained_part = if s.total_retained > 0 {
+                format!(" / {} retained", report::format_bytes(s.total_retained))
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
-                "- Heap: {} shallow | {} objects | {} GC roots\n",
+                "- Heap: {} shallow{} | {} objects | {} GC roots\n",
                 report::format_bytes(s.total_shallow),
+                retained_part,
                 fmt_count(s.total_objects),
                 fmt_count(s.gc_roots),
             ));

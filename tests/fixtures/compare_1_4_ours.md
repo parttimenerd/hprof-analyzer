@@ -11,14 +11,14 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 
 **dump_1_mnemonics.hprof**
 
-- Heap: 11.3 MB shallow | 334,875 objects | 1,553 GC roots
+- Heap: 11.3 MB shallow / 11.3 MB retained | 334,875 objects | 1,553 GC roots
 - Top suspect: `java.lang.Thread` — 5.5 MB retained (2 total)
 - **CRITICAL:** Headline retainer
 - Warning: Thread pinning; Off-heap (DirectByteBuffer); Fixed per-object header overhead
 
 **dump_4_philosophers.hprof**
 
-- Heap: 11.6 MB shallow | 236,457 objects | 1,681 GC roots
+- Heap: 11.6 MB shallow / 11.6 MB retained | 236,457 objects | 1,681 GC roots
 - Top suspect: `scala.concurrent.stm.ccstm.InTxnImpl` — 2.7 MB retained (3 total)
 - **CRITICAL:** Headline Retainer
 - Warning: Off-Heap (DirectByteBuffer); Fixed per-Object Header Overhead

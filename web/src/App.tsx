@@ -10536,7 +10536,8 @@ function PerReportSummaryCard({ s, idx, fmtB }: { s: PerReportSummary; idx: numb
         </div>
       )}
       <div style={rowStyle}>
-        <span><strong>{fmtB(s.total_shallow)}</strong> heap</span>
+        <span><strong>{fmtB(s.total_shallow)}</strong> shallow</span>
+        {s.total_retained > 0 && <span><strong>{fmtB(s.total_retained)}</strong> retained</span>}
         <span>{s.total_objects.toLocaleString()} objects</span>
         <span>{s.gc_roots.toLocaleString()} GC roots</span>
       </div>

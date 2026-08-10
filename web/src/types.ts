@@ -1025,6 +1025,7 @@ export interface PerReportSummary {
   label: string;
   total_objects: number;
   total_shallow: number;
+  total_retained: number;
   gc_roots: number;
   dump_creation?: number;
   jvm_version?: string;
