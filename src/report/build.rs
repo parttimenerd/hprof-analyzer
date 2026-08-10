@@ -1496,7 +1496,7 @@ fn aggregate_collection_attribution(
                 container_kind: kind_label(kind).to_string(),
                 empty_count: ta.empty_count,
                 singleton_count: ta.singleton_count,
-                overhead_bytes: total * 80,
+                overhead_bytes: total.saturating_mul(80),
             })
         })
         .collect();
@@ -2631,7 +2631,7 @@ fn build_system_overview(
             .iter()
             .filter(|r| r.instances > 0 && r.shallow > 0)
             .filter_map(|r| {
-                let total_header = r.instances * header_bytes as u64;
+                let total_header = r.instances.saturating_mul(header_bytes as u64);
                 let header_pct_bp = ((total_header as f64 / r.shallow as f64) * 10_000.0) as u32;
                 if header_pct_bp >= HEADER_PCT_BP_FLOOR || total_header >= HEADER_FLOOR_BYTES {
                     Some(crate::report::HeaderOverheadRow {

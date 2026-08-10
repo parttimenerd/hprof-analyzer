@@ -1476,7 +1476,7 @@ impl Rule for FixedPerObjectOverhead {
         } else {
             16
         };
-        let overhead = r.overview.total_objects * header_bytes;
+        let overhead = r.overview.total_objects.saturating_mul(header_bytes);
         let pct = overhead as f64 / total as f64 * 100.0;
         if pct < HEADER_OVERHEAD_PCT {
             return None;
