@@ -144,6 +144,16 @@ Compressed dumps are read transparently — no manual decompression needed:
 
 **Tip: use `-XX:+HeapDumpGzip` to write compressed dumps directly.** Gzip-compressed dumps are typically 5–10× smaller than raw `.hprof` files, making them much faster to copy off the production machine before analysis.
 
+**Tip: store a JSON report instead of the dump.** Run the analysis on the production machine and keep only the report — the original dump can then be discarded. The JSON report can be re-rendered into any other format later without the `.hprof` file:
+
+```sh
+# On the production machine — fast, low memory, small output:
+hprof-analyzer heap.hprof.gz report.json.gz
+
+# Later, anywhere — re-render to HTML without the original dump:
+hprof-analyzer report.json.gz --format html report.html
+```
+
 **Truncated and corrupt files are handled gracefully.** If the JVM was killed mid-dump, the file was copied incompletely, the gzip stream ends early, or random bytes follow a valid HPROF header (e.g. a partial network copy), the analyzer recovers whatever objects were successfully parsed and produces a partial report rather than aborting with an error. A warning is printed to stderr and `truncated_input: true` is set in the JSON output when truncation or corruption is detected.
 
 Analysis time scales with the dump — seconds for small dumps, minutes for
