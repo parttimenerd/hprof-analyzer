@@ -10347,7 +10347,7 @@ function SeriesTable({
         if (base === 0) return <span style={{ color: "var(--muted)" }}>new</span>;
         const pct = (r.delta_retained / base) * 100;
         if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
-        const sign = pct > 0 ? "+" : "";
+        const sign = pct > 0 ? "+" : pct < 0 ? MINUS : "";
         return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{fmtPct(Math.abs(pct))}</span>;
       },
       selector: (r: SRow) => {
@@ -10448,7 +10448,7 @@ function diffVerdict(diff: SeriesDiffResult, fmtB: (n: number) => string): strin
     diff.gross_growth_retained > 0 &&
     diff.gross_growth_retained > Math.max(diff.net_delta_retained, 0) * 2
   ) {
-    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(diff.gross_shrink_retained)} reclaimed across steps.`;
+    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(Math.abs(diff.gross_shrink_retained))} reclaimed across steps.`;
   }
   if (newSuspects > 0) {
     line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
@@ -10483,7 +10483,7 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
         if (base === 0) return <span style={{ color: "var(--muted)" }}>new</span>;
         const pct = (r.delta_retained / base) * 100;
         if (Math.abs(pct) < 0.5) return <span style={{ color: "var(--muted)" }}>≈0%</span>;
-        const sign = pct > 0 ? "+" : "";
+        const sign = pct > 0 ? "+" : pct < 0 ? MINUS : "";
         return <span style={{ color: pct > 0 ? "var(--ok, #22c55e)" : "var(--muted)" }}>{sign}{fmtPct(Math.abs(pct))}</span>;
       },
       sortable: true,
@@ -10605,7 +10605,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
           <li><strong>Δ Shallow Heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow, fmtB)}</li>
           <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained, fmtB)}</li>
-          <li><strong>Gross Retained Churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(diff.gross_shrink_retained)} reclaimed</li>
+          <li><strong>Gross Retained Churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(Math.abs(diff.gross_shrink_retained))} reclaimed</li>
         </ul>
       </section>
 
