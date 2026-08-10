@@ -31,21 +31,13 @@ const BOXED_TYPES: &[&str] = &[
     "java/lang/BigDecimal",
 ];
 
-/// Compute top holder classes for boxed-number objects.
-/// Performs two full-file scans (collect addrs, then count refs).
-pub(crate) fn compute_boxed_holders<O>(
-    open: O,
-    p1: &Pass1,
-    id_size: u8,
-) -> io::Result<Vec<crate::report::BoxedNumberHolder>>
-where
-    O: Fn() -> io::Result<crate::reader::HprofReader>,
-{
-    let class_map = &p1.class_map;
-    let strings = &p1.strings;
-
-    // Build a set of class addresses that correspond to boxed types.
-    let boxed_class_addrs: HashSet<u64> = class_map
+/// Class addresses of boxed-number types ([`BOXED_TYPES`]). Shared with the 2a
+/// scan so it can capture boxed instance addresses using the identical predicate.
+pub(crate) fn boxed_class_addrs(
+    class_map: &HashMap<u64, crate::pass1::ClassInfo>,
+    strings: &HashMap<u64, String>,
+) -> HashSet<u64> {
+    class_map
         .iter()
         .filter(|(_, ci)| {
             strings
@@ -54,19 +46,45 @@ where
                 .unwrap_or(false)
         })
         .map(|(&addr, _)| addr)
-        .collect();
+        .collect()
+}
 
-    if boxed_class_addrs.is_empty() {
-        return Ok(Vec::new());
-    }
+/// Compute top holder classes for boxed-number objects.
+///
+/// `prefetched_boxed_addrs`: when `Some`, the addresses of live boxed instances
+/// were already captured during the 2a scan, so Pass 1 (the full-file address
+/// collection) is skipped. When `None`, Pass 1 runs as a standalone scan.
+/// Pass 2 (the FieldPlan ref-count scan) always runs.
+pub(crate) fn compute_boxed_holders<O>(
+    open: O,
+    p1: &Pass1,
+    id_size: u8,
+    prefetched_boxed_addrs: Option<HashSet<u64>>,
+) -> io::Result<Vec<crate::report::BoxedNumberHolder>>
+where
+    O: Fn() -> io::Result<crate::reader::HprofReader>,
+{
+    let class_map = &p1.class_map;
+    let strings = &p1.strings;
 
-    // Pass 1: collect addresses of all live boxed-type instances.
-    let mut boxed_addrs: HashSet<u64> = HashSet::new();
-    scan_all_instances(&open, id_size, |obj_addr, class_id, _blob| {
-        if boxed_class_addrs.contains(&class_id) {
-            boxed_addrs.insert(obj_addr);
+    // Pass 1: collect addresses of all live boxed-type instances — unless the 2a
+    // scan already captured them (prefetched), in which case skip the full scan.
+    let boxed_addrs: HashSet<u64> = match prefetched_boxed_addrs {
+        Some(addrs) => addrs,
+        None => {
+            let boxed_class_addrs = boxed_class_addrs(class_map, strings);
+            if boxed_class_addrs.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut addrs: HashSet<u64> = HashSet::new();
+            scan_all_instances(&open, id_size, |obj_addr, class_id, _blob| {
+                if boxed_class_addrs.contains(&class_id) {
+                    addrs.insert(obj_addr);
+                }
+            })?;
+            addrs
         }
-    })?;
+    };
 
     if boxed_addrs.is_empty() {
         return Ok(Vec::new());

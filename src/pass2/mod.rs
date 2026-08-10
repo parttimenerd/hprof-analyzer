@@ -544,6 +544,19 @@ impl Pass2 {
         };
         let mut captured_props_addr: u64 = 0;
 
+        // Boxed-number holder Pass 1 is redundant with the 2a scan (both visit
+        // every instance + class_id), so capture boxed instance addresses inline
+        // here instead of a separate full-file scan. Only when --collections is
+        // on; otherwise both sets stay empty (zero overhead). The captured set is
+        // exactly what boxed.rs Pass 1 would allocate, so RSS is unchanged.
+        let boxed_capture_class_addrs: std::collections::HashSet<u64> = if opts.collections {
+            boxed::boxed_class_addrs(&p1.class_map, &p1.strings)
+        } else {
+            std::collections::HashSet::new()
+        };
+        let mut captured_boxed_addrs: std::collections::HashSet<u64> =
+            std::collections::HashSet::new();
+
         t_phase!("2a scan start (pre-scan setup done)");
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         // Create field-decode state before the scan so it can be fused into
@@ -591,6 +604,8 @@ impl Pass2 {
                         system_class_addr,
                         props_name_id,
                         &mut captured_props_addr,
+                        &boxed_capture_class_addrs,
+                        &mut captured_boxed_addrs,
                         Some(&mut fd_state),
                         &p1,
                         &shallow,
@@ -940,10 +955,10 @@ impl Pass2 {
             None
         };
 
-        // Opt-in boxed-number holder scan. Two extra full-file passes (collect
-        // boxed-type addresses, then count references) when --collections is on.
+        // Opt-in boxed-number holder scan. Pass 1 (address collection) was folded
+        // into the 2a scan (captured_boxed_addrs), so only the ref-count scan runs.
         let boxed_number_holders: Vec<crate::report::BoxedNumberHolder> = if opts.collections {
-            compute_boxed_holders(&open, &p1, p1.id_size)?
+            compute_boxed_holders(&open, &p1, p1.id_size, Some(captured_boxed_addrs))?
         } else {
             Vec::new()
         };
@@ -1385,6 +1400,8 @@ impl Pass2 {
         system_class_addr: u64,
         props_name_id: u64,
         captured_props_addr: &mut u64,
+        boxed_class_addrs: &std::collections::HashSet<u64>,
+        captured_boxed_addrs: &mut std::collections::HashSet<u64>,
         mut fd: Option<&mut fielddecode::FieldDecodeState>,
         fd_p1: &Pass1,
         fd_shallow: &[u32],
@@ -1492,6 +1509,12 @@ impl Pass2 {
                     // Capture blob for wanted addresses (e.g. thread objects).
                     if !capture_inst.is_empty() && capture_inst.contains(&addr) {
                         captured_inst.insert(addr, (class_id, scratch.clone()));
+                    }
+
+                    // Capture boxed-number instance addresses (--collections).
+                    // Address-only: replaces compute_boxed_holders' Pass-1 scan.
+                    if !boxed_class_addrs.is_empty() && boxed_class_addrs.contains(&class_id) {
+                        captured_boxed_addrs.insert(addr);
                     }
 
                     // Field-decode hook must run on ALL instances (including
