@@ -15,7 +15,7 @@ use std::io::{self, Read};
 
 use crate::md::{Align, Table};
 use crate::opts::OutputFormat;
-use crate::report::{self, Report};
+use crate::report::{self, Report, TriageSeverity};
 
 /// Cap on the number of rows shown in the growth-leaders and new-classes
 /// lists. Suspects are uncapped (there are only ever a handful).
@@ -101,6 +101,12 @@ pub struct SeriesClassRow {
     pub delta_instances: i64,
     /// Maximum retained across all N reports.
     pub peak_retained: u64,
+    /// peak_retained − first retained (≥ 0).
+    pub peak_over_baseline: i64,
+    /// Sum of positive per-step retained deltas (step-by-step gross growth).
+    pub gross_growth: i64,
+    /// Sum of negative per-step retained deltas (step-by-step gross shrink, ≤ 0).
+    pub gross_shrink: i64,
 }
 
 /// One directed type-level reference edge's growth between two dumps.
@@ -135,6 +141,32 @@ pub struct SeriesSuspectRow {
     pub is_new: bool,
     /// Present in the first report, absent in the last.
     pub is_gone: bool,
+}
+
+/// Per-report snapshot: key headline numbers + triage signals extracted from
+/// each individual Report. Embedded in SeriesDiffResult so the HTML/Markdown
+/// diff view can show a summary card for each dump without re-reading the
+/// original JSON files.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PerReportSummary {
+    /// Display label (source_name, or "report N" fallback).
+    pub label: String,
+    pub total_objects: u64,
+    pub total_shallow: u64,
+    pub gc_roots: u64,
+    /// Dump creation timestamp (epoch ms), if present in the HPROF header.
+    pub dump_creation: Option<i64>,
+    pub jvm_version: Option<String>,
+    /// Top leak suspect class name (leaks.suspects[0]), if any.
+    pub top_suspect_class: Option<String>,
+    /// Retained bytes of the top suspect, if any.
+    pub top_suspect_retained: Option<u64>,
+    /// Total number of leak suspects identified.
+    pub suspect_count: usize,
+    /// Titles of critical-severity triage signals.
+    pub critical_signals: Vec<String>,
+    /// Titles of warning-severity triage signals.
+    pub warning_signals: Vec<String>,
 }
 
 /// The machine-readable N-way cross-dump time-series diff. INTERNAL to this
@@ -178,6 +210,8 @@ pub struct SeriesDiffResult {
     /// Sorted by |delta_weight| desc, then |delta_count| desc, then src_class asc.
     /// Capped at 500 entries (aligned with per-dump TPFG cap).
     pub tpfg_diff: Vec<TypeEdgeDiff>,
+    /// Per-report headline snapshot (len N, same order as labels).
+    pub per_report: Vec<PerReportSummary>,
 }
 
 /// Compute the N-way cross-dump time-series diff. Pure and deterministic:
@@ -249,6 +283,18 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
             instances[last] as i64 - instances[0] as i64
         };
         let peak_retained = retained.iter().copied().max().unwrap_or(0);
+        let first_ret = retained.first().copied().unwrap_or(0);
+        let peak_over_baseline = (peak_retained as i64 - first_ret as i64).max(0);
+        let mut gross_growth: i64 = 0;
+        let mut gross_shrink: i64 = 0;
+        for i in 1..retained.len() {
+            let d = retained[i] as i64 - retained[i - 1] as i64;
+            if d > 0 {
+                gross_growth += d;
+            } else if d < 0 {
+                gross_shrink += d;
+            }
+        }
         net_delta_retained += delta_retained;
         if delta_retained > 0 {
             gross_growth_retained += delta_retained;
@@ -262,6 +308,9 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
             delta_retained,
             delta_instances,
             peak_retained,
+            peak_over_baseline,
+            gross_growth,
+            gross_shrink,
         };
         // "new" iff present in last and absent in first; "removed" iff reverse.
         if last_present && !first_present {
@@ -460,7 +509,7 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
     };
 
     SeriesDiffResult {
-        labels,
+        labels: labels.clone(),
         total_objects,
         total_shallow,
         delta_total_objects,
@@ -476,10 +525,50 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         shrunk_suspects,
         gone_suspects,
         tpfg_diff,
+        per_report: reports
+            .iter()
+            .enumerate()
+            .map(|(i, r)| PerReportSummary {
+                label: labels[i].clone(),
+                total_objects: r.overview.total_objects,
+                total_shallow: r.overview.total_shallow,
+                gc_roots: r.overview.gc_roots,
+                dump_creation: r.overview.dump_creation,
+                jvm_version: r.overview.jvm_version.clone(),
+                top_suspect_class: r.leaks.suspects.first().map(|s| s.pretty_class.clone()),
+                top_suspect_retained: r.leaks.suspects.first().map(|s| s.retained),
+                suspect_count: r.leaks.suspects.len(),
+                critical_signals: r
+                    .triage
+                    .iter()
+                    .filter(|s| s.severity == TriageSeverity::Critical)
+                    .map(|s| s.title.clone())
+                    .collect(),
+                warning_signals: r
+                    .triage
+                    .iter()
+                    .filter(|s| s.severity == TriageSeverity::Warning)
+                    .map(|s| s.title.clone())
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
+
+/// Format an unsigned count with thousands separators, e.g. "1,024" / "0".
+fn fmt_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut grouped = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    grouped.chars().rev().collect()
+}
 
 /// Unicode minus sign (U+2212), matching the report style's preference for a
 /// typographic minus over a hyphen for negative values.
@@ -617,6 +706,42 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         out.push_str(&format!("- `r{}` = {}\n", i + 1, label));
     }
     out.push('\n');
+
+    // Per-report summary cards (one compact block per dump).
+    if !d.per_report.is_empty() {
+        out.push_str("### Per-Dump Summaries\n\n");
+        for s in &d.per_report {
+            out.push_str(&format!("**{}**\n\n", s.label));
+            out.push_str(&format!(
+                "- Heap: {} shallow | {} objects | {} GC roots\n",
+                report::format_bytes(s.total_shallow),
+                fmt_count(s.total_objects),
+                fmt_count(s.gc_roots),
+            ));
+            if let Some(cls) = &s.top_suspect_class {
+                let ret = s
+                    .top_suspect_retained
+                    .map(|r| format!(" — {} retained", report::format_bytes(r)))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- Top suspect: `{cls}`{ret} ({} total)\n",
+                    s.suspect_count
+                ));
+            } else {
+                out.push_str(&format!("- Suspects: {}\n", s.suspect_count));
+            }
+            if !s.critical_signals.is_empty() {
+                out.push_str(&format!(
+                    "- **CRITICAL:** {}\n",
+                    s.critical_signals.join("; ")
+                ));
+            }
+            if !s.warning_signals.is_empty() {
+                out.push_str(&format!("- Warning: {}\n", s.warning_signals.join("; ")));
+            }
+            out.push('\n');
+        }
+    }
 
     out.push_str(&format!("**Verdict:** {}\n\n", verdict(d)));
 

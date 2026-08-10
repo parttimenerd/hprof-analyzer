@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, PerReportSummary, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -14,6 +14,7 @@ import {
   LeakShareChart,
   QueryViz,
   RetainedGrowthChart,
+  RetainedTrendChart,
   TopClassesChart,
   ZoomableTreemap,
 } from "./charts";
@@ -10491,6 +10492,74 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
   return <StdTable columns={spikeCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="peak" />;
 }
 
+// ── Per-report summary card ───────────────────────────────────────────────────
+// Compact at-a-glance card for a single dump in the diff series.
+function PerReportSummaryCard({ s, idx, fmtB }: { s: PerReportSummary; idx: number; fmtB: (n: number) => string }) {
+  const cardStyle: React.CSSProperties = {
+    border: "1px solid var(--border, #e2e2e2)",
+    borderRadius: 8,
+    padding: "0.75rem 1rem",
+    background: "var(--card-bg, var(--bg, #fff))",
+    minWidth: 220,
+    flex: "1 1 220px",
+  };
+  const rowStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: "0.25rem 1rem", fontSize: "0.85rem", color: "var(--muted, #666)" };
+  const badgeStyle = (color: string): React.CSSProperties => ({
+    display: "inline-block", padding: "0.1rem 0.45rem", borderRadius: 4,
+    background: color, color: "#fff", fontSize: "0.72rem", fontWeight: 700,
+    marginRight: "0.3rem", marginTop: "0.25rem",
+  });
+  const dumpMs = s.dump_creation ?? 0;
+  return (
+    <div style={cardStyle}>
+      <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: "0.92rem" }}>
+        <code style={{ fontSize: "0.82rem", color: "var(--muted, #666)" }}>r{idx + 1}</code>{" "}{s.label}
+      </div>
+      {dumpMs > 0 && (
+        <div style={{ fontSize: "0.78rem", color: "var(--muted, #666)", marginBottom: "0.3rem" }}>
+          {formatEpochMs(dumpMs)}
+        </div>
+      )}
+      {s.jvm_version && (
+        <div style={{ fontSize: "0.78rem", color: "var(--muted, #666)", marginBottom: "0.3rem" }}>
+          JVM: {s.jvm_version}
+        </div>
+      )}
+      <div style={rowStyle}>
+        <span><strong>{fmtB(s.total_shallow)}</strong> heap</span>
+        <span>{s.total_objects.toLocaleString()} objects</span>
+        <span>{s.gc_roots.toLocaleString()} GC roots</span>
+      </div>
+      {s.top_suspect_class != null && (
+        <div style={{ marginTop: "0.35rem", fontSize: "0.83rem" }}>
+          <span style={{ color: "var(--muted, #666)" }}>Top suspect: </span>
+          <code title={s.top_suspect_class}>{s.top_suspect_class.length > 40 ? s.top_suspect_class.slice(0, 39) + "…" : s.top_suspect_class}</code>
+          {s.top_suspect_retained != null && (
+            <span style={{ color: "var(--muted, #666)" }}> — {fmtB(s.top_suspect_retained)}</span>
+          )}
+          {s.suspect_count > 1 && (
+            <span style={{ color: "var(--muted, #666)" }}> ({s.suspect_count} suspects)</span>
+          )}
+        </div>
+      )}
+      {s.critical_signals.length > 0 && (
+        <div style={{ marginTop: "0.35rem" }}>
+          {s.critical_signals.map((sig, i) => (
+            <span key={i} style={badgeStyle("var(--critical, #c0392b)")}>{sig}</span>
+          ))}
+        </div>
+      )}
+      {s.warning_signals.length > 0 && (
+        <div style={{ marginTop: "0.25rem" }}>
+          {s.warning_signals.map((sig, i) => (
+            <span key={i} style={badgeStyle("var(--warning, #e67e22)")}>{sig}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const { labels } = diff;
@@ -10517,6 +10586,18 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         </ol>
       </section>
 
+      {diff.per_report && diff.per_report.length > 0 && (
+        <section className="diff-section">
+          <h2>Per-Dump Summaries</h2>
+          <p className="subtitle">Key headline numbers and triage signals for each individual dump.</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.5rem" }}>
+            {diff.per_report.map((s, i) => (
+              <PerReportSummaryCard key={i} s={s} idx={i} fmtB={fmtB} />
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="diff-section">
         <h2>Headline Totals</h2>
         <p><strong>Verdict:</strong> {diffVerdict(diff, fmtB)}</p>
@@ -10531,6 +10612,11 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
       {diff.growth_leaders.length > 0 && (
         <section className="diff-section">
           <RetainedGrowthChart rows={diff.growth_leaders} />
+        </section>
+      )}
+      {labels.length >= 3 && diff.growth_leaders.length > 0 && (
+        <section className="diff-section">
+          <RetainedTrendChart rows={diff.growth_leaders} labels={labels} />
         </section>
       )}
       <DiffSection

@@ -16,7 +16,7 @@ import type {
   VizSpec,
 } from "./types";
 import { fmtCount, formatBytes, fmtExactBytes, fmtPct, shortLoader } from "./format";
-import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
+import { Pie as ChartPie, Bar as ChartBar, Line as ChartLine } from "react-chartjs-2";
 import { themeColors, useThemeKey } from "./chartSetup";
 import "./chartSetup";
 
@@ -1377,6 +1377,88 @@ export function RetainedGrowthChart({ rows }: { rows: SeriesClassRow[] }) {
   return (
     <div key={themeKey} className="chart-wrap" role="img" aria-label="Retained growth bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
       <ChartBar data={chartData} options={options} />
+    </div>
+  );
+}
+
+// ── RetainedTrendChart — line chart for N≥3 trend view ────────────────────────
+// Shows retained bytes per report for the top 8 growth leaders as separate
+// lines. X = report label (r1…rN), Y = retained bytes. Only useful for N≥3;
+// callers should guard on labels.length >= 3.
+const LINE_COLORS = [
+  "rgba(59,130,246,0.9)",   // blue
+  "rgba(34,197,94,0.9)",    // green
+  "rgba(239,68,68,0.9)",    // red
+  "rgba(249,115,22,0.9)",   // orange
+  "rgba(168,85,247,0.9)",   // purple
+  "rgba(20,184,166,0.9)",   // teal
+  "rgba(234,179,8,0.9)",    // yellow
+  "rgba(236,72,153,0.9)",   // pink
+];
+
+export function RetainedTrendChart({ rows, labels }: { rows: SeriesClassRow[]; labels: string[] }) {
+  const themeKey = useThemeKey();
+  const t = themeColors();
+  if (rows.length === 0 || labels.length < 2) return null;
+  const top = rows
+    .slice()
+    .sort((a, b) => Math.abs(b.delta_retained) - Math.abs(a.delta_retained))
+    .slice(0, 8);
+  const xLabels = labels.map((lbl, i) => {
+    const short = lbl.length > 20 ? lbl.slice(0, 19) + "…" : lbl;
+    return `r${i + 1}: ${short}`;
+  });
+  const datasets = top.map((row, idx) => ({
+    label: row.pretty_class.length > 30 ? row.pretty_class.slice(0, 29) + "…" : row.pretty_class,
+    data: row.retained.map((v) => v),
+    borderColor: LINE_COLORS[idx % LINE_COLORS.length],
+    backgroundColor: LINE_COLORS[idx % LINE_COLORS.length].replace("0.9", "0.12"),
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    tension: 0.3,
+    fill: false,
+  }));
+  const chartData = { labels: xLabels, datasets };
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index" as const, intersect: false },
+    scales: {
+      x: {
+        ticks: { color: t.muted, font: { size: 11 } },
+        grid: { color: t.border },
+      },
+      y: {
+        ticks: {
+          color: t.muted,
+          callback: (v: number | string) => formatBytes(Number(v)),
+        },
+        grid: { color: t.border },
+      },
+    },
+    plugins: {
+      legend: {
+        display: true,
+        labels: { color: t.fg, font: { size: 11 }, boxWidth: 12 },
+      },
+      title: {
+        display: true,
+        text: "Retained Heap Trend (Top Classes)",
+        color: t.fg,
+        font: { size: 13 },
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { dataset: { label?: string }; parsed: { y: number } }) =>
+            `${ctx.dataset.label}: ${formatBytes(ctx.parsed.y)}`,
+        },
+      },
+    },
+  };
+  const height = 280;
+  return (
+    <div key={themeKey} className="chart-wrap" role="img" aria-label="Retained heap trend line chart" style={{ position: "relative", height, maxWidth: 800 }}>
+      <ChartLine data={chartData} options={options} />
     </div>
   );
 }

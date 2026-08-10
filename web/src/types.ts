@@ -1017,6 +1017,22 @@ export interface SeriesDiffResult {
   shrunk_suspects: SeriesSuspectRow[];
   gone_suspects: SeriesSuspectRow[];
   tpfg_diff?: TypeEdgeDiff[];
+  per_report: PerReportSummary[];
+}
+
+// Per-dump headline snapshot embedded in SeriesDiffResult (one entry per report).
+export interface PerReportSummary {
+  label: string;
+  total_objects: number;
+  total_shallow: number;
+  gc_roots: number;
+  dump_creation?: number;
+  jvm_version?: string;
+  top_suspect_class?: string;
+  top_suspect_retained?: number;
+  suspect_count: number;
+  critical_signals: string[];
+  warning_signals: string[];
 }
 
 // Tagged envelope embedded by the HTML diff view so the shared bundle can tell

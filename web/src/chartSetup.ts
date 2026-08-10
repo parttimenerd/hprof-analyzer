@@ -7,6 +7,8 @@ import {
   Chart as ChartJS,
   ArcElement,
   BarElement,
+  LineElement,
+  PointElement,
   CategoryScale,
   LinearScale,
   LogarithmicScale,
@@ -15,7 +17,7 @@ import {
   Title,
 } from "chart.js";
 
-ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, LogarithmicScale, Tooltip, Legend, Title);
+ChartJS.register(ArcElement, BarElement, LineElement, PointElement, CategoryScale, LinearScale, LogarithmicScale, Tooltip, Legend, Title);
 
 // Chart.js draws to <canvas> and cannot read CSS custom properties, so pull the
 // current theme colors from the document root at render time. Recomputed on each
