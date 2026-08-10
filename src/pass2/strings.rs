@@ -360,7 +360,8 @@ where
     for &(count, len) in dup_map.values() {
         if count > 1 {
             duplicated_values += 1;
-            approx_wasted_bytes += (count as u64 - 1) * len as u64;
+            approx_wasted_bytes = approx_wasted_bytes
+                .saturating_add((count as u64).saturating_sub(1).saturating_mul(len as u64));
         }
         let upper = len.checked_next_power_of_two().unwrap_or(u32::MAX).max(1);
         *len_buckets.entry(upper).or_insert(0) += 1;
@@ -443,7 +444,7 @@ where
             text: hash_text.get(&hv).cloned().unwrap_or_default(),
             count: count as u64,
             len,
-            wasted_bytes: (count as u64 - 1) * len as u64,
+            wasted_bytes: (count as u64).saturating_sub(1).saturating_mul(len as u64),
         })
         .collect();
     // #5: same text-recovery pattern, from the length ranking. wasted_bytes uses
@@ -454,7 +455,7 @@ where
             text: hash_text.get(&hv).cloned().unwrap_or_default(),
             count: count as u64,
             len,
-            wasted_bytes: (count as u64).saturating_sub(1) * len as u64,
+            wasted_bytes: (count as u64).saturating_sub(1).saturating_mul(len as u64),
         })
         .collect();
     drop(hash_text);

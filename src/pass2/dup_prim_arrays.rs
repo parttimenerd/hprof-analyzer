@@ -225,7 +225,7 @@ where
             continue;
         }
         dup_hashes.insert(hv);
-        let wasted = (count as u64 - 1) * shallow;
+        let wasted = (count as u64).saturating_sub(1).saturating_mul(shallow);
         total_wasted = total_wasted.saturating_add(wasted);
         let e = by_type.entry(elem_type).or_insert((0, 0));
         e.0 = e.0.saturating_add(wasted);
