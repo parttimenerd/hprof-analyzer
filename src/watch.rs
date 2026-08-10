@@ -1,8 +1,12 @@
-//! `hprof-analyzer watch` — periodic heap capture + report series.
+//! `hprof-analyzer watch` / `watch-dir` — heap capture + report series.
 //!
-//! Attaches to a running JVM (via `jcmd` or `jmap`), takes heap dumps on a
-//! schedule, produces a Report JSON for each, keeps the last N, and
+//! `watch`: attaches to a running JVM (via `jcmd` or `jmap`), takes heap dumps
+//! on a schedule, produces a Report JSON for each, keeps the last N, and
 //! optionally regenerates a rolling diff HTML after every capture.
+//!
+//! `watch-dir`: monitors a directory for heap dump files deposited by an
+//! external tool (e.g. SapMachine `-XX:HiMemReportExec=GC.heap_dump`) and
+//! analyzes each new file as it arrives.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -453,6 +457,194 @@ fn epoch_to_date_time(secs: u64) -> (String, String) {
         format!("{year:04}{month:02}{day:02}"),
         format!("{h:02}{m:02}{s:02}"),
     )
+}
+
+// ── watch-dir ─────────────────────────────────────────────────────────────────
+
+pub struct WatchDirConfig {
+    /// Directory to watch for incoming heap dump files.
+    pub dir: PathBuf,
+    /// Poll interval in seconds (default: 5).
+    pub poll_secs: u64,
+    /// Maximum number of Report JSONs to keep (oldest deleted).
+    pub keep: usize,
+    /// Regenerate diff.html after each new report.
+    pub diff: bool,
+    /// Analysis detail level.
+    pub detail: DetailLevel,
+    /// Delete the source dump file after analysis.
+    pub delete_dumps: bool,
+}
+
+/// Extensions treated as heap dump files by `watch-dir`.
+fn is_dump_file(name: &str) -> bool {
+    name.ends_with(".hprof")
+        || name.ends_with(".hprof.gz")
+        || name.ends_with(".dump")
+        || name.ends_with(".dump.gz")
+}
+
+/// Poll `dir` and return the set of dump file paths currently present.
+fn list_dump_files(dir: &Path) -> io::Result<std::collections::HashSet<PathBuf>> {
+    let mut set = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(dir)?.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        if is_dump_file(&name.to_string_lossy()) && entry.path().is_file() {
+            set.insert(entry.path());
+        }
+    }
+    Ok(set)
+}
+
+/// Wait until a file's size has been stable for two consecutive polls.
+/// Returns false if the stop flag fires first.
+fn wait_for_stable(path: &Path, poll_secs: u64, stop: &AtomicBool) -> bool {
+    let mut prev_size: u64 = 0;
+    loop {
+        interruptible_sleep(poll_secs.max(2), stop);
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if size > 0 && size == prev_size {
+            return true;
+        }
+        prev_size = size;
+    }
+}
+
+/// `hprof-analyzer watch-dir` — monitor a directory for incoming dumps.
+pub fn run_watch_dir(cfg: WatchDirConfig) -> io::Result<()> {
+    std::fs::create_dir_all(&cfg.dir)?;
+
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            signal_handler as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            signal_handler as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
+    }
+
+    eprintln!(
+        "hprof-analyzer watch-dir: monitoring {} — poll {}s, keep {}, delete dumps: {}",
+        cfg.dir.display(),
+        cfg.poll_secs,
+        cfg.keep,
+        cfg.delete_dumps,
+    );
+    eprintln!("  Press Ctrl-C to stop.\n");
+
+    let mut known: std::collections::HashSet<PathBuf> =
+        list_dump_files(&cfg.dir).unwrap_or_default();
+
+    loop {
+        interruptible_sleep(cfg.poll_secs, stop_flag());
+        if stop_flag().load(Ordering::Relaxed) {
+            eprintln!("\nhprof-analyzer watch-dir: stopped.");
+            break;
+        }
+
+        let current = match list_dump_files(&cfg.dir) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  warning: cannot list directory: {e}");
+                continue;
+            }
+        };
+
+        let mut new_dumps: Vec<PathBuf> = current.difference(&known).cloned().collect();
+        new_dumps.sort(); // deterministic order for multiple arrivals
+        known = current;
+
+        for dump_path in new_dumps {
+            let dump_str = dump_path.to_string_lossy();
+            eprint!(
+                "  new dump: {} — waiting for write to complete… ",
+                dump_path.display()
+            );
+
+            if !wait_for_stable(&dump_path, cfg.poll_secs, stop_flag()) {
+                eprintln!("interrupted.");
+                return Ok(());
+            }
+            eprintln!("done.");
+
+            let ts = timestamp_label();
+            let report_path = cfg.dir.join(format!("report_{ts}.json"));
+            eprint!("  analyzing… ");
+
+            let opts = cfg.detail.options();
+            let source = crate::source::HprofSource::from(dump_str.as_ref());
+            match crate::analyze_to_report_with_retained(&source, &opts) {
+                Ok((report, _retained)) => {
+                    if cfg.delete_dumps {
+                        let _ = std::fs::remove_file(&dump_path);
+                    }
+                    match serde_json::to_string_pretty(&report) {
+                        Ok(json) => {
+                            if let Err(e) = std::fs::write(&report_path, &json) {
+                                eprintln!("FAILED to write report: {e}");
+                                continue;
+                            }
+                            let top = report
+                                .leaks
+                                .suspects
+                                .first()
+                                .map(|s| {
+                                    format!(
+                                        " — top suspect: {} {}",
+                                        s.pretty_class,
+                                        crate::report::format_bytes(s.retained)
+                                    )
+                                })
+                                .unwrap_or_default();
+                            eprintln!("done.{top}");
+                            // Track the new report file.
+                            known.insert(report_path.clone());
+                        }
+                        Err(e) => {
+                            eprintln!("FAILED to serialize: {e}");
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("FAILED to analyze: {e}");
+                    continue;
+                }
+            }
+
+            if let Err(e) = prune_old_reports(&cfg.dir, cfg.keep) {
+                eprintln!("  warning: could not prune old reports: {e}");
+            }
+
+            if cfg.diff {
+                match collect_report_paths(&cfg.dir) {
+                    Ok(paths) if paths.len() >= 2 => {
+                        let diff_path = cfg.dir.join("diff.html");
+                        match crate::diff_reports::run(&paths, crate::opts::OutputFormat::Html) {
+                            Ok(html) => {
+                                if let Err(e) = std::fs::write(&diff_path, html) {
+                                    eprintln!("  warning: could not write diff.html: {e}");
+                                } else {
+                                    eprintln!("  diff.html updated ({} reports)", paths.len());
+                                }
+                            }
+                            Err(e) => eprintln!("  warning: diff failed: {e}"),
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("  warning: could not list reports for diff: {e}"),
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

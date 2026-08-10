@@ -407,6 +407,48 @@ enum Cmd {
         #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
         jcmd: Option<String>,
     },
+    /// Watch a directory for new heap dumps and analyze them as they arrive.
+    ///
+    /// Designed as a sidecar for SapMachine's High Memory Reports feature
+    /// (-XX:+HiMemReport -XX:HiMemReportDir=<DIR> -XX:HiMemReportExec=GC.heap_dump).
+    /// When SapMachine writes a heap dump to DIR at each memory threshold (66%,
+    /// 75%, 90%), this command picks it up, analyzes it, and writes a compact
+    /// Report JSON — keeping the last N reports and optionally regenerating a
+    /// rolling diff.html after each new capture.
+    ///
+    /// Also works with any external tool that drops .hprof / .dump files into
+    /// a directory (jmap, async-profiler, etc.).
+    ///
+    /// Examples:
+    ///   # SapMachine sidecar — run alongside your JVM:
+    ///   hprof-analyzer watch-dir /var/himem-reports --diff --keep 6 --detail minimal
+    ///
+    ///   # JVM flags on the same host:
+    ///   java -XX:+HiMemReport -XX:HiMemReportDir=/var/himem-reports \
+    ///        -XX:HiMemReportExec=GC.heap_dump ...
+    WatchDir {
+        /// Directory to watch for new heap dump files (.hprof, .dump, .hprof.gz).
+        /// Created if it does not exist.
+        #[arg(value_hint = ValueHint::DirPath)]
+        dir: String,
+        /// How often to poll the directory for new dumps (seconds). Default: 5s.
+        #[arg(long, default_value_t = 5, value_name = "SECS")]
+        poll_secs: u64,
+        /// Keep only the last N report JSONs (oldest deleted). Default: 10.
+        #[arg(long, default_value_t = 10, value_name = "N")]
+        keep: usize,
+        /// After each new report, regenerate a rolling diff.html in the directory.
+        #[arg(long)]
+        diff: bool,
+        /// Analysis detail level. Use `minimal` for fast, low-RSS analysis
+        /// during live memory pressure.
+        #[arg(long, value_enum, default_value = "default")]
+        detail: DetailLevel,
+        /// Retain the source .hprof/.dump file after analysis instead of
+        /// deleting it. By default the dump is deleted to save disk space.
+        #[arg(long)]
+        keep_dumps: bool,
+    },
 }
 
 /// `mat` subcommands.
@@ -969,6 +1011,26 @@ fn main() {
                 jcmd_override: jcmd,
             };
             if let Err(e) = watch::run(cfg) {
+                fail(e);
+            }
+        }
+        Some(Cmd::WatchDir {
+            dir,
+            poll_secs,
+            keep,
+            diff,
+            detail,
+            keep_dumps,
+        }) => {
+            let cfg = watch::WatchDirConfig {
+                dir: std::path::PathBuf::from(dir),
+                poll_secs,
+                keep,
+                diff,
+                detail,
+                delete_dumps: !keep_dumps,
+            };
+            if let Err(e) = watch::run_watch_dir(cfg) {
                 fail(e);
             }
         }
