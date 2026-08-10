@@ -10450,7 +10450,7 @@ function diffVerdict(diff: SeriesDiffResult, fmtB: (n: number) => string): strin
     diff.gross_growth_retained > 0 &&
     diff.gross_growth_retained > Math.max(diff.net_delta_retained, 0) * 2
   ) {
-    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(Math.abs(diff.gross_shrink_retained))} reclaimed across steps.`;
+    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(Math.abs(diff.gross_shrink_retained))} reclaimed.`;
   }
   if (newSuspects > 0) {
     line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
