@@ -413,12 +413,13 @@ enum CompareCmd {
         #[arg(short, long, value_enum)]
         format: Option<FormatArg>,
     },
-    /// Cross-dump growth: compare 2+ canonical Report JSONs as a time series
-    /// (first = baseline, last = current)
+    /// Cross-dump growth: compare 2+ canonical Report JSONs as a time series.
+    /// Pass individual paths, a shell glob (e.g. `./reports/*.json`), or a
+    /// directory — reports are auto-sorted by dump timestamp (oldest first).
     Reports {
-        /// Report JSON paths in time order (first = baseline). Two or more are
-        /// required; use "-" for stdin (at most one).
-        #[arg(value_hint = ValueHint::FilePath, num_args = 2..)]
+        /// Report JSON paths, globs, or a directory. At least two reports are
+        /// required after expansion. Use "-" for stdin (at most one).
+        #[arg(value_hint = ValueHint::FilePath, num_args = 1..)]
         reports: Vec<String>,
         /// Diff output format (Markdown, JSON, or HTML); defaults to Markdown.
         #[arg(short, long, value_enum)]
@@ -529,6 +530,85 @@ fn resolve_format(explicit: Option<FormatArg>, out: Option<&str>) -> OutputForma
     OutputFormat::Md
 }
 
+/// Expand paths: a directory → its *.json / *.json.gz contents (sorted
+/// lexicographically); anything else passes through unchanged.  Then sort all
+/// resolved paths by dump_creation timestamp ascending (oldest = baseline).
+/// Reports without a timestamp sort first (treated as oldest).
+/// Returns an error string if fewer than two reports are found.
+fn resolve_and_sort_report_paths(raw: &[String]) -> Result<Vec<String>, String> {
+    let mut paths: Vec<String> = Vec::new();
+    for raw_path in raw {
+        let p = std::path::Path::new(raw_path);
+        if p.is_dir() {
+            let mut entries: Vec<String> = std::fs::read_dir(p)
+                .map_err(|e| format!("cannot read directory '{raw_path}': {e}"))?
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let n = e.file_name();
+                    let s = n.to_string_lossy();
+                    (s.ends_with(".json") || s.ends_with(".json.gz")) && e.path().is_file()
+                })
+                .map(|e| e.path().to_string_lossy().into_owned())
+                .collect();
+            entries.sort();
+            if entries.is_empty() {
+                return Err(format!(
+                    "directory '{raw_path}' contains no *.json report files"
+                ));
+            }
+            paths.extend(entries);
+        } else {
+            paths.push(raw_path.clone());
+        }
+    }
+    if paths.len() < 2 {
+        return Err(format!(
+            "at least 2 reports are required, but only {} found after expanding inputs",
+            paths.len()
+        ));
+    }
+    // Sort by dump_creation (fast header peek — no full JSON parse).
+    // Timestamp-less reports get ts=0 and sort first (treated as oldest).
+    let mut stamped: Vec<(i64, String)> = paths
+        .into_iter()
+        .map(|p| {
+            let ts = peek_dump_creation(&p).unwrap_or(0);
+            (ts, p)
+        })
+        .collect();
+    stamped.sort_by_key(|(ts, _)| *ts);
+    Ok(stamped.into_iter().map(|(_, p)| p).collect())
+}
+
+/// Read just `overview.dump_creation` from a Report JSON without deserialising
+/// the full model.  Returns `None` on any error or when the field is absent.
+fn peek_dump_creation(path: &str) -> Option<i64> {
+    #[derive(serde::Deserialize)]
+    struct Peek {
+        overview: OvPeek,
+    }
+    #[derive(serde::Deserialize)]
+    struct OvPeek {
+        dump_creation: Option<i64>,
+    }
+    if path == "-" {
+        return None; // stdin — no peeking
+    }
+    let bytes = std::fs::read(path).ok()?;
+    // Decompress if .json.gz
+    let json: Vec<u8> = if path.ends_with(".gz") {
+        use std::io::Read;
+        let mut decoder = flate2::read::GzDecoder::new(bytes.as_slice());
+        let mut out = Vec::new();
+        decoder.read_to_end(&mut out).ok()?;
+        out
+    } else {
+        bytes
+    };
+    let peek: Peek = serde_json::from_slice(&json).ok()?;
+    peek.overview.dump_creation
+}
+
 /// Write report text to `path`, or to stdout when `path` is `None`. A `.gz`
 /// suffix is written gzip-compressed (matching how `render` reads it back).
 fn write_output(path: Option<&str>, text: &str) -> io::Result<()> {
@@ -595,8 +675,12 @@ fn main() {
                 format,
                 output,
             } => {
-                // Name a missing input up front for a clear error, mirroring the
-                // MAT arm. Skip "-" (stdin) — it has no filesystem path.
+                // Expand directories and sort by timestamp (oldest first).
+                let reports = match resolve_and_sort_report_paths(&reports) {
+                    Ok(v) => v,
+                    Err(e) => fail(e),
+                };
+                // Validate each path exists (skip "-" = stdin).
                 for p in &reports {
                     if p != "-" && !std::path::Path::new(p).exists() {
                         fail(format!("cannot open '{p}': no such file or directory"));
