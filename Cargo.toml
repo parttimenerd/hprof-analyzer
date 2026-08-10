@@ -23,6 +23,7 @@ exclude = [
     "tests/fixtures/*.index",
     "tests/fixtures/*.threads",
     "web/dist/*",
+    "web/node_modules/*",
     "dist/*",
     ".git-worktrees/*",
     "docs/*",
