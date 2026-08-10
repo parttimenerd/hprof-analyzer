@@ -295,7 +295,9 @@ hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
             a saved report .json[.gz] → re-render it to another format
 
 Named subcommands:
-  compare      Compare reports (MAT export vs ours, or two of ours across time)
+  compare      Compare reports (MAT export vs ours, or two+ of ours as a time series)
+  watch        Periodically capture heap dumps from a running JVM and build a report series
+  watch-dir    Watch a directory for incoming dumps (sidecar for SapMachine HiMemReport)
   completions  Generate a shell completion script
   mat          Generate Eclipse MAT index cache files (low-RSS alternative to MAT's first parse)
   query        Run OQL queries against a heap dump (no full report needed)
@@ -356,13 +358,74 @@ hprof-analyzer heap.hprof report.json
 hprof-analyzer compare mat mat_System_Overview.zip report.json
 ```
 
-### Track growth across two dumps
+### Track growth across a dump series
+
+Analyze two or more dumps and compare them as a time series — reports are
+auto-sorted by `dump_creation` timestamp so you don't have to order them
+manually.
 
 ```sh
+# Explicit paths
 hprof-analyzer early.hprof a.json
 hprof-analyzer later.hprof b.json
-hprof-analyzer compare reports a.json b.json
+hprof-analyzer compare reports a.json b.json --format html --output diff.html
+
+# A directory — all *.json files inside, sorted by timestamp
+hprof-analyzer compare reports ./reports/ --format html --output diff.html
+
+# Shell glob (shell expands before the tool sees it)
+hprof-analyzer compare reports ./reports/*.json --format html --output diff.html
 ```
+
+### Continuous monitoring with `watch`
+
+Attaches to a running JVM via `jcmd` (falls back to `jmap`), captures heap
+dumps on a schedule, analyzes each one inline, and keeps the last N report
+JSONs. With `--diff` a rolling `diff.html` is regenerated after every capture.
+
+```sh
+# Capture every 30 min, keep the last 5 reports, regenerate diff.html each time
+hprof-analyzer watch --pid 12345 --interval 30m --keep 5 \
+    --output-dir ./reports --diff
+```
+
+This gives you a before-OOM series automatically — by the time the application
+crashes you already have several snapshots to compare, not just the final dump.
+
+Options: `--interval` accepts `30m`, `1h`, `300s`, or plain seconds.
+`--detail minimal` reduces RSS and analysis time during live memory pressure.
+
+### Watching a directory with `watch-dir`
+
+Monitors a directory for heap dump files written by an external tool and
+analyzes each one as it arrives.
+
+```sh
+hprof-analyzer watch-dir /var/himem-reports --diff --keep 6 --detail minimal
+```
+
+**SapMachine integration.** SapMachine's High Memory Reports feature writes a
+heap dump at each memory threshold (66%/75%/90%). Run `watch-dir` as a sidecar:
+
+```sh
+# JVM flags
+java -XX:+HiMemReport \
+     -XX:HiMemReportDir=/var/himem-reports \
+     -XX:HiMemReportExec=GC.heap_dump \
+     -jar your-app.jar
+
+# Sidecar on the same host
+hprof-analyzer watch-dir /var/himem-reports --diff --keep 6 --detail minimal
+```
+
+SapMachine writes `GC.heap_dump_pid<pid>_<timestamp>.dump` into the directory;
+`watch-dir` picks it up, waits for the write to stabilize, analyzes it, writes
+a compact `report_<timestamp>.json`, deletes the raw dump (use `--keep-dumps`
+to retain it), and regenerates `diff.html` — giving you a six-report trend to
+open in any browser.
+
+Also works with jmap, async-profiler, or any other tool that drops `.hprof` or
+`.dump` files into a directory.
 
 ### Re-render a saved report
 
