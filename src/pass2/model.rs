@@ -1783,13 +1783,15 @@ fn scan_fwd_segment(
 
                 // Object-type instance fields
                 if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                    for &(off, _excluded) in &field_plans_dense[cidx as usize] {
-                        let off = off as usize;
-                        if off + id_size as usize <= scratch.len() {
-                            let ref_val = super::read_ref(&scratch[off..], id_size as usize);
-                            if ref_val != 0 {
-                                if let Some(dst) = cache.index_of(id_map, ref_val) {
-                                    scatter_edge(fwd_off, fwd_tgt, src_idx, dst);
+                    if (cidx as usize) < field_plans_dense.len() {
+                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = super::read_ref(&scratch[off..], id_size as usize);
+                                if ref_val != 0 {
+                                    if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                        scatter_edge(fwd_off, fwd_tgt, src_idx, dst);
+                                    }
                                 }
                             }
                         }
