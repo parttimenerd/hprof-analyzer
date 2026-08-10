@@ -544,6 +544,7 @@ impl Pass2 {
         };
         let mut captured_props_addr: u64 = 0;
 
+        t_phase!("2a scan start (pre-scan setup done)");
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         // Create field-decode state before the scan so it can be fused into
         // the single 2a pass, eliminating the separate build_field_decode_views
@@ -902,10 +903,14 @@ impl Pass2 {
         let alloc_frames_by_serial: Option<std::collections::HashMap<u32, Vec<String>>> =
             Some(resolve_alloc_frames(&p1));
 
-        // Decode each thread's java.lang.Thread.name. Thread instance blobs were
-        // captured during the 2a scan; remaining hops (String objects, backing
-        // arrays) need 2 more targeted collect_blobs calls instead of 3.
-        let thread_props = resolve_thread_names(&open, &p1, captured_thread_blobs)?;
+        // Decode each thread's java.lang.Thread.name AND capture java.lang.System's
+        // static `props` in ONE interleaved set of shared file scans. Both are
+        // bounded, independent subgraphs; interleaving their per-round wanted sets
+        // lets a single collect_blobs pass serve both, cutting ~8 sequential full
+        // scans (the old sum of the two resolvers) toward ~5. Byte-exact output is
+        // preserved. Runs while class_map/strings/id_map are still alive.
+        let (thread_props, (system_properties, jvm_version)) =
+            resolve_thread_and_props(&open, &p1, captured_thread_blobs, captured_props_addr)?;
         t_phase!("thread_names done");
 
         // Opt-in approximate duplicate-java.lang.String report. Runs two extra
@@ -943,15 +948,8 @@ impl Pass2 {
             Vec::new()
         };
 
-        // Capture java.lang.System's static `props` (a Properties/Hashtable of
-        // String->String) via a bounded multi-pass worklist, while class_map/
-        // strings/id_map are still alive. All captured sets are bounded (ONE
-        // props object, capped at 4096 entries + their Strings/arrays), so this
-        // stays off the per-object RSS budget on multi-GB dumps. Derives a JVM
-        // version from the decoded properties. Falls back to empty/None (never
-        // garbage) if the layout does not match the Hashtable form.
-        let (system_properties, jvm_version) =
-            resolve_system_properties(&open, &p1, captured_props_addr)?;
+        // system_properties / jvm_version were resolved above alongside thread
+        // names in the shared-scan orchestrator (resolve_thread_and_props).
         t_phase!("system_props done");
 
         // Free class_ids now: build_field_decode_views was its last reader
@@ -1042,6 +1040,7 @@ impl Pass2 {
             }
         } // class_idx_restored dropped here
         crate::trace::probe("pass2: incoming_refs_per_class computed (class_idx restore dropped)");
+        t_phase!("incoming_refs done");
 
         let mut gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
         gc_root_indices.sort_unstable();
@@ -1073,6 +1072,7 @@ impl Pass2 {
             fwd_offsets.push(edge_acc as u32);
         }
         crate::trace::drop_vec(out_degree); // dead after prefix sum
+        t_phase!("fwd_offsets done");
 
         // Compress shallow NOW, before fwd_targets (~6GB) is allocated.
         // class_idx and alloc_serial were already compressed before the 2a scan.
