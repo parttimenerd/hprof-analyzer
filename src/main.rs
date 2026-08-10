@@ -44,6 +44,7 @@ mod types;
 mod unreachable_retained;
 mod update;
 mod vbyte;
+mod watch;
 
 use std::io::IsTerminal;
 use std::{io, process, time::Instant};
@@ -370,6 +371,41 @@ enum Cmd {
     Mat {
         #[command(subcommand)]
         cmd: MatCmd,
+    },
+    /// Periodically capture heap dumps from a running JVM and build a report series.
+    ///
+    /// Attaches to the target JVM via `jcmd` (or `jmap` as fallback), takes a
+    /// heap dump on each interval, analyzes it into a Report JSON, and keeps
+    /// the last N reports. With `--diff`, a rolling diff HTML is regenerated
+    /// after every capture so you can open it in a browser and watch the trend.
+    ///
+    /// Example:
+    ///   hprof-analyzer watch --pid 12345 --interval 30m --keep 5 --output-dir ./reports --diff
+    Watch {
+        /// JVM process ID to monitor.
+        #[arg(long, value_name = "PID")]
+        pid: u32,
+        /// How often to capture a heap dump. Accepts "30m", "1h", "300s", or
+        /// plain seconds. Default: 30m.
+        #[arg(long, default_value = "30m", value_name = "DURATION")]
+        interval: String,
+        /// Keep only the last N report JSONs (oldest are deleted). Default: 5.
+        #[arg(long, default_value_t = 5, value_name = "N")]
+        keep: usize,
+        /// Directory for report JSONs and the optional diff.html. Created if
+        /// it does not exist. Default: hprof-watch/
+        #[arg(long, default_value = "hprof-watch", value_name = "DIR")]
+        output_dir: String,
+        /// After each capture, regenerate a rolling diff.html in output-dir.
+        #[arg(long)]
+        diff: bool,
+        /// Analysis detail level for each captured report.
+        #[arg(long, value_enum, default_value = "default")]
+        detail: DetailLevel,
+        /// Explicit path to the jcmd binary. Default: auto-discover from PATH /
+        /// $JAVA_HOME. Falls back to jmap if jcmd is not found.
+        #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+        jcmd: Option<String>,
     },
 }
 
@@ -910,6 +946,32 @@ fn main() {
                 }
             }
         },
+        Some(Cmd::Watch {
+            pid,
+            interval,
+            keep,
+            output_dir,
+            diff,
+            detail,
+            jcmd,
+        }) => {
+            let interval_secs = match watch::parse_duration(&interval) {
+                Ok(s) => s,
+                Err(e) => fail(e),
+            };
+            let cfg = watch::WatchConfig {
+                pid,
+                interval_secs,
+                keep,
+                output_dir: std::path::PathBuf::from(output_dir),
+                diff,
+                detail,
+                jcmd_override: jcmd,
+            };
+            if let Err(e) = watch::run(cfg) {
+                fail(e);
+            }
+        }
     }
 }
 
