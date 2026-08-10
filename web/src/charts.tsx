@@ -1319,16 +1319,20 @@ export function QueryViz({ query }: { query: QueryResult }) {
 }
 
 // ── RetainedGrowthChart — horizontal bar chart for top growth leaders ─────────
-export function RetainedGrowthChart({ rows }: { rows: SeriesClassRow[] }) {
+export function RetainedGrowthChart({ rows, nReports }: { rows: SeriesClassRow[]; nReports: number }) {
   const themeKey = useThemeKey();
   const t = themeColors();
   if (rows.length === 0) return null;
-  const top = rows.slice().sort((a, b) => Math.abs(b.delta_retained) - Math.abs(a.delta_retained)).slice(0, 10);
+  // For N≥3, use peak_over_baseline (max excursion above r1) so the chart
+  // remains meaningful even when the series returns toward the baseline.
+  const usesPeak = nReports >= 3;
+  const metric = (r: SeriesClassRow) => usesPeak ? r.peak_over_baseline : r.delta_retained;
+  const top = rows.slice().sort((a, b) => Math.abs(metric(b)) - Math.abs(metric(a))).slice(0, 10);
   const labels = top.map((r) => {
     const cls = r.pretty_class;
     return cls.length > 35 ? cls.slice(0, 34) + "…" : cls;
   });
-  const values = top.map((r) => r.delta_retained);
+  const values = top.map(metric);
   const bgColors = values.map((v) => v >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)");
   const chartData = {
     labels,
@@ -1340,6 +1344,7 @@ export function RetainedGrowthChart({ rows }: { rows: SeriesClassRow[] }) {
       },
     ],
   };
+  const titleText = usesPeak ? "Top Retained Growth (peak − baseline)" : "Top Retained Growth (Δ bytes)";
   const options = {
     indexAxis: "y" as const,
     responsive: true,
@@ -1358,7 +1363,7 @@ export function RetainedGrowthChart({ rows }: { rows: SeriesClassRow[] }) {
       legend: { display: false },
       title: {
         display: true,
-        text: "Top Retained Growth (Δ bytes)",
+        text: titleText,
         color: t.fg,
         font: { size: 13 },
       },
@@ -1366,8 +1371,9 @@ export function RetainedGrowthChart({ rows }: { rows: SeriesClassRow[] }) {
         callbacks: {
           label: (ctx: { dataIndex: number }) => {
             const r = top[ctx.dataIndex];
-            const sign = r.delta_retained >= 0 ? "+" : "−";
-            return `${r.pretty_class} — ${sign}${formatBytes(Math.abs(r.delta_retained))}`;
+            const v = metric(r);
+            const sign = v >= 0 ? "+" : "−";
+            return `${r.pretty_class} — ${sign}${formatBytes(Math.abs(v))}`;
           },
         },
       },

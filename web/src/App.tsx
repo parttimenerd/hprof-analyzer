@@ -10615,7 +10615,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 
       {diff.growth_leaders.length > 0 && (
         <section className="diff-section">
-          <RetainedGrowthChart rows={diff.growth_leaders} />
+          <RetainedGrowthChart rows={diff.growth_leaders} nReports={labels.length} />
         </section>
       )}
       {labels.length >= 3 && diff.growth_leaders.length > 0 && (
