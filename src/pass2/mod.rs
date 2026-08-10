@@ -33,7 +33,7 @@ mod scan;
 pub(crate) mod sizing;
 mod strings;
 
-pub(crate) use boxed::compute_boxed_holders;
+pub(crate) use boxed::build_boxed_holders_from_counts;
 pub(crate) use dup_prim_arrays::{
     DupPrimArrays, compute_dup_array_holders, compute_dup_prim_arrays,
 };
@@ -955,13 +955,13 @@ impl Pass2 {
             None
         };
 
-        // Opt-in boxed-number holder scan. Pass 1 (address collection) was folded
-        // into the 2a scan (captured_boxed_addrs), so only the ref-count scan runs.
-        let boxed_number_holders: Vec<crate::report::BoxedNumberHolder> = if opts.collections {
-            compute_boxed_holders(&open, &p1, p1.id_size, Some(captured_boxed_addrs))?
-        } else {
-            Vec::new()
-        };
+        // Opt-in boxed-number holder counting. Pass 1 (address collection) was
+        // folded into the 2a scan (captured_boxed_addrs). Pass 2 (ref counting)
+        // is folded into the 2b forward-CSR fill below: it already reads every
+        // instance's object fields, so we accumulate holder counts there instead
+        // of running a dedicated ref-count scan. captured_boxed_addrs must stay
+        // alive until the 2b scan; the holder list is built afterwards.
+        let mut boxed_holder_counts: HashMap<u64, u64> = HashMap::new();
 
         // system_properties / jvm_version were resolved above alongside thread
         // names in the shared-scan orchestrator (resolve_thread_and_props).
@@ -971,6 +971,25 @@ impl Pass2 {
         // (class_name_of_index uses it for referent class lookups). Releasing
         // here keeps peak RSS low before the edge-scan allocations.
         p1.class_ids = Vec::new();
+
+        // Snapshot class-id → dotted-name for boxed-holder resolution BEFORE
+        // class_map/strings are freed below. The boxed-holder counts are not
+        // final until the 2b forward fill completes (after the free), so we
+        // resolve names later from this small snapshot (one String per class,
+        // negligible vs the multi-GB edge arrays; dropped after the build).
+        // Only under --collections; otherwise stays empty.
+        let boxed_holder_names: HashMap<u64, String> = if opts.collections {
+            p1.class_map
+                .iter()
+                .filter_map(|(&addr, ci)| {
+                    p1.strings
+                        .get(&ci.name_id)
+                        .map(|s| (addr, s.replace('/', ".")))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
 
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
@@ -1172,6 +1191,8 @@ impl Pass2 {
                         &mut inb_flat_stub,
                         &mut in_degree_stub,
                         &mut scratch,
+                        &captured_boxed_addrs,
+                        &mut boxed_holder_counts,
                     ),
                     tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
                     _ => r.skip(length),
@@ -1254,6 +1275,20 @@ impl Pass2 {
             class_dumps: p1.class_dump_count,
             gc_root_tag_counts,
         };
+        // Boxed-holder list: built from counts accumulated during the 2b forward
+        // fill above (Pass 2 folded in), replacing the dedicated ref-count scan.
+        // Names resolve from the pre-free snapshot; the `0x{addr}` fallback
+        // matches compute_boxed_holders' behavior for any unmapped class.
+        // Empty when --collections is off (boxed_holder_counts stays empty).
+        let boxed_number_holders = build_boxed_holders_from_counts(
+            std::mem::take(&mut boxed_holder_counts),
+            |class_addr| {
+                boxed_holder_names
+                    .get(&class_addr)
+                    .cloned()
+                    .unwrap_or_else(|| format!("0x{class_addr:x}"))
+            },
+        );
         let mut graph = Graph {
             n,
             format: p1.format,
@@ -1696,6 +1731,8 @@ impl Pass2 {
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
+        boxed_addrs: &std::collections::HashSet<u64>,
+        boxed_holder_counts: &mut HashMap<u64, u64>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1838,6 +1875,16 @@ impl Pass2 {
                                 let off = off as usize;
                                 if off + id_size as usize <= scratch.len() {
                                     let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                    // Boxed-holder Pass 2, folded in: count refs to
+                                    // captured boxed instances per holder class. Reuses
+                                    // this read + field iteration (byte-identical to the
+                                    // removed compute_boxed_holders ref-count scan).
+                                    if !boxed_addrs.is_empty()
+                                        && ref_val != 0
+                                        && boxed_addrs.contains(&ref_val)
+                                    {
+                                        *boxed_holder_counts.entry(class_id).or_insert(0) += 1;
+                                    }
                                     let name_idx = if do_names && fi < named_plan.len() {
                                         let fname = &named_plan[fi].2;
                                         if fname.is_empty() {

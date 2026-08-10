@@ -1093,6 +1093,11 @@ impl InboundBuilder {
                             &mut inb_flat,
                             &mut in_cursors,
                             &mut scratch,
+                            // Inbound pass: boxed-holder counting happens only on
+                            // the forward fill, so pass an empty set (hook skipped)
+                            // and a throwaway counter.
+                            &std::collections::HashSet::new(),
+                            &mut std::collections::HashMap::new(),
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,

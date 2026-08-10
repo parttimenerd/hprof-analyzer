@@ -1,20 +1,15 @@
 //! Boxed-number holder ranking (`--collections` opt-in).
 //!
-//! Two-pass scan:
+//! Both phases are folded into the main pass2 scans:
 //!
-//! 1. Collect addresses of all live boxed-type instances
-//!    (java.lang.Integer, Long, Double, …).
-//! 2. FieldPlan scan to count how many object-reference fields
-//!    of each class point at those addresses.
-//!
-//! Returns the top-20 holder classes sorted by `boxed_refs` descending.
+//! 1. Addresses of all live boxed-type instances (java.lang.Integer, Long,
+//!    Double, …) are captured during the 2a scan ([`boxed_class_addrs`] is the
+//!    shared predicate).
+//! 2. Per-class ref counts to those addresses are accumulated during the 2b
+//!    forward-CSR fill, then turned into the top-20 holder list here by
+//!    [`build_boxed_holders_from_counts`] (sorted by `boxed_refs` descending).
 
 use std::collections::{HashMap, HashSet};
-use std::io;
-
-use super::strings::scan_all_instances;
-use super::{build_field_plans, read_ref};
-use crate::pass1::Pass1;
 
 const BOXED_HOLDER_TOP_N: usize = 20;
 
@@ -49,85 +44,24 @@ pub(crate) fn boxed_class_addrs(
         .collect()
 }
 
-/// Compute top holder classes for boxed-number objects.
+/// Build the sorted, truncated top-N holder list from per-class boxed-ref counts.
 ///
-/// `prefetched_boxed_addrs`: when `Some`, the addresses of live boxed instances
-/// were already captured during the 2a scan, so Pass 1 (the full-file address
-/// collection) is skipped. When `None`, Pass 1 runs as a standalone scan.
-/// Pass 2 (the FieldPlan ref-count scan) always runs.
-pub(crate) fn compute_boxed_holders<O>(
-    open: O,
-    p1: &Pass1,
-    id_size: u8,
-    prefetched_boxed_addrs: Option<HashSet<u64>>,
-) -> io::Result<Vec<crate::report::BoxedNumberHolder>>
-where
-    O: Fn() -> io::Result<crate::reader::HprofReader>,
-{
-    let class_map = &p1.class_map;
-    let strings = &p1.strings;
-
-    // Pass 1: collect addresses of all live boxed-type instances — unless the 2a
-    // scan already captured them (prefetched), in which case skip the full scan.
-    let boxed_addrs: HashSet<u64> = match prefetched_boxed_addrs {
-        Some(addrs) => addrs,
-        None => {
-            let boxed_class_addrs = boxed_class_addrs(class_map, strings);
-            if boxed_class_addrs.is_empty() {
-                return Ok(Vec::new());
-            }
-            let mut addrs: HashSet<u64> = HashSet::new();
-            scan_all_instances(&open, id_size, |obj_addr, class_id, _blob| {
-                if boxed_class_addrs.contains(&class_id) {
-                    addrs.insert(obj_addr);
-                }
-            })?;
-            addrs
-        }
-    };
-
-    if boxed_addrs.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Pass 2: FieldPlan scan — count refs to boxed addrs per class.
-    let obj_ref_width = id_size as usize;
-    let field_plans = build_field_plans(class_map, strings, id_size as usize);
-    let mut class_counter: HashMap<u64, u64> = HashMap::new();
-
-    scan_all_instances(&open, id_size, |_obj_addr, class_id, blob| {
-        let Some(plan) = field_plans.get(&class_id) else {
-            return;
-        };
-        let mut hits: u64 = 0;
-        for &(offset, _excluded) in plan {
-            let off = offset as usize;
-            if off + obj_ref_width > blob.len() {
-                continue;
-            }
-            let r = read_ref(&blob[off..], obj_ref_width);
-            if r != 0 && boxed_addrs.contains(&r) {
-                hits += 1;
-            }
-        }
-        if hits > 0 {
-            *class_counter.entry(class_id).or_insert(0) += hits;
-        }
-    })?;
-
+/// `name_of` resolves a holder class address to its dotted class name. Fed by the
+/// 2b-scan fold in `mod.rs`, which accumulates the `class_id -> count` map during
+/// the forward-CSR fill and resolves names from a snapshot captured before
+/// class_map/strings are freed.
+pub(crate) fn build_boxed_holders_from_counts(
+    class_counter: HashMap<u64, u64>,
+    name_of: impl Fn(u64) -> String,
+) -> Vec<crate::report::BoxedNumberHolder> {
     let mut holders: Vec<crate::report::BoxedNumberHolder> = class_counter
         .into_iter()
-        .map(|(class_addr, boxed_refs)| {
-            let class_name = class_map
-                .get(&class_addr)
-                .and_then(|ci| strings.get(&ci.name_id))
-                .map(|s| s.replace('/', "."))
-                .unwrap_or_else(|| format!("0x{class_addr:x}"));
-            crate::report::BoxedNumberHolder {
-                class_name,
+        .map(
+            |(class_addr, boxed_refs)| crate::report::BoxedNumberHolder {
+                class_name: name_of(class_addr),
                 boxed_refs,
-            }
-        })
+            },
+        )
         .collect();
     holders.sort_unstable_by(|a, b| {
         b.boxed_refs
@@ -135,5 +69,5 @@ where
             .then(a.class_name.cmp(&b.class_name))
     });
     holders.truncate(BOXED_HOLDER_TOP_N);
-    Ok(holders)
+    holders
 }
