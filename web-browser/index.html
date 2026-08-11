@@ -179,6 +179,13 @@ const { default: _initWasm, HprofSession, complete: wasmComplete } = wasmModule;
 let wasmReady = false;
 let namedQueries = [];
 
+// The active WASM module's HprofSession class. Starts as the inlined wasm32
+// build; _switchToWasm64() swaps it to the experimental wasm64 (memory64) build
+// when a heap dump is too large for wasm32's 4 GiB linear-memory cap. The shell
+// load path routes all HprofSession.* static calls through `activeHprof`.
+let activeHprof = HprofSession;
+let onWasm64 = false;
+
 try {
   await _initWasm({ module_or_path: _b64toBytes(_wasmB64) });
   namedQueries = JSON.parse(HprofSession.named_queries());
@@ -188,6 +195,43 @@ try {
   console.warn('[hprof-analyzer] WASM init failed:', e);
 }
 window._hprofWasmReady = () => wasmReady;
+window._hprofOnWasm64 = () => onWasm64;
+
+// Base URL for the experimental wasm64 assets (fetchable, not inlined). Built
+// by scripts/build-browser-wasm64.sh into dist/wasm64/. Overridable for hosting.
+const WASM64_BASE = window.__HPROF_WASM64_BASE__ || './wasm64/';
+
+// Fetch + initialize the experimental wasm64 (memory64) module IN-PLACE and make
+// it the active module. Memoized: the fetch/init happens at most once. The
+// wasm64 glue is imported as a SEPARATE blob-URL ES module, so its exports
+// (identical symbol names) and its linear memory stay independent of the wasm32
+// module. Returns the wasm64 HprofSession class, or throws if assets are absent.
+let _wasm64Promise = null;
+async function _switchToWasm64() {
+  if (_wasm64Promise) return _wasm64Promise;
+  _wasm64Promise = (async () => {
+    const glueResp = await fetch(WASM64_BASE + 'hprof_wasm.js');
+    if (!glueResp.ok) {
+      throw new Error(`experimental wasm64 build unavailable (${glueResp.status} fetching ${WASM64_BASE}hprof_wasm.js)`);
+    }
+    const glueText = await glueResp.text();
+    const glueBlob = new Blob([glueText], { type: 'application/javascript' });
+    const glueUrl = URL.createObjectURL(glueBlob);
+    let mod64;
+    try {
+      mod64 = await import(glueUrl);
+    } finally {
+      URL.revokeObjectURL(glueUrl);
+    }
+    await mod64.default({ module_or_path: WASM64_BASE + 'hprof_wasm_bg.wasm' });
+    activeHprof = mod64.HprofSession;
+    onWasm64 = true;
+    console.log('[hprof-analyzer] switched to experimental wasm64 module');
+    return activeHprof;
+  })();
+  return _wasm64Promise;
+}
+window._switchToWasm64 = _switchToWasm64;
 
 // ── Shell logic (inlined from shell.js) ──────────────────────────────────────
 %%SHELL_JS%%

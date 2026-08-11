@@ -10,7 +10,7 @@
 //! parity-sensitive (byte-exact, MAT-frozen counts) — most edits here should be
 //! comments, not behavior changes.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
     collections::HashMap,
@@ -84,11 +84,11 @@ impl Pass2 {
         // surface `QueryResult.truncated` even when the map is non-empty.
         bool,
     )> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(target_family = "wasm"))]
         let _t_build = Instant::now();
         macro_rules! t_phase {
             ($label:expr) => {
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(target_family = "wasm"))]
                 if std::env::var_os("HPROF_TIMING").is_some() {
                     eprintln!(
                         "[timing] {}: {:.3}s",
@@ -96,7 +96,7 @@ impl Pass2 {
                         _t_build.elapsed().as_secs_f64()
                     );
                 }
-                #[cfg(target_arch = "wasm32")]
+                #[cfg(target_family = "wasm")]
                 let _ = $label;
             };
         }

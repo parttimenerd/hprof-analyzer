@@ -131,14 +131,14 @@ pub(crate) fn gc_root_type_label_opt(code: u8) -> Option<&'static str> {
 /// ISO-8601 UTC timestamp matching java.time.Instant.toString() shape.
 /// Non-deterministic — parity comparison ignores this line.
 pub fn now_iso8601() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         format_epoch_nanos(now.as_secs(), now.subsec_nanos())
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     {
         format_epoch_nanos(0, 0)
     }

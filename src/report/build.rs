@@ -519,9 +519,11 @@ pub fn build_model(
     // Per-step wall markers to attribute build_model's ~157s (the biggest touchable
     // serial WALL lever in the dark phase). Relative to build_model entry. Gated on
     // HPROF_TIMING like the pass2/t_dark markers; stderr-only, byte-exact.
+    #[cfg(not(target_family = "wasm"))]
     let _t_bm = std::time::Instant::now();
     macro_rules! t_bm {
         ($label:expr) => {
+            #[cfg(not(target_family = "wasm"))]
             if std::env::var_os("HPROF_TIMING").is_some() {
                 eprintln!(
                     "[timing] build_model/{}: {:.3}s",
@@ -3829,9 +3831,11 @@ fn build_top_consumers(
     // Sub-step timing (HPROF_TIMING-gated, stderr-only, byte-exact): splits the
     // build_top_consumers phase across its distinct passes so we can pick the
     // real hot sub-part rather than optimizing blind.
+    #[cfg(not(target_family = "wasm"))]
     let _t_tc = std::time::Instant::now();
     macro_rules! t_tc {
         ($label:expr) => {
+            #[cfg(not(target_family = "wasm"))]
             if std::env::var_os("HPROF_TIMING").is_some() {
                 eprintln!(
                     "[timing] top_consumers/{}: {:.3}s",

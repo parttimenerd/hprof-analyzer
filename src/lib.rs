@@ -275,11 +275,11 @@ fn analyze_to_report_inner(
     // Wall-clock timing of the post-pass2 "dark phase" (dominators/retained/leak/
     // build_model) to localize the runtime sink. Gated on HPROF_TIMING like the
     // pass2 t_phase! markers; zero cost otherwise. Wall-relative to this fn's start.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     let _t_pipe = std::time::Instant::now();
     macro_rules! t_pipe {
         ($label:expr) => {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(target_family = "wasm"))]
             if std::env::var_os("HPROF_TIMING").is_some() {
                 eprintln!(
                     "[timing] {}: {:.3}s",

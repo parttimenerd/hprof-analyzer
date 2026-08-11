@@ -68,3 +68,5 @@ tests/web-stress/package-lock.json
 .claude/
 dist/*.html
 dist/*.json
+# Experimental wasm64 build artifacts (opt-in; built via scripts/build-browser-wasm64.sh)
+dist/wasm64/

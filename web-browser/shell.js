@@ -1,5 +1,7 @@
 // shell.js — injected into index.html after WASM init block.
-// Outer scope provides: namedQueries, wasmReady, wasmComplete, HprofSession
+// Outer scope provides: namedQueries, wasmReady, wasmComplete, HprofSession,
+// activeHprof (the active WASM module's HprofSession — swaps to wasm64 on
+// fallback), and window._switchToWasm64 / window._hprofOnWasm64.
 
 // ── Theme management ──────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto, same as the React report viewer.
@@ -540,9 +542,8 @@ async function loadWasmSession(file) {
 
   const tLoad0 = performance.now();
   try {
-    if (wasmSession) { wasmSession.free(); wasmSession = null; }
     await enterBlocking(`Parsing ${escHtml(file.name)}…`, compBarEnd, loadBarEnd, parseEtaMs);
-    wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
+    wasmSession = await _loadWithFallback(bytes, file, onLoadPhase);
     wasmSession._fileName = file.name;
   } catch (e) {
     if (statusEl) { statusEl.innerHTML = _errorHtml('Loading', file.name, e); }
@@ -657,9 +658,8 @@ async function loadWasmSessionWithReport(file, opts = {}) {
 
   const tParse0 = performance.now();
   try {
-    if (wasmSession) { wasmSession.free(); wasmSession = null; }
     await enterBlocking(`Parsing ${escHtml(file.name)}…`, compBarEnd2, loadBarEnd, parseEtaMs);
-    wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
+    wasmSession = await _loadWithFallback(bytes, file, onLoadPhase);
   } catch (e) {
     msg.innerHTML = _errorHtml('Loading', file.name, e);
     return;
@@ -699,6 +699,75 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   }
 }
 
+// wasm32 linear memory is capped at 4 GiB, so a plain .hprof larger than this
+// (buffer + parse indices) will OOM. gzip dumps decompress much larger, so the
+// trigger threshold is lower. These are heuristics for the *pre-load* prompt;
+// the actual OOM catch below is the real safety net.
+const _WASM32_PLAIN_LIMIT = 3.2 * 1024 * 1024 * 1024;   // ~3.2 GiB plain .hprof
+const _WASM32_GZIP_LIMIT  = 1.0 * 1024 * 1024 * 1024;   // ~1 GiB gzip (expands)
+
+// Confirm + switch to the experimental wasm64 module. Returns true if now on
+// wasm64, false if the user declined or the switch failed (caller stays wasm32).
+async function _confirmSwitchToWasm64() {
+  if (window._hprofOnWasm64 && window._hprofOnWasm64()) return true;
+  const ok = confirm(
+    'This heap dump is too large for the standard (wasm32) build, which is ' +
+    'capped at 4 GiB of memory.\n\n' +
+    'Load the EXPERIMENTAL wasm64 build?\n\n' +
+    'WARNING: this build is compiled for the wasm64 (memory64) target using a ' +
+    'Rust NIGHTLY toolchain with an unstable, build-from-source std — a truly ' +
+    'experimental toolchain. It lifts the 4 GiB memory cap so larger dumps can ' +
+    'be analysed, but it may be slower, less stable, or fail to parse some ' +
+    'dumps (aborting the tab). If it fails, use the native CLI instead — it has ' +
+    'no memory cap and handles dumps of any size.');
+  if (!ok) return false;
+  try {
+    await window._switchToWasm64();
+    return true;
+  } catch (e) {
+    console.warn('[hprof-analyzer] wasm64 switch failed:', e);
+    showToast(`Experimental wasm64 build unavailable: ${e.message || e}`, 'error', 6000);
+    return false;
+  }
+}
+
+// Load a heap dump, transparently switching to the experimental wasm64 module
+// when the standard wasm32 build can't handle the file. Two triggers:
+//   1. Pre-check: file clearly exceeds the wasm32 ceiling → prompt up front.
+//   2. OOM catch: wasm32 load throws an OOM error → prompt, switch, retry on
+//      the SAME in-scope bytes (the File is never re-picked).
+// The wasm32 session is freed before switching; the wasm64 module has its own
+// independent linear memory. `bytes` is the (gzip-compressed) buffer already
+// prepared by the caller. Returns the loaded HprofSession, or throws.
+async function _loadWithFallback(bytes, file, onLoadPhase) {
+  const onWasm64 = () => window._hprofOnWasm64 && window._hprofOnWasm64();
+
+  // Pre-check: obviously-too-big files prompt for wasm64 before we even try.
+  if (!onWasm64()) {
+    const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+    const overLimit = isGzip
+      ? file.size > _WASM32_GZIP_LIMIT
+      : file.size > _WASM32_PLAIN_LIMIT;
+    if (overLimit) await _confirmSwitchToWasm64();
+  }
+
+  // Free any prior wasm32 session before loading (frees its linear memory).
+  if (wasmSession) { wasmSession.free(); wasmSession = null; }
+
+  try {
+    return activeHprof.load_with_progress(bytes, file.name, onLoadPhase);
+  } catch (e) {
+    // OOM fallback: retry on wasm64 with the same bytes.
+    if (_isOomError(e) && !onWasm64()) {
+      const switched = await _confirmSwitchToWasm64();
+      if (switched) {
+        return activeHprof.load_with_progress(bytes, file.name, onLoadPhase);
+      }
+    }
+    throw e;
+  }
+}
+
 // Detect out-of-memory conditions from WASM/browser errors.
 function _isOomError(e) {
   const s = String(e).toLowerCase();
@@ -712,8 +781,29 @@ function _errorHtml(action, fileName, e) {
   const raw = String(e);
   if (_isOomError(e)) {
     const readmeUrl = 'https://github.com/parttimenerd/hprof-analyzer#quick-start';
+    const onWasm64 = window._hprofOnWasm64 && window._hprofOnWasm64();
+    // A wasm64 trap ("unreachable"/RuntimeError) is NOT a true OOM — the
+    // experimental memory64 build aborted (e.g. failed to parse this dump).
+    // Don't mislabel it as "Out of memory"; say the experimental build failed.
+    if (onWasm64 && (raw.toLowerCase().includes('unreachable') ||
+                     raw.toLowerCase().includes('runtimeerror'))) {
+      return `<strong>Experimental wasm64 build failed</strong> — the memory64 build ` +
+             `(built with an unstable Rust nightly toolchain) aborted while processing ` +
+             `<em>${escHtml(fileName)}</em>.<br>` +
+             `This is a known limitation of the experimental toolchain. Use the ` +
+             `<strong>CLI</strong> instead — it has no memory cap and is fully stable:<br>` +
+             `<code>hprof-analyzer ${escHtml(fileName)}</code><br>` +
+             `<a href="${readmeUrl}" target="_blank" rel="noopener">Install &amp; quick-start guide →</a>`;
+    }
+    // On wasm32 the experimental wasm64 build may still fit the dump; only when
+    // wasm64 itself OOMs (or is unavailable) do we fall back to the CLI message.
+    const wasm64Hint = onWasm64
+      ? ''
+      : `The experimental <strong>wasm64</strong> build lifts the browser's 4 GiB memory cap — ` +
+        `reload the file to be prompted to switch to it.<br>`;
     return `<strong>Out of memory</strong> — <em>${escHtml(fileName)}</em> is too large for the browser's WASM heap.<br>` +
-           `Try the <strong>CLI</strong> instead — it has no memory cap and handles dumps of any size:<br>` +
+           wasm64Hint +
+           `Or use the <strong>CLI</strong> — it has no memory cap and handles dumps of any size:<br>` +
            `<code>hprof-analyzer ${escHtml(fileName)}</code><br>` +
            `<a href="${readmeUrl}" target="_blank" rel="noopener">Install &amp; quick-start guide →</a>`;
   }
@@ -4568,7 +4658,7 @@ function startTerminal() {
         ref_ = await fetch(serverUrl + '/help').then(r => r.json());
         term.writeln('\r\n\x1b[1mOQL Language Reference\x1b[0m  \x1b[2m(from server /help)\x1b[0m');
       } else {
-        ref_ = JSON.parse(HprofSession.oql_help());
+        ref_ = JSON.parse(activeHprof.oql_help());
         term.writeln('\r\n\x1b[1mOQL Language Reference\x1b[0m  \x1b[2m(built-in)\x1b[0m');
       }
     } catch (e) {

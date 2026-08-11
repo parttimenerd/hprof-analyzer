@@ -113,8 +113,9 @@ impl HprofSession {
     ///
     /// # Memory strategy
     ///
-    /// wasm-bindgen copies the JS `Uint8Array` into WASM linear memory once
-    /// (via `passArray8ToWasm`).  From that point everything happens inside WASM:
+    /// wasm-bindgen moves the JS `Uint8Array` into WASM linear memory once, as
+    /// an owned `Vec<u8>` parameter — no extra copy on our side.  From that
+    /// point everything happens inside WASM:
     ///
     /// 1. We take **ownership** of that buffer as `Arc<Vec<u8>>` (Vec is Sized,
     ///    so `Arc::try_unwrap` works on it after parsing completes).
@@ -125,15 +126,22 @@ impl HprofSession {
     ///    the raw buffer (N bytes) is freed before the compressed tail is written.
     ///    Raw and compressed never coexist simultaneously.
     ///
+    /// Taking `data` by owned `Vec<u8>` (not `&[u8]`) is deliberate: wasm-bindgen
+    /// hands us ownership of the buffer it already placed in linear memory, so
+    /// there is no transient second full-file copy. That roughly halves the
+    /// tightest-moment footprint for a plain (non-gzip) `.hprof`, raising the
+    /// largest file that fits under the wasm32 4 GiB linear-memory cap.
+    ///
     /// Peak WASM footprint = N (parse buffer) + analysis structures.
     /// After load() returns only the compressed copy survives (~N/4).
-    pub fn load(data: &[u8], name: &str) -> Result<HprofSession, JsValue> {
+    pub fn load(data: Vec<u8>, name: &str) -> Result<HprofSession, JsValue> {
         let is_gzip = data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b;
 
         // ── Step 1: own the parse buffer ─────────────────────────────────
-        // wasm-bindgen already copied JS bytes into `data` (WASM linear memory).
-        // Arc<Vec<u8>> is Sized, so try_unwrap works below.
-        let raw_arc: Arc<Vec<u8>> = Arc::new(data.to_vec());
+        // wasm-bindgen moved the JS bytes into `data` (WASM linear memory); take
+        // ownership directly — no copy. Arc<Vec<u8>> is Sized, so try_unwrap
+        // works below.
+        let raw_arc: Arc<Vec<u8>> = Arc::new(data);
 
         let parse_source = hprof_analyzer::HprofSource::Bytes {
             data: Arc::clone(&raw_arc),
@@ -451,12 +459,12 @@ impl HprofSession {
     /// callbacks — but each call allows JS to update DOM state that is rendered
     /// after the full load() returns control to the event loop.
     pub fn load_with_progress(
-        data: &[u8],
+        data: Vec<u8>,
         name: &str,
         cb: js_sys::Function,
     ) -> Result<HprofSession, JsValue> {
         let is_gzip = data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b;
-        let raw_arc: Arc<Vec<u8>> = Arc::new(data.to_vec());
+        let raw_arc: Arc<Vec<u8>> = Arc::new(data);
 
         let parse_source = hprof_analyzer::HprofSource::Bytes {
             data: Arc::clone(&raw_arc),
