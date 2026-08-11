@@ -33,6 +33,28 @@ fn deflate_compress(raw: &[u8]) -> io::Result<Vec<u8>> {
     e.finish()
 }
 
+/// Deflate a `u32` slice as little-endian bytes WITHOUT materializing the full
+/// `len*4` byte intermediate. Feeds the encoder in bounded 64 KiB chunks, so the
+/// transient is O(64 KiB) instead of O(n): on large dense arrays (e.g. parent_pre
+/// at ~2 GB) this removes a ~2 GB copy that otherwise spiked peak RSS during the
+/// rpo→inbound window. The compressed output is byte-identical to compressing the
+/// concatenated LE bytes in one shot (DEFLATE output depends only on the input
+/// byte stream, not on write-call boundaries).
+fn deflate_compress_u32_le(v: &[u32]) -> io::Result<Vec<u8>> {
+    let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+    // 16384 u32 = 64 KiB per flush.
+    let mut buf = [0u8; 16384 * 4];
+    let mut chunks = v.chunks(16384);
+    for chunk in &mut chunks {
+        let nbytes = chunk.len() * 4;
+        for (i, &x) in chunk.iter().enumerate() {
+            buf[i * 4..i * 4 + 4].copy_from_slice(&x.to_le_bytes());
+        }
+        e.write_all(&buf[..nbytes])?;
+    }
+    e.finish()
+}
+
 fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
     let mut d = flate2::read::DeflateDecoder::new(blob);
     let mut out = Vec::with_capacity(cap);
@@ -66,11 +88,7 @@ impl CompressedU32 {
                 len,
             }),
             Codec::Deflate9 => {
-                let mut bytes = Vec::with_capacity(len * 4);
-                for &x in v {
-                    bytes.extend_from_slice(&x.to_le_bytes());
-                }
-                let blob = deflate_compress(&bytes)?;
+                let blob = deflate_compress_u32_le(v)?;
                 Ok(Self {
                     codec,
                     blob,
@@ -392,6 +410,39 @@ mod tests {
             let mut got: Vec<u32> = Vec::with_capacity(v.len());
             c.for_each_u32(|x| got.push(x)).unwrap();
             assert_eq!(got, v, "codec {codec:?}");
+        }
+    }
+
+    #[test]
+    fn streaming_u32_compress_matches_oneshot() {
+        // The chunked streaming compressor must produce a byte-identical blob to
+        // the old one-shot (materialize-then-deflate) path, across chunk-boundary
+        // sizes. This guards byte-exactness of the compressed cold arrays.
+        fn oneshot(v: &[u32]) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(v.len() * 4);
+            for &x in v {
+                bytes.extend_from_slice(&x.to_le_bytes());
+            }
+            deflate_compress(&bytes).unwrap()
+        }
+        let mut state = 0x1234_5678u32;
+        // Sizes straddling the 16384-u32 (64 KiB) chunk boundary.
+        for &n in &[0usize, 1, 16383, 16384, 16385, 40000] {
+            let mut v: Vec<u32> = Vec::with_capacity(n);
+            for _ in 0..n {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                v.push(state);
+            }
+            assert_eq!(
+                deflate_compress_u32_le(&v).unwrap(),
+                oneshot(&v),
+                "streaming blob differs from one-shot at n={n}"
+            );
+            // And it must still round-trip.
+            let c = CompressedU32::compress(&v, Codec::Deflate9).unwrap();
+            assert_eq!(c.restore().unwrap(), v, "roundtrip failed at n={n}");
         }
     }
 
