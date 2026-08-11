@@ -4037,13 +4037,56 @@ fn build_top_consumers(
     let biggest_packages = convert(String::new(), root, total, threshold_bp, &seg_names);
     t_tc!("package_tree_convert");
 
-    // Sort top_level in-place by retained desc (no clone). Compute size
-    // distribution directly from sorted indices to avoid a Vec<u64> copy.
-    top_level.sort_unstable_by(|&a, &b| {
-        g.retained[b as usize]
-            .cmp(&g.retained[a as usize])
-            .then(a.cmp(&b))
-    });
+    // Sort top_level by retained desc, tie-broken by index asc. The natural
+    // comparator does two random-access loads into the ~4 GB `g.retained` array
+    // per comparison (~O(n log n) of them) — cache-hostile and the dominant cost
+    // of this phase (task #29 attribution). When the values fit, replace it with
+    // a single-key sort that reads each `g.retained[idx]` EXACTLY ONCE into a
+    // packed `u64` key, then sorts the cache-local key array (no indirection):
+    //
+    //   key = ((max_retained - retained) << idx_bits) | idx
+    //
+    // Sorting keys ASCENDING orders by `(max_retained - retained)` asc = retained
+    // DESC, with `idx` in the low bits breaking ties ASC — byte-identical to the
+    // old `retained desc, idx asc` comparator. This needs `idx` and
+    // `max_retained` to co-fit in 64 bits; when they don't we fall back to the
+    // exact comparator, so output is identical either way. The packed-key buffer
+    // is one `Vec<u64>` (8 B/elem) — half the 16 B of a `(u64,u32)` decorate
+    // (task #30, which blew the RSS ceiling at ~5.3 GB) and paying the random
+    // `g.retained` loads once (unlike the radix retry, task #31, which re-read
+    // them per pass for no win).
+    if !top_level.is_empty() {
+        // top_level is built index-ascending, so the last element is the largest
+        // index; +1 gives the count of representable ids.
+        let max_idx = *top_level.last().unwrap();
+        let idx_bits = (u32::BITS - max_idx.leading_zeros()).max(1);
+        let retained_bits = 64u32.saturating_sub(idx_bits);
+        // Max retained over ALL objects (sequential scan, cache-friendly ~0.3s);
+        // this is >= the max over top_level, so it is a conservative width bound.
+        let max_retained = g.retained.iter().copied().max().unwrap_or(0);
+        let fits = retained_bits >= 64 || max_retained < (1u64 << retained_bits);
+        if fits && idx_bits < 64 {
+            let idx_mask = (1u64 << idx_bits) - 1;
+            let mut keys: Vec<u64> = top_level
+                .iter()
+                .map(|&i| {
+                    let inv = max_retained - g.retained[i as usize];
+                    (inv << idx_bits) | (i as u64 & idx_mask)
+                })
+                .collect();
+            keys.sort_unstable();
+            for (slot, &k) in top_level.iter_mut().zip(keys.iter()) {
+                *slot = (k & idx_mask) as u32;
+            }
+            drop(keys);
+        } else {
+            top_level.sort_unstable_by(|&a, &b| {
+                g.retained[b as usize]
+                    .cmp(&g.retained[a as usize])
+                    .then(a.cmp(&b))
+            });
+        }
+    }
     t_tc!("sort_top_level");
     let size_distribution = {
         let k = top_level.len();
@@ -4191,6 +4234,132 @@ mod fragmentation_tests {
     #[test]
     fn fragmentation_ratio_zero_empty_heap() {
         assert_eq!(compute_fragmentation_ratio(0, 0), 0.0_f64);
+    }
+}
+
+#[cfg(test)]
+mod top_level_sort_tests {
+    // Proves the packed-u64 single-key sort used in `build_top_consumers`
+    // (`sort_top_level`) produces byte-identical order to the reference
+    // `retained desc, idx asc` comparator. The packing arithmetic
+    // `((max_retained - retained) << idx_bits) | idx` is the delicate part, so
+    // we exercise edge cases plus randomized inputs with heavy duplicate keys.
+
+    // The reference: sort indices by retained desc, tie-broken by index asc.
+    fn comparator_order(top_level: &[u32], retained: &[u64]) -> Vec<u32> {
+        let mut v = top_level.to_vec();
+        v.sort_unstable_by(|&a, &b| {
+            retained[b as usize]
+                .cmp(&retained[a as usize])
+                .then(a.cmp(&b))
+        });
+        v
+    }
+
+    // Mirror of the production packed-key path (must stay in sync with
+    // build_top_consumers). Returns None if the values don't co-fit in 64 bits,
+    // in which case production falls back to the exact comparator.
+    fn packed_order(top_level: &[u32], retained: &[u64]) -> Option<Vec<u32>> {
+        if top_level.is_empty() {
+            return Some(Vec::new());
+        }
+        // top_level is index-ascending in production; the test inputs honor that,
+        // so the last element is the max index.
+        let max_idx = *top_level.last().unwrap();
+        let idx_bits = (u32::BITS - max_idx.leading_zeros()).max(1);
+        let retained_bits = 64u32.saturating_sub(idx_bits);
+        let max_retained = retained.iter().copied().max().unwrap_or(0);
+        let fits = retained_bits >= 64 || max_retained < (1u64 << retained_bits);
+        if !(fits && idx_bits < 64) {
+            return None;
+        }
+        let idx_mask = (1u64 << idx_bits) - 1;
+        let mut keys: Vec<u64> = top_level
+            .iter()
+            .map(|&i| {
+                let inv = max_retained - retained[i as usize];
+                (inv << idx_bits) | (i as u64 & idx_mask)
+            })
+            .collect();
+        keys.sort_unstable();
+        Some(keys.iter().map(|&k| (k & idx_mask) as u32).collect())
+    }
+
+    fn assert_matches(top_level: &[u32], retained: &[u64]) {
+        let want = comparator_order(top_level, retained);
+        let got = packed_order(top_level, retained)
+            .expect("test inputs are constructed to fit in 64 bits");
+        assert_eq!(got, want, "packed order != comparator order");
+    }
+
+    #[test]
+    fn empty() {
+        assert_matches(&[], &[]);
+    }
+
+    #[test]
+    fn single() {
+        assert_matches(&[0], &[42]);
+    }
+
+    #[test]
+    fn distinct_retained() {
+        // idx 0..5, retained increasing → sorted order is 4,3,2,1,0.
+        let retained = vec![10u64, 20, 30, 40, 50];
+        assert_matches(&[0, 1, 2, 3, 4], &retained);
+    }
+
+    #[test]
+    fn all_equal_retained_preserves_idx_asc() {
+        // Every retained equal → order is purely idx ascending (stable tiebreak).
+        let retained = vec![7u64; 8];
+        assert_matches(&[0, 1, 2, 3, 4, 5, 6, 7], &retained);
+    }
+
+    #[test]
+    fn some_zero_retained() {
+        let retained = vec![0u64, 5, 0, 5, 0];
+        assert_matches(&[0, 1, 2, 3, 4], &retained);
+    }
+
+    #[test]
+    fn max_retained_is_zero() {
+        // max_retained == 0 → inv == 0 for all, key == idx, order is idx asc.
+        let retained = vec![0u64, 0, 0];
+        assert_matches(&[0, 1, 2], &retained);
+    }
+
+    #[test]
+    fn randomized_heavy_duplicates() {
+        // Deterministic xorshift PRNG; retained drawn from a tiny domain so many
+        // ties collide, stressing the idx-asc tiebreak inside the packing.
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for trial in 0..200 {
+            let n = (next() % 300) as usize + 1;
+            // Small retained domain (0..=6) => heavy duplicate keys.
+            let retained: Vec<u64> = (0..n).map(|_| next() % 7).collect();
+            // top_level is index-ascending, a subset of 0..n. Include all for
+            // simplicity (still index-ascending).
+            let top_level: Vec<u32> = (0..n as u32).collect();
+            let want = comparator_order(&top_level, &retained);
+            let got = packed_order(&top_level, &retained)
+                .unwrap_or_else(|| panic!("trial {trial}: unexpected non-fit"));
+            assert_eq!(got, want, "trial {trial}: n={n}");
+        }
+    }
+
+    #[test]
+    fn large_retained_values() {
+        // Retained values in the hundreds of millions with a small index space:
+        // idx_bits is tiny, retained_bits huge, so packing must not overflow.
+        let retained = vec![900_000_000u64, 100, 500_000_000, 900_000_000, 0];
+        assert_matches(&[0, 1, 2, 3, 4], &retained);
     }
 }
 
