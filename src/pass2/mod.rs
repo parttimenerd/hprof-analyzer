@@ -928,16 +928,21 @@ impl Pass2 {
             resolve_thread_and_props(&open, &p1, captured_thread_blobs, captured_props_addr)?;
         t_phase!("thread_names done");
 
-        // Opt-in approximate duplicate-java.lang.String report. Runs two extra
+        // Opt-in approximate duplicate-java.lang.String report. Runs extra
         // full-file scans and keeps only hashes+lengths+counts (never the
         // decoded bytes), so RSS stays bounded. Must run while class_map/strings
         // are still alive (freed just below). `None` on the default path = zero
-        // extra work, zero RSS.
-        let dup_strings = if opts.find_duplicates {
-            Some(resolve_duplicate_strings(&open, &p1)?)
-        } else {
-            None
-        };
+        // extra work, zero RSS. Pass D (holder ref-counting) is DEFERRED: the
+        // resolver returns the String-instance address set, and we fold the
+        // per-instance ref-count into the 2b forward-CSR fill below (like the
+        // boxed fold), eliminating a dedicated full-file scan.
+        let (mut dup_strings, string_addrs): (Option<DupStrings>, std::collections::HashSet<u64>) =
+            if opts.find_duplicates {
+                let (ds, addrs) = resolve_duplicate_strings(&open, &p1)?;
+                (Some(ds), addrs)
+            } else {
+                (None, std::collections::HashSet::new())
+            };
         t_phase!("dup_strings done");
 
         // Opt-in duplicate-primitive-array waste scan. One extra full-file pass
@@ -966,6 +971,13 @@ impl Pass2 {
         // alive until the 2b scan; the holder list is built afterwards.
         let mut boxed_holder_counts: HashMap<u64, u64> = HashMap::new();
 
+        // Opt-in String-holder counting (dup_strings Pass D), folded into the 2b
+        // fill: owning class address → count of object-field refs to a String
+        // instance. `string_addrs` (from resolve_duplicate_strings) must stay
+        // alive until the 2b scan; the ranked holder list is built afterwards
+        // (finalize_string_holders) and attached to dup_strings.
+        let mut string_holder_counts: HashMap<u64, u64> = HashMap::new();
+
         // system_properties / jvm_version were resolved above alongside thread
         // names in the shared-scan orchestrator (resolve_thread_and_props).
         t_phase!("system_props done");
@@ -982,6 +994,25 @@ impl Pass2 {
         // negligible vs the multi-GB edge arrays; dropped after the build).
         // Only under --collections; otherwise stays empty.
         let boxed_holder_names: HashMap<u64, String> = if opts.collections {
+            p1.class_map
+                .iter()
+                .filter_map(|(&addr, ci)| {
+                    p1.strings
+                        .get(&ci.name_id)
+                        .map(|s| (addr, s.replace('/', ".")))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
+        // Same pre-free class-address → dotted-name snapshot for String-holder
+        // resolution (dup_strings Pass D, folded into the 2b fill). Gated on
+        // find_duplicates (String holders run whenever dup detection is on,
+        // independent of --collections). Byte-identical name resolution to the
+        // removed compute_string_holders (map+strings lookup, `.replace('/',".")`,
+        // `0x{addr}` fallback for unmapped classes).
+        let string_holder_names: HashMap<u64, String> = if opts.find_duplicates {
             p1.class_map
                 .iter()
                 .filter_map(|(&addr, ci)| {
@@ -1196,6 +1227,8 @@ impl Pass2 {
                         &mut scratch,
                         &captured_boxed_addrs,
                         &mut boxed_holder_counts,
+                        &string_addrs,
+                        &mut string_holder_counts,
                     ),
                     tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
                     _ => r.skip(length),
@@ -1292,6 +1325,21 @@ impl Pass2 {
                     .unwrap_or_else(|| format!("0x{class_addr:x}"))
             },
         );
+
+        // Finalize String-holder Pass D from the counts accumulated during the
+        // 2b fill above (dedicated compute_string_holders scan eliminated).
+        // Names resolve from the pre-free snapshot with the same `0x{addr}`
+        // fallback the removed scan used. No-op when find_duplicates is off
+        // (dup_strings is None and string_holder_counts stays empty).
+        if let Some(ds) = dup_strings.as_mut() {
+            ds.top_string_holders =
+                finalize_string_holders(std::mem::take(&mut string_holder_counts), |class_addr| {
+                    string_holder_names
+                        .get(&class_addr)
+                        .cloned()
+                        .unwrap_or_else(|| format!("0x{class_addr:x}"))
+                });
+        }
         let mut graph = Graph {
             n,
             format: p1.format,
@@ -1736,6 +1784,8 @@ impl Pass2 {
         scratch: &mut Vec<u8>,
         boxed_addrs: &std::collections::HashSet<u64>,
         boxed_holder_counts: &mut HashMap<u64, u64>,
+        string_addrs: &std::collections::HashSet<u64>,
+        string_holder_counts: &mut HashMap<u64, u64>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1887,6 +1937,17 @@ impl Pass2 {
                                         && boxed_addrs.contains(&ref_val)
                                     {
                                         *boxed_holder_counts.entry(class_id).or_insert(0) += 1;
+                                    }
+                                    // String-holder Pass D, folded in: count refs
+                                    // to captured String instances per holder class
+                                    // (byte-identical to the removed
+                                    // compute_string_holders scan, which summed one
+                                    // hit per matching object-field ref).
+                                    if !string_addrs.is_empty()
+                                        && ref_val != 0
+                                        && string_addrs.contains(&ref_val)
+                                    {
+                                        *string_holder_counts.entry(class_id).or_insert(0) += 1;
                                     }
                                     let name_idx = if do_names && fi < named_plan.len() {
                                         let fname = &named_plan[fi].2;

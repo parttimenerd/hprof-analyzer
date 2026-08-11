@@ -13,8 +13,7 @@ use std::io::{self, ErrorKind};
 
 use super::{
     CharArrayWaste, CharArrayWasteRow, DupStringSample, DupStrings, StrLenBucket, StrLenStats,
-    StringHolder, build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump,
-    sub_remaining,
+    StringHolder, field_offset, read_ref, scan_prim_arrays, skip_class_dump, sub_remaining,
 };
 
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
@@ -169,7 +168,10 @@ where
 ///     for the most-duplicated values only.
 ///   Pass D (`compute_string_holders`, `scan_all_instances`): credit each
 ///     owning class for every object-field reference to a String instance.
-pub(crate) fn resolve_duplicate_strings<O>(open: O, p1: &Pass1) -> io::Result<DupStrings>
+pub(crate) fn resolve_duplicate_strings<O>(
+    open: O,
+    p1: &Pass1,
+) -> io::Result<(DupStrings, std::collections::HashSet<u64>)>
 where
     O: Fn() -> io::Result<HprofReader>,
 {
@@ -243,7 +245,7 @@ where
     })?;
 
     if per_instance.is_empty() {
-        return Ok(DupStrings::default());
+        return Ok((DupStrings::default(), std::collections::HashSet::new()));
     }
 
     // ── Pass B: decode each distinct backing array once → (hash, len) ────────
@@ -460,26 +462,59 @@ where
         .collect();
     drop(hash_text);
 
-    // ── Pass D: classes holding the most Strings ─────────────────────────────
-    // Walk EVERY instance's object-reference fields via the memoized FieldPlan;
-    // credit each owning class for every field ref that points at a String
-    // instance. Bounded by #classes (the counter) + string_addrs (already held).
-    let top_string_holders =
-        compute_string_holders(&open, p1, &string_addrs, id_size, obj_ref_width)?;
-    drop(string_addrs);
+    // ── Pass D DEFERRED ──────────────────────────────────────────────────────
+    // Classes holding the most Strings were historically computed here by a
+    // dedicated full-file `scan_all_instances` (`compute_string_holders`) that
+    // walks every instance's object-reference fields and credits the owning
+    // class for each ref pointing at a String instance. That scan is redundant
+    // with the 2b forward-CSR fill (`fill_heap_2b`), which already reads every
+    // instance's object-field refs. So we now DEFER it: return `string_addrs`
+    // to the caller, which threads it into the 2b scan to accumulate holder
+    // counts there, then calls `finalize_string_holders` to rank them. The
+    // returned `DupStrings.top_string_holders` is left empty here and filled by
+    // the caller after 2b — byte-identical to the old inline scan.
+    Ok((
+        DupStrings {
+            distinct_values,
+            duplicated_values,
+            total_string_instances,
+            approx_wasted_bytes,
+            top_duplicated,
+            length_histogram,
+            length_stats,
+            top_string_holders: Vec::new(),
+            top_by_length,
+            char_array_waste,
+        },
+        string_addrs,
+    ))
+}
 
-    Ok(DupStrings {
-        distinct_values,
-        duplicated_values,
-        total_string_instances,
-        approx_wasted_bytes,
-        top_duplicated,
-        length_histogram,
-        length_stats,
-        top_string_holders,
-        top_by_length,
-        char_array_waste,
-    })
+/// Rank the String-holder counts accumulated during the 2b scan into the top-N
+/// owning classes (refs desc, name asc). This is the tail of the old
+/// `compute_string_holders`, split out so the per-instance ref-counting can be
+/// folded into the 2b forward-CSR fill instead of running a dedicated scan.
+/// `class_counter` maps owning class ADDRESS → String-instance reference count.
+/// `name_of` resolves a class address to its dotted name (the caller supplies a
+/// pre-free snapshot, since class_map/strings are freed before the 2b scan).
+pub(crate) fn finalize_string_holders(
+    class_counter: HashMap<u64, u64>,
+    name_of: impl Fn(u64) -> String,
+) -> Vec<StringHolder> {
+    let mut holders: Vec<StringHolder> = class_counter
+        .into_iter()
+        .map(|(class_addr, string_refs)| StringHolder {
+            class_name: name_of(class_addr),
+            string_refs,
+        })
+        .collect();
+    holders.sort_unstable_by(|a, b| {
+        b.string_refs
+            .cmp(&a.string_refs)
+            .then(a.class_name.cmp(&b.class_name))
+    });
+    holders.truncate(TOP_STRINGS_N);
+    holders
 }
 
 /// Truncate `s` in place to at most `max_bytes` bytes, respecting UTF-8 char
@@ -493,73 +528,6 @@ pub(crate) fn truncate_on_char_boundary(s: &mut String, max_bytes: usize) {
         end -= 1;
     }
     s.truncate(end);
-}
-
-/// Walk every INSTANCE_DUMP's object-reference fields (via the memoized
-/// per-class `FieldPlan`) and, for each reference that points at a
-/// `java.lang.String` instance, credit the owning (referencing) class. Returns
-/// the top-N owning classes by String-reference count. RSS is bounded by the
-/// per-class counter (#classes) plus `string_addrs` (already held by the
-/// caller); no per-object state is retained.
-pub(crate) fn compute_string_holders<O>(
-    open: O,
-    p1: &Pass1,
-    string_addrs: &std::collections::HashSet<u64>,
-    id_size: u8,
-    obj_ref_width: usize,
-) -> io::Result<Vec<StringHolder>>
-where
-    O: Fn() -> io::Result<HprofReader>,
-{
-    let class_map = &p1.class_map;
-    let strings = &p1.strings;
-    let field_plans = build_field_plans(class_map, strings, id_size as usize);
-    // owning class address → count of String-instance references.
-    let mut class_counter: HashMap<u64, u64> = HashMap::new();
-
-    scan_all_instances(&open, id_size, |_obj_addr, class_id, blob| {
-        let Some(plan) = field_plans.get(&class_id) else {
-            return;
-        };
-        let mut hits: u64 = 0;
-        for &(offset, _excluded) in plan {
-            let off = offset as usize;
-            if off + obj_ref_width > blob.len() {
-                continue;
-            }
-            let r = read_ref(&blob[off..], obj_ref_width);
-            if r != 0 && string_addrs.contains(&r) {
-                hits += 1;
-            }
-        }
-        if hits > 0 {
-            *class_counter.entry(class_id).or_insert(0) += hits;
-        }
-    })?;
-    drop(field_plans);
-
-    // Resolve names and rank (refs desc, name asc). Bounded by #classes.
-    let mut holders: Vec<StringHolder> = class_counter
-        .into_iter()
-        .map(|(class_addr, string_refs)| {
-            let class_name = class_map
-                .get(&class_addr)
-                .and_then(|ci| strings.get(&ci.name_id))
-                .map(|s| s.replace('/', "."))
-                .unwrap_or_else(|| format!("0x{class_addr:x}"));
-            StringHolder {
-                class_name,
-                string_refs,
-            }
-        })
-        .collect();
-    holders.sort_unstable_by(|a, b| {
-        b.string_refs
-            .cmp(&a.string_refs)
-            .then(a.class_name.cmp(&b.class_name))
-    });
-    holders.truncate(TOP_STRINGS_N);
-    Ok(holders)
 }
 
 // ── Utility ────────────────────────────────────────────────────────────────
