@@ -652,7 +652,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
             <span style={{ color: "var(--muted)", fontSize: "0.8rem", marginLeft: "0.25rem" }}>({fmtPct(unreachablePct)} of heap)</span>
           </span>
         )}
-        {totalHeap > 0 && (
+        {unreachable > 0 && (
           <span>
             <span style={labelStyle}>Total heap</span>
             <a href="#system-overview" className="summary-num" title={`${fmtExactBytes(totalHeap)} — reachable + unreachable (jump to System Overview)`}>
@@ -685,9 +685,12 @@ function ExecSummaryCard({ report }: { report: Report }) {
         <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
           <span style={labelStyle}>Top suspect</span>
           <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={top.pretty_class}>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /></span>
-          {" "}holds{" "}
-          <strong title={fmtExactBytes(top.retained)}>{formatBytes(top.retained)}</strong>
-          {" "}({fmtPct(topRetainsPct)})
+          {" "}retains{" "}
+          <a href="#leak-suspects" className="summary-num" title={`${fmtExactBytes(top.retained)} retained heap — jump to Leak Suspects`}>
+            <strong>{formatBytes(top.retained)}</strong>
+          </a>
+          {" "}
+          <span title="% of reachable heap by retained size" style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtPct(topRetainsPct)} of reachable)</span>
           {top.root_type_label && top.root_type_label !== "System Class" &&
            !top.pretty_class.toLowerCase().includes(top.root_type_label.toLowerCase()) && (
             <span style={{ color: "var(--muted)", marginLeft: "0.5rem", fontSize: "0.85em" }}>
@@ -697,23 +700,34 @@ function ExecSummaryCard({ report }: { report: Report }) {
         </div>
       )}
 
-      {/* Line 5: Notable indicators */}
+      {/* Line 5: Notable indicators — each links to its detail section */}
       {(showStaleThreadLocals || showOffHeap) && (
         <div style={{ margin: "0.3rem 0", fontSize: "0.88rem", color: "var(--muted)", display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
           {showStaleThreadLocals && (
-            <span>⚠ {fmtCount(li?.thread_local_null_key_count ?? 0)} stale ThreadLocal entr{(li?.thread_local_null_key_count ?? 0) === 1 ? "y" : "ies"}</span>
+            <a href="#leak-indicators" className="summary-num" title="ThreadLocal entries whose key was GC'd but value was never removed — jump to Leak Indicators">
+              ⚠ {fmtCount(li?.thread_local_null_key_count ?? 0)} stale ThreadLocal entr{(li?.thread_local_null_key_count ?? 0) === 1 ? "y" : "ies"}
+            </a>
           )}
           {showOffHeap && (
-            <span>⚠ DirectByteBuffer off-heap: <span title={fmtExactBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}>{formatBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}</span></span>
+            <a href="#off-heap-nio" className="summary-num" title={`${fmtExactBytes(li?.direct_byte_buffer_capacity_sum ?? 0)} of native memory held by DirectByteBuffers — not counted in on-heap totals, jump to Off-Heap NIO`}>
+              ⚠ Off-heap (DirectByteBuffer): {formatBytes(li?.direct_byte_buffer_capacity_sum ?? 0)}
+            </a>
           )}
         </div>
       )}
 
-      {/* Line 6: Longest dominator chain (V25) */}
+      {/* Line 6: Longest dominator chain */}
       {chainDepth != null && chainDepth >= 2 && (
         <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
-          <span style={labelStyle}>Longest dominator chain</span>
-          <strong>{fmtCount(chainDepth)}</strong> hops
+          <span style={labelStyle}>Retention depth</span>
+          <a href="#dominator-depth-distribution" className="summary-num"
+            title={`Longest dominator chain: ${fmtCount(chainDepth)} hops from a GC root to the deepest held object. Deep chains (>20) often mean nested linked structures or deep object graphs — jump to Dominator Depth`}>
+            <strong>{fmtCount(chainDepth)}</strong>
+          </a>
+          {" "}<span style={{ color: "var(--muted)", fontSize: "0.85em" }}>hops deep
+            {chainDepth > 20 && " — nested structure"}
+            {chainDepth > 100 && " (very deep)"}
+          </span>
         </div>
       )}
     </section>
@@ -782,19 +796,19 @@ function LeakScoreDashboard({ report }: { report: Report }) {
         {rows.map(r => {
           const conf = r.score >= 35 ? "high" : r.score >= 18 ? "mid" : "low";
           const signals: string[] = [];
-          if (r.pct > 0.15) signals.push(`${(r.pct * 100).toFixed(0)}% heap`);
+          if (r.pct > 0.15) signals.push(`${(r.pct * 100).toFixed(0)}% retained`);
           if (r.bpi > medBpi * 5) signals.push("↑ bytes/inst");
-          if (r.hub > 0.4) signals.push("↑ hub");
-          if (r.depth <= 1) signals.push("shallow");
+          if (r.hub > 0.4) signals.push("↑ dominates others");
+          if (r.depth <= 1) signals.push("GC-root level");
           return (
             <div key={r.cls} className={`leak-score-card leak-score-${conf}`}
-              title={`Score: ${r.score.toFixed(0)} | depth: ${r.depth} | ${(r.pct*100).toFixed(1)}% heap | ${r.instances} ${r.instances === 1 ? "instance" : "instances"}`}>
+              title={`Score: ${r.score.toFixed(0)}/99 | dominator depth: ${r.depth} | ${(r.pct*100).toFixed(1)}% of reachable heap by retained size | ${r.instances} ${r.instances === 1 ? "instance" : "instances"}`}>
               <div className="leak-score-bar" style={{ width: `${r.score}%` }} />
               <div className="leak-score-body">
                 <button className="trg-link-btn leak-score-cls" title={r.cls} onClick={() => fireInspect({ kind: "class", cls: r.cls })}>
                   <code>{r.cls.split(".").pop()}</code>
                 </button>
-                <span className="leak-score-num">{r.score.toFixed(0)}</span>
+                <span className="leak-score-num" title="Composite leak likelihood score (0–99)">{r.score.toFixed(0)}<span style={{ fontSize: "0.7em", opacity: 0.6 }}>/99</span></span>
               </div>
               <div className="leak-score-tags">
                 {signals.map(s => <span key={s} className="leak-score-tag">{s}</span>)}
@@ -815,16 +829,18 @@ function OomTriage({ report }: { report: Report }) {
       <h2>Memory Triage</h2>
       <p className="subtitle">
         Automated signals pointing to where memory concentrates and what to investigate first.
-        {totalHeap > 0 && <> Total reachable heap: <strong title={fmtExactBytes(totalHeap)}>{formatBytes(totalHeap)}</strong>.</>}
+        {totalHeap > 0 && <> Reachable heap: <a href="#system-overview" className="summary-num" title={`${fmtExactBytes(totalHeap)} — jump to System Overview`}><strong>{formatBytes(totalHeap)}</strong></a>.</>}
       </p>
       <ul>
         {signals.map((s, i) => {
           const detail = SIGNAL_DETAIL_OVERRIDES[s.id] ?? s.detail;
-          const sevColor = s.severity === "critical" ? "var(--critical, #c0392b)" : s.severity === "warning" ? "var(--warn-border, #c84)" : "var(--muted, #888)";
-          const sevLabel = s.severity === "critical" ? "Critical" : s.severity === "warning" ? "Warning" : "Info";
+          const isCritical = s.severity === "critical";
+          const isWarning = s.severity === "warning";
+          const sevColor = isCritical ? "var(--critical, #c0392b)" : isWarning ? "var(--warn-border, #c84)" : "var(--muted, #888)";
+          const sevLabel = isCritical ? "Critical" : isWarning ? "Warning" : "Info";
           return (
-            <li key={i}>
-              <span title={sevLabel} style={{ color: sevColor, marginRight: "0.3rem", fontSize: "0.85em" }}>●</span>
+            <li key={i} style={{ marginBottom: "0.25rem" }}>
+              <span style={{ color: sevColor, marginRight: "0.35rem", fontSize: "0.78rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", verticalAlign: "middle" }}>{sevLabel}</span>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
               {s.nav_class && <>{" "}<PivotBtn cls={s.nav_class} /><OqlBtn cls={s.nav_class} /><ListObjectsBtn cls={s.nav_class} /></>}
               {s.anchor && s.anchor_label ? (
