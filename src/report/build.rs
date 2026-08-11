@@ -516,9 +516,25 @@ pub fn build_model(
     precomputed_field_stats: Option<FieldStats>,
 ) -> Report {
     let generated = now_iso8601();
+    // Per-step wall markers to attribute build_model's ~157s (the biggest touchable
+    // serial WALL lever in the dark phase). Relative to build_model entry. Gated on
+    // HPROF_TIMING like the pass2/t_dark markers; stderr-only, byte-exact.
+    let _t_bm = std::time::Instant::now();
+    macro_rules! t_bm {
+        ($label:expr) => {
+            if std::env::var_os("HPROF_TIMING").is_some() {
+                eprintln!(
+                    "[timing] build_model/{}: {:.3}s",
+                    $label,
+                    _t_bm.elapsed().as_secs_f64()
+                );
+            }
+        };
+    }
     crate::trace::probe("build_model: before system_overview aggregates");
     let overview =
         build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
+    t_bm!("system_overview");
     crate::trace::probe("build_model: after system_overview aggregates");
     let leaks = build_leak_suspects(
         g,
@@ -529,16 +545,21 @@ pub fn build_model(
         opts.dominator_tree_max_nodes,
         opts.dominator_tree_max_depth,
     );
+    t_bm!("leak_suspects");
     crate::trace::probe("build_model: after leak_suspects aggregates");
     let stack_held_via = build_stack_held_via(g);
     let top = build_top_consumers(g, opts.top_consumers, &stack_held_via);
+    t_bm!("top_consumers");
     crate::trace::probe("build_model: after top_consumers aggregates");
     let threads = build_thread_overview(g, overview.total_shallow);
+    t_bm!("thread_overview");
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
+    t_bm!("top_components");
     crate::trace::probe("build_model: after top_components aggregates");
     let dominator_analysis =
         build_dominator_analysis(g, &dc_offsets, &dc_targets, depth_counts.len() as u32);
+    t_bm!("dominator_analysis");
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let obj_graph_flat = if opts.obj_graph {
         Some(build_obj_graph_flat(
@@ -551,6 +572,7 @@ pub fn build_model(
     } else {
         None
     };
+    t_bm!("obj_graph_flat");
     // dc_offsets and dc_targets are not used after this point. Drop them now
     // (~4 GB on large dumps) before the remaining sections allocate intermediate
     // data, reducing the report-phase peak by ~4 GB.
@@ -563,6 +585,7 @@ pub fn build_model(
     } else {
         vec![]
     };
+    t_bm!("type_ref_graph");
     // obj_graph_edges (sparse capture) is not used after type_ref_graph. Free it now.
     drop(g.obj_graph_edges.take());
     // type_ref_pairs (pre-aggregated class-pair counts) is consumed by build_type_ref_graph.
@@ -571,6 +594,7 @@ pub fn build_model(
     drop(g.type_ref_pair_fields.take());
     crate::trace::trim();
     let references = build_references(g);
+    t_bm!("references");
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
     // g.idom is not used after build_references. Free it now (~2 GB on large dumps)
     // before collection/attribution/framework sections run.
@@ -578,13 +602,17 @@ pub fn build_model(
     crate::trace::trim();
     crate::trace::probe("build_model: after drop(g.idom) — before collection_attribution");
     let collection_attribution = build_collection_attribution(g, &overview);
+    t_bm!("collection_attribution");
     crate::trace::probe("build_model: after collection_attribution");
     let fields_by_size = build_fields_by_size(g, &overview);
+    t_bm!("fields_by_size");
     crate::trace::probe("build_model: after fields_by_size");
     let biggest_collections = build_biggest_collections(g);
     let collection_contents = build_collection_contents(g);
+    t_bm!("biggest_collections+contents");
     crate::trace::probe("build_model: after biggest_collections+contents");
     let top_retainers = build_top_retainers(&fields_by_size, &threads);
+    t_bm!("top_retainers");
     crate::trace::probe("build_model: after top_retainers");
     // ThreadLocal Leak Analyzer — gated on find_duplicates (same opt-in as dup
     // analysis; also implicitly enabled by --full-analysis via the flag fold).
@@ -593,10 +621,12 @@ pub fn build_model(
     } else {
         Vec::new()
     };
+    t_bm!("thread_local_analysis");
     crate::trace::probe("build_model: after thread_local_analysis");
     // Framework Auto-Analysis — always-on; each framework only emits when its
     // sentinel class is present in the heap.
     let framework_analysis = crate::pass2::scan_frameworks(g);
+    t_bm!("framework_analysis");
     crate::trace::probe("build_model: after framework_analysis");
     let field_stats = if precomputed_field_stats.is_some() {
         // Precomputed before build_model to free the fwd CSR copy early (saves ~2 GB peak RSS).
@@ -610,6 +640,7 @@ pub fn build_model(
     } else {
         None
     };
+    t_bm!("field_stats");
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -649,6 +680,7 @@ pub fn build_model(
     report.waste_summary = build_waste_summary(&report);
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);
+    t_bm!("waste_summary+triage+done");
     // Invariant: the "% Heap" denominator is one number. `leaks.total_shallow`
     // and `overview.total_shallow` are computed by separate passes but must agree,
     // or the same figure would slug to different percentages in different sections.
