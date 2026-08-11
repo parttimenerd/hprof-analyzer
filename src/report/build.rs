@@ -3826,6 +3826,22 @@ fn build_top_consumers(
     let undef = u32::MAX;
     let class_count = g.class_names.len();
 
+    // Sub-step timing (HPROF_TIMING-gated, stderr-only, byte-exact): splits the
+    // build_top_consumers phase across its distinct passes so we can pick the
+    // real hot sub-part rather than optimizing blind.
+    let _t_tc = std::time::Instant::now();
+    macro_rules! t_tc {
+        ($label:expr) => {
+            if std::env::var_os("HPROF_TIMING").is_some() {
+                eprintln!(
+                    "[timing] top_consumers/{}: {:.3}s",
+                    $label,
+                    _t_tc.elapsed().as_secs_f64()
+                );
+            }
+        };
+    }
+
     // Collect top-level dominators
     let mut top_level: Vec<u32> = Vec::new();
     for i in 0..n {
@@ -3833,12 +3849,14 @@ fn build_top_consumers(
             top_level.push(i as u32);
         }
     }
+    t_tc!("collect_top_level");
 
     // Total shallow of all reachable objects (MAT parity: pct base for Biggest Objects)
     let total_shallow: u64 = (0..n)
         .filter(|&i| g.idom[i] != undef)
         .map(|i| g.shallow[i] as u64)
         .sum();
+    t_tc!("total_shallow");
 
     // Biggest Classes by Retained Heap (aggregate before sorting top_level)
     let mut class_retained: Vec<u64> = vec![0; class_count];
@@ -3873,6 +3891,7 @@ fn build_top_consumers(
     drop(class_retained);
     drop(class_count_map);
     drop(class_order);
+    t_tc!("biggest_classes");
 
     // Biggest Packages: build a pruned package TREE (MAT PackageTreeResult
     // parity). Accumulate cumulative retained/shallow/count into a tree keyed by
@@ -3967,6 +3986,7 @@ fn build_top_consumers(
             node.retained_heap += retained;
         }
     }
+    t_tc!("package_tree_build");
 
     // Prune below-threshold nodes (top-down) and convert to the sorted model.
     // Children are keyed by interned segment id; `seg_names` maps id -> name.
@@ -4011,6 +4031,7 @@ fn build_top_consumers(
         }
     }
     let biggest_packages = convert(String::new(), root, total, threshold_bp, &seg_names);
+    t_tc!("package_tree_convert");
 
     // Sort top_level in-place by retained desc (no clone). Compute size
     // distribution directly from sorted indices to avoid a Vec<u64> copy.
@@ -4019,6 +4040,7 @@ fn build_top_consumers(
             .cmp(&g.retained[a as usize])
             .then(a.cmp(&b))
     });
+    t_tc!("sort_top_level");
     let size_distribution = {
         let k = top_level.len();
         if k == 0 {
@@ -4053,6 +4075,8 @@ fn build_top_consumers(
             }
         }
     };
+
+    t_tc!("size_distribution");
 
     // Biggest Objects
     // Owner attribution (Class#field) for the biggest objects, resolved only
@@ -4134,6 +4158,8 @@ fn build_top_consumers(
             }
         })
         .collect();
+
+    t_tc!("biggest_objects");
 
     TopConsumers {
         biggest_objects,
