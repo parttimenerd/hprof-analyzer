@@ -585,11 +585,11 @@ function ExecSummaryCard({ report }: { report: Report }) {
   const showOffHeap = (li?.direct_byte_buffer_capacity_sum ?? 0) > 0;
   const showStaleThreadLocals = (li?.thread_local_null_key_count ?? 0) > 0;
 
-  const badges: { label: string; color: string }[] = [];
-  if (showLeakRisk) badges.push({ label: "LEAK RISK", color: "var(--critical, #c0392b)" });
-  if (showHighGC) badges.push({ label: "HIGH GC PRESSURE", color: "var(--warning, #e67e22)" });
-  if (showOffHeap) badges.push({ label: "OFF-HEAP MEMORY", color: "var(--info, #2980b9)" });
-  if (showStaleThreadLocals) badges.push({ label: "STALE THREAD LOCALS", color: "var(--warning, #e67e22)" });
+  const badges: { label: string; color: string; href: string }[] = [];
+  if (showLeakRisk) badges.push({ label: "LEAK RISK", color: "var(--critical, #c0392b)", href: "#leak-suspects" });
+  if (showHighGC) badges.push({ label: "HIGH GC PRESSURE", color: "var(--warning, #e67e22)", href: "#unreachable-objects" });
+  if (showOffHeap) badges.push({ label: "OFF-HEAP MEMORY", color: "var(--info, #2980b9)", href: "#off-heap-nio" });
+  if (showStaleThreadLocals) badges.push({ label: "STALE THREAD LOCALS", color: "var(--warning, #e67e22)", href: "#leak-indicators" });
 
   const dumpMs = ov.dump_creation ?? 0;
   const src = ov.source_name ?? "";
@@ -683,11 +683,13 @@ function ExecSummaryCard({ report }: { report: Report }) {
         )}
       </div>
 
-      {/* Line 3: Badge pills */}
+      {/* Line 3: Badge pills — each links to its relevant section */}
       {badges.length > 0 && (
         <div style={{ ...rowStyle, margin: "0.4rem 0" }}>
           {badges.map((b) => (
-            <span key={b.label} style={badgeStyle(b.color)}>{b.label}</span>
+            <a key={b.label} href={b.href} className="summary-num" style={{ textDecoration: "none" }}>
+              <span style={badgeStyle(b.color)}>{b.label}</span>
+            </a>
           ))}
         </div>
       )}
