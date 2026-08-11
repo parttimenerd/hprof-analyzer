@@ -2229,7 +2229,23 @@ fn build_system_overview(
         "Primitive Arrays",
         "Class Objects",
     ];
-    let kind_idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
+    // Composition bucket index for object `i`, given its already-computed
+    // `class_obj_repr` (`repr`). This is `KIND_ORDER.position(object_kind(g,i))`
+    // computed WITHOUT the string round-trip and WITHOUT re-probing the
+    // class-object HashMap: `object_kind` returns "Class Objects" iff
+    // `class_obj_repr != MAX`, so the caller passes the `repr` it already holds.
+    // Bucket ids match KIND_ORDER: 0=Instances, 1=Object Arrays,
+    // 2=Primitive Arrays, 3=Class Objects.
+    let kind_idx_of = |g: &Graph, i: usize, repr: u32| -> usize {
+        if repr != u32::MAX {
+            return 3; // Class Objects
+        }
+        match g.class_names.get(g.class_idx[i] as usize) {
+            Some(raw) if is_prim_array_desc(raw) => 2, // Primitive Arrays
+            Some(raw) if raw.starts_with('[') => 1,    // Object Arrays
+            _ => 0,                                    // Instances
+        }
+    };
     let mut comp_objs = [0u64; 4];
     let mut comp_sh = [0u64; 4];
     // Same kind buckets, but for the UNREACHABLE heap (mirrors comp_objs/comp_sh).
@@ -2266,10 +2282,14 @@ fn build_system_overview(
         let id = g.idom[i];
         let sh = g.shallow[i] as u64;
         let ci_raw = g.class_idx[i] as usize;
+        // Resolve class_obj_repr ONCE (a HashMap probe) — it drives the kind
+        // bucket, the class-object rollup, AND the loader lookup below, which
+        // previously re-probed the same map two more times per object.
+        let repr = class_obj_repr(g, i);
         if id != undef_u32 {
             total_objects += 1;
             total_shallow += sh;
-            let b = kind_idx(object_kind(g, i));
+            let b = kind_idx_of(g, i, repr);
             comp_objs[b] += 1;
             comp_sh[b] += sh;
             // Retention concentration: collect top-level retained values.
@@ -2290,28 +2310,25 @@ fn build_system_overview(
             }
             // Class object: add its retained to the represented class row,
             // and track classes_loaded / loader set.
-            let repr = class_obj_repr(g, i);
             if repr != undef_u32 {
                 if (repr as usize) < class_count {
                     let ci = remap[repr as usize] as usize;
                     class_retained[ci] += g.retained[i];
                 }
                 classes_loaded += 1;
-                let lid = g
-                    .class_obj_class_idx
-                    .get(&(i as u32))
-                    .and_then(|&row| g.class_loader_id.get(row as usize).copied())
-                    .unwrap_or(0);
+                // `repr` IS `class_obj_class_idx[i]`, so reuse it as the row
+                // index instead of re-probing the map.
+                let lid = g.class_loader_id.get(repr as usize).copied().unwrap_or(0);
                 loader_set.insert(lid);
             }
         } else {
             unreachable_count += 1;
             unreachable_shallow += sh;
-            let b = kind_idx(object_kind(g, i));
+            let b = kind_idx_of(g, i, repr);
             unreach_comp_objs[b] += 1;
             unreach_comp_sh[b] += sh;
             // Track prim-array sub-types for the composition chart.
-            if b == kind_idx("Primitive Arrays") {
+            if b == 2 {
                 if let Some(raw) = g.class_names.get(ci_raw) {
                     let human: &'static str = match raw.as_str() {
                         "[B" => "byte[]",
@@ -2391,7 +2408,7 @@ fn build_system_overview(
         // Synthetic <system class loader> counts as an Instance, matching how
         // total_objects/total_shallow count it above.
         if let Some(sz) = g.system_classloader_shallow {
-            let b = kind_idx("Instances");
+            let b = 0; // "Instances" bucket in KIND_ORDER
             objs[b] += 1;
             sh[b] += sz as u64;
         }

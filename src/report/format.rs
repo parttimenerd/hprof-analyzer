@@ -55,7 +55,7 @@ pub(crate) fn escape_string_cell(s: &str) -> String {
 }
 /// a single `[` followed by one primitive type char. These are boot-loaded
 /// (single loader), so exact-name duplicate rows can be folded safely.
-fn is_prim_array_desc(name: &str) -> bool {
+pub(crate) fn is_prim_array_desc(name: &str) -> bool {
     name.len() == 2
         && name.as_bytes()[0] == b'['
         && matches!(
@@ -384,6 +384,11 @@ pub fn pretty_class_name(raw: &str) -> String {
 /// is no `kind[]` array in Graph. Mirrors `pretty_class_name`'s array parsing:
 /// a single `[X` primitive descriptor is a primitive array; any other `[…`
 /// (e.g. `[L…;`, `[[B`) is an object array.
+/// Human-readable kind label for object `i`, matching the KIND_ORDER buckets
+/// in `build_system_overview`. Retained as the `#[cfg(test)]` oracle for that
+/// function's inline `kind_idx_of` (which computes the bucket INDEX directly,
+/// without this string, to avoid ~n string round-trips in the fused hot loop).
+#[cfg(test)]
 pub(crate) fn object_kind(g: &Graph, i: usize) -> &'static str {
     if class_obj_repr(g, i) != u32::MAX {
         return "Class Objects";
