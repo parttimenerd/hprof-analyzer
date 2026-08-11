@@ -111,6 +111,40 @@ mod tests {
         );
     }
 
+    /// The allocation-free `package_segments` used by build_top_consumers must
+    /// yield the SAME segment sequence as `package_path(name).split('.')` for
+    /// every name — this is the byte-exactness guard for the Biggest-Packages
+    /// tree keys. `package_path` is the reference oracle.
+    #[test]
+    fn package_segments_matches_package_path() {
+        use crate::report::format::package_segments;
+        let names = [
+            "java/util/concurrent/Foo",
+            "Foo",
+            "[I",
+            "[B",
+            "[Ljava/lang/String;",
+            "java/lang/String",
+            "java/util/concurrent/ConcurrentHashMap$Node",
+            "[[Lcom/example/Deep$Inner;",
+            "com/example/single/Klass",
+            "a/b/c/d/e/F",
+            "",
+            "[Z",
+            "SomeClassInDefaultPkg$1",
+        ];
+        let mut segs: Vec<&str> = Vec::new();
+        for name in names {
+            package_segments(name, &mut segs);
+            let expected_owned = package_path(name);
+            let expected_segs: Vec<&str> = expected_owned.split('.').collect();
+            assert_eq!(
+                segs, expected_segs,
+                "segment mismatch for {name:?}: got {segs:?}, want {expected_segs:?}"
+            );
+        }
+    }
+
     /// Build a tiny synthetic Graph plus the dominator-children CSR that
     /// `build_model` expects, for the objects/classes described below.
     ///

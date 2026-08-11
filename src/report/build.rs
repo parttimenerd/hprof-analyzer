@@ -3895,11 +3895,16 @@ fn build_top_consumers(
     }
 
     let mut root = Builder::new();
+    // Reused across dominators so only its capacity persists (no per-dominator
+    // Vec alloc); segments borrow from `raw_name` within each iteration.
+    let mut segs: Vec<&str> = Vec::with_capacity(8);
     for &i in &top_level {
         let idx = i as usize;
         // Use the class the object represents (for class objects), else own class.
-        let raw_name = if class_obj_repr(g, idx) != undef {
-            let repr = class_obj_repr(g, idx) as usize;
+        // Resolve class_obj_repr ONCE (it is a HashMap probe) rather than twice.
+        let repr = class_obj_repr(g, idx);
+        let raw_name = if repr != undef {
+            let repr = repr as usize;
             if repr < g.class_names.len() {
                 &g.class_names[repr]
             } else {
@@ -3920,14 +3925,17 @@ fn build_top_consumers(
         };
         let retained = g.retained[idx];
         let shallow = g.shallow[idx] as u64;
-        let path = package_path(raw_name);
 
-        // Accumulate at the root and at every node along the dotted path.
+        // Accumulate at the root and at every node along the package path.
+        // `package_segments` fills `segs` with the same segment sequence as
+        // `package_path(raw_name).split('.')` but borrowed from `raw_name` — no
+        // per-dominator String allocation. Only inserted BTreeMap keys allocate.
+        package_segments(raw_name, &mut segs);
         root.top_dominator_count += 1;
         root.shallow_heap += shallow;
         root.retained_heap += retained;
         let mut node = &mut root;
-        for seg in path.split('.') {
+        for &seg in &segs {
             node = node
                 .children
                 .entry(seg.to_string())

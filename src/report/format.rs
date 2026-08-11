@@ -408,6 +408,10 @@ pub(crate) fn object_kind(g: &Graph, i: usize) -> &'static str {
 /// `(primitives)`; a class in the default package (no dot) becomes `(default)`.
 /// Examples: `java/util/concurrent/Foo` -> `java.util.concurrent`;
 /// `Foo` -> `(default)`; `[I` -> `(primitives)`.
+/// Reference package-path renderer, retained as the byte-exact oracle for
+/// `package_segments` (production uses `package_segments` to avoid per-dominator
+/// allocation). Test-only: the model build no longer calls this.
+#[cfg(test)]
 pub(crate) fn package_path(name: &str) -> String {
     let mut s = name;
     while s.starts_with('[') {
@@ -426,6 +430,47 @@ pub(crate) fn package_path(name: &str) -> String {
     match s.rfind('.') {
         Some(dot) => s[..dot].to_string(),
         None => "(default)".to_string(),
+    }
+}
+
+/// Append the package-path segments of `name` (borrowed, no per-call heap
+/// allocation) into `out`, in the exact order `package_path(name).split('.')`
+/// would. Lets the Biggest-Packages tree build walk millions of top-level
+/// dominators without allocating a `String` per dominator (the
+/// `replace('/', ".")` + `to_string()` in `package_path`). The caller reuses one
+/// `Vec` across dominators (clear + refill), so only its capacity persists and
+/// only the BTreeMap keys that are actually inserted allocate.
+///
+/// Class names separate packages with `/` (nested classes use `$`, arrays `[`),
+/// so the only `.`-producing char in `package_path` is the `/`→`.` replace. The
+/// package path is everything before the final `/` (the class-name component is
+/// dropped). Primitives/arrays collapse to `(primitives)`; a default-package
+/// class (no `/`) becomes `(default)` — matching `package_path` byte-for-byte.
+pub(crate) fn package_segments<'a>(name: &'a str, out: &mut Vec<&'a str>) {
+    out.clear();
+    let mut s = name;
+    while let Some(rest) = s.strip_prefix('[') {
+        s = rest;
+    }
+    if let Some(inner) = s.strip_prefix('L') {
+        if let Some(inner) = inner.strip_suffix(';') {
+            s = inner;
+        }
+    }
+    if s.is_empty()
+        || matches!(s, "B" | "C" | "D" | "F" | "I" | "J" | "S" | "Z")
+        || s.ends_with("[]")
+    {
+        out.push("(primitives)");
+        return;
+    }
+    match s.rfind('/') {
+        Some(slash) => {
+            for seg in s[..slash].split('/') {
+                out.push(seg);
+            }
+        }
+        None => out.push("(default)"),
     }
 }
 
