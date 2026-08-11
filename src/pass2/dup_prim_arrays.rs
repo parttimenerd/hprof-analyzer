@@ -267,62 +267,18 @@ where
     ))
 }
 
-/// Scan all INSTANCE_DUMP records and count how many object-reference fields of
-/// each class point at addresses in `dup_addrs` (a set of duplicate primitive-array
-/// object IDs). Returns the top-N holder classes sorted by `array_refs` descending.
-///
-/// Requires a `Pass1` for the class map (FieldPlan building) — only called when
-/// `--collections` is also on.
-pub(crate) fn compute_dup_array_holders<O>(
-    open: O,
-    p1: &crate::pass1::Pass1,
-    dup_addrs: &HashSet<u64>,
-    id_size: u8,
-) -> io::Result<Vec<DupArrayHolder>>
-where
-    O: Fn() -> io::Result<HprofReader>,
-{
-    use super::strings::scan_all_instances;
-    use super::{build_field_plans, read_ref};
-
-    let obj_ref_width = id_size as usize;
-    let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
-    let mut class_counter: HashMap<u64, u64> = HashMap::new();
-
-    scan_all_instances(&open, id_size, |_obj_addr, class_id, blob| {
-        let Some(plan) = field_plans.get(&class_id) else {
-            return;
-        };
-        let mut hits: u64 = 0;
-        for &(offset, _excluded) in plan {
-            let off = offset as usize;
-            if off + obj_ref_width > blob.len() {
-                continue;
-            }
-            let r = read_ref(&blob[off..], obj_ref_width);
-            if r != 0 && dup_addrs.contains(&r) {
-                hits += 1;
-            }
-        }
-        if hits > 0 {
-            *class_counter.entry(class_id).or_insert(0) += hits;
-        }
-    })?;
-
-    let class_map = &p1.class_map;
-    let strings = &p1.strings;
+/// Build the top-N holder list from counts accumulated during the 2b fill
+/// (replaces `compute_dup_array_holders`'s full-file scan).
+/// `name_of` resolves a class address to its dotted name.
+pub(crate) fn finalize_dup_array_holders(
+    class_counter: HashMap<u64, u64>,
+    name_of: impl Fn(u64) -> String,
+) -> Vec<DupArrayHolder> {
     let mut holders: Vec<DupArrayHolder> = class_counter
         .into_iter()
-        .map(|(class_addr, array_refs)| {
-            let class_name = class_map
-                .get(&class_addr)
-                .and_then(|ci| strings.get(&ci.name_id))
-                .map(|s| s.replace('/', "."))
-                .unwrap_or_else(|| format!("0x{class_addr:x}"));
-            DupArrayHolder {
-                class_name,
-                array_refs,
-            }
+        .map(|(class_addr, array_refs)| DupArrayHolder {
+            class_name: name_of(class_addr),
+            array_refs,
         })
         .collect();
     holders.sort_unstable_by(|a, b| {
@@ -331,5 +287,5 @@ where
             .then(a.class_name.cmp(&b.class_name))
     });
     holders.truncate(DUP_ARRAY_HOLDER_TOP_N);
-    Ok(holders)
+    holders
 }

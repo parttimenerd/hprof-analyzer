@@ -35,7 +35,7 @@ mod strings;
 
 pub(crate) use boxed::build_boxed_holders_from_counts;
 pub(crate) use dup_prim_arrays::{
-    DupPrimArrays, compute_dup_array_holders, compute_dup_prim_arrays,
+    DupPrimArrays, compute_dup_prim_arrays, finalize_dup_array_holders,
 };
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
 pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
@@ -947,21 +947,22 @@ impl Pass2 {
 
         // Opt-in duplicate-primitive-array waste scan. One extra full-file pass
         // alongside --find-duplicates; keeps only a hash→(count,type) map plus
-        // an addr→hash map so we can later compute holder classes.
-        let dup_prim_arrays: Option<DupPrimArrays> = if opts.find_duplicates {
-            let (mut dpa, dup_addrs) = compute_dup_prim_arrays(&open, p1.id_size)?;
+        // an addr→hash map so we can later compute holder classes in the 2b fill.
+        let (dup_prim_arrays_opt, dup_addrs): (
+            Option<DupPrimArrays>,
+            std::collections::HashSet<u64>,
+        ) = if opts.find_duplicates {
+            let (dpa, dup_addrs) = compute_dup_prim_arrays(&open, p1.id_size)?;
             t_phase!("dup_prim_arrays scan done");
-            // If --collections is also on we have the class_map/strings needed
-            // to build FieldPlans and find which classes hold the most dup arrays.
-            if opts.collections && !dup_addrs.is_empty() {
-                dpa.top_array_holders =
-                    compute_dup_array_holders(&open, &p1, &dup_addrs, p1.id_size)?;
-            }
+            // dup_array_holders is now folded into the 2b forward fill below;
+            // the marker still fires here so timing output stays consistent.
             t_phase!("dup_array_holders done");
-            Some(dpa)
+            (Some(dpa), dup_addrs)
         } else {
-            None
+            (None, std::collections::HashSet::new())
         };
+        // Mutable wrapper so we can attach top_array_holders after the 2b fill.
+        let mut dup_prim_arrays = dup_prim_arrays_opt;
 
         // Opt-in boxed-number holder counting. Pass 1 (address collection) was
         // folded into the 2a scan (captured_boxed_addrs). Pass 2 (ref counting)
@@ -977,6 +978,13 @@ impl Pass2 {
         // alive until the 2b scan; the ranked holder list is built afterwards
         // (finalize_string_holders) and attached to dup_strings.
         let mut string_holder_counts: HashMap<u64, u64> = HashMap::new();
+
+        // Opt-in dup-array-holder counting (folded from compute_dup_array_holders,
+        // which was a dedicated full-file INSTANCE_DUMP scan). The 2b fill already
+        // reads every instance's ref fields, so we accumulate counts there instead.
+        // `dup_addrs` must stay alive until the 2b scan; the holder list is built
+        // afterwards (finalize_dup_array_holders) and attached to dup_prim_arrays.
+        let mut dup_array_holder_counts: HashMap<u64, u64> = HashMap::new();
 
         // system_properties / jvm_version were resolved above alongside thread
         // names in the shared-scan orchestrator (resolve_thread_and_props).
@@ -1024,6 +1032,23 @@ impl Pass2 {
         } else {
             HashMap::new()
         };
+
+        // Pre-free snapshot for dup-array-holder resolution (folded from
+        // compute_dup_array_holders). Gated on collections && find_duplicates;
+        // the original scan used the same class_map/strings lookup + fallback.
+        let dup_array_holder_names: HashMap<u64, String> =
+            if opts.collections && opts.find_duplicates {
+                p1.class_map
+                    .iter()
+                    .filter_map(|(&addr, ci)| {
+                        p1.strings
+                            .get(&ci.name_id)
+                            .map(|s| (addr, s.replace('/', ".")))
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
 
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
@@ -1229,6 +1254,8 @@ impl Pass2 {
                         &mut boxed_holder_counts,
                         &string_addrs,
                         &mut string_holder_counts,
+                        &dup_addrs,
+                        &mut dup_array_holder_counts,
                     ),
                     tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
                     _ => r.skip(length),
@@ -1340,6 +1367,25 @@ impl Pass2 {
                         .unwrap_or_else(|| format!("0x{class_addr:x}"))
                 });
         }
+
+        // Finalize dup-array-holder counts accumulated during the 2b fill
+        // (replaces the dedicated compute_dup_array_holders full-file scan).
+        // Only attaches when collections+find_duplicates are both on and there
+        // are non-empty counts; otherwise dup_array_holder_counts is empty.
+        if let Some(dpa) = dup_prim_arrays.as_mut() {
+            if !dup_array_holder_counts.is_empty() {
+                dpa.top_array_holders = finalize_dup_array_holders(
+                    std::mem::take(&mut dup_array_holder_counts),
+                    |class_addr| {
+                        dup_array_holder_names
+                            .get(&class_addr)
+                            .cloned()
+                            .unwrap_or_else(|| format!("0x{class_addr:x}"))
+                    },
+                );
+            }
+        }
+
         let mut graph = Graph {
             n,
             format: p1.format,
@@ -1786,6 +1832,8 @@ impl Pass2 {
         boxed_holder_counts: &mut HashMap<u64, u64>,
         string_addrs: &std::collections::HashSet<u64>,
         string_holder_counts: &mut HashMap<u64, u64>,
+        dup_addrs: &std::collections::HashSet<u64>,
+        dup_array_holder_counts: &mut HashMap<u64, u64>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1948,6 +1996,16 @@ impl Pass2 {
                                         && string_addrs.contains(&ref_val)
                                     {
                                         *string_holder_counts.entry(class_id).or_insert(0) += 1;
+                                    }
+                                    // Dup-array-holder counting, folded from
+                                    // compute_dup_array_holders (deleted dedicated
+                                    // full-file scan). Count refs to duplicate
+                                    // primitive-array instances per holder class.
+                                    if !dup_addrs.is_empty()
+                                        && ref_val != 0
+                                        && dup_addrs.contains(&ref_val)
+                                    {
+                                        *dup_array_holder_counts.entry(class_id).or_insert(0) += 1;
                                     }
                                     let name_idx = if do_names && fi < named_plan.len() {
                                         let fname = &named_plan[fi].2;
