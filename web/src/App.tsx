@@ -6645,9 +6645,158 @@ function fireInspect(page: InspectPage) {
   window.dispatchEvent(new CustomEvent("inspect", { detail: page }));
 }
 
+// Sankey view of the type reference graph. The type graph is a general
+// (cyclic) directed graph, but d3-sankey requires a DAG. We break cycles with
+// a deterministic heuristic: rank nodes by total retained flow (descending) and
+// keep only edges that go from a higher-ranked (heavier) node to a lower-ranked
+// one. This surfaces the dominant "big holds small" retention direction and can
+// never form a cycle. Ties are broken by class name so the layout is stable.
+function TypeGraphSankey({ edges, topN, onSelect }: { edges: TypeEdge[]; topN: number; onSelect: (cls: string) => void }) {
+  const [fmtB] = useFmtBytes();
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(600);
+  const [hover, setHover] = React.useState<{ x: number; y: number; name: string; flow: number } | null>(null);
+
+  React.useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      const bw = entries[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const { nodes, links, height, kept, total } = React.useMemo(() => {
+    // Total retained flow per node, used both for ranking and node sizing.
+    const retByNode = new Map<string, number>();
+    for (const e of edges) {
+      retByNode.set(e.src_class, (retByNode.get(e.src_class) ?? 0) + e.retained_weight);
+      retByNode.set(e.dst_class, (retByNode.get(e.dst_class) ?? 0) + e.retained_weight);
+    }
+    const ranked = Array.from(retByNode.keys()).sort((a, b) => {
+      const d = (retByNode.get(b) ?? 0) - (retByNode.get(a) ?? 0);
+      return d !== 0 ? d : a.localeCompare(b);
+    });
+    const keptArr = ranked.slice(0, topN);
+    const rank = new Map(keptArr.map((c, i) => [c, i]));
+    // Acyclic edge set: only higher-rank → lower-rank, both within kept set.
+    // Coalesce parallel edges (same src/dst) by summing weights.
+    const linkMap = new Map<string, number>();
+    for (const e of edges) {
+      const rs = rank.get(e.src_class);
+      const rd = rank.get(e.dst_class);
+      if (rs === undefined || rd === undefined || rs >= rd) continue;
+      const key = `${rs} ${rd}`;
+      linkMap.set(key, (linkMap.get(key) ?? 0) + e.retained_weight);
+    }
+    const nodes: SNode[] = keptArr.map((name, i) => ({
+      name,
+      retained: retByNode.get(name) ?? 0,
+      count: 0,
+      _idx: i,
+    }));
+    const links: SLink[] = Array.from(linkMap.entries()).map(([k, v]) => {
+      const [s, t] = k.split(" ");
+      return { source: Number(s), target: Number(t), value: Math.max(v, 1) };
+    });
+    const nodePad = keptArr.length > 30 ? 6 : keptArr.length > 15 ? 10 : 12;
+    const height = Math.min(700, Math.max(240, keptArr.length * (14 + nodePad)));
+    return { nodes, links, height, kept: keptArr.length, total: ranked.length };
+  }, [edges, topN]);
+
+  const LABEL_COL = 240;
+
+  const graph = React.useMemo(() => {
+    if (w < 60 || nodes.length <= 1 || links.length === 0) return null;
+    // d3-sankey mutates its inputs, so clone every render.
+    const ns: SNode[] = nodes.map((n) => ({ ...n }));
+    const ls: SLink[] = links.map((l) => ({ ...l }));
+    try {
+      const svgW = Math.max(1, w - LABEL_COL);
+      const layout = sankey<SNode, SLink>()
+        .nodeId((n) => n._idx)
+        .nodeWidth(16)
+        .nodePadding(nodes.length > 30 ? 6 : 10)
+        .extent([[1, 1], [svgW - 1, height - 1]]);
+      return layout({ nodes: ns, links: ls });
+    } catch {
+      return null;
+    }
+  }, [w, nodes, links, height]);
+
+  if (nodes.length <= 1 || links.length === 0) {
+    return (
+      <p className="subtitle">
+        Not enough directed retention flow to render a Sankey. Try the Graph or Table view,
+        or re-run with <code>--obj-graph</code>.
+      </p>
+    );
+  }
+  if (graph === null) return <p className="subtitle">Sankey layout unavailable at this width.</p>;
+
+  const svgW = Math.max(1, w - LABEL_COL);
+
+  return (
+    <>
+      <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0 0 0.5rem" }}>
+        Retained-flow Sankey: left→right follows the dominant "larger type retains smaller type"
+        direction. Edges within a rank tier or forming cycles are omitted to keep the diagram acyclic.
+        {total > kept && <> Showing top {kept} of {total} types.</>}
+      </p>
+      <div ref={containerRef} style={{ width: "100%" }}>
+        <svg width={w} height={height} role="img" aria-label="Type reference Sankey"
+          style={{ display: "block", overflow: "visible" }}>
+          {graph.links.map((link, i) => (
+            <path key={`tgl-${i}`} className="sankey-link"
+              d={sankeyLinkHorizontal()(link) ?? undefined}
+              fill="none" stroke="var(--muted)"
+              strokeWidth={Math.max(1, link.width ?? 1)} strokeOpacity={0.32} />
+          ))}
+          {graph.nodes.map((n, i) => {
+            type SN = SNode & { x0?: number; x1?: number; y0?: number; y1?: number };
+            const sn = n as unknown as SN;
+            const x0 = sn.x0 ?? 0, x1 = sn.x1 ?? 0, y0 = sn.y0 ?? 0, y1 = sn.y1 ?? 0;
+            const nodeH = Math.max(2, y1 - y0);
+            const midY = y0 + nodeH / 2;
+            const short = tpfgShortName(sn.name);
+            const label = short.length > 34 ? short.slice(0, 33) + "…" : short;
+            return (
+              <g key={`tgn-${i}`} className="sankey-node">
+                <rect x={x0} y={y0} width={Math.max(2, x1 - x0)} height={nodeH}
+                  fill={tpfgColor(sn.name)} style={{ cursor: "pointer" }}
+                  onClick={() => onSelect(sn.name)}
+                  onMouseEnter={(e) => setHover({ x: e.clientX, y: e.clientY, name: sn.name, flow: sn.retained })}
+                  onMouseLeave={() => setHover(null)} />
+                <text x={x1 + 6} y={midY} dominantBaseline="middle"
+                  fontSize="0.72rem" fill="var(--fg)" style={{ pointerEvents: "none" }}>
+                  {label}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {hover && (
+        <div style={{
+          position: "fixed", left: hover.x + 12, top: hover.y + 12, zIndex: 10000,
+          background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4,
+          padding: "0.4rem 0.6rem", fontSize: "0.78rem", pointerEvents: "none",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.3)", maxWidth: 360,
+        }}>
+          <div style={{ fontWeight: 600, wordBreak: "break-all" }}>{hover.name}</div>
+          <div style={{ color: "var(--muted)" }} title={fmtExactBytes(hover.flow)}>
+            retained flow: {fmtB(hover.flow)}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histogram: HistRow[]; objGraph?: ObjGraphFlat | null }) {
   const [fmtB] = useFmtBytes();
-  const [view, setView] = React.useState<"graph" | "table">("graph");
+  const [view, setView] = React.useState<"graph" | "table" | "sankey">("graph");
   const [filter, setFilter] = React.useState("");
   const [topN, setTopN] = React.useState(100);
   const [sizeBy, setSizeBy] = React.useState<"retained" | "edges">("retained");
@@ -6911,13 +7060,13 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
     <div style={wrapStyle}>
       {/* Tab bar */}
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-        {(["graph", "table"] as const).map(v => (
+        {(["graph", "table", "sankey"] as const).map(v => (
           <button key={v} onClick={() => setView(v)} style={{
             padding: "0.25rem 0.85rem", fontSize: "0.88rem",
             border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
             background: view === v ? "var(--accent)" : "transparent",
             color: view === v ? "#fff" : "var(--fg)",
-          }}>{v === "graph" ? "⬡ Graph" : "⊞ Table"}</button>
+          }}>{v === "graph" ? "⬡ Graph" : v === "table" ? "⊞ Table" : "⇉ Sankey"}</button>
         ))}
         <span style={{ flex: 1 }} />
         {view === "graph" && (
@@ -6954,7 +7103,25 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
             </button>
           </>
         )}
+        {view === "sankey" && (
+          <>
+            <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Top:</span>
+            {([50, 100, 150] as const).map(n => (
+              <button key={n} onClick={() => setTopN(n)} style={{
+                padding: "0.15rem 0.5rem", fontSize: "0.82rem",
+                border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+                background: topN === n ? "var(--accent)" : "transparent",
+                color: topN === n ? "#fff" : "var(--fg)",
+              }}>{n}</button>
+            ))}
+          </>
+        )}
       </div>
+
+      {/* Sankey view */}
+      {view === "sankey" && (
+        <TypeGraphSankey edges={edges} topN={topN} onSelect={setSelected} />
+      )}
 
       {/* Graph view */}
       {view === "graph" && (
@@ -10306,6 +10473,39 @@ function fmtDeltaCount(n: number): string {
   return sign + Math.abs(n).toLocaleString("en-US");
 }
 
+// Compact inline sparkline of a retained-size series across the dump sequence.
+// Makes intermediate-dump trajectories (spikes, plateaus, monotone growth)
+// scannable at a glance — the whole point of an N-way diff over first-vs-last.
+// Baseline-relative: y is normalized within the row's own min/max so shape,
+// not absolute magnitude, is what reads. A single point renders as a dot.
+function RetainedSparkline({ series }: { series: number[] }) {
+  const w = 68, h = 18, pad = 2;
+  if (series.length === 0) return null;
+  if (series.length === 1) {
+    return (
+      <svg width={w} height={h} role="img" aria-label="single data point">
+        <circle cx={w / 2} cy={h / 2} r={2} fill="var(--accent)" />
+      </svg>
+    );
+  }
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = max - min;
+  const x = (i: number) => pad + (i / (series.length - 1)) * (w - 2 * pad);
+  const y = (v: number) => range === 0 ? h / 2 : (h - pad) - ((v - min) / range) * (h - 2 * pad);
+  const pts = series.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const up = series[series.length - 1] >= series[0];
+  const stroke = range === 0 ? "var(--muted)" : up ? "var(--ok, #22c55e)" : "#e0662b";
+  return (
+    <svg width={w} height={h} role="img" aria-label="retained trajectory"
+      style={{ display: "block" }}>
+      <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.25}
+        strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(series.length - 1)} cy={y(series[series.length - 1])} r={1.8} fill={stroke} />
+    </svg>
+  );
+}
+
 // A sortable, N-column class/suspect table. Columns: name | r1 … rN | Δ.
 // Sorting is descending by the chosen numeric key: any per-report column
 // (its retained value) or the Δ column. Copies before sorting so the model
@@ -10326,6 +10526,13 @@ function SeriesTable({
   type SRow = SeriesClassRow | SeriesSuspectRow;
   const seriesCols: TableColumn<SRow>[] = [
     { id: "name", name: nameLabel, grow: 1, cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    ...(n >= 2 ? [{
+      id: "trend",
+      name: "Trend",
+      width: "84px",
+      cell: (r: SRow) => <RetainedSparkline series={r.retained} />,
+      sortable: false,
+    } as TableColumn<SRow>] : []),
     ...labels.map((lbl, i): TableColumn<SRow> => ({
       id: `r${i}`,
       name: useKB ? `Retained r${i + 1} (KB)` : `Retained r${i + 1}`,
@@ -10461,6 +10668,13 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
   const spikeNameMaxW = `${Math.max(160, 1040 - 322 - labels.length * 140)}px`;
   const spikeCols: TableColumn<SeriesClassRow>[] = [
     { id: "name", name: "Class", grow: 1, maxWidth: spikeNameMaxW, cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    ...(labels.length >= 2 ? [{
+      id: "trend",
+      name: "Trend",
+      width: "84px",
+      cell: (r: SeriesClassRow) => <RetainedSparkline series={r.retained} />,
+      sortable: false,
+    } as TableColumn<SeriesClassRow>] : []),
     ...labels.map((lbl, i): TableColumn<SeriesClassRow> => ({
       id: `r${i}`,
       name: useKB ? `Retained r${i + 1} (KB)` : `Retained r${i + 1}`,
