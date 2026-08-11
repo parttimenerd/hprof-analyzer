@@ -1,9 +1,9 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-09T08:12:50.774586000Z",
+  "generated": "2026-08-11T21:21:19.954575000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
-    "file_path": "tests/fixtures/fixtures/dump_4_philosophers.hprof",
+    "file_path": "tests/fixtures/dump_4_philosophers.hprof",
     "format": "JAVA PROFILE 1.0.2",
     "file_size": 23731997,
     "identifier_size_bits": 64,
@@ -105538,6 +105538,7 @@
   },
   "waste_summary": {
     "total_bytes": 4754568,
+    "reachable_bytes": 4449220,
     "sources": [
       {
         "label": "Under-filled Object Arrays",
