@@ -938,18 +938,21 @@ impl Pass2 {
         } else {
             None
         };
+        t_phase!("dup_strings done");
 
         // Opt-in duplicate-primitive-array waste scan. One extra full-file pass
         // alongside --find-duplicates; keeps only a hash→(count,type) map plus
         // an addr→hash map so we can later compute holder classes.
         let dup_prim_arrays: Option<DupPrimArrays> = if opts.find_duplicates {
             let (mut dpa, dup_addrs) = compute_dup_prim_arrays(&open, p1.id_size)?;
+            t_phase!("dup_prim_arrays scan done");
             // If --collections is also on we have the class_map/strings needed
             // to build FieldPlans and find which classes hold the most dup arrays.
             if opts.collections && !dup_addrs.is_empty() {
                 dpa.top_array_holders =
                     compute_dup_array_holders(&open, &p1, &dup_addrs, p1.id_size)?;
             }
+            t_phase!("dup_array_holders done");
             Some(dpa)
         } else {
             None
