@@ -3875,13 +3875,20 @@ fn build_top_consumers(
     drop(class_order);
 
     // Biggest Packages: build a pruned package TREE (MAT PackageTreeResult
-    // parity). Accumulate cumulative retained/shallow/count into a BTreeMap-keyed
-    // builder so the model has no HashMap, then convert + sort + prune.
+    // parity). Accumulate cumulative retained/shallow/count into a tree keyed by
+    // an INTERNED segment id (u32), not the segment String. Each distinct package
+    // segment (e.g. "java", "util") is interned once into `seg_names`; the hot
+    // per-dominator loop then does zero String allocation (the old
+    // `entry(seg.to_string())` allocated a fresh key on EVERY segment of EVERY
+    // top-level dominator, even on BTreeMap hits — tens of millions of wasted
+    // allocs). Keying by id changes the BTreeMap's traversal order vs the old
+    // string keys, but `convert` re-sorts every node's children by
+    // (retained desc, name asc), so the emitted tree is byte-identical.
     struct Builder {
         top_dominator_count: u64,
         shallow_heap: u64,
         retained_heap: u64,
-        children: std::collections::BTreeMap<String, Builder>,
+        children: std::collections::BTreeMap<u32, Builder>,
     }
     impl Builder {
         fn new() -> Builder {
@@ -3894,6 +3901,13 @@ fn build_top_consumers(
         }
     }
 
+    // Segment interner: id -> owned name (for `convert`), and borrowed
+    // segment slice -> id. The segment slices borrow from `g.class_names`
+    // (never mutated in this function), so they are valid for the whole loop
+    // and can key the map directly with no owned copy or unsafe.
+    let mut seg_names: Vec<String> = Vec::new();
+    let mut seg_ids: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+
     let mut root = Builder::new();
     // Reused across dominators so only its capacity persists (no per-dominator
     // Vec alloc); segments borrow from `raw_name` within each iteration.
@@ -3903,7 +3917,7 @@ fn build_top_consumers(
         // Use the class the object represents (for class objects), else own class.
         // Resolve class_obj_repr ONCE (it is a HashMap probe) rather than twice.
         let repr = class_obj_repr(g, idx);
-        let raw_name = if repr != undef {
+        let raw_name: &str = if repr != undef {
             let repr = repr as usize;
             if repr < g.class_names.len() {
                 &g.class_names[repr]
@@ -3929,17 +3943,25 @@ fn build_top_consumers(
         // Accumulate at the root and at every node along the package path.
         // `package_segments` fills `segs` with the same segment sequence as
         // `package_path(raw_name).split('.')` but borrowed from `raw_name` — no
-        // per-dominator String allocation. Only inserted BTreeMap keys allocate.
+        // per-dominator String allocation. Segment strings are interned to u32
+        // ids, so a segment allocates at most once (on first sight) rather than
+        // once per dominator that mentions it.
         package_segments(raw_name, &mut segs);
         root.top_dominator_count += 1;
         root.shallow_heap += shallow;
         root.retained_heap += retained;
         let mut node = &mut root;
         for &seg in &segs {
-            node = node
-                .children
-                .entry(seg.to_string())
-                .or_insert_with(Builder::new);
+            let id = match seg_ids.get(seg) {
+                Some(&id) => id,
+                None => {
+                    let id = seg_names.len() as u32;
+                    seg_names.push(seg.to_string());
+                    seg_ids.insert(seg, id);
+                    id
+                }
+            };
+            node = node.children.entry(id).or_insert_with(Builder::new);
             node.top_dominator_count += 1;
             node.shallow_heap += shallow;
             node.retained_heap += retained;
@@ -3947,9 +3969,16 @@ fn build_top_consumers(
     }
 
     // Prune below-threshold nodes (top-down) and convert to the sorted model.
+    // Children are keyed by interned segment id; `seg_names` maps id -> name.
     let total = root.retained_heap;
     let threshold_bp = PACKAGE_THRESHOLD_BP;
-    fn convert(name: String, b: Builder, total: u64, threshold_bp: u32) -> PackageNode {
+    fn convert(
+        name: String,
+        b: Builder,
+        total: u64,
+        threshold_bp: u32,
+        seg_names: &[String],
+    ) -> PackageNode {
         let mut children: Vec<PackageNode> = b
             .children
             .into_iter()
@@ -3957,7 +3986,15 @@ fn build_top_consumers(
             .filter(|(_, cb)| {
                 cb.retained_heap as u128 * 10_000 >= total as u128 * threshold_bp as u128
             })
-            .map(|(seg, cb)| convert(seg, cb, total, threshold_bp))
+            .map(|(id, cb)| {
+                convert(
+                    seg_names[id as usize].clone(),
+                    cb,
+                    total,
+                    threshold_bp,
+                    seg_names,
+                )
+            })
             .collect();
         // Sort retained-desc, tie-broken by name-asc.
         children.sort_by(|a, b| {
@@ -3973,7 +4010,7 @@ fn build_top_consumers(
             children,
         }
     }
-    let biggest_packages = convert(String::new(), root, total, threshold_bp);
+    let biggest_packages = convert(String::new(), root, total, threshold_bp, &seg_names);
 
     // Sort top_level in-place by retained desc (no clone). Compute size
     // distribution directly from sorted indices to avoid a Vec<u64> copy.
