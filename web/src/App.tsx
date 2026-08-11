@@ -564,6 +564,13 @@ function ExecSummaryCard({ report }: { report: Report }) {
   const total = ov.total_shallow;
   const unreachable = ov.unreachable_shallow ?? 0;
   const wasted = report.waste_summary?.total_bytes ?? 0;
+  // Reachable + unreachable = the whole dump. Waste is measured across the whole
+  // heap (the duplicate/fill scans walk every instance, reachable or not), so its
+  // honest denominator is totalHeap — NOT reachable alone. Using reachable makes
+  // "wasted > reachable heap" look impossible when it is merely a mostly-dead dump.
+  const totalHeap = total + unreachable;
+  const unreachablePct = pctOf(unreachable, totalHeap);
+  const wastedPct = pctOf(wasted, totalHeap);
   const triage = report.triage ?? [];
   const li = report.leak_indicators;
   const top = report.leaks.suspects[0] ?? null;
@@ -626,22 +633,40 @@ function ExecSummaryCard({ report }: { report: Report }) {
         )}
       </div>
 
-      {/* Line 2: Heap sizes */}
+      {/* Line 2: Heap sizes. Reachable + Unreachable = Total; Wasted is a
+          whole-heap figure shown as % of total so it never looks larger than
+          "the heap" on a mostly-dead dump. Each number links to its section. */}
       <div style={rowStyle}>
         <span>
           <span style={labelStyle}>Reachable heap</span>
-          <strong title={fmtExactBytes(total)}>{formatBytes(total)}</strong>
+          <a href="#system-overview" className="summary-num" title={`${fmtExactBytes(total)} — live objects (jump to System Overview)`}>
+            <strong>{formatBytes(total)}</strong>
+          </a>
         </span>
         {unreachable > 0 && (
           <span>
             <span style={labelStyle}>Unreachable</span>
-            <strong title={fmtExactBytes(unreachable)}>{formatBytes(unreachable)}</strong>
+            <a href="#unreachable-objects" className="summary-num" title={`${fmtExactBytes(unreachable)} — dead objects not yet collected (jump to Unreachable Objects)`}>
+              <strong>{formatBytes(unreachable)}</strong>
+            </a>
+            <span style={{ color: "var(--muted)", fontSize: "0.8rem", marginLeft: "0.25rem" }}>({fmtPct(unreachablePct)} of heap)</span>
+          </span>
+        )}
+        {totalHeap > 0 && (
+          <span>
+            <span style={labelStyle}>Total heap</span>
+            <a href="#system-overview" className="summary-num" title={`${fmtExactBytes(totalHeap)} — reachable + unreachable (jump to System Overview)`}>
+              <strong>{formatBytes(totalHeap)}</strong>
+            </a>
           </span>
         )}
         {wasted > 0 && (
           <span>
             <span style={labelStyle}>Wasted</span>
-            <strong title={fmtExactBytes(wasted)}>{formatBytes(wasted)}</strong>
+            <a href="#waste-summary" className="summary-num" title={`${fmtExactBytes(wasted)} — reclaimable across the whole heap: duplicates, under-filled collections/arrays (jump to Waste Summary)`}>
+              <strong>{formatBytes(wasted)}</strong>
+            </a>
+            <span style={{ color: "var(--muted)", fontSize: "0.8rem", marginLeft: "0.25rem" }}>({fmtPct(wastedPct)} of heap)</span>
           </span>
         )}
       </div>
@@ -854,7 +879,7 @@ function WasteSummarySection({ report }: { report: Report }) {
     <section className="section" id="waste-summary" tabIndex={-1}>
       <h2>Waste Summary</h2>
       <p className="subtitle">
-        <strong title={fmtExactBytes(w.total_bytes)}>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
+        <strong title={fmtExactBytes(w.total_bytes)}>{fmtB(w.total_bytes)}</strong> estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap. Waste is measured across the <em>whole heap</em> (reachable + unreachable), so it can exceed the reachable-heap figure on a mostly-dead dump.
       </p>
       <div className="waste-summary-table">
         <StdTable columns={wasteCols} data={w.sources} searchKeys={["label"]} fmtBtn={kbBtn} defaultSortFieldId="reclaimable" defaultSortAsc={false} />
