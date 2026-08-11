@@ -3952,27 +3952,26 @@ fn build_top_consumers(
     // Reused across dominators so only its capacity persists (no per-dominator
     // Vec alloc); segments borrow from `raw_name` within each iteration.
     let mut segs: Vec<&str> = Vec::with_capacity(8);
+    // Per-class memo of the resolved interned-segment-id PATH. The name that
+    // drives the package path is `g.class_names[name_ci]`, and #classes (memo
+    // size) is tiny vs #dominators (~329M on the 34GB dump), so the vast
+    // majority of dominators repeat a class already seen. Caching the id path
+    // per class turns ~329M `package_segments` name-parses + per-segment
+    // `seg_ids` string-hash lookups into ~#classes of them, plus a cheap
+    // `Vec<u32>` replay per dominator. `u32::MAX` marks "not yet computed".
+    // Byte-exact: same interned ids, same tree, same `convert` output.
+    let mut class_seg_path: Vec<Option<Vec<u32>>> = vec![None; class_count];
     for &i in &top_level {
         let idx = i as usize;
         // Use the class the object represents (for class objects), else own class.
         // Resolve class_obj_repr ONCE (it is a HashMap probe) rather than twice.
         let repr = class_obj_repr(g, idx);
-        let raw_name: &str = if repr != undef {
-            let repr = repr as usize;
-            if repr < g.class_names.len() {
-                &g.class_names[repr]
-            } else {
-                let ci = g.class_idx[idx] as usize;
-                if ci < g.class_names.len() {
-                    &g.class_names[ci]
-                } else {
-                    continue;
-                }
-            }
+        let name_ci: usize = if repr != undef && (repr as usize) < class_count {
+            repr as usize
         } else {
             let ci = g.class_idx[idx] as usize;
-            if ci < g.class_names.len() {
-                &g.class_names[ci]
+            if ci < class_count {
+                ci
             } else {
                 continue;
             }
@@ -3980,27 +3979,37 @@ fn build_top_consumers(
         let retained = g.retained[idx];
         let shallow = g.shallow[idx] as u64;
 
+        // Resolve (and memoize) the interned segment-id path for this class.
+        // On a cache miss, parse the name into borrowed segments and intern each
+        // (allocating a seg_name only on a segment's first global sighting), then
+        // store the id path so future dominators of this class skip the parse and
+        // the per-segment string hashing entirely.
+        if class_seg_path[name_ci].is_none() {
+            let raw_name: &str = &g.class_names[name_ci];
+            package_segments(raw_name, &mut segs);
+            let mut path: Vec<u32> = Vec::with_capacity(segs.len());
+            for &seg in &segs {
+                let id = match seg_ids.get(seg) {
+                    Some(&id) => id,
+                    None => {
+                        let id = seg_names.len() as u32;
+                        seg_names.push(seg.to_string());
+                        seg_ids.insert(seg, id);
+                        id
+                    }
+                };
+                path.push(id);
+            }
+            class_seg_path[name_ci] = Some(path);
+        }
+        let path = class_seg_path[name_ci].as_ref().unwrap();
+
         // Accumulate at the root and at every node along the package path.
-        // `package_segments` fills `segs` with the same segment sequence as
-        // `package_path(raw_name).split('.')` but borrowed from `raw_name` — no
-        // per-dominator String allocation. Segment strings are interned to u32
-        // ids, so a segment allocates at most once (on first sight) rather than
-        // once per dominator that mentions it.
-        package_segments(raw_name, &mut segs);
         root.top_dominator_count += 1;
         root.shallow_heap += shallow;
         root.retained_heap += retained;
         let mut node = &mut root;
-        for &seg in &segs {
-            let id = match seg_ids.get(seg) {
-                Some(&id) => id,
-                None => {
-                    let id = seg_names.len() as u32;
-                    seg_names.push(seg.to_string());
-                    seg_ids.insert(seg, id);
-                    id
-                }
-            };
+        for &id in path {
             node = node.children.entry(id).or_insert_with(Builder::new);
             node.top_dominator_count += 1;
             node.shallow_heap += shallow;
