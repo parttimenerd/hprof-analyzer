@@ -4540,6 +4540,13 @@
       "description": "A single headline \"reclaimable N bytes\" figure folding every waste source\nthe report can quantify (under-filled collections & object arrays, duplicate\nString values, String backing-array slack, duplicate primitive arrays). The\nsources are approximate and may overlap slightly; `total_bytes` is their sum.\nPresent only when at least one source is nonzero. Additive; not part of MAT\nparity comparison.",
       "type": "object",
       "properties": {
+        "reachable_bytes": {
+          "description": "Proportional estimate of waste attributable to reachable objects only.\nComputed as `total_bytes * reachable_shallow / (reachable_shallow + unreachable_shallow)`.\nApproximate because waste scans do not distinguish reachable from unreachable per-instance.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "sources": {
           "description": "Per-source breakdown, sorted by bytes desc. Only nonzero sources.",
           "type": "array",

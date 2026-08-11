@@ -1202,6 +1202,11 @@ pub struct WasteSource {
 pub struct WasteSummary {
     /// Sum of every source's bytes (the headline "reclaimable" figure).
     pub total_bytes: u64,
+    /// Proportional estimate of waste attributable to reachable objects only.
+    /// Computed as `total_bytes * reachable_shallow / (reachable_shallow + unreachable_shallow)`.
+    /// Approximate because waste scans do not distinguish reachable from unreachable per-instance.
+    #[serde(default)]
+    pub reachable_bytes: u64,
     /// Per-source breakdown, sorted by bytes desc. Only nonzero sources.
     pub sources: Vec<WasteSource>,
 }

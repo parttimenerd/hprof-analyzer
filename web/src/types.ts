@@ -876,6 +876,9 @@ export interface WasteSource {
 // approximate and may overlap slightly; total_bytes is their sum.
 export interface WasteSummary {
   total_bytes: number;
+  /** Proportional estimate of waste in reachable objects only. Approximate — waste
+   *  scans do not separate reachable from unreachable. 0 when no unreachable heap. */
+  reachable_bytes?: number;
   sources: WasteSource[];
 }
 

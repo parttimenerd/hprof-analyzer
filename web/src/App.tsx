@@ -564,10 +564,9 @@ function ExecSummaryCard({ report }: { report: Report }) {
   const total = ov.total_shallow;
   const unreachable = ov.unreachable_shallow ?? 0;
   const wasted = report.waste_summary?.total_bytes ?? 0;
-  // Reachable + unreachable = the whole dump. Waste is measured across the whole
-  // heap (the duplicate/fill scans walk every instance, reachable or not), so its
-  // honest denominator is totalHeap — NOT reachable alone. Using reachable makes
-  // "wasted > reachable heap" look impossible when it is merely a mostly-dead dump.
+  // reachable_bytes is a proportional estimate from Rust; fall back to wasted when absent
+  // (old reports without the field, or when unreachable == 0).
+  const wastedReachable = report.waste_summary?.reachable_bytes ?? (unreachable === 0 ? wasted : null);
   const totalHeap = total + unreachable;
   const unreachablePct = pctOf(unreachable, totalHeap);
   const wastedPct = pctOf(wasted, totalHeap);
@@ -662,11 +661,24 @@ function ExecSummaryCard({ report }: { report: Report }) {
         )}
         {wasted > 0 && (
           <span>
-            <span style={labelStyle}>Wasted</span>
-            <a href="#waste-summary" className="summary-num" title={`${fmtExactBytes(wasted)} — reclaimable across the whole heap: duplicates, under-filled collections/arrays (jump to Waste Summary)`}>
+            <span style={labelStyle}>
+              {unreachable > 0 ? "Wasted (whole heap)" : "Wasted"}
+            </span>
+            <a href="#waste-summary" className="summary-num" title={
+              unreachable > 0
+                ? `${fmtExactBytes(wasted)} estimated reclaimable across the whole heap (reachable + unreachable) — duplicates, under-filled collections, boxed primitives. Measured across the whole ${fmtExactBytes(totalHeap)}, not just the ${fmtExactBytes(total)} reachable portion, so it can exceed the reachable figure. Jump to Waste Summary.`
+                : `${fmtExactBytes(wasted)} estimated reclaimable — duplicates, under-filled collections, boxed primitives. Jump to Waste Summary.`
+            }>
               <strong>{formatBytes(wasted)}</strong>
             </a>
-            <span style={{ color: "var(--muted)", fontSize: "0.8rem", marginLeft: "0.25rem" }}>({fmtPct(wastedPct)} of heap)</span>
+            <span style={{ color: "var(--muted)", fontSize: "0.8rem", marginLeft: "0.25rem" }}>
+              ({fmtPct(wastedPct)} of total heap
+              {unreachable > 0 && wastedReachable !== null && (
+                <span title="Proportional estimate of waste in reachable objects only (approximate — waste scans cover the whole heap)">
+                  {" · ~"}{formatBytes(wastedReachable)} in reachable ({fmtPct(pctOf(wastedReachable, total))} of reachable)
+                </span>
+              )})
+            </span>
           </span>
         )}
       </div>

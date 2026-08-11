@@ -779,9 +779,20 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
     }
     // Largest reclaimable source first; ties broken by label for stable output.
     sources.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.label.cmp(&b.label)));
-    let total_bytes = sources.iter().map(|s| s.bytes).sum();
+    let total_bytes: u64 = sources.iter().map(|s| s.bytes).sum();
+    // Proportional estimate of waste in reachable objects: scale total_bytes by
+    // the reachable fraction of the whole heap. Approximate — waste scans do not
+    // separate reachable from unreachable per-instance.
+    let reachable = report.overview.total_shallow;
+    let total_heap = reachable + report.overview.unreachable_shallow;
+    let reachable_bytes = if total_heap > 0 {
+        (total_bytes as u128 * reachable as u128 / total_heap as u128) as u64
+    } else {
+        total_bytes
+    };
     Some(WasteSummary {
         total_bytes,
+        reachable_bytes,
         sources,
     })
 }
