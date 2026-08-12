@@ -621,6 +621,9 @@ function ExecSummaryCard({ report }: { report: Report }) {
 
   return (
     <section className="card" id="exec-summary" style={{ margin: "0.75rem 0", padding: "0.9rem 1.1rem" }}>
+      <p style={{ margin: "0 0 0.55rem", fontSize: "0.8rem", color: "var(--muted)", fontStyle: "italic" }}>
+        Heap numbers behind the triage signals above.
+      </p>
       {/* Line 1: Dump info */}
       <div style={{ marginBottom: "0.45rem" }}>
         {src && <><span style={labelStyle}>Source</span><code style={{ fontSize: "0.88rem" }}>{src}</code></>}
@@ -11806,6 +11809,36 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
   );
 }
 
+// ── Start Here callout ───────────────────────────────────────────────────────
+// Shown on first open (per session). Dismissed permanently until the page is
+// reloaded. Does not render if sessionStorage is unavailable.
+const START_HERE_KEY = "hprof-start-here-dismissed";
+function StartHereCallout() {
+  const [visible, setVisible] = React.useState(() => {
+    try { return !sessionStorage.getItem(START_HERE_KEY); } catch { return false; }
+  });
+  if (!visible) return null;
+  const dismiss = () => {
+    try { sessionStorage.setItem(START_HERE_KEY, "1"); } catch { /* ignore */ }
+    setVisible(false);
+  };
+  return (
+    <div className="start-here-callout" role="note">
+      <span className="start-here-label">New to heap analysis?</span>
+      {" "}Start with{" "}
+      <a href="#memory-triage" onClick={dismiss}>Memory Triage</a>
+      {" "}for an instant diagnosis, then{" "}
+      <a href="#leak-suspects" onClick={dismiss}>Leak Suspects</a>
+      {" "}to find what's holding memory, and{" "}
+      <a href="#top-consumers" onClick={dismiss}>Top Consumers</a>
+      {" "}for the class-level breakdown.{" "}
+      <em>Retained heap</em> = memory freed when an object is collected (its size + everything it exclusively holds).{" "}
+      <a href="#glossary" style={{ opacity: 0.7, fontSize: "0.8em" }} onClick={dismiss}>Glossary →</a>
+      <button className="start-here-dismiss" onClick={dismiss} title="Dismiss" aria-label="Dismiss">✕</button>
+    </div>
+  );
+}
+
 export default function App({ report }: { report: Report }) {
   const [expandAllTables, setExpandAllTables] = React.useState(false);
   const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
@@ -11984,6 +12017,7 @@ export default function App({ report }: { report: Report }) {
       <HeapInspector report={report} histogram={report.overview?.histogram ?? []} />
       <OomTriage report={report} />
       <ExecSummaryCard report={report} />
+      <StartHereCallout />
       <WasteSummarySection report={report} />
       <KpiStrip report={report} />
       <SystemOverviewSection report={report} />

@@ -857,6 +857,23 @@ button:hover { background: var(--accent-hover); }
   transition: background .12s, color .12s;
 }
 .rpt-nav-link:hover { background: var(--bg3); color: var(--accent); }
+.rpt-nav-active { background: var(--bg3); color: var(--accent) !important; font-weight: 600; }
+
+/* Intro card for first-time users */
+.rpt-intro-card {
+  background: var(--rpt-kpi-bg);
+  border: 1px solid var(--rpt-kpi-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  font-size: .85rem;
+  color: var(--fg);
+  line-height: 1.6;
+}
+.rpt-intro-card a { color: var(--accent); }
+.rpt-intro-card em { color: var(--muted); font-style: normal; }
+.rpt-intro-glossary { margin-left: 6px; font-size: .8rem; opacity: .75; }
 
 /* Sortable table headers */
 th.rpt-sort-hdr {

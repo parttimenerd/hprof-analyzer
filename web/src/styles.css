@@ -897,3 +897,38 @@ kbd {
 .sankey-chain-step { padding: 0.15rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--mono, monospace); font-size: 0.78rem; }
 .sankey-chain-step:hover:not(.sankey-chain-current) { color: var(--accent); text-decoration: underline; }
 .sankey-chain-current { font-weight: 600; color: var(--accent); }
+
+/* Start Here callout */
+.start-here-callout {
+  position: relative;
+  background: var(--accent-bg, rgba(37,99,235,0.07));
+  border: 1px solid var(--accent-border, rgba(37,99,235,0.25));
+  border-left: 3px solid var(--accent, #2563eb);
+  border-radius: 6px;
+  padding: 0.6rem 2.5rem 0.6rem 0.85rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.start-here-label {
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+}
+.start-here-callout em {
+  font-style: normal;
+  color: var(--muted);
+}
+.start-here-dismiss {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.55rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0;
+  line-height: 1;
+}
+.start-here-dismiss:hover { color: var(--fg); }
