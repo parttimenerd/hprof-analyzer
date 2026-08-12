@@ -573,15 +573,14 @@ pub fn build_model(
     drop(dc_targets);
     crate::trace::trim();
     crate::trace::probe("build_model: after drop(dc) — before system_overview");
-    let stack_held_via = build_stack_held_via(g);
-    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via);
-    t_bm!("top_consumers");
-    crate::trace::probe("build_model: after top_consumers aggregates");
     crate::trace::probe("build_model: before system_overview aggregates");
-    let overview =
+    let (overview, top_level_list) =
         build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
     t_bm!("system_overview");
     crate::trace::probe("build_model: after system_overview aggregates");
+    let stack_held_via = build_stack_held_via(g);
+    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via, top_level_list);
+    t_bm!("top_consumers");
     let threads = build_thread_overview(g, overview.total_shallow);
     t_bm!("thread_overview");
     crate::trace::probe("build_model: after thread_overview aggregates");
@@ -2224,7 +2223,7 @@ fn build_system_overview(
     depth_counts: &[u64],
     top_n: usize,
     hist_root_path_top: usize,
-) -> SystemOverview {
+) -> (SystemOverview, Vec<u32>) {
     let n = g.n;
 
     // Count reachable objects and total shallow; track unreachable in the same loop.
@@ -2299,6 +2298,7 @@ fn build_system_overview(
         }
     }
 
+    let mut top_level_list: Vec<u32> = Vec::new();
     // Single fused pass over all objects — computes totals, composition,
     // top-level retained, class histogram, and class-loader rollup together
     // to avoid 5 separate O(n) scans on large dumps.
@@ -2319,6 +2319,7 @@ fn build_system_overview(
             // Retention concentration: maintain top-100 buffer (no 329M Vec).
             if id == vroot_u32 {
                 let ret = g.retained[i];
+                top_level_list.push(i as u32);
                 top_total_retained += ret;
                 // Insert into sorted-descending top100_buf if it belongs.
                 if top100_len < 100 {
@@ -3006,7 +3007,7 @@ fn build_system_overview(
         None
     };
 
-    SystemOverview {
+    let overview = SystemOverview {
         source_name: g.source_name.clone(),
         file_path: g.file_path.clone(),
         format: g.format.clone(),
@@ -3059,7 +3060,8 @@ fn build_system_overview(
         heap_fragmentation_ratio,
         top_class_concentration_bp,
         gc_roots_retained_by_type,
-    }
+    };
+    (overview, top_level_list)
 }
 
 /// Build the FULL multi-level dominator subtree rooted at `root`, walking the
@@ -3911,9 +3913,9 @@ fn build_top_consumers(
     g: &Graph,
     top_n: usize,
     stack_held_via: &std::collections::HashMap<u32, String>,
+    mut top_level: Vec<u32>,
 ) -> TopConsumers {
     let n = g.n;
-    let vroot = n as u32;
     let undef = u32::MAX;
     let class_count = g.class_names.len();
 
@@ -3935,13 +3937,8 @@ fn build_top_consumers(
         };
     }
 
-    // Collect top-level dominators
-    let mut top_level: Vec<u32> = Vec::new();
-    for i in 0..n {
-        if g.idom[i] == vroot {
-            top_level.push(i as u32);
-        }
-    }
+    // top_level is pre-computed by build_system_overview's fused loop, eliminating
+    // a redundant O(n) scan over g.idom.
     t_tc!("collect_top_level");
 
     // Total shallow of all reachable objects (MAT parity: pct base for Biggest Objects)
