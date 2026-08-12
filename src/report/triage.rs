@@ -127,6 +127,78 @@ const OVERSIZED_PRIM_ARRAY_FLOOR: u64 = 64 * 1024 * 1024;
 const DUP_PRIM_ARRAYS_PCT: f64 = 5.0;
 /// Duplicate-primitive-array absolute wasted-bytes floor.
 const DUP_PRIM_ARRAYS_FLOOR: u64 = 16 * 1024 * 1024;
+/// Dominator-chain depth threshold: a longest-chain above this signals a
+/// linked-list-shaped heap (unbounded accumulation via linked structure).
+const DEEP_CHAIN_DEPTH: u32 = 10_000;
+/// Minimum framework retained bytes before the framework-leak rule fires.
+const FRAMEWORK_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
+/// Framework retained share of total heap that constitutes a "significant" signal.
+const FRAMEWORK_RETAINED_PCT: f64 = 10.0;
+/// Minimum retained bytes held by blocked/waiting threads before rule fires.
+const BLOCKED_THREAD_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
+/// Blocked/waiting retained as a share of heap.
+const BLOCKED_THREAD_PCT: f64 = 10.0;
+/// Tiny-collection overhead floor (bytes) before the rule fires.
+const TINY_COLL_OVERHEAD_FLOOR: u64 = 8 * 1024 * 1024;
+/// Soft-reference referent retained floor (bytes) before the soft-cache rule fires.
+const SOFT_CACHE_RETAINED_FLOOR: u64 = 128 * 1024 * 1024;
+/// Minimum non-null soft-reference count for the soft-cache rule to fire.
+const SOFT_CACHE_REF_FLOOR: u64 = 10_000;
+/// Minimum element count in an ownerless collection for the unowned-sink rule.
+const UNOWNED_SINK_ELEMENTS: u64 = 100_000;
+/// Minimum retained bytes for an ownerless collection.
+const UNOWNED_SINK_RETAINED: u64 = 32 * 1024 * 1024;
+/// JDK release older than this many days at dump-capture time triggers the stale-JDK rule.
+const STALE_JDK_DAYS: i64 = 270; // ~9 months
+/// Minimum number of same-class worker objects for the worker-pool retention rule.
+const WORKER_POOL_MIN_INSTANCES: u64 = 3;
+/// Aggregate retained share of the heap that N same-class workers must hold to fire.
+const WORKER_POOL_RETAINED_PCT: f64 = 20.0;
+/// Minimum aggregate retained bytes for the worker-pool retention rule.
+const WORKER_POOL_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
+/// Minimum aggregate shallow bytes of CGLIB-proxied domain objects before rule fires.
+const CGLIB_PROXY_SHALLOW_FLOOR: u64 = 32 * 1024 * 1024;
+/// Minimum total instances of CGLIB-proxied domain objects.
+const CGLIB_PROXY_INSTANCE_FLOOR: u64 = 50_000;
+/// WeakHashMap instance count above which the accumulation rule fires.
+const WEAK_HASHMAP_FLOOR: u64 = 100_000;
+/// Minimum async-log ring-buffer event count before the rule fires.
+/// Ring buffers are sized as powers of 2; >= 512 live instances of RingBufferLogEvent
+/// means the buffer is non-trivially populated (default Log4j2 size is 262,144).
+const ASYNC_LOG_RINGBUF_FLOOR: u64 = 512;
+/// Map-entry instance count threshold: when HashMap$Node / CHM$Node / LHM$Entry
+/// together exceed this, accumulated map entries dominate the heap.
+const MAP_ENTRY_INSTANCE_FLOOR: u64 = 50_000_000;
+/// … or map entries as a share of total live objects.
+const MAP_ENTRY_OBJECT_PCT: f64 = 20.0;
+/// Hibernate field/setter interceptor instance count floor.
+/// A few hundred is normal (one per enhanced field); millions means enhanced entities
+/// are being accumulated rather than released after use.
+const HIBERNATE_INTERCEPTOR_FLOOR: u64 = 1_000_000;
+/// Minimum aggregate shallow bytes for the Hibernate interceptor rule.
+const HIBERNATE_INTERCEPTOR_SHALLOW_FLOOR: u64 = 32 * 1024 * 1024;
+/// Lock-sync object (ReentrantLock$NonfairSync etc.) instance count floor.
+const LOCK_OBJECT_FLOOR: u64 = 500_000;
+/// Perf-monitoring call-graph object (CallNode, CallStack, etc.) instance count floor.
+const PERF_MONITOR_FLOOR: u64 = 200_000;
+/// Minimum total ThreadLocal value retained bytes for the ThreadLocal value retention rule.
+const THREADLOCAL_VALUE_RETAINED_FLOOR: u64 = 32 * 1024 * 1024;
+/// Minimum entry count for a single ThreadLocal value class to be named in the signal.
+const THREADLOCAL_VALUE_ENTRY_FLOOR: u32 = 500;
+/// Minimum single primitive-array shallow bytes for the humongous-object rule.
+/// G1GC marks objects as "humongous" when they exceed half a region (typically 1–4 MB);
+/// 4 MB is a safe conservative threshold that fires on known-problematic allocations.
+const HUMONGOUS_ARRAY_FLOOR: u64 = 4 * 1024 * 1024;
+/// Top component retained share floor for the component-imbalance rule to fire.
+const COMPONENT_IMBALANCE_TOP_PCT: f64 = 60.0;
+/// Minimum number of components before the imbalance rule makes sense.
+const COMPONENT_IMBALANCE_MIN_COMPONENTS: usize = 3;
+
+const EXCEPTION_ACCUM_FLOOR: u64 = 50_000;
+const EXCEPTION_ACCUM_SHALLOW_FLOOR: u64 = 16 * 1024 * 1024;
+
+const DAEMON_RETAINED_PCT: f64 = 15.0;
+const DAEMON_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
 
 // ── Framework ─────────────────────────────────────────────────────────────────
 
@@ -178,6 +250,26 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(EmptyCollectionCemetery),
         Box::new(OversizedPrimArray),
         Box::new(DuplicatePrimArrays),
+        Box::new(DeepRetentionChain),
+        Box::new(FrameworkLeak),
+        Box::new(BlockedThreadConcentration),
+        Box::new(TinyCollectionOverhead),
+        Box::new(SoftRefCacheExpansion),
+        Box::new(UnownedCollectionSink),
+        Box::new(StaleJdk),
+        Box::new(WorkerPoolRetention),
+        Box::new(CglibProxyAccumulation),
+        Box::new(WeakHashMapAccumulation),
+        Box::new(AsyncLogRingBufferFull),
+        Box::new(MapEntryDominance),
+        Box::new(HibernateInterceptorAccumulation),
+        Box::new(LockObjectProliferation),
+        Box::new(PerfMonitoringRetention),
+        Box::new(ThreadLocalValueRetention),
+        Box::new(HumongousObjectAllocation),
+        Box::new(ComponentRetentionImbalance),
+        Box::new(ExceptionObjectAccumulation),
+        Box::new(DaemonThreadRetention),
     ]
 }
 
@@ -1643,6 +1735,1197 @@ impl Rule for DuplicatePrimArrays {
     }
 }
 
+/// Deep retention chain. Reads `dominator_analysis.longest_chain_depth`.
+/// Always-on. Fires when the deepest dominator chain exceeds DEEP_CHAIN_DEPTH
+/// hops — a linked-list-shaped heap where objects are chained one-by-one rather
+/// than held in a flat container. Typical in unbounded `LinkedList`/`Deque`
+/// accumulation or recursive data structures that are never cleared.
+struct DeepRetentionChain;
+impl Rule for DeepRetentionChain {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let depth = r.dominator_analysis.longest_chain_depth;
+        if depth < DEEP_CHAIN_DEPTH {
+            return None;
+        }
+        Some(signal(
+            "deep-retention-chain",
+            TriageSeverity::Warning,
+            "Deep Retention Chain (Linked-List Shape)",
+            format!(
+                "The dominator tree's longest chain is {} hops — this is a linked-list-shaped \
+                 heap. Memory is being accumulated object-by-object in an unbounded chain \
+                 (e.g. `LinkedList`, `ArrayDeque` backed by a linked structure, or a recursive \
+                 data structure). Consider replacing with an array-backed container \
+                 (`ArrayList`, `ArrayDeque`) or bounding growth.",
+                fmt_count(depth as u64),
+            ),
+            Some(("dominator-analysis", "Dominator Analysis")),
+        ))
+    }
+}
+
+/// Framework-retained-heap leak. Reads `framework_analysis`. Fires when any
+/// detected framework retains at least FRAMEWORK_RETAINED_FLOOR bytes AND
+/// at least FRAMEWORK_RETAINED_PCT of the heap. A sentinel class holding far
+/// more than expected indicates retained application contexts, open sessions,
+/// or leaked prototype beans.
+struct FrameworkLeak;
+impl Rule for FrameworkLeak {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total = r.overview.total_shallow;
+        if total == 0 {
+            return None;
+        }
+        // Pick the framework with the most retained heap as the headline.
+        let fa = r
+            .framework_analysis
+            .iter()
+            .max_by_key(|f| f.total_retained)?;
+        if fa.total_retained < FRAMEWORK_RETAINED_FLOOR {
+            return None;
+        }
+        let pct = pct_of(fa.total_retained, total);
+        if pct < FRAMEWORK_RETAINED_PCT {
+            return None;
+        }
+        let advice = if fa.framework.contains("Spring") {
+            "Check for multiple retained `ApplicationContext` instances, prototype-scoped \
+             beans stored in singletons, or `@Autowired` fields captured in closures."
+        } else if fa.framework.contains("Hibernate") || fa.framework.contains("JPA") {
+            "Check for unclosed `Session`/`EntityManager` instances, first-level caches \
+             grown unboundedly, or collections marked `FetchType.EAGER` in bulk queries."
+        } else {
+            "Check for retained context/session/factory instances that were not closed."
+        };
+        Some(signal(
+            "framework-leak",
+            TriageSeverity::Warning,
+            "Framework Retained-Heap Leak",
+            format!(
+                "{} objects retain {} ({:.1}% of heap) via `{}` sentinel instances — {}",
+                fmt_count(fa.instance_count as u64),
+                format_bytes(fa.total_retained),
+                pct,
+                fa.framework,
+                advice,
+            ),
+            Some(("system-overview", "System Overview")),
+        ))
+    }
+}
+
+/// Blocked/waiting thread concentration. Reads `threads.threads` and their
+/// `thread_state` + `retained`. Fires when threads that are BLOCKED or WAITING
+/// together hold at least BLOCKED_THREAD_RETAINED_FLOOR bytes AND at least
+/// BLOCKED_THREAD_PCT of the heap. A cluster of stuck threads pinning
+/// significant memory indicates deadlock, lock contention, or a thread pool
+/// that captured large objects in its locals.
+struct BlockedThreadConcentration;
+impl Rule for BlockedThreadConcentration {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total = r.leaks.total_shallow;
+        if total == 0 {
+            return None;
+        }
+        let (blocked_count, blocked_retained): (usize, u64) = r
+            .threads
+            .threads
+            .iter()
+            .filter(|t| {
+                let s = t.thread_state.to_ascii_lowercase();
+                s.contains("blocked") || s.contains("waiting")
+            })
+            .fold((0, 0u64), |(c, ret), t| {
+                (c + 1, ret.saturating_add(t.retained))
+            });
+        if blocked_count == 0 || blocked_retained < BLOCKED_THREAD_RETAINED_FLOOR {
+            return None;
+        }
+        let pct = pct_of(blocked_retained, total);
+        if pct < BLOCKED_THREAD_PCT {
+            return None;
+        }
+        Some(signal(
+            "blocked-thread-concentration",
+            TriageSeverity::Warning,
+            "Blocked/Waiting Threads Holding Heap",
+            format!(
+                "{} BLOCKED or WAITING thread{} collectively retain {} ({:.1}% of heap) — \
+                 stuck threads are pinning significant memory. Check for deadlocks, \
+                 lock contention, or thread-pool threads that captured large objects \
+                 in local variables and are now blocked waiting for I/O or a monitor.",
+                blocked_count,
+                if blocked_count == 1 { "" } else { "s" },
+                format_bytes(blocked_retained),
+                pct,
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
+/// Tiny-collection overhead. Reads `collection_attribution.tiny_overhead`.
+/// Present only when `--collections` was passed. Fires when the aggregate wrapper
+/// overhead of size-{0,1} collections (empty + singleton) exceeds
+/// TINY_COLL_OVERHEAD_FLOOR bytes — thousands of single-element or empty
+/// wrappers whose overhead is dominated by the container object itself.
+struct TinyCollectionOverhead;
+impl Rule for TinyCollectionOverhead {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let ca = r.collection_attribution.as_ref()?;
+        let total_overhead: u64 = ca.tiny_overhead.iter().map(|t| t.overhead_bytes).sum();
+        if total_overhead < TINY_COLL_OVERHEAD_FLOOR {
+            return None;
+        }
+        // Name the top offender if one stands out.
+        let top = ca.tiny_overhead.first();
+        let offender_clause = match top {
+            Some(t) if t.overhead_bytes >= total_overhead / 2 => format!(
+                " — top offender: `{}#{}` ({} empty, {} singleton)",
+                t.holder_class,
+                t.field,
+                fmt_count(t.empty_count),
+                fmt_count(t.singleton_count),
+            ),
+            _ => String::new(),
+        };
+        Some(signal(
+            "tiny-collection-overhead",
+            TriageSeverity::Info,
+            "Tiny-Collection Wrapper Overhead",
+            format!(
+                "~{} wasted in empty/singleton collection wrappers{}. \
+                 Each holds ≤1 element but pays the full ~80 B object-header + \
+                 backing-store cost. Replace empty collections with `List.of()` / \
+                 `Collections.emptyList()` sentinels and singletons with \
+                 `List.of(element)`, or use lazy initialization.",
+                format_bytes(total_overhead),
+                offender_clause,
+            ),
+            Some(("collections", "Collections")),
+        ))
+    }
+}
+
+/// Soft-reference cache expansion. Reads `references.soft`. Always-on. Fires
+/// when there are many live soft-reference instances (non-null referents) that
+/// together retain >= SOFT_CACHE_RETAINED_FLOOR bytes — a soft-reference-based
+/// cache that has grown very large without being evicted, often the silent culprit
+/// when the JVM appears healthy until memory pressure forces a full GC.
+struct SoftRefCacheExpansion;
+impl Rule for SoftRefCacheExpansion {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let soft = r.references.soft.as_ref()?;
+        let total = r.overview.total_shallow;
+        let live_refs = soft
+            .reference_instances
+            .saturating_sub(soft.null_referent_count);
+        if live_refs < SOFT_CACHE_REF_FLOOR {
+            return None;
+        }
+        // Largest class retained only through soft references is the best signal;
+        // fall back to the largest class in the referent histogram.
+        let largest_retained: u64 = soft.referent_histogram.iter().map(|c| c.retained).sum();
+        if largest_retained < SOFT_CACHE_RETAINED_FLOOR {
+            return None;
+        }
+        let top_class = soft
+            .referent_histogram
+            .first()
+            .map(|c| c.pretty_class.as_str())
+            .unwrap_or("(unknown)");
+        let pct_clause = if total > 0 {
+            format!(" ({:.1}% of heap)", pct_of(largest_retained, total))
+        } else {
+            String::new()
+        };
+        Some(signal(
+            "soft-ref-cache-expansion",
+            TriageSeverity::Warning,
+            "Soft-Reference Cache Expansion",
+            format!(
+                "{} live `SoftReference` objects retain {}{} via cached referents — \
+                 dominant referent type: `{}`. Soft-reference caches do not evict until \
+                 the JVM is near OOM; a large soft-ref heap can mask a memory leak and \
+                 trigger long GC pauses. Consider bounding the cache with a size limit \
+                 (`LinkedHashMap` LRU, Caffeine/Guava `softValues()` with `maximumSize`), \
+                 or switching to explicit LRU eviction.",
+                fmt_count(live_refs),
+                format_bytes(largest_retained),
+                pct_clause,
+                top_class,
+            ),
+            Some(("references", "References")),
+        ))
+    }
+}
+
+/// Unowned collection sink. Reads `biggest_collections.combined` and looks for
+/// large collections whose `owner` field is `None` (no `Class#field` was attributed
+/// as the holder). An ownerless collection with many elements and significant
+/// retained heap is a strong signal of a static-field-backed or root-held cache
+/// that the field-attribution pass could not trace — often the root cause of an OOM
+/// that `LargeUnboundedCollection` (which flags any big collection) does not
+/// specifically call out.
+///
+/// Complements rather than replaces `LargeUnboundedCollection`: that rule fires on
+/// ANY big collection; this rule fires only when the collection has no identified
+/// owner, which raises the urgency and changes the remediation advice.
+struct UnownedCollectionSink;
+impl Rule for UnownedCollectionSink {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let bc = r.biggest_collections.as_ref()?;
+        let total = r.leaks.total_shallow;
+        // Find the largest ownerless collection that crosses both thresholds.
+        let row = bc.combined.iter().filter(|c| c.owner.is_none()).find(|c| {
+            c.elements >= UNOWNED_SINK_ELEMENTS
+                || c.retained
+                    .map(|ret| ret >= UNOWNED_SINK_RETAINED)
+                    .unwrap_or(false)
+        })?;
+        let retained_str = row
+            .retained
+            .map(|ret| {
+                if total > 0 {
+                    format!(
+                        ", retaining {} ({:.1}% of heap)",
+                        format_bytes(ret),
+                        pct_of(ret, total)
+                    )
+                } else {
+                    format!(", retaining {}", format_bytes(ret))
+                }
+            })
+            .unwrap_or_default();
+        let value_hint = row
+            .dominant_value_type
+            .as_deref()
+            .map(|t| format!(" Values are predominantly `{t}`."))
+            .unwrap_or_default();
+        Some(signal_cls(
+            "unowned-collection-sink",
+            TriageSeverity::Warning,
+            "Unowned Collection Sink",
+            format!(
+                "A `{}` holds {} elements{} with no attributed holder field — \
+                 likely reachable via a static field, a GC root, or an indirect \
+                 reference chain that field attribution did not resolve.{} \
+                 Re-run with `--collections` to get field ownership, then trace \
+                 the retaining path in the Object Graph Explorer.",
+                row.container_class,
+                fmt_count(row.elements),
+                retained_str,
+                value_hint,
+            ),
+            Some(("biggest-collections", "Biggest Collections")),
+            &row.container_class,
+        ))
+    }
+}
+
+/// Stale JDK version. Reads `overview.jvm_version` and `overview.dump_creation`.
+/// Fires when the JDK major.minor release can be dated and was released more than
+/// STALE_JDK_DAYS before the dump was captured — an outdated JVM may have known
+/// GC bugs, memory leaks in the JDK itself, or regressions fixed in later patches.
+/// Uses a hardcoded table of JDK GA release dates (updated per the 6-month
+/// OpenJDK cadence; LTS every 2 years, feature releases every 6 months).
+struct StaleJdk;
+impl Rule for StaleJdk {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let ver_str = r.overview.jvm_version.as_deref()?;
+        let dump_ms = r.overview.dump_creation?;
+        if dump_ms <= 0 {
+            return None;
+        }
+        let dump_days_since_epoch = dump_ms / 86_400_000;
+
+        // Parse the major version number. Handles both "1.8.0_382" (legacy) and
+        // "17.0.9+9" (modern) notation.
+        let major = parse_jdk_major(ver_str)?;
+
+        // GA release date as days since Unix epoch for each known major version.
+        // Source: https://www.java.com/releases/ / OpenJDK release history.
+        // Non-LTS releases are included so stale feature-release detection works.
+        let release_days: i64 = match major {
+            8 => days_since_epoch(2014, 3, 18),
+            9 => days_since_epoch(2017, 9, 21),
+            10 => days_since_epoch(2018, 3, 20),
+            11 => days_since_epoch(2018, 9, 25),
+            12 => days_since_epoch(2019, 3, 19),
+            13 => days_since_epoch(2019, 9, 17),
+            14 => days_since_epoch(2020, 3, 17),
+            15 => days_since_epoch(2020, 9, 15),
+            16 => days_since_epoch(2021, 3, 16),
+            17 => days_since_epoch(2021, 9, 14),
+            18 => days_since_epoch(2022, 3, 22),
+            19 => days_since_epoch(2022, 9, 20),
+            20 => days_since_epoch(2023, 3, 21),
+            21 => days_since_epoch(2023, 9, 19),
+            22 => days_since_epoch(2024, 3, 19),
+            23 => days_since_epoch(2024, 9, 17),
+            24 => days_since_epoch(2025, 3, 18),
+            25 => days_since_epoch(2025, 9, 16),
+            _ => return None, // unknown future version — don't fire
+        };
+
+        let age_days = dump_days_since_epoch - release_days;
+        if age_days < STALE_JDK_DAYS {
+            return None;
+        }
+
+        let lts = matches!(major, 8 | 11 | 17 | 21 | 25);
+        let eol_note = if !lts && age_days > 180 {
+            " This is a non-LTS release past its 6-month support window — no further patches will be issued."
+        } else {
+            ""
+        };
+
+        Some(signal(
+            "stale-jdk",
+            TriageSeverity::Info,
+            "Stale JDK Version",
+            format!(
+                "JVM version `{}` (JDK {major}) was released ~{} days before this dump was \
+                 captured.{eol_note} Update to the latest patch release to rule out known \
+                 JDK memory bugs and GC regressions.",
+                ver_str, age_days,
+            ),
+            Some(("system-overview", "System Overview")),
+        ))
+    }
+}
+
+/// Parse the JDK major version number from a version string.
+/// Handles "1.8.0_382-b05" (legacy JDK ≤8), "9.0.4", "17.0.9+9", etc.
+fn parse_jdk_major(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Legacy "1.N.*" form (JDK ≤8 reported as "1.8.0_...")
+    if let Some(rest) = s.strip_prefix("1.") {
+        let major_str = rest.split(['.', '_', '-', '+']).next()?;
+        return major_str.parse().ok();
+    }
+    // Modern "N.minor.patch+build" or "N-ea" form
+    let first = s.split(['.', '-', '+']).next()?;
+    first.parse().ok()
+}
+
+/// Days since Unix epoch (1970-01-01) for a given Gregorian calendar date.
+/// Uses the proleptic Gregorian calendar (no leap-second correction needed for
+/// coarse "days" precision). Matches chrono's NaiveDate::from_ymd arithmetic.
+const fn days_since_epoch(year: i32, month: u32, day: u32) -> i64 {
+    // Algorithm: compute Julian Day Number, subtract JDN of 1970-01-01.
+    // From Fliegel & Van Flandern (1968), valid for all Gregorian dates.
+    let y = year as i64;
+    let m = month as i64;
+    let d = day as i64;
+    let jdn = (1461 * (y + 4800 + (m - 14) / 12)) / 4 + (367 * (m - 2 - 12 * ((m - 14) / 12))) / 12
+        - (3 * ((y + 4900 + (m - 14) / 12) / 100)) / 4
+        + d
+        - 32075;
+    // JDN of 1970-01-01 = 2440588
+    jdn - 2_440_588
+}
+
+/// Worker-pool retention. Reads `leaks.suspects` (biggest class groups) and
+/// `threads.threads`. Fires when a single class appears as BOTH a multi-instance
+/// group suspect (or top class by retained) AND has >= WORKER_POOL_MIN_INSTANCES
+/// instances each holding significant heap — i.e. N same-class worker objects
+/// together retaining a dominant share while no single one crosses the
+/// single-thread-pinning threshold.
+///
+/// Motivation: in the VSCode/NetBeans dump, 9 `RequestProcessor$Processor` threads
+/// each retained 50-100 MB of parser state; individually none crossed the 20%
+/// thread-pinning threshold, but collectively they held 77% of the heap. The
+/// existing `HeadlineRetainer` fires on the class group, but doesn't explain WHY
+/// (each member is a thread-pool worker holding live task state). This rule bridges
+/// that gap with a worker-specific diagnosis.
+struct WorkerPoolRetention;
+impl Rule for WorkerPoolRetention {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total = r.leaks.total_shallow;
+        if total == 0 {
+            return None;
+        }
+
+        // Find a class-group suspect whose aggregate retained crosses the threshold,
+        // but whose per-instance average is well below the single-object threshold —
+        // meaning it's many objects each holding a moderate share, not one outlier.
+        let suspect = r.leaks.suspects.iter().find(|s| {
+            if s.is_single || s.instance_count < WORKER_POOL_MIN_INSTANCES {
+                return false;
+            }
+            if s.retained < WORKER_POOL_RETAINED_FLOOR {
+                return false;
+            }
+            if pct_of(s.retained, total) < WORKER_POOL_RETAINED_PCT {
+                return false;
+            }
+            // Per-instance average must be < 10% of heap (otherwise single-object
+            // rules already cover it, and this isn't really a "pool" pattern).
+            let per_instance = s.retained / s.instance_count;
+            pct_of(per_instance, total) < 10.0
+        })?;
+
+        // Check if the class name looks like a thread/worker/task/processor.
+        let cls = &suspect.pretty_class;
+        let is_worker_class = [
+            "Thread",
+            "Worker",
+            "Processor",
+            "Executor",
+            "Task",
+            "Runner",
+            "Handler",
+        ]
+        .iter()
+        .any(|kw| cls.contains(kw));
+
+        let worker_hint = if is_worker_class {
+            " These appear to be worker/thread objects — each one is keeping live \
+             task state (parser contexts, request data, open transactions) that \
+             should be released when the task completes."
+        } else {
+            " Each instance is holding a significant share; check whether these \
+             objects are being pooled, cached, or accumulated without a release path."
+        };
+
+        let per_instance = format_bytes(suspect.retained / suspect.instance_count);
+        Some(signal_cls(
+            "worker-pool-retention",
+            TriageSeverity::Warning,
+            "Worker-Pool Object Retention",
+            format!(
+                "{} instances of `{}` together retain {} ({:.1}% of heap), ~{} each —\
+                 no single instance dominates, but the pool as a whole is the leak.{worker_hint} \
+                 Check whether completed tasks are being recycled or whether task-local \
+                 data is being cleared on return to the pool.",
+                suspect.instance_count,
+                cls,
+                format_bytes(suspect.retained),
+                pct_of(suspect.retained, total),
+                per_instance,
+            ),
+            Some(("leak-suspects", "Leak Suspects")),
+            cls.as_str(),
+        ))
+    }
+}
+
+/// CGLIB / Spring-CGLIB proxy domain-object accumulation.
+///
+/// Reads `overview.histogram`. Fires when classes whose name contains
+/// `$EnhancerByCGLIB$` or `$$EnhancerBySpringCGLIB$$` (Hibernate/Spring AOP
+/// proxies of domain objects) have more than [`CGLIB_PROXY_INSTANCE_FLOOR`]
+/// total instances and at least [`CGLIB_PROXY_SHALLOW_FLOOR`] aggregate shallow.
+/// A handful of CGLIB-proxied beans is normal; hundreds of thousands of them means
+/// proxy instances are being created and retained on every request or batch cycle
+/// rather than returned to the pool or garbage-collected after use.
+struct CglibProxyAccumulation;
+impl Rule for CglibProxyAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let mut total_instances: u64 = 0;
+        let mut total_shallow: u64 = 0;
+        let mut top_class = "";
+        let mut top_count: u64 = 0;
+
+        for row in &r.overview.histogram {
+            if row.pretty_class.contains("$EnhancerByCGLIB$")
+                || row.pretty_class.contains("$$EnhancerBySpringCGLIB$$")
+            {
+                total_instances += row.instances;
+                total_shallow += row.shallow;
+                if row.instances > top_count {
+                    top_count = row.instances;
+                    top_class = &row.pretty_class;
+                }
+            }
+        }
+
+        if total_instances < CGLIB_PROXY_INSTANCE_FLOOR || total_shallow < CGLIB_PROXY_SHALLOW_FLOOR
+        {
+            return None;
+        }
+
+        // Trim the generated suffix for a readable name: keep the base class.
+        let base = top_class
+            .split("$EnhancerByCGLIB$")
+            .next()
+            .or_else(|| top_class.split("$$EnhancerBySpringCGLIB$$").next())
+            .unwrap_or(top_class);
+
+        Some(signal(
+            "cglib-proxy-accumulation",
+            TriageSeverity::Warning,
+            "CGLIB Proxy Instance Accumulation",
+            format!(
+                "{} CGLIB-enhanced domain-object instances ({}) are live — far more \
+                 than the handful expected from a healthy proxy pool. \
+                 The most common proxied type is `{}`. \
+                 Hibernate lazy-load proxies and Spring AOP advice proxies are normally \
+                 short-lived; large counts indicate that proxied objects are being retained \
+                 in a cache, thread-local, or collection that is not cleared after use. \
+                 Check whether `EntityManager` / `Session` scopes are leaking across \
+                 request boundaries, or whether a cache is holding proxied entities \
+                 instead of detached plain objects.",
+                fmt_count(total_instances),
+                format_bytes(total_shallow),
+                base,
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// WeakHashMap accumulation.
+///
+/// Reads `overview.histogram`. Fires when the count of live `WeakHashMap`
+/// instances exceeds [`WEAK_HASHMAP_FLOOR`]. WeakHashMaps are typically used as
+/// small-scale caches or listener registries where keys are GC'd when no longer
+/// strongly referenced, triggering automatic entry removal. A count in the
+/// hundreds of thousands means either (a) a new `WeakHashMap` is created per
+/// request/object without a shared registry, or (b) keys are being kept strongly
+/// alive elsewhere so entries accumulate without ever being expunged.
+struct WeakHashMapAccumulation;
+impl Rule for WeakHashMapAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let count = r
+            .overview
+            .histogram
+            .iter()
+            .find(|row| row.pretty_class == "java.util.WeakHashMap")
+            .map(|row| row.instances)
+            .unwrap_or(0);
+
+        if count < WEAK_HASHMAP_FLOOR {
+            return None;
+        }
+
+        Some(signal(
+            "weak-hashmap-accumulation",
+            TriageSeverity::Warning,
+            "WeakHashMap Instance Accumulation",
+            format!(
+                "{} live `java.util.WeakHashMap` instances — far above the handful \
+                 expected from a healthy application. WeakHashMaps are intended as \
+                 small-scale caches whose entries expire when their keys are GC'd. \
+                 A high count usually means one of: (1) a new WeakHashMap is allocated \
+                 per request/object rather than shared, causing unbounded creation; \
+                 (2) keys are strongly held elsewhere (e.g. in a static field or \
+                 another collection) so entries never expunge; or (3) a framework is \
+                 using WeakHashMap as a per-class/per-loader registry and class reloads \
+                 are accumulating stale entries. \
+                 Search for `new WeakHashMap` call sites and verify that map lifecycles \
+                 are bounded.",
+                fmt_count(count),
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// Returns `true` if `n` is a power of two and `>= min`.
+#[inline]
+fn is_power_of_two_ge(n: u64, min: u64) -> bool {
+    n >= min && n.is_power_of_two()
+}
+
+/// Async logging ring buffer full (Log4j2 / Disruptor).
+///
+/// Reads `overview.histogram`. Fires when a class whose name contains
+/// `RingBufferLogEvent` (Log4j2 async appender) has an instance count that is a
+/// power of two and at least [`ASYNC_LOG_RINGBUF_FLOOR`]. Log4j2's AsyncAppender
+/// (and LMAX Disruptor-based async loggers) pre-allocate a fixed-size ring buffer
+/// of event objects (default 256 KiB = 262,144 slots). Finding *exactly* 2^N live
+/// instances is a strong signal that the buffer is fully populated — the
+/// application is writing logs faster than the async appender can drain them,
+/// which causes application threads to block on log calls, wasting heap, and
+/// potentially masking the underlying issue.
+struct AsyncLogRingBufferFull;
+impl Rule for AsyncLogRingBufferFull {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let row = r
+            .overview
+            .histogram
+            .iter()
+            .find(|row| row.pretty_class.contains("RingBufferLogEvent"))?;
+
+        let count = row.instances;
+        if !is_power_of_two_ge(count, ASYNC_LOG_RINGBUF_FLOOR) {
+            return None;
+        }
+
+        Some(signal(
+            "async-log-ringbuf-full",
+            TriageSeverity::Warning,
+            "Async Logging Ring Buffer Full",
+            format!(
+                "Exactly {} `{}` instances are live — a power of two, which is the \
+                 signature of a fully-populated Log4j2 / Disruptor async appender \
+                 ring buffer. When the ring buffer is full, application threads block \
+                 on every log call until a slot is freed. This indicates the async \
+                 appender cannot drain as fast as the application produces log events. \
+                 Check: (1) whether log volume spiked during an error storm (exceptions \
+                 being logged in a tight loop); (2) whether the async appender's \
+                 backing I/O (file, socket, SIEM) is slow or blocked; (3) consider \
+                 increasing `<AsyncRoot>` discardThreshold or switching to a \
+                 synchronous appender if log ordering is not critical.",
+                fmt_count(count),
+                row.pretty_class,
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// Map-entry dominance (HashMap$Node / ConcurrentHashMap$Node / LinkedHashMap$Entry).
+///
+/// Reads `overview.histogram` and `overview.total_objects`. Fires when the
+/// combined instance count of map-entry types (`HashMap$Node`,
+/// `ConcurrentHashMap$Node`, `LinkedHashMap$Entry`) exceeds
+/// [`MAP_ENTRY_INSTANCE_FLOOR`] or constitutes more than [`MAP_ENTRY_OBJECT_PCT`]%
+/// of all live objects. A massive number of map entries, relative to the total
+/// object count, means the application is accumulating key–value pairs that should
+/// have been evicted or their containing maps should have been GC'd. The signal is
+/// most actionable when the top leaked suspect is a HashMap or a class that holds
+/// one: the maps themselves explain only part of the picture because each map's
+/// `HashMap$Node[]` table and each `HashMap$Node` chain-node are separate objects.
+struct MapEntryDominance;
+impl Rule for MapEntryDominance {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total_objects = r.overview.total_objects;
+        if total_objects == 0 {
+            return None;
+        }
+
+        let mut total_entries: u64 = 0;
+        for row in &r.overview.histogram {
+            let cls = row.pretty_class.as_str();
+            if cls == "java.util.HashMap$Node"
+                || cls == "java.util.concurrent.ConcurrentHashMap$Node"
+                || cls == "java.util.LinkedHashMap$Entry"
+            {
+                total_entries += row.instances;
+            }
+        }
+
+        if total_entries == 0 {
+            return None;
+        }
+
+        let pct = pct_of(total_entries, total_objects);
+        if total_entries < MAP_ENTRY_INSTANCE_FLOOR && pct < MAP_ENTRY_OBJECT_PCT {
+            return None;
+        }
+
+        Some(signal(
+            "map-entry-dominance",
+            TriageSeverity::Warning,
+            "Map Entry Objects Dominate Live Set",
+            format!(
+                "{} map-entry objects (`HashMap$Node` / `ConcurrentHashMap$Node` / \
+                 `LinkedHashMap$Entry`) account for {:.1}% of all {} live objects. \
+                 This means the heap is filled with accumulated key–value pairs — the \
+                 maps holding them are not being cleared, evicted, or GC'd. \
+                 Common causes: a cache without an eviction policy; thread-locals that \
+                 accumulate a map entry per processed item and are never cleared; a \
+                 batch job that builds in-memory indexes without releasing them between \
+                 iterations. \
+                 Identify the owning `HashMap` instances via the Biggest Collections \
+                 section and trace them up the dominator tree to find the GC root \
+                 preventing collection.",
+                fmt_count(total_entries),
+                pct,
+                fmt_count(total_objects),
+            ),
+            Some(("biggest-collections", "Biggest Collections")),
+        ))
+    }
+}
+
+/// Hibernate field/setter interceptor accumulation.
+///
+/// Reads `overview.histogram`. Fires when classes whose name contains
+/// `FieldInterceptor`, `SetterInterceptMethodAdaptor`, or `FieldHandler`
+/// (Hibernate bytecode-enhancement artifacts — one instance is created per
+/// intercepted field on every enhanced entity) have more than
+/// [`HIBERNATE_INTERCEPTOR_FLOOR`] total instances AND at least
+/// [`HIBERNATE_INTERCEPTOR_SHALLOW_FLOOR`] aggregate shallow bytes.
+///
+/// A handful of these is expected; millions means Hibernate-enhanced entities
+/// are being accumulated in a session, cache, or collection that is not
+/// cleared between requests or batch iterations. Unlike CGLIB proxies (which
+/// are class-level), each interceptor wraps a single field on a single entity
+/// instance — so a high count tracks entity accumulation directly.
+struct HibernateInterceptorAccumulation;
+impl Rule for HibernateInterceptorAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let mut total_instances: u64 = 0;
+        let mut total_shallow: u64 = 0;
+        let mut top_class = "";
+        let mut top_count: u64 = 0;
+
+        for row in &r.overview.histogram {
+            let cls = row.pretty_class.as_str();
+            if cls.contains("FieldInterceptor")
+                || cls.contains("SetterInterceptMethodAdaptor")
+                || cls.contains("FieldHandler")
+            {
+                total_instances += row.instances;
+                total_shallow += row.shallow;
+                if row.instances > top_count {
+                    top_count = row.instances;
+                    top_class = cls;
+                }
+            }
+        }
+
+        if total_instances < HIBERNATE_INTERCEPTOR_FLOOR
+            || total_shallow < HIBERNATE_INTERCEPTOR_SHALLOW_FLOOR
+        {
+            return None;
+        }
+
+        Some(signal(
+            "hibernate-interceptor-accumulation",
+            TriageSeverity::Warning,
+            "Hibernate Field Interceptor Accumulation",
+            format!(
+                "{} Hibernate field/setter interceptor instances ({}) are live — \
+                 one interceptor is created per field on each enhanced entity, so this \
+                 count tracks retained entity instance count directly. The most common \
+                 interceptor type is `{}`. \
+                 This indicates Hibernate-enhanced entities are not being released after \
+                 use. Common causes: an `EntityManager` or `Session` not closed after a \
+                 request; a cache holding managed (not detached) entities; a batch loop \
+                 that loads entities into a session without periodic `flush()`/`clear()` \
+                 calls. Call `session.evict()` or `entityManager.detach()` after processing \
+                 each entity in bulk operations, or use `StatelessSession` for read-only \
+                 batch access.",
+                fmt_count(total_instances),
+                format_bytes(total_shallow),
+                top_class,
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// Lock-object proliferation (`ReentrantLock$NonfairSync`, etc.).
+///
+/// Reads `overview.histogram`. Fires when classes whose name contains
+/// `ReentrantLock$` or `ReentrantReadWriteLock$` (the inner `Sync` AQS nodes
+/// that back `java.util.concurrent.locks.ReentrantLock`) total more than
+/// [`LOCK_OBJECT_FLOOR`] instances. A handful is normal; hundreds of thousands
+/// means the application is creating a per-entity or per-record lock, which
+/// scales linearly with the entity count and leaks if those entities are cached.
+/// It is also a contention risk: many threads competing for many fine-grained
+/// locks can serialise on the AQS queue nodes even when different logical
+/// resources are involved.
+struct LockObjectProliferation;
+impl Rule for LockObjectProliferation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let count: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|row| {
+                row.pretty_class.contains("ReentrantLock$")
+                    || row.pretty_class.contains("ReentrantReadWriteLock$")
+            })
+            .map(|row| row.instances)
+            .sum();
+
+        if count < LOCK_OBJECT_FLOOR {
+            return None;
+        }
+
+        Some(signal(
+            "lock-object-proliferation",
+            TriageSeverity::Warning,
+            "Fine-Grained Lock Object Proliferation",
+            format!(
+                "{} `ReentrantLock` / `ReentrantReadWriteLock` sync objects are live. \
+                 At this scale the application is creating one lock per entity or record \
+                 rather than using a shared striped-lock structure. The lock objects \
+                 accumulate whenever their owning entities are cached or accumulated. \
+                 Consider replacing per-entity `ReentrantLock` fields with \
+                 `Striped<Lock>` (Guava) or a `ConcurrentHashMap`-based compare-and-swap \
+                 approach, which shares a fixed pool of lock objects across all keys \
+                 regardless of how many entities are cached.",
+                fmt_count(count),
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// Performance-monitoring call-graph retention.
+///
+/// Reads `overview.histogram`. Fires when classes whose simple name contains
+/// `CallNode`, `CallStack`, `CallTree`, or `StackFrame` AND whose package
+/// contains `perf`, `profil`, `monitor`, `metric`, or `trace` accumulate more
+/// than [`PERF_MONITOR_FLOOR`] instances. These are internal nodes of a
+/// call-graph or profiling tree built by in-process APM / performance-logging
+/// instrumentation. A large live count means the instrumentation is retaining
+/// call graphs indefinitely (e.g. accumulating into a static tree that is never
+/// pruned) rather than flushing them after each reporting window.
+struct PerfMonitoringRetention;
+impl Rule for PerfMonitoringRetention {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let mut total_instances: u64 = 0;
+        let mut top_class = "";
+        let mut top_count: u64 = 0;
+
+        for row in &r.overview.histogram {
+            let cls = &row.pretty_class;
+            // Simple-name must look like a call-graph node.
+            let simple = cls.rsplit('.').next().unwrap_or(cls.as_str());
+            let is_call_node = simple.contains("CallNode")
+                || simple.contains("CallStack")
+                || simple.contains("CallTree")
+                || simple.contains("StackFrame");
+            if !is_call_node {
+                continue;
+            }
+            // Package must look like perf/profiling/monitoring/tracing infra.
+            let pkg = cls.as_str();
+            let is_perf_pkg = pkg.contains("perf")
+                || pkg.contains("profil")
+                || pkg.contains("monitor")
+                || pkg.contains("metric")
+                || pkg.contains("trace");
+            if !is_perf_pkg {
+                continue;
+            }
+            total_instances += row.instances;
+            if row.instances > top_count {
+                top_count = row.instances;
+                top_class = cls.as_str();
+            }
+        }
+
+        if total_instances < PERF_MONITOR_FLOOR {
+            return None;
+        }
+
+        Some(signal(
+            "perf-monitoring-retention",
+            TriageSeverity::Warning,
+            "Performance Monitoring Call-Graph Retention",
+            format!(
+                "{} performance-monitoring call-graph nodes are live (top type: `{}`). \
+                 In-process APM or performance-logging instrumentation is accumulating \
+                 call-graph nodes without flushing them after each reporting window. \
+                 This often happens when a static call-tree root is appended to on every \
+                 instrumented method call but never pruned or reset. \
+                 Check the instrumentation library's flush/reset API and ensure it is \
+                 called on a bounded interval (e.g. after each request or on a periodic \
+                 timer), or disable call-graph collection if only flat timing is needed.",
+                fmt_count(total_instances),
+                top_class,
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// ThreadLocal value class retention.
+///
+/// Reads `thread_local_analysis` (populated by `--find-duplicates` /
+/// `--full-analysis`). Fires when the aggregate retained heap across all
+/// `ThreadLocalMap$Entry` values exceeds [`THREADLOCAL_VALUE_RETAINED_FLOOR`].
+/// This complements the existing `threadlocal-leak` rule (which counts null-key
+/// stale entries) by surfacing LIVE, non-stale ThreadLocal values that are
+/// simply large — e.g. request-scoped objects that survive well beyond their
+/// expected scope, or parser/formatter state held per-thread in a pool.
+///
+/// The signal names the top value class by retained heap so the developer can
+/// directly grep for the corresponding `ThreadLocal<T>` declaration.
+struct ThreadLocalValueRetention;
+impl Rule for ThreadLocalValueRetention {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        if r.thread_local_analysis.is_empty() {
+            return None;
+        }
+        let total_retained: u64 = r.thread_local_analysis.iter().map(|row| row.retained).sum();
+        if total_retained < THREADLOCAL_VALUE_RETAINED_FLOOR {
+            return None;
+        }
+
+        // Find the value class that retains the most.
+        let top = r
+            .thread_local_analysis
+            .iter()
+            .max_by_key(|row| row.retained)?;
+
+        // Stale-entry fraction across all entries.
+        let total_entries: u32 = r
+            .thread_local_analysis
+            .iter()
+            .map(|row| row.entry_count)
+            .sum();
+        let total_stale: u32 = r
+            .thread_local_analysis
+            .iter()
+            .map(|row| row.stale_count)
+            .sum();
+        let stale_note = if total_entries > 0 && total_stale * 10 >= total_entries {
+            // >= 10% stale
+            format!(
+                " ({:.0}% of entries are stale — keys GC'd but values still held)",
+                total_stale as f64 / total_entries as f64 * 100.0
+            )
+        } else {
+            String::new()
+        };
+
+        let top_note = if top.entry_count >= THREADLOCAL_VALUE_ENTRY_FLOOR {
+            format!(
+                " The largest contributor is `{}` ({} entries, {}).",
+                top.value_class,
+                fmt_count(top.entry_count as u64),
+                format_bytes(top.retained),
+            )
+        } else {
+            String::new()
+        };
+
+        Some(signal(
+            "threadlocal-value-retention",
+            TriageSeverity::Warning,
+            "ThreadLocal Value Retention",
+            format!(
+                "{} retained across {} ThreadLocal entries{stale_note}.{top_note} \
+                 Large ThreadLocal values mean each thread in the pool holds its own \
+                 copy of significant data that outlives the logical request or task. \
+                 Ensure values are `remove()`d at task boundaries, or use \
+                 request-scoped injection (CDI/Spring `@RequestScope`) instead of \
+                 raw ThreadLocals.",
+                format_bytes(total_retained),
+                fmt_count(total_entries as u64),
+            ),
+            Some(("thread-local-analysis", "ThreadLocal Analysis")),
+        ))
+    }
+}
+
+/// Humongous primitive-array allocation.
+///
+/// Reads `collections.top_prim_arrays.top_individual`. Fires when the single
+/// largest primitive array is ≥ [`HUMONGOUS_ARRAY_FLOOR`] bytes (default 4 MB).
+/// G1GC classifies allocations larger than half a heap region (typically 0.5–4 MB
+/// depending on heap size and `-XX:G1HeapRegionSize`) as "humongous". Humongous
+/// objects bypass the normal young-generation allocation path and are placed
+/// directly into old-gen regions, which G1 then dedicates entirely to that one
+/// object. This causes fragmentation — each humongous region is only partially
+/// used — and forces more frequent full-GC cycles to reclaim them.
+///
+/// Common sources: large serialised payloads (`byte[]`), JDBC result-set
+/// buffers, in-memory image data, or inflate-then-keep patterns where a
+/// decompressed buffer grows to a multiple of its compressed size.
+struct HumongousObjectAllocation;
+impl Rule for HumongousObjectAllocation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let top = r.collections.top_prim_arrays.top_individual.first()?;
+        if top.shallow < HUMONGOUS_ARRAY_FLOOR {
+            return None;
+        }
+        let owner_note = match &top.owner {
+            Some(o) => format!(" held by `{o}`"),
+            None => String::new(),
+        };
+        Some(signal(
+            "humongous-object-allocation",
+            TriageSeverity::Info,
+            "Humongous Primitive Array",
+            format!(
+                "The largest primitive array is a `{}` of {} ({} elements){owner_note}. \
+                 Arrays this size are allocated as G1GC \"humongous\" objects: they \
+                 bypass the young generation and are placed directly in dedicated \
+                 old-gen regions, causing heap fragmentation and more frequent \
+                 full-GC cycles. If this array is transient (e.g. a decode buffer or \
+                 a network read buffer), consider pooling it with a `ByteBuffer` pool \
+                 or splitting the work into smaller chunks. If it is long-lived, \
+                 verify that its size is bounded and expected.",
+                top.array_class,
+                format_bytes(top.shallow),
+                fmt_count(top.length),
+            ),
+            Some(("collections", "Collections")),
+        ))
+    }
+}
+
+/// Component (class-loader) retention imbalance.
+///
+/// Reads `top_components`. Fires when the single top component retains
+/// ≥ [`COMPONENT_IMBALANCE_TOP_PCT`]% of the heap AND there are at least
+/// [`COMPONENT_IMBALANCE_MIN_COMPONENTS`] components — meaning one plugin,
+/// module, or application within a multi-app server monopolizes the heap while
+/// all others are comparatively small. In OSGi, Jakarta EE, or embedded
+/// classloader architectures (Tomcat, OSGi Felix, JBoss modules) this pattern
+/// typically indicates that one deployed component has a retention leak while
+/// the others are healthy.
+struct ComponentRetentionImbalance;
+impl Rule for ComponentRetentionImbalance {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let comps = &r.top_components.components;
+        if comps.len() < COMPONENT_IMBALANCE_MIN_COMPONENTS {
+            return None;
+        }
+        let top = comps.first()?;
+        if top.pct < COMPONENT_IMBALANCE_TOP_PCT {
+            return None;
+        }
+        // Second component for comparison.
+        let second = &comps[1];
+        Some(signal(
+            "component-retention-imbalance",
+            TriageSeverity::Warning,
+            "Component Retention Imbalance",
+            format!(
+                "Component `{}` retains {:.1}% of heap ({}) while the next \
+                 largest component (`{}`) retains only {:.1}%. In a multi-module \
+                 or multi-app deployment (OSGi, EE, Tomcat) this imbalance means \
+                 one component dominates the heap. Investigate whether a \
+                 class-loader-scoped cache, static field, or event-listener \
+                 registration in `{}` is accumulating without a release path.",
+                top.loader_label,
+                top.pct,
+                format_bytes(top.retained),
+                second.loader_label,
+                second.pct,
+                top.loader_label,
+            ),
+            Some(("top-components", "Top Components")),
+        ))
+    }
+}
+
+/// Exception-object accumulation. Reads `overview.histogram`. Fires when a
+/// class whose name ends with `Exception` or `Error` (but not `*ErrorCode`,
+/// `*ErrorMessage`, `*ErrorHandler`, etc.) accumulates >= 50 K live instances
+/// with aggregate shallow >= 16 MB. Each exception object carries a
+/// StackTraceElement[] that can itself retain dozens of String/char[] objects;
+/// tight error-retry loops that keep references to thrown exceptions are a
+/// reliable OOM vector.
+struct ExceptionObjectAccumulation;
+impl Rule for ExceptionObjectAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        // Collect all exception/error rows that meet both floors, pick the worst.
+        let rows: Vec<_> = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                let c = &h.pretty_class;
+                // Must end with "Exception" or "Error" but not noise suffixes.
+                let is_exc = c.ends_with("Exception") || c.ends_with("Error");
+                let is_noise = c.ends_with("ErrorCode")
+                    || c.ends_with("ErrorMessage")
+                    || c.ends_with("ErrorHandler")
+                    || c.ends_with("ErrorType")
+                    || c.ends_with("ErrorListener");
+                is_exc
+                    && !is_noise
+                    && h.instances >= EXCEPTION_ACCUM_FLOOR
+                    && h.shallow >= EXCEPTION_ACCUM_SHALLOW_FLOOR
+            })
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        // Report the single worst offender (most instances).
+        let worst = rows.iter().max_by_key(|h| h.instances)?;
+        let total_instances: u64 = rows.iter().map(|h| h.instances).sum();
+        let total_shallow: u64 = rows.iter().map(|h| h.shallow).sum();
+        let detail = if rows.len() == 1 {
+            format!(
+                "`{}` has {} live instances (shallow {}). Each exception retains a \
+                 StackTraceElement[] plus String/char[] for class/method/file names; \
+                 tight error-retry loops that hold references to thrown exceptions \
+                 cause rapid heap growth. Look for catch blocks that store exceptions \
+                 in collections/queues, or memoized failures, and add explicit \
+                 nulling or capacity caps.",
+                worst.pretty_class,
+                fmt_count(worst.instances),
+                format_bytes(worst.shallow),
+            )
+        } else {
+            format!(
+                "{} exception/error classes accumulate a combined {} instances ({}) — \
+                 largest: `{}` ({} instances). Each exception retains a \
+                 StackTraceElement[] plus String/char[] for class/method/file names; \
+                 tight error-retry loops that hold references to thrown exceptions \
+                 cause rapid heap growth. Look for catch blocks that store exceptions \
+                 in collections/queues, or memoized failures, and add explicit \
+                 nulling or capacity caps.",
+                rows.len(),
+                fmt_count(total_instances),
+                format_bytes(total_shallow),
+                worst.pretty_class,
+                fmt_count(worst.instances),
+            )
+        };
+        Some(signal_cls(
+            "exception-object-accumulation",
+            TriageSeverity::Warning,
+            "Exception Object Accumulation",
+            detail,
+            Some(("system-overview", "System Overview")),
+            &worst.pretty_class,
+        ))
+    }
+}
+
+/// Daemon-thread retention. Reads `threads.threads`. Fires when a single daemon
+/// thread retains >= 15% of the heap AND >= 64 MB absolute. Daemon threads are
+/// meant to be lightweight background workers (GC helpers, timers, I/O pollers);
+/// one holding a large retained heap is unusual and indicates an unbounded
+/// cache, queue, or circular reference reachable only through that thread's
+/// locals or instance fields.
+struct DaemonThreadRetention;
+impl Rule for DaemonThreadRetention {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total = r.overview.total_shallow;
+        if total == 0 {
+            return None;
+        }
+        let worst = r
+            .threads
+            .threads
+            .iter()
+            .filter(|t| t.is_daemon && t.retained >= DAEMON_RETAINED_FLOOR)
+            .max_by_key(|t| t.retained)?;
+        if pct_of(worst.retained, total) < DAEMON_RETAINED_PCT {
+            return None;
+        }
+        let name = worst.name.as_deref().unwrap_or("<unnamed>");
+        let class = worst.class_name.as_deref().unwrap_or("<unknown>");
+        Some(signal(
+            "daemon-thread-retention",
+            TriageSeverity::Warning,
+            "Daemon Thread Retains Large Heap Share",
+            format!(
+                "Daemon thread `{}` ({}) retains {} ({:.1}% of heap). Daemon threads \
+                 should be lightweight background workers; one holding this much heap \
+                 indicates an unbounded cache, queue, or circular reference reachable \
+                 only through that thread's locals or instance fields. Inspect the \
+                 thread's stack and local variables with `--thread-locals` to identify \
+                 the retaining path.",
+                name,
+                class,
+                format_bytes(worst.retained),
+                pct_of(worst.retained, total),
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2350,5 +3633,719 @@ mod tests {
             .unwrap()
             .total_wasted_bytes = 1024;
         assert!(DuplicatePrimArrays.eval(&r).is_none());
+    }
+
+    #[test]
+    fn deep_retention_chain_fires_above_threshold() {
+        let mut r = base_report();
+        r.dominator_analysis.longest_chain_depth = 5_000;
+        assert!(
+            DeepRetentionChain.eval(&r).is_none(),
+            "5k depth must not fire"
+        );
+        r.dominator_analysis.longest_chain_depth = 15_000;
+        let s = DeepRetentionChain.eval(&r).expect("15k depth must fire");
+        assert_eq!(s.id, "deep-retention-chain");
+        assert!(s.detail.contains("15,000"));
+    }
+
+    #[test]
+    fn framework_leak_fires_on_dominant_framework() {
+        let mut r = base_report();
+        r.overview.total_shallow = 1_000_000_000; // 1 GB
+        r.framework_analysis = vec![crate::report::model::FrameworkAnalysis {
+            framework: "Spring".into(),
+            instance_count: 12,
+            total_retained: 200_000_000, // 20% of heap
+        }];
+        let s = FrameworkLeak.eval(&r).expect("20% Spring must fire");
+        assert_eq!(s.id, "framework-leak");
+        assert!(s.detail.contains("Spring"));
+
+        // Below retained floor.
+        r.framework_analysis[0].total_retained = 10_000_000;
+        assert!(FrameworkLeak.eval(&r).is_none());
+    }
+
+    #[test]
+    fn blocked_thread_concentration_fires_on_stuck_threads() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1_000_000_000;
+        r.threads.threads = vec![
+            ThreadInfo {
+                thread_state: "[alive, waiting]".into(),
+                retained: 150_000_000,
+                name: Some("pool-1".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                thread_state: "[alive, blocked]".into(),
+                retained: 100_000_000,
+                name: Some("pool-2".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                thread_state: "[alive, runnable]".into(),
+                retained: 10_000_000,
+                ..Default::default()
+            },
+        ];
+        let s = BlockedThreadConcentration
+            .eval(&r)
+            .expect("250 MB blocked must fire");
+        assert_eq!(s.id, "blocked-thread-concentration");
+        assert!(s.detail.contains("2 BLOCKED"));
+
+        // Only runnable threads → no fire.
+        r.threads.threads = vec![ThreadInfo {
+            thread_state: "[alive, runnable]".into(),
+            retained: 500_000_000,
+            ..Default::default()
+        }];
+        assert!(BlockedThreadConcentration.eval(&r).is_none());
+    }
+
+    #[test]
+    fn tiny_collection_overhead_fires_above_floor() {
+        let mut r = base_report();
+        r.collection_attribution = Some(CollectionAttribution {
+            most_overall: vec![],
+            biggest_single: vec![],
+            tiny_overhead: vec![TinyCollectionRow {
+                holder_class: "com.app.Node".into(),
+                field: "children".into(),
+                container_kind: "list".into(),
+                empty_count: 500_000,
+                singleton_count: 100_000,
+                overhead_bytes: 48_000_000, // 48 MB > TINY_COLL_OVERHEAD_FLOOR
+            }],
+            truncated: false,
+        });
+        let s = TinyCollectionOverhead
+            .eval(&r)
+            .expect("48 MB tiny overhead must fire");
+        assert_eq!(s.id, "tiny-collection-overhead");
+        assert!(s.detail.contains("com.app.Node"));
+
+        // Below floor.
+        r.collection_attribution.as_mut().unwrap().tiny_overhead[0].overhead_bytes = 100_000;
+        assert!(TinyCollectionOverhead.eval(&r).is_none());
+    }
+
+    #[test]
+    fn soft_ref_cache_expansion_fires_on_large_live_refs() {
+        use crate::report::model::RefStatClassRow;
+        let mut r = base_report();
+        r.overview.total_shallow = 2_000_000_000;
+        r.references.soft = Some(ReferenceStats {
+            kind: "Soft".into(),
+            reference_instances: 50_000,
+            null_referent_count: 100, // almost all live
+            referent_histogram: vec![RefStatClassRow {
+                pretty_class: "com.example.CachedEntry".into(),
+                objects: 49_900,
+                shallow: 500_000_000,
+                retained: 500_000_000, // 25% of heap
+            }],
+            only_weakly_retained: vec![],
+        });
+        let s = SoftRefCacheExpansion
+            .eval(&r)
+            .expect("500 MB soft-ref cache must fire");
+        assert_eq!(s.id, "soft-ref-cache-expansion");
+        assert!(s.detail.contains("com.example.CachedEntry"));
+
+        // Too few live refs.
+        r.references.soft.as_mut().unwrap().reference_instances = 500;
+        r.references.soft.as_mut().unwrap().null_referent_count = 0;
+        assert!(SoftRefCacheExpansion.eval(&r).is_none());
+    }
+
+    #[test]
+    fn unowned_collection_sink_fires_on_large_ownerless_collection() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1_000_000_000;
+        r.biggest_collections = Some(BiggestCollections {
+            combined: vec![
+                // Owned collection — must not fire.
+                BiggestCollectionRow {
+                    kind: "map".into(),
+                    container_class: "java.util.HashMap".into(),
+                    elements: 500_000,
+                    retained: Some(200_000_000),
+                    owner: Some("com.app.Cache#store".into()),
+                    ..Default::default()
+                },
+                // Large ownerless collection — should fire.
+                BiggestCollectionRow {
+                    kind: "map".into(),
+                    container_class: "java.util.LinkedHashMap".into(),
+                    elements: 800_000,
+                    retained: Some(150_000_000),
+                    owner: None,
+                    dominant_value_type: Some("com.app.Session".into()),
+                    ..Default::default()
+                },
+            ],
+            by_kind: vec![],
+            truncated: false,
+        });
+        let s = UnownedCollectionSink
+            .eval(&r)
+            .expect("large ownerless collection must fire");
+        assert_eq!(s.id, "unowned-collection-sink");
+        assert!(s.detail.contains("java.util.LinkedHashMap"));
+        assert!(s.detail.contains("com.app.Session"));
+
+        // All collections have an owner → silent.
+        r.biggest_collections.as_mut().unwrap().combined[1].owner = Some("com.app.Foo#bar".into());
+        assert!(UnownedCollectionSink.eval(&r).is_none());
+
+        // Ownerless but below both thresholds → silent.
+        r.biggest_collections.as_mut().unwrap().combined[1].owner = None;
+        r.biggest_collections.as_mut().unwrap().combined[1].elements = 100;
+        r.biggest_collections.as_mut().unwrap().combined[1].retained = Some(1024);
+        assert!(UnownedCollectionSink.eval(&r).is_none());
+    }
+
+    #[test]
+    fn parse_jdk_major_handles_legacy_and_modern() {
+        assert_eq!(parse_jdk_major("1.8.0_382-b05"), Some(8));
+        assert_eq!(parse_jdk_major("1.7.0_80"), Some(7));
+        assert_eq!(parse_jdk_major("11.0.20+8"), Some(11));
+        assert_eq!(parse_jdk_major("17.0.9+9"), Some(17));
+        assert_eq!(parse_jdk_major("21"), Some(21));
+        assert_eq!(parse_jdk_major("21-ea"), Some(21));
+        assert_eq!(parse_jdk_major(""), None);
+    }
+
+    #[test]
+    fn days_since_epoch_known_values() {
+        // Cross-checked against Python datetime.
+        assert_eq!(days_since_epoch(1970, 1, 1), 0);
+        assert_eq!(days_since_epoch(2014, 3, 18), 16147); // JDK 8 GA
+        assert_eq!(days_since_epoch(2021, 9, 14), 18884); // JDK 17 GA
+        assert_eq!(days_since_epoch(2023, 9, 19), 19619); // JDK 21 GA
+    }
+
+    #[test]
+    fn stale_jdk_fires_on_old_version_at_dump_time() {
+        let mut r = base_report();
+        // Dump taken 2024-08-01 = days_since_epoch(2024,8,1) * 86400000 ms
+        let dump_day = days_since_epoch(2024, 8, 1); // 19936
+        r.overview.dump_creation = Some(dump_day * 86_400_000);
+
+        // JDK 17 GA was 2021-09-14 = day 18884 → age = 19936 - 18884 = 1052 days → fires
+        r.overview.jvm_version = Some("17.0.9+9".into());
+        let s = StaleJdk.eval(&r).expect("JDK 17 (1052 days old) must fire");
+        assert_eq!(s.id, "stale-jdk");
+        assert!(s.detail.contains("JDK 17"));
+
+        // JDK 24 GA was 2025-03-18 = day 20165 → age = 19936 - 20165 = -229 → must not fire
+        r.overview.jvm_version = Some("24.0.1+9".into());
+        assert!(
+            StaleJdk.eval(&r).is_none(),
+            "JDK 24 not yet released at dump time must not fire"
+        );
+
+        // Legacy JDK 8 ("1.8.0_382") GA was 2014-03-18 = day 16147 → very old → fires
+        r.overview.jvm_version = Some("1.8.0_382-b05".into());
+        let s8 = StaleJdk.eval(&r).expect("JDK 8 must fire");
+        assert!(s8.detail.contains("JDK 8"));
+
+        // No dump timestamp → silent.
+        r.overview.dump_creation = None;
+        assert!(StaleJdk.eval(&r).is_none());
+    }
+
+    #[test]
+    fn worker_pool_retention_fires_on_multi_instance_group() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1_000_000_000; // 1 GB
+
+        // 9 worker objects each holding ~88 MB = 792 MB aggregate = 79.2%
+        // Per-instance = 88 MB = 8.8% (below 10% single-object threshold)
+        r.leaks.suspects = vec![Suspect {
+            is_single: false,
+            pretty_class: "org.openide.util.RequestProcessor$Processor".into(),
+            instance_count: 9,
+            retained: 792_000_000,
+            ..Default::default()
+        }];
+        let s = WorkerPoolRetention
+            .eval(&r)
+            .expect("9 workers at 79% must fire");
+        assert_eq!(s.id, "worker-pool-retention");
+        assert!(s.detail.contains("RequestProcessor"));
+        // Worker-class hint should appear because name contains "Processor"
+        assert!(s.detail.contains("worker/thread"));
+
+        // Single-instance suspects don't fire this rule.
+        r.leaks.suspects[0].is_single = true;
+        r.leaks.suspects[0].instance_count = 1;
+        assert!(WorkerPoolRetention.eval(&r).is_none());
+
+        // Group with per-instance average >= 10% of heap → single-object rules cover it.
+        r.leaks.suspects[0].is_single = false;
+        r.leaks.suspects[0].instance_count = 3;
+        r.leaks.suspects[0].retained = 600_000_000; // 200 MB each = 20% each
+        assert!(WorkerPoolRetention.eval(&r).is_none());
+
+        // Group below the floor.
+        r.leaks.suspects[0].instance_count = 9;
+        r.leaks.suspects[0].retained = 10_000_000; // tiny
+        assert!(WorkerPoolRetention.eval(&r).is_none());
+    }
+
+    #[test]
+    fn cglib_proxy_accumulation_fires_on_many_enhanced_instances() {
+        let mut r = base_report();
+        r.overview.histogram = vec![
+            hist_row(
+                "com.example.TimeAccountType$EnhancerByCGLIB$5b6cad54",
+                200_000,
+                60_000_000,
+            ),
+            hist_row(
+                "com.example.Employee$EnhancerByCGLIB$1a2b3c4d",
+                80_000,
+                24_000_000,
+            ),
+            hist_row("java.lang.String", 1_000_000, 32_000_000),
+        ];
+        let s = CglibProxyAccumulation
+            .eval(&r)
+            .expect("280k CGLIB proxy instances must fire");
+        assert_eq!(s.id, "cglib-proxy-accumulation");
+        // Base class name extracted from top entry
+        assert!(s.detail.contains("TimeAccountType"));
+
+        // Below instance floor
+        r.overview.histogram[0].instances = 1_000;
+        r.overview.histogram[1].instances = 1_000;
+        assert!(CglibProxyAccumulation.eval(&r).is_none());
+
+        // Above instance floor but below shallow floor
+        r.overview.histogram[0].instances = 60_000;
+        r.overview.histogram[0].shallow = 100_000; // tiny
+        r.overview.histogram[1].instances = 5_000;
+        r.overview.histogram[1].shallow = 100_000;
+        assert!(CglibProxyAccumulation.eval(&r).is_none());
+
+        // No CGLIB classes at all: silent
+        r.overview.histogram = vec![hist_row("java.lang.String", 1_000_000, 32_000_000)];
+        assert!(CglibProxyAccumulation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn weak_hashmap_accumulation_fires_above_floor() {
+        let mut r = base_report();
+        r.overview.histogram = vec![hist_row("java.util.WeakHashMap", 200_000, 10_000_000)];
+        let s = WeakHashMapAccumulation
+            .eval(&r)
+            .expect("200k WeakHashMap instances must fire");
+        assert_eq!(s.id, "weak-hashmap-accumulation");
+        assert!(s.detail.contains("200,000"));
+
+        // Below floor
+        r.overview.histogram[0].instances = 50;
+        assert!(WeakHashMapAccumulation.eval(&r).is_none());
+
+        // Not present
+        r.overview.histogram = vec![];
+        assert!(WeakHashMapAccumulation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn async_log_ringbuf_full_fires_on_power_of_two() {
+        let mut r = base_report();
+        // 65536 = 2^16 — exactly a power of two, >= 512 → fires
+        r.overview.histogram = vec![hist_row(
+            "org.apache.logging.log4j.core.async.RingBufferLogEvent",
+            65_536,
+            6_000_000,
+        )];
+        let s = AsyncLogRingBufferFull
+            .eval(&r)
+            .expect("65536 RingBufferLogEvent must fire");
+        assert_eq!(s.id, "async-log-ringbuf-full");
+        assert!(s.detail.contains("65,536"));
+
+        // Non-power-of-two count: silent
+        r.overview.histogram[0].instances = 65_000;
+        assert!(AsyncLogRingBufferFull.eval(&r).is_none());
+
+        // Below minimum floor (256 = power of two but < 512): silent
+        r.overview.histogram[0].instances = 256;
+        assert!(AsyncLogRingBufferFull.eval(&r).is_none());
+
+        // Not present at all: silent
+        r.overview.histogram = vec![hist_row("java.lang.String", 1_000, 16_000)];
+        assert!(AsyncLogRingBufferFull.eval(&r).is_none());
+    }
+
+    #[test]
+    fn map_entry_dominance_fires_on_count_floor() {
+        let mut r = base_report();
+        r.overview.total_objects = 200_000_000;
+        r.overview.histogram = vec![
+            hist_row("java.util.HashMap$Node", 50_000_000, 2_000_000_000),
+            hist_row(
+                "java.util.concurrent.ConcurrentHashMap$Node",
+                10_000_000,
+                400_000_000,
+            ),
+            hist_row("java.lang.String", 5_000_000, 160_000_000),
+        ];
+        let s = MapEntryDominance
+            .eval(&r)
+            .expect("60M map entry objects must fire");
+        assert_eq!(s.id, "map-entry-dominance");
+        assert!(s.detail.contains("60,000,000"));
+
+        // Below both floor (5M total) and pct (2.5%): silent
+        r.overview.histogram[0].instances = 4_000_000;
+        r.overview.histogram[1].instances = 1_000_000;
+        assert!(MapEntryDominance.eval(&r).is_none());
+    }
+
+    #[test]
+    fn map_entry_dominance_fires_on_pct() {
+        let mut r = base_report();
+        r.overview.total_objects = 10_000_000; // small total
+        r.overview.histogram = vec![hist_row(
+            "java.util.LinkedHashMap$Entry",
+            2_500_000, // 25% of total objects — fires on pct even below count floor
+            100_000_000,
+        )];
+        let s = MapEntryDominance
+            .eval(&r)
+            .expect("25% map entries must fire on pct");
+        assert_eq!(s.id, "map-entry-dominance");
+        assert!(s.detail.contains("25.0%"));
+    }
+
+    #[test]
+    fn hibernate_interceptor_fires_on_many_instances() {
+        let mut r = base_report();
+        r.overview.histogram = vec![
+            hist_row(
+                "com.sap.engine.services.orpersistence.GenericFieldInterceptor",
+                2_000_000,
+                64_000_000,
+            ),
+            hist_row(
+                "com.sap.engine.services.orpersistence.SetterInterceptMethodAdaptor",
+                1_500_000,
+                48_000_000,
+            ),
+            hist_row("java.lang.String", 500_000, 16_000_000),
+        ];
+        let s = HibernateInterceptorAccumulation
+            .eval(&r)
+            .expect("3.5M interceptor instances must fire");
+        assert_eq!(s.id, "hibernate-interceptor-accumulation");
+        assert!(s.detail.contains("3,500,000"));
+        assert!(s.detail.contains("GenericFieldInterceptor"));
+
+        // Below instance floor
+        r.overview.histogram[0].instances = 100_000;
+        r.overview.histogram[1].instances = 100_000;
+        assert!(HibernateInterceptorAccumulation.eval(&r).is_none());
+
+        // Above instance floor but below shallow floor
+        r.overview.histogram[0].instances = 1_000_000;
+        r.overview.histogram[0].shallow = 1_000; // tiny
+        r.overview.histogram[1].instances = 100_000;
+        r.overview.histogram[1].shallow = 1_000;
+        assert!(HibernateInterceptorAccumulation.eval(&r).is_none());
+
+        // No matching classes: silent
+        r.overview.histogram = vec![hist_row("java.lang.String", 5_000_000, 80_000_000)];
+        assert!(HibernateInterceptorAccumulation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn lock_object_proliferation_fires_on_high_count() {
+        let mut r = base_report();
+        r.overview.histogram = vec![
+            hist_row(
+                "java.util.concurrent.locks.ReentrantLock$NonfairSync",
+                800_000,
+                25_600_000,
+            ),
+            hist_row(
+                "java.util.concurrent.locks.ReentrantReadWriteLock$NonfairSync",
+                200_000,
+                6_400_000,
+            ),
+        ];
+        let s = LockObjectProliferation
+            .eval(&r)
+            .expect("1M lock objects must fire");
+        assert_eq!(s.id, "lock-object-proliferation");
+        assert!(s.detail.contains("1,000,000"));
+
+        // Below floor
+        r.overview.histogram[0].instances = 100_000;
+        r.overview.histogram[1].instances = 50_000;
+        assert!(LockObjectProliferation.eval(&r).is_none());
+
+        // Unrelated lock class: silent
+        r.overview.histogram = vec![hist_row(
+            "java.util.concurrent.locks.AbstractQueuedSynchronizer",
+            600_000,
+            19_200_000,
+        )];
+        assert!(LockObjectProliferation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn perf_monitoring_fires_on_call_graph_accumulation() {
+        let mut r = base_report();
+        r.overview.histogram = vec![
+            hist_row(
+                "com.sap.engine.services.perflog.CallStack$CallNode",
+                500_000,
+                40_000_000,
+            ),
+            hist_row(
+                "com.sap.engine.services.perflog.CallStack",
+                100_000,
+                8_000_000,
+            ),
+        ];
+        let s = PerfMonitoringRetention
+            .eval(&r)
+            .expect("600k perf call-graph nodes must fire");
+        assert_eq!(s.id, "perf-monitoring-retention");
+        assert!(s.detail.contains("600,000"));
+        assert!(s.detail.contains("CallNode"));
+
+        // Below floor
+        r.overview.histogram[0].instances = 50_000;
+        r.overview.histogram[1].instances = 10_000;
+        assert!(PerfMonitoringRetention.eval(&r).is_none());
+
+        // Right class name but wrong package (not perf infra): silent
+        r.overview.histogram = vec![hist_row("com.example.domain.CallNode", 500_000, 16_000_000)];
+        assert!(PerfMonitoringRetention.eval(&r).is_none());
+
+        // No matching classes: silent
+        r.overview.histogram = vec![hist_row("java.lang.String", 1_000_000, 32_000_000)];
+        assert!(PerfMonitoringRetention.eval(&r).is_none());
+    }
+
+    #[test]
+    fn threadlocal_value_retention_fires_on_large_retained() {
+        use crate::report::model::ThreadLocalLeakRow;
+        let mut r = base_report();
+
+        // Empty analysis: silent
+        assert!(ThreadLocalValueRetention.eval(&r).is_none());
+
+        r.thread_local_analysis = vec![
+            ThreadLocalLeakRow {
+                value_class: "com.example.RequestContext".into(),
+                entry_count: 800,
+                stale_count: 0,
+                retained: 50_000_000, // 50 MB
+            },
+            ThreadLocalLeakRow {
+                value_class: "com.example.FormatCache".into(),
+                entry_count: 200,
+                stale_count: 10,
+                retained: 5_000_000,
+            },
+        ];
+        let s = ThreadLocalValueRetention
+            .eval(&r)
+            .expect("55 MB ThreadLocal retention must fire");
+        assert_eq!(s.id, "threadlocal-value-retention");
+        assert!(s.detail.contains("RequestContext"));
+        assert!(s.detail.contains("800")); // entry count
+
+        // Below floor
+        r.thread_local_analysis[0].retained = 1_000_000;
+        r.thread_local_analysis[1].retained = 500_000;
+        assert!(ThreadLocalValueRetention.eval(&r).is_none());
+
+        // High stale fraction triggers stale note
+        r.thread_local_analysis[0].retained = 50_000_000;
+        r.thread_local_analysis[0].entry_count = 100;
+        r.thread_local_analysis[0].stale_count = 80; // 80% stale
+        let s2 = ThreadLocalValueRetention.eval(&r).expect("must fire");
+        assert!(s2.detail.contains("stale"));
+    }
+
+    #[test]
+    fn humongous_object_fires_on_large_array() {
+        use crate::report::model::TopArrayRow;
+        let mut r = base_report();
+        r.overview.total_shallow = 200 * 1024 * 1024;
+
+        // No arrays: silent
+        assert!(HumongousObjectAllocation.eval(&r).is_none());
+
+        r.collections.top_prim_arrays.top_individual = vec![TopArrayRow {
+            array_class: "byte[]".into(),
+            length: 8_000_000,
+            shallow: 8 * 1024 * 1024, // 8 MB → fires
+            obj_index_1based: 1,
+            owner: Some("com.example.ResponseBuffer#buf".into()),
+            non_null: None,
+        }];
+        let s = HumongousObjectAllocation
+            .eval(&r)
+            .expect("8 MB array must fire");
+        assert_eq!(s.id, "humongous-object-allocation");
+        assert!(s.detail.contains("byte[]"));
+        assert!(s.detail.contains("ResponseBuffer"));
+
+        // Below 4 MB floor: silent
+        r.collections.top_prim_arrays.top_individual[0].shallow = 2 * 1024 * 1024;
+        assert!(HumongousObjectAllocation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn component_imbalance_fires_on_dominant_component() {
+        use crate::report::model::{Component, TopComponents};
+        let mut r = base_report();
+
+        // Fewer than 3 components: silent
+        r.top_components = TopComponents {
+            components: vec![
+                Component {
+                    loader_label: "app1".into(),
+                    retained: 900,
+                    pct: 90.0,
+                    top_classes: vec![],
+                },
+                Component {
+                    loader_label: "app2".into(),
+                    retained: 100,
+                    pct: 10.0,
+                    top_classes: vec![],
+                },
+            ],
+        };
+        assert!(
+            ComponentRetentionImbalance.eval(&r).is_none(),
+            "only 2 components: silent"
+        );
+
+        r.top_components.components.push(Component {
+            loader_label: "system".into(),
+            retained: 10,
+            pct: 1.0,
+            top_classes: vec![],
+        });
+        // Now 3 components, top at 90% >= 60%: fires
+        let s = ComponentRetentionImbalance
+            .eval(&r)
+            .expect("90% top component must fire");
+        assert_eq!(s.id, "component-retention-imbalance");
+        assert!(s.detail.contains("app1"));
+        assert!(s.detail.contains("app2"));
+
+        // Top at only 50%: silent
+        r.top_components.components[0].pct = 50.0;
+        assert!(ComponentRetentionImbalance.eval(&r).is_none());
+    }
+
+    #[test]
+    fn exception_accumulation_fires_and_silent() {
+        let mut r = base_report();
+        r.overview.total_shallow = 1_000_000_000;
+
+        // Below instance floor: silent.
+        r.overview.histogram.push(hist_row(
+            "com.example.MyException",
+            EXCEPTION_ACCUM_FLOOR - 1,
+            EXCEPTION_ACCUM_SHALLOW_FLOOR,
+        ));
+        assert!(ExceptionObjectAccumulation.eval(&r).is_none());
+
+        // Below shallow floor: silent.
+        r.overview.histogram[0] = hist_row(
+            "com.example.MyException",
+            EXCEPTION_ACCUM_FLOOR,
+            EXCEPTION_ACCUM_SHALLOW_FLOOR - 1,
+        );
+        assert!(ExceptionObjectAccumulation.eval(&r).is_none());
+
+        // Both floors met: fires.
+        r.overview.histogram[0] = hist_row(
+            "com.example.MyException",
+            EXCEPTION_ACCUM_FLOOR,
+            EXCEPTION_ACCUM_SHALLOW_FLOOR,
+        );
+        let s = ExceptionObjectAccumulation
+            .eval(&r)
+            .expect("both floors met must fire");
+        assert_eq!(s.id, "exception-object-accumulation");
+        assert!(s.detail.contains("MyException"));
+
+        // Noise suffixes: silent.
+        r.overview.histogram[0] = hist_row(
+            "com.example.MyErrorCode",
+            EXCEPTION_ACCUM_FLOOR,
+            EXCEPTION_ACCUM_SHALLOW_FLOOR,
+        );
+        assert!(ExceptionObjectAccumulation.eval(&r).is_none());
+
+        // Plain "Error" suffix fires.
+        r.overview.histogram[0] = hist_row(
+            "java.lang.OutOfMemoryError",
+            EXCEPTION_ACCUM_FLOOR,
+            EXCEPTION_ACCUM_SHALLOW_FLOOR,
+        );
+        let s2 = ExceptionObjectAccumulation
+            .eval(&r)
+            .expect("Error suffix must fire");
+        assert_eq!(s2.id, "exception-object-accumulation");
+        assert!(s2.detail.contains("OutOfMemoryError"));
+    }
+
+    #[test]
+    fn daemon_thread_retention_fires_and_silent() {
+        let mut r = base_report();
+        r.overview.total_shallow = 1_000_000_000;
+
+        let daemon = ThreadInfo {
+            thread_serial: 1,
+            name: Some("background-worker-1".into()),
+            class_name: Some("java.lang.Thread".into()),
+            is_daemon: true,
+            retained: 200_000_000, // 20% of 1 GB
+            ..ThreadInfo::default()
+        };
+
+        // Non-daemon with same retained: silent.
+        let mut non_daemon = daemon.clone();
+        non_daemon.is_daemon = false;
+        non_daemon.thread_serial = 2;
+        r.threads.threads = vec![non_daemon];
+        assert!(DaemonThreadRetention.eval(&r).is_none());
+
+        // Daemon but below absolute floor: silent.
+        let mut small_daemon = daemon.clone();
+        small_daemon.retained = DAEMON_RETAINED_FLOOR - 1;
+        r.threads.threads = vec![small_daemon];
+        assert!(DaemonThreadRetention.eval(&r).is_none());
+
+        // Daemon meets both floors: fires.
+        r.threads.threads = vec![daemon];
+        let s = DaemonThreadRetention
+            .eval(&r)
+            .expect("daemon with 20% retained must fire");
+        assert_eq!(s.id, "daemon-thread-retention");
+        assert!(s.detail.contains("background-worker-1"));
+        assert!(s.detail.contains("20.0%") || s.detail.contains("20%"));
+
+        // At exactly DAEMON_RETAINED_PCT boundary but below: silent.
+        let pct_boundary = ((DAEMON_RETAINED_PCT - 0.1) / 100.0 * 1_000_000_000f64) as u64;
+        r.threads.threads[0].retained = pct_boundary;
+        assert!(DaemonThreadRetention.eval(&r).is_none());
     }
 }
