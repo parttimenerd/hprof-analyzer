@@ -34,9 +34,7 @@ pub(crate) mod sizing;
 mod strings;
 
 pub(crate) use boxed::build_boxed_holders_from_counts;
-pub(crate) use dup_prim_arrays::{
-    DupPrimArrays, compute_dup_prim_arrays, finalize_dup_array_holders,
-};
+pub(crate) use dup_prim_arrays::{DupPrimArrays, DupPrimCollector, finalize_dup_array_holders};
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
 pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
 pub use framework_scan::scan_frameworks;
@@ -581,6 +579,14 @@ impl Pass2 {
             opts.collections,
             fielddecode::CollCaps::from_size(opts.report_size),
         );
+        // Fold compute_dup_prim_arrays into 2a: collect hash fingerprints inline
+        // while prim array bytes are already read for fd_state. Eliminates the
+        // separate file scan (~15s on warm cache on 34GB).
+        let mut dup_prim_collector: Option<DupPrimCollector> = if opts.find_duplicates {
+            Some(DupPrimCollector::new())
+        } else {
+            None
+        };
         {
             let mut r = source.open()?;
             // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
@@ -627,6 +633,7 @@ impl Pass2 {
                         &p1,
                         &shallow,
                         &opts.coll_descs,
+                        dup_prim_collector.as_mut(),
                     ),
                     tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
                     _ => r.skip(length),
@@ -976,14 +983,16 @@ impl Pass2 {
             };
         t_phase!("dup_strings done");
 
-        // Opt-in duplicate-primitive-array waste scan. One extra full-file pass
-        // alongside --find-duplicates; keeps only a hash→(count,type) map plus
-        // an addr→hash map so we can later compute holder classes in the 2b fill.
+        // Duplicate-primitive-array waste: collector was fed inline during the
+        // 2a scan above, so finish() just aggregates (no extra file I/O).
         let (dup_prim_arrays_opt, dup_addrs): (
             Option<DupPrimArrays>,
             std::collections::HashSet<u64>,
         ) = if opts.find_duplicates {
-            let (dpa, dup_addrs) = compute_dup_prim_arrays(&open, p1.id_size)?;
+            let (dpa, dup_addrs) = dup_prim_collector
+                .take()
+                .expect("dup_prim_collector present when find_duplicates")
+                .finish();
             t_phase!("dup_prim_arrays scan done");
             // dup_array_holders is now folded into the 2b forward fill below;
             // the marker still fires here so timing output stays consistent.
@@ -1574,6 +1583,7 @@ impl Pass2 {
         fd_p1: &Pass1,
         fd_shallow: &[u32],
         fd_descs: &[CollDesc],
+        mut dup_prim: Option<&mut DupPrimCollector>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1832,7 +1842,7 @@ impl Pass2 {
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
                     let byte_len = count.saturating_mul(esz);
-                    if fd.is_some() {
+                    if fd.is_some() || dup_prim.is_some() {
                         try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     } else {
                         try_read!(r.skip(byte_len));
@@ -1842,6 +1852,9 @@ impl Pass2 {
 
                     if let Some(ref mut fds) = fd {
                         fds.on_prim_array(addr, elem_type, count, scratch, fd_p1, fd_shallow);
+                    }
+                    if let Some(ref mut dpc) = dup_prim {
+                        dpc.on_prim_array(addr, elem_type, count, scratch);
                     }
 
                     // OQL: deliver the primitive array to any active query executor.

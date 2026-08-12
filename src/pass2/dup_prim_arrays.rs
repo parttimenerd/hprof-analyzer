@@ -9,15 +9,7 @@
 //! per-element-type breakdown sorted by wasted bytes descending.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::io::{self, ErrorKind};
-
-use crate::{
-    reader::HprofReader,
-    types::{HprofType, heap, tags},
-};
-
-use super::scan::{skip_class_dump, sub_remaining};
+use std::hash::Hash;
 
 /// Top-N element types to report in the breakdown.
 const DUP_PRIM_TOP_N: usize = 10;
@@ -83,188 +75,87 @@ fn elem_type_name(code: u8) -> &'static str {
     }
 }
 
-/// Compute approximate duplicate-primitive-array waste. One full-file pass.
-/// Also returns the set of duplicate array object IDs (addresses of arrays
-/// that appeared in a group of ≥ 2 identical copies) for use by
-/// [`compute_dup_array_holders`].
-pub(crate) fn compute_dup_prim_arrays<O>(
-    open: O,
-    id_size: u8,
-) -> io::Result<(DupPrimArrays, HashSet<u64>)>
-where
-    O: Fn() -> io::Result<HprofReader>,
-{
-    let ids = id_size as u64;
-    let mut r = open()?;
-    let mut scratch: Vec<u8> = Vec::with_capacity(4096);
+/// Accumulates duplicate-primitive-array data inline during the 2a scan,
+/// replacing the standalone `compute_dup_prim_arrays` file pass.
+/// Call `on_prim_array` for each PRIM_ARRAY_DUMP record, then `finish`.
+pub(crate) struct DupPrimCollector {
+    hash_map: HashMap<u64, (u32, u64, u8)>, // hash → (count, shallow_bytes, elem_type)
+    addr_to_hash: HashMap<u64, u64>,
+}
 
-    // hash → (count, shallow_bytes_per_copy, elem_type_code, first_seen_addr)
-    // We track one representative address per group to build the dup-addr set.
-    // Because addresses per group can be many, we collect ALL addresses of
-    // arrays that land in a duplicated group in a second step below.
-    // Instead: map hash → (count, shallow, elem_type, Vec<addr>) — but that is
-    // O(N) memory. Compromise: store up to a small cap of addrs, then expand
-    // after aggregation using a second scan conceptually.
-    // Simpler: track hash → (count, shallow, elem_type); separately track
-    // addr → hash for all arrays. Then after the pass, collect all addrs whose
-    // hash has count >= 2.
-    let mut hash_map: HashMap<u64, (u32, u64, u8)> = HashMap::new();
-    let mut addr_to_hash: HashMap<u64, u64> = HashMap::new();
+impl DupPrimCollector {
+    pub(crate) fn new() -> Self {
+        Self {
+            hash_map: HashMap::new(),
+            addr_to_hash: HashMap::new(),
+        }
+    }
 
-    loop {
-        let tag = match r.u1() {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            other => other?,
-        };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
-        match tag {
-            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                let mut remaining = length;
-                while remaining > 0 {
-                    let sub_tag = r.u1()?;
-                    sub_remaining(&mut remaining, 1)?;
-                    match sub_tag {
-                        heap::ROOT_SYSTEM_CLASS
-                        | heap::ROOT_UNKNOWN
-                        | heap::ROOT_MONITOR_USED
-                        | heap::ROOT_STICKY_CLASS
-                        | heap::ROOT_INTERNED_STRING
-                        | heap::ROOT_DEBUGGER
-                        | heap::ROOT_VM_INTERNAL => {
-                            r.skip(ids)?;
-                            sub_remaining(&mut remaining, ids)?;
-                        }
-                        heap::ROOT_JNI_GLOBAL => {
-                            r.skip(2 * ids)?;
-                            sub_remaining(&mut remaining, 2 * ids)?;
-                        }
-                        heap::ROOT_JNI_LOCAL
-                        | heap::ROOT_JAVA_FRAME
-                        | heap::ROOT_JNI_MONITOR
-                        | heap::ROOT_THREAD_OBJ => {
-                            r.skip(ids + 8)?;
-                            sub_remaining(&mut remaining, ids + 8)?;
-                        }
-                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                            r.skip(ids + 4)?;
-                            sub_remaining(&mut remaining, ids + 4)?;
-                        }
-                        heap::HEAP_DUMP_INFO => {
-                            r.skip(4 + ids)?;
-                            sub_remaining(&mut remaining, 4 + ids)?;
-                        }
-                        heap::CLASS_DUMP => {
-                            let consumed = skip_class_dump(&mut r, id_size)?;
-                            sub_remaining(&mut remaining, consumed)?;
-                        }
-                        heap::INSTANCE_DUMP => {
-                            r.skip(ids + 4)?;
-                            let _class_id = r.id()?;
-                            let data_len = r.u4()? as u64;
-                            r.skip(data_len)?;
-                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
-                        }
-                        heap::OBJ_ARRAY_DUMP => {
-                            r.skip(ids + 4)?;
-                            let count = r.u4()? as u64;
-                            r.skip(ids)?;
-                            let byte_len = count.saturating_mul(ids);
-                            r.skip(byte_len)?;
-                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
-                        }
-                        heap::PRIM_ARRAY_NODATA_DUMP => {
-                            // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
-                            r.skip(ids + 4 + 4 + 1)?;
-                            sub_remaining(&mut remaining, ids + 4 + 4 + 1)?;
-                        }
+    /// Ingest one PRIM_ARRAY_DUMP record. `bytes` is the raw element data.
+    pub(crate) fn on_prim_array(&mut self, addr: u64, elem_type: u8, _count: u64, bytes: &[u8]) {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        elem_type.hash(&mut h);
+        bytes.hash(&mut h);
+        let hv = h.finish();
+        let e = self
+            .hash_map
+            .entry(hv)
+            .or_insert((0, bytes.len() as u64, elem_type));
+        e.0 = e.0.saturating_add(1);
+        self.addr_to_hash.insert(addr, hv);
+    }
 
-                        heap::PRIM_ARRAY_DUMP => {
-                            let obj_addr = r.id()?;
-                            r.skip(4)?; // serial
-                            let count = r.u4()? as u64;
-                            let elem_type = r.u1()?;
-                            let esz = HprofType::from_code(elem_type)
-                                .map(|t| t.byte_size() as u64)
-                                .unwrap_or(1);
-                            let byte_len = count.saturating_mul(esz);
-                            sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
-                            r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
-                            // Include elem_type in hash so byte[]{0} ≠ int[]{0}.
-                            let mut h = std::collections::hash_map::DefaultHasher::new();
-                            elem_type.hash(&mut h);
-                            scratch.hash(&mut h);
-                            let hv = h.finish();
-                            let e = hash_map.entry(hv).or_insert((0, byte_len, elem_type));
-                            e.0 = e.0.saturating_add(1);
-                            addr_to_hash.insert(obj_addr, hv);
-                        }
-                        other => {
-                            return Err(io::Error::new(
-                                ErrorKind::InvalidData,
-                                format!(
-                                    "unknown heap sub-tag 0x{other:02x} in dup-prim-arrays scan"
-                                ),
-                            ));
-                        }
-                    }
-                }
+    /// Finalize: compute dup groups and return `(DupPrimArrays, dup_addrs)`.
+    pub(crate) fn finish(self) -> (DupPrimArrays, HashSet<u64>) {
+        let Self {
+            hash_map,
+            addr_to_hash,
+        } = self;
+        let mut by_type: HashMap<u8, (u64, u64)> = HashMap::new();
+        let mut total_wasted: u64 = 0;
+        let mut dup_hashes: HashSet<u64> = HashSet::new();
+        for (&hv, &(count, shallow, elem_type)) in &hash_map {
+            if count <= 1 {
+                continue;
             }
-            tags::HEAP_DUMP_END => break,
-            _ => r.skip(length)?,
+            dup_hashes.insert(hv);
+            let wasted = (count as u64).saturating_sub(1).saturating_mul(shallow);
+            total_wasted = total_wasted.saturating_add(wasted);
+            let e = by_type.entry(elem_type).or_insert((0, 0));
+            e.0 = e.0.saturating_add(wasted);
+            e.1 = e.1.saturating_add(1);
         }
-    }
-
-    // Aggregate by element type: (wasted_bytes, duplicated_groups).
-    let mut by_type: HashMap<u8, (u64, u64)> = HashMap::new();
-    let mut total_wasted: u64 = 0;
-    // Set of hashes whose groups have count >= 2 (duplicated).
-    let mut dup_hashes: HashSet<u64> = HashSet::new();
-    for (&hv, &(count, shallow, elem_type)) in &hash_map {
-        if count <= 1 {
-            continue;
-        }
-        dup_hashes.insert(hv);
-        let wasted = (count as u64).saturating_sub(1).saturating_mul(shallow);
-        total_wasted = total_wasted.saturating_add(wasted);
-        let e = by_type.entry(elem_type).or_insert((0, 0));
-        e.0 = e.0.saturating_add(wasted);
-        e.1 = e.1.saturating_add(1);
-    }
-
-    // Build the set of addresses that belong to duplicated groups.
-    let dup_addrs: HashSet<u64> = addr_to_hash
-        .into_iter()
-        .filter(|(_, hv)| dup_hashes.contains(hv))
-        .map(|(addr, _)| addr)
-        .collect();
-
-    let mut rows: Vec<DupPrimArrayRow> = by_type
-        .into_iter()
-        .map(
-            |(code, (wasted_bytes, duplicated_groups))| DupPrimArrayRow {
-                array_class: elem_type_name(code).to_string(),
-                duplicated_groups,
-                wasted_bytes,
+        let dup_addrs: HashSet<u64> = addr_to_hash
+            .into_iter()
+            .filter(|(_, hv)| dup_hashes.contains(hv))
+            .map(|(addr, _)| addr)
+            .collect();
+        let mut rows: Vec<DupPrimArrayRow> = by_type
+            .into_iter()
+            .map(
+                |(code, (wasted_bytes, duplicated_groups))| DupPrimArrayRow {
+                    array_class: elem_type_name(code).to_string(),
+                    duplicated_groups,
+                    wasted_bytes,
+                },
+            )
+            .collect();
+        rows.sort_unstable_by(|a, b| {
+            b.wasted_bytes
+                .cmp(&a.wasted_bytes)
+                .then(a.array_class.cmp(&b.array_class))
+        });
+        rows.truncate(DUP_PRIM_TOP_N);
+        (
+            DupPrimArrays {
+                total_wasted_bytes: total_wasted,
+                rows,
+                top_array_holders: Vec::new(),
             },
+            dup_addrs,
         )
-        .collect();
-    // Sort by wasted_bytes desc, array_class asc for stability.
-    rows.sort_unstable_by(|a, b| {
-        b.wasted_bytes
-            .cmp(&a.wasted_bytes)
-            .then(a.array_class.cmp(&b.array_class))
-    });
-    rows.truncate(DUP_PRIM_TOP_N);
-
-    Ok((
-        DupPrimArrays {
-            total_wasted_bytes: total_wasted,
-            rows,
-            top_array_holders: Vec::new(),
-        },
-        dup_addrs,
-    ))
+    }
 }
 
 /// Build the top-N holder list from counts accumulated during the 2b fill
