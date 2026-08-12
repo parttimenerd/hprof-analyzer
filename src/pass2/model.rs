@@ -663,6 +663,199 @@ pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairField
     (pair_map, pair_fields)
 }
 
+/// Fused capture of the type-reference graph AND sparse per-object edge snapshot
+/// in a single O(n × edges) pass over the fwd-CSR.
+///
+/// Replaces calling `capture_type_ref_graph` + `capture_obj_graph_edges` separately
+/// (which each do their own full O(n × edges) pass). The merged pass reads each edge
+/// exactly once to simultaneously accumulate class-pair counts and collect inbound edges
+/// for the top-`top_n` captured nodes.
+///
+/// `class_idx` must be the fully-built dense→class mapping (not compressed); callers
+/// that have it in `class_idx_c` must restore it before calling and drop it after.
+pub fn capture_type_ref_and_obj_graph(
+    g: &Graph,
+    class_idx: &[u32],
+    top_n: usize,
+    edge_cap: usize,
+) -> (HashMap<(u32, u32), u64>, PairFieldTally, ObjGraphCapture) {
+    let n = if g.shallow.is_empty() {
+        g.n
+    } else {
+        g.shallow.len()
+    };
+    if n == 0 || g.fwd_offsets.is_empty() {
+        return (HashMap::new(), HashMap::new(), ObjGraphCapture::empty());
+    }
+
+    // ── Type-ref accumulators ──────────────────────────────────────────────────
+    let has_names = g.fwd_field_name_idx.is_some() && g.field_name_pool.is_some();
+    let mut pair_map: HashMap<(u32, u32), u64> = HashMap::new();
+    let mut field_tally: HashMap<(u32, u32), HashMap<u16, u32>> = HashMap::new();
+
+    // ── ObjGraph capture setup ─────────────────────────────────────────────────
+    let mut cap = ObjGraphCapture::empty();
+    cap.n = n;
+    cap.captured = crate::bitset::Bitset::with_len(n);
+    cap.inbound_truncated = crate::bitset::Bitset::with_len(n);
+
+    let mut name_map: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
+    name_map.insert(String::new(), 0u16);
+
+    let fwd_names = g.fwd_field_name_idx.as_ref();
+    let name_pool_ref = g.field_name_pool.as_ref();
+
+    // Select top-top_n captured nodes by shallow size (same threshold approach
+    // as the standalone capture_obj_graph_edges).
+    let captured_nodes: Vec<u32> = if top_n >= n {
+        Vec::new()
+    } else {
+        let sample_step = (n / top_n.min(n)).max(1);
+        let mut sample: Vec<u32> = g.shallow.iter().step_by(sample_step).copied().collect();
+        sample.sort_unstable_by(|a, b| b.cmp(a));
+        let threshold = sample
+            .get(top_n.min(sample.len()).saturating_sub(1))
+            .copied()
+            .unwrap_or(0);
+        drop(sample);
+        let mut nodes: Vec<u32> = g
+            .shallow
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &s)| if s >= threshold { Some(i as u32) } else { None })
+            .collect();
+        if nodes.len() > top_n {
+            nodes.sort_unstable_by(|&a, &b| g.shallow[b as usize].cmp(&g.shallow[a as usize]));
+            nodes.truncate(top_n);
+        }
+        nodes
+    };
+    let all_captured = top_n >= n;
+
+    if all_captured {
+        for i in 0..n {
+            cap.captured.set(i);
+        }
+    } else {
+        for &s in &captured_nodes {
+            cap.captured.set(s as usize);
+        }
+    }
+
+    // ── Outbound edges for captured sources (sparse, cheap: only top_n) ───────
+    {
+        let iter: Box<dyn Iterator<Item = u32>> = if all_captured {
+            Box::new(0u32..n as u32)
+        } else {
+            Box::new(captured_nodes.iter().copied())
+        };
+        for src in iter {
+            let s = src as usize;
+            let fwd_start = g.fwd_offsets[s] as usize;
+            let fwd_end = g.fwd_offsets[s + 1] as usize;
+            let take = (fwd_end - fwd_start).min(edge_cap);
+            if take == 0 {
+                continue;
+            }
+            let mut edges: Vec<(u32, u16)> = Vec::with_capacity(take);
+            for pos in fwd_start..fwd_start + take {
+                let dst = g.fwd_targets.get(pos);
+                let ni = name_idx_for(
+                    fwd_names,
+                    name_pool_ref,
+                    pos,
+                    &mut name_map,
+                    &mut cap.field_name_pool,
+                );
+                edges.push((dst, ni));
+            }
+            cap.edges.insert(src, edges.into_boxed_slice());
+        }
+    }
+    drop(captured_nodes);
+
+    // ── Fused pass: type-ref accumulation + inbound-for-captured ─────────────
+    // One O(n × edges) scan over fwd-CSR. For each edge src→dst:
+    //   • accumulate (src_ci, dst_ci) count for type-ref graph
+    //   • if dst is captured, append src to inbound_acc[dst]
+    let mut inbound_acc: std::collections::HashMap<u32, Vec<(u32, u16)>> =
+        std::collections::HashMap::new();
+    for src_idx in 0..n {
+        let start = g.fwd_offsets[src_idx] as usize;
+        let end = g.fwd_offsets[src_idx + 1] as usize;
+        if start == end {
+            continue;
+        }
+        let src_ci = if src_idx < class_idx.len() {
+            class_idx[src_idx]
+        } else {
+            continue;
+        };
+        for pos in start..end {
+            let dst = g.fwd_targets.get(pos) as usize;
+            // — type-ref —
+            if dst < class_idx.len() {
+                let dst_ci = class_idx[dst];
+                *pair_map.entry((src_ci, dst_ci)).or_insert(0) += 1;
+                if has_names {
+                    if let Some(name_idx) = fwd_names.and_then(|v| v.get(pos)).copied() {
+                        if name_idx != 0 {
+                            *field_tally
+                                .entry((src_ci, dst_ci))
+                                .or_default()
+                                .entry(name_idx)
+                                .or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            // — inbound for captured —
+            if cap.captured.get(dst) {
+                let bucket = inbound_acc.entry(dst as u32).or_default();
+                if bucket.len() < edge_cap {
+                    let ni = name_idx_for(
+                        fwd_names,
+                        name_pool_ref,
+                        pos,
+                        &mut name_map,
+                        &mut cap.field_name_pool,
+                    );
+                    bucket.push((src_idx as u32, ni));
+                } else {
+                    cap.inbound_truncated.set(dst);
+                }
+            }
+        }
+    }
+    for (dst, vec) in inbound_acc {
+        cap.inbound.insert(dst, vec.into_boxed_slice());
+    }
+
+    // ── Convert field_tally → sorted top-3 per pair ───────────────────────────
+    let name_pool = g.field_name_pool.as_deref().unwrap_or(&[]);
+    let pair_fields: PairFieldTally = field_tally
+        .into_iter()
+        .map(|(key, counts)| {
+            let mut sorted: Vec<(String, u32)> = counts
+                .into_iter()
+                .filter_map(|(idx, cnt)| {
+                    let name = name_pool.get(idx as usize)?;
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some((name.clone(), cnt))
+                })
+                .collect();
+            sorted.sort_unstable_by_key(|a: &(String, u32)| Reverse(a.1));
+            sorted.truncate(3);
+            (key, sorted)
+        })
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+
+    (pair_map, pair_fields, cap)
+}
+
 /// Sparse per-object edge snapshot for the click-through view.
 ///
 /// Captures edges only for the top-`top_n` objects by shallow heap size

@@ -1105,17 +1105,17 @@ fn analyze_to_report_inner(
     // transiently for the scan (matching the run() path).
     if opts.obj_graph {
         g.class_idx = class_idx_c.restore()?;
-        let (pairs, pair_fields) = crate::pass2::capture_type_ref_graph(&g);
+        let (pairs, pair_fields, obj_graph) = crate::pass2::capture_type_ref_and_obj_graph(
+            &g,
+            &g.class_idx.clone(),
+            500_000,
+            opts.report_size.edge_cap(),
+        );
         crate::trace::drop_vec(std::mem::take(&mut g.class_idx));
         g.type_ref_pairs = Some(pairs);
         g.type_ref_pair_fields = Some(pair_fields);
-        crate::trace::probe("main: after capture_type_ref_graph");
-        g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
-            &g,
-            500_000,
-            opts.report_size.edge_cap(),
-        ));
-        crate::trace::probe("main: after capture_obj_graph_edges");
+        g.obj_graph_edges = Some(obj_graph);
+        crate::trace::probe("main: after capture_type_ref_and_obj_graph");
     }
 
     // When --field-stats is requested, save the fwd CSR before inbound consumes it.
@@ -2600,31 +2600,26 @@ fn run(
     // scan builds only a HashMap of class-pair counts, costing ~200-500 MB peak.
     // NOTE: g.class_idx was compressed inside Pass2 (to cut the binding peak);
     // restore it transiently here for the scan, then drop it again immediately.
-    if opts.obj_graph {
-        g.class_idx = class_idx_c.restore()?;
-        let (pairs, pair_fields) = crate::pass2::capture_type_ref_graph(&g);
-        crate::trace::drop_vec(std::mem::take(&mut g.class_idx));
-        g.type_ref_pairs = Some(pairs);
-        g.type_ref_pair_fields = Some(pair_fields);
-        crate::trace::probe("main: after capture_type_ref_graph");
-        t_dark!("capture_type_ref_graph done");
-    }
-
-    // Capture per-object edges for top-500K objects by shallow size only.
-    // This feeds build_obj_graph_flat (the click-through view), which only
-    // displays nodes with high retained size. Objects not captured get
-    // edges_unknown=true. The sparse HashMap<u32,Box<[...]>> avoids the 4 GB
-    // of CSR offset arrays the old full-universe capture required.
-    // 500K × 150 edges × 6 B ≈ 450 MB, vs. the old 24 GB full capture.
+    // Fused capture: one O(n×edges) pass covers both type-ref pair counting and
+    // inbound-edge accumulation for the top-OBJ_GRAPH_TOP_N captured nodes,
+    // replacing two separate O(n×edges) passes.
     const OBJ_GRAPH_TOP_N: usize = 500_000;
     if opts.obj_graph {
-        g.obj_graph_edges = Some(crate::pass2::capture_obj_graph_edges(
+        g.class_idx = class_idx_c.restore()?;
+        let class_idx_snap = g.class_idx.clone();
+        crate::trace::drop_vec(std::mem::take(&mut g.class_idx));
+        let (pairs, pair_fields, obj_graph) = crate::pass2::capture_type_ref_and_obj_graph(
             &g,
+            &class_idx_snap,
             OBJ_GRAPH_TOP_N,
             opts.report_size.edge_cap(),
-        ));
-        crate::trace::probe("main: after capture_obj_graph_edges");
-        t_dark!("capture_obj_graph_edges done");
+        );
+        drop(class_idx_snap);
+        g.type_ref_pairs = Some(pairs);
+        g.type_ref_pair_fields = Some(pair_fields);
+        g.obj_graph_edges = Some(obj_graph);
+        crate::trace::probe("main: after capture_type_ref_and_obj_graph");
+        t_dark!("capture_type_ref_and_obj_graph done");
     }
 
     // When --field-stats is requested, save the fwd CSR before inbound consumes it.
