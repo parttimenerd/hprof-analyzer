@@ -557,6 +557,19 @@ impl Pass2 {
         let mut captured_boxed_addrs: std::collections::HashSet<u64> =
             std::collections::HashSet::new();
 
+        // Pre-compute java.lang.String class addr + field offsets for inline
+        // capture during the 2a scan (folds resolve_duplicate_strings Pass A).
+        // Only when find_duplicates is on; (0, 0, None) disables the hook.
+        let (string_class_id, string_value_off, string_coder_off): (u64, usize, Option<usize>) =
+            if opts.find_duplicates {
+                strings::string_class_info(&p1).unwrap_or((0, 0, None))
+            } else {
+                (0, 0, None)
+            };
+        // Accumulates (obj_addr, arr_addr, coder) for each String instance seen
+        // during 2a. Fed to resolve_duplicate_strings instead of its own Pass A.
+        let mut captured_string_instances: Vec<(u64, u64, u8)> = Vec::new();
+
         t_phase!("2a scan start (pre-scan setup done)");
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         // Create field-decode state before the scan so it can be fused into
@@ -606,6 +619,10 @@ impl Pass2 {
                         &mut captured_props_addr,
                         &boxed_capture_class_addrs,
                         &mut captured_boxed_addrs,
+                        string_class_id,
+                        string_value_off,
+                        string_coder_off,
+                        &mut captured_string_instances,
                         Some(&mut fd_state),
                         &p1,
                         &shallow,
@@ -938,7 +955,11 @@ impl Pass2 {
         // boxed fold), eliminating a dedicated full-file scan.
         let (mut dup_strings, string_addrs): (Option<DupStrings>, std::collections::HashSet<u64>) =
             if opts.find_duplicates {
-                let (ds, addrs) = resolve_duplicate_strings(&open, &p1)?;
+                let (ds, addrs) = resolve_duplicate_strings(
+                    &open,
+                    &p1,
+                    std::mem::take(&mut captured_string_instances),
+                )?;
                 (Some(ds), addrs)
             } else {
                 (None, std::collections::HashSet::new())
@@ -1534,6 +1555,10 @@ impl Pass2 {
         captured_props_addr: &mut u64,
         boxed_class_addrs: &std::collections::HashSet<u64>,
         captured_boxed_addrs: &mut std::collections::HashSet<u64>,
+        string_class_id: u64,
+        string_value_off: usize,
+        string_coder_off: Option<usize>,
+        captured_string_instances: &mut Vec<(u64, u64, u8)>,
         mut fd: Option<&mut fielddecode::FieldDecodeState>,
         fd_p1: &Pass1,
         fd_shallow: &[u32],
@@ -1647,6 +1672,22 @@ impl Pass2 {
                     // Address-only: replaces compute_boxed_holders' Pass-1 scan.
                     if !boxed_class_addrs.is_empty() && boxed_class_addrs.contains(&class_id) {
                         captured_boxed_addrs.insert(addr);
+                    }
+
+                    // Capture String instance info for resolve_duplicate_strings
+                    // Pass A (--find-duplicates). Replaces the dedicated
+                    // scan_all_instances that previously ran after this scan.
+                    if string_class_id != 0
+                        && class_id == string_class_id
+                        && scratch.len() >= string_value_off + id_size as usize
+                    {
+                        let arr_addr = read_ref(&scratch[string_value_off..], id_size as usize);
+                        if arr_addr != 0 {
+                            let coder = string_coder_off
+                                .and_then(|off| scratch.get(off).copied())
+                                .unwrap_or(1);
+                            captured_string_instances.push((addr, arr_addr, coder));
+                        }
                     }
 
                     // Field-decode hook must run on ALL instances (including

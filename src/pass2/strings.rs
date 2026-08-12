@@ -13,7 +13,7 @@ use std::io::{self, ErrorKind};
 
 use super::{
     CharArrayWaste, CharArrayWasteRow, DupStringSample, DupStrings, StrLenBucket, StrLenStats,
-    StringHolder, field_offset, read_ref, scan_prim_arrays, skip_class_dump, sub_remaining,
+    StringHolder, field_offset, scan_prim_arrays, skip_class_dump, sub_remaining,
 };
 
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
@@ -144,6 +144,49 @@ where
     Ok(())
 }
 
+/// Pre-compute the java.lang.String class address + field offsets for use
+/// during the 2a scan (so Pass A of resolve_duplicate_strings can be folded
+/// into the 2a heap walk instead of running a separate scan_all_instances).
+///
+/// Returns `(class_id, value_off, coder_off)` for the first String class found,
+/// or `None` if java.lang.String is absent from the class_map.
+/// `value_off` is the byte offset of the `value` ref field within the instance
+/// blob; `coder_off` is the byte offset of the `coder` byte field (None on
+/// Java 8 char[] layout — treat as coder=1).
+pub(crate) fn string_class_info(p1: &Pass1) -> Option<(u64, usize, Option<usize>)> {
+    let obj_ref_width = p1.id_size as usize;
+    // Find the class addr for java.lang.String.
+    let string_class_id = p1.class_map.iter().find_map(|(&addr, ci)| {
+        p1.strings
+            .get(&ci.name_id)
+            .filter(|name| *name == "java/lang/String")
+            .map(|_| addr)
+    })?;
+    let value_off = match field_offset(
+        string_class_id,
+        "value",
+        "java/lang/String",
+        &p1.class_map,
+        &p1.strings,
+        obj_ref_width,
+    ) {
+        Some((off, HprofType::Object)) => off as usize,
+        _ => return None,
+    };
+    let coder_off = match field_offset(
+        string_class_id,
+        "coder",
+        "java/lang/String",
+        &p1.class_map,
+        &p1.strings,
+        obj_ref_width,
+    ) {
+        Some((off, HprofType::Byte)) => Some(off as usize),
+        _ => None,
+    };
+    Some((string_class_id, value_off, coder_off))
+}
+
 /// Compute an approximate duplicate-`java.lang.String` report. Opt-in
 /// (`--find-duplicates`); adds up to four extra full-file scans. RSS stays bounded
 /// because decoded String bytes are NEVER retained wholesale — each value is
@@ -168,9 +211,16 @@ where
 ///     for the most-duplicated values only.
 ///   Pass D (`compute_string_holders`, `scan_all_instances`): credit each
 ///     owning class for every object-field reference to a String instance.
+///
+/// `captured`: pre-captured `(obj_addr, arr_addr, coder)` triples collected
+/// during the 2a scan (replaces Pass A's `scan_all_instances`). When the 2a
+/// capture ran, `obj_addr` is the String instance address, `arr_addr` is the
+/// backing char[]/byte[] address (already filtered: never 0), and `coder` is
+/// 0 (UTF-8) / 1 (UTF-16) / fallback 1 for Java-8 char[].
 pub(crate) fn resolve_duplicate_strings<O>(
     open: O,
     p1: &Pass1,
+    captured: Vec<(u64, u64, u8)>,
 ) -> io::Result<(DupStrings, std::collections::HashSet<u64>)>
 where
     O: Fn() -> io::Result<HprofReader>,
@@ -181,68 +231,24 @@ where
 
     let id_size = p1.id_size;
     let obj_ref_width = id_size as usize;
-    let class_map = &p1.class_map;
-    let strings = &p1.strings;
+    let _ = obj_ref_width; // used below in Pass B/C
 
-    // ── Pass A: enumerate every String instance → (arr_addr, coder) ──────────
-    // Memoize the value/coder offsets per class id; None means "not a String
-    // class" (or its `value` field is missing / not an Object). Also collect the
-    // set of String INSTANCE addresses (for the strings-held-by-class walk).
-    let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
+    // ── Pass A FOLDED INTO 2a ─────────────────────────────────────────────────
+    // Build per_instance / arr_coder / string_addrs from the pre-captured data
+    // collected during the 2a heap walk (no scan_all_instances needed here).
     // One entry per String INSTANCE (duplicates of the same arr_addr allowed).
-    let mut per_instance: Vec<(u64, u8)> = Vec::new();
+    let mut per_instance: Vec<(u64, u8)> = Vec::with_capacity(captured.len());
     // arr_addr → first-seen coder; also seeds the wanted set for Pass B.
     let mut arr_coder: HashMap<u64, u8> = HashMap::new();
     // Every java.lang.String instance address — bounded by #Strings * 8 bytes.
-    let mut string_addrs: HashSet<u64> = HashSet::new();
-    let mut total_string_instances: u64 = 0;
+    let mut string_addrs: HashSet<u64> = HashSet::with_capacity(captured.len());
+    let total_string_instances: u64 = captured.len() as u64;
 
-    scan_all_instances(&open, id_size, |obj_addr, class_id, blob| {
-        let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
-            let value_off = match field_offset(
-                class_id,
-                "value",
-                "java/lang/String",
-                class_map,
-                strings,
-                obj_ref_width,
-            ) {
-                Some((off, HprofType::Object)) => off as usize,
-                _ => return None,
-            };
-            let coder_off = match field_offset(
-                class_id,
-                "coder",
-                "java/lang/String",
-                class_map,
-                strings,
-                obj_ref_width,
-            ) {
-                Some((off, HprofType::Byte)) => Some(off as usize),
-                _ => None,
-            };
-            Some((value_off, coder_off))
-        });
-        let Some((value_off, coder_off)) = offs else {
-            return;
-        };
-        if value_off + obj_ref_width > blob.len() {
-            return;
-        }
-        let arr_ref = read_ref(&blob[value_off..], obj_ref_width);
-        if arr_ref == 0 {
-            return;
-        }
-        // Java 8 char[]: no coder field → UTF16 (coder 1).
-        let coder = match coder_off {
-            Some(co) if co < blob.len() => blob[co],
-            _ => 1,
-        };
-        total_string_instances += 1;
-        per_instance.push((arr_ref, coder));
-        arr_coder.entry(arr_ref).or_insert(coder);
+    for (obj_addr, arr_addr, coder) in captured {
+        per_instance.push((arr_addr, coder));
+        arr_coder.entry(arr_addr).or_insert(coder);
         string_addrs.insert(obj_addr);
-    })?;
+    }
 
     if per_instance.is_empty() {
         return Ok((DupStrings::default(), std::collections::HashSet::new()));
