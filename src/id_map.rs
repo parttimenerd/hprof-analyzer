@@ -330,8 +330,12 @@ impl IdMap {
                         prev = addr;
                     }
                 }
-                let mut e =
-                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+                let level = if codec == Codec::Deflate1 {
+                    flate2::Compression::fast()
+                } else {
+                    flate2::Compression::best()
+                };
+                let mut e = flate2::write::DeflateEncoder::new(Vec::new(), level);
                 e.write_all(&vb)?;
                 let blob = e.finish()?;
                 Ok((blob, len))
