@@ -4008,40 +4008,16 @@ fn build_top_consumers(
         .sum();
     t_tc!("total_shallow");
 
-    // Biggest Classes by Retained Heap (aggregate before sorting top_level)
+    // Biggest Classes by Retained Heap + Biggest Packages: fused single pass over
+    // top_level. The two separate O(top_level) loops (biggest_classes and
+    // package_tree_build) each read g.retained/shallow/class_idx for every
+    // top-level dominator (~329M random reads each). Fusing them cuts the random
+    // reads in half at no algorithmic cost.
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut class_count_map: Vec<u64> = vec![0; class_count];
     // Fold duplicate `java/lang/Class` rows into the canonical row (see
     // `class_row_remap`) so the by-type count matches the histogram + MAT.
     let remap = class_row_remap(g);
-    for &i in &top_level {
-        let idx = i as usize;
-        let ci = g.class_idx[idx] as usize;
-        if ci < class_count {
-            let ci = remap[ci] as usize;
-            class_retained[ci] += g.retained[idx];
-            class_count_map[ci] += 1;
-        }
-    }
-    let mut class_order: Vec<usize> = (0..class_count)
-        .filter(|&ci| class_retained[ci] > 0)
-        .collect();
-    // Retained desc, tie-breaker ascending class index.
-    class_order
-        .sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
-    let biggest_classes: Vec<ClassRow> = class_order
-        .iter()
-        .take(top_n)
-        .map(|&ci| ClassRow {
-            pretty_class: pretty_class_name(&g.class_names[ci]),
-            instances: class_count_map[ci],
-            retained: class_retained[ci],
-        })
-        .collect();
-    drop(class_retained);
-    drop(class_count_map);
-    drop(class_order);
-    t_tc!("biggest_classes");
 
     // Biggest Packages: build a pruned package TREE (MAT PackageTreeResult
     // parity). Accumulate cumulative retained/shallow/count into a tree keyed by
@@ -4092,21 +4068,28 @@ fn build_top_consumers(
     let mut class_seg_path: Vec<Option<Vec<u32>>> = vec![None; class_count];
     for &i in &top_level {
         let idx = i as usize;
+        let ci_raw = g.class_idx[idx] as usize;
+        let retained = g.retained[idx];
+        let shallow = g.shallow[idx] as u64;
+
+        // Biggest Classes accumulation (fused with package_tree_build to avoid a
+        // duplicate pass over top_level with the same random retained/class_idx reads).
+        if ci_raw < class_count {
+            let ci = remap[ci_raw] as usize;
+            class_retained[ci] += retained;
+            class_count_map[ci] += 1;
+        }
+
         // Use the class the object represents (for class objects), else own class.
         // Resolve class_obj_repr ONCE (it is a HashMap probe) rather than twice.
         let repr = class_obj_repr(g, idx);
         let name_ci: usize = if repr != undef && (repr as usize) < class_count {
             repr as usize
+        } else if ci_raw < class_count {
+            ci_raw
         } else {
-            let ci = g.class_idx[idx] as usize;
-            if ci < class_count {
-                ci
-            } else {
-                continue;
-            }
+            continue;
         };
-        let retained = g.retained[idx];
-        let shallow = g.shallow[idx] as u64;
 
         // Resolve (and memoize) the interned segment-id path for this class.
         // On a cache miss, parse the name into borrowed segments and intern each
@@ -4146,6 +4129,27 @@ fn build_top_consumers(
         }
     }
     t_tc!("package_tree_build");
+
+    // Post-loop: extract biggest_classes from the accumulated class_retained/count_map
+    // (both were populated in the fused loop above alongside the package tree).
+    let mut class_order: Vec<usize> = (0..class_count)
+        .filter(|&ci| class_retained[ci] > 0)
+        .collect();
+    class_order
+        .sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
+    let biggest_classes: Vec<ClassRow> = class_order
+        .iter()
+        .take(top_n)
+        .map(|&ci| ClassRow {
+            pretty_class: pretty_class_name(&g.class_names[ci]),
+            instances: class_count_map[ci],
+            retained: class_retained[ci],
+        })
+        .collect();
+    drop(class_retained);
+    drop(class_count_map);
+    drop(class_order);
+    t_tc!("biggest_classes");
 
     // Prune below-threshold nodes (top-down) and convert to the sorted model.
     // Children are keyed by interned segment id; `seg_names` maps id -> name.
