@@ -69,6 +69,7 @@ pub fn compute_retained(
     class_idx: &[u32],
     class_count: usize,
     class_obj_class_idx: &std::collections::HashMap<u32, u32>,
+    jlc_idx: u32,
     child_off: &[u32],
     child_tgt: &[u32],
 ) -> (Vec<u64>, crate::bitset::Bitset, Vec<u64>) {
@@ -136,7 +137,11 @@ pub fn compute_retained(
             } else {
                 undef
             };
-            let ci = class_obj_class_idx.get(&child).copied().unwrap_or(undef);
+            let ci = if (child as usize) < n && class_idx[child as usize] == jlc_idx {
+                class_obj_class_idx.get(&child).copied().unwrap_or(undef)
+            } else {
+                undef
+            };
 
             // sp_new = depth the child will have on the stack (1-based, vroot is depth 1).
             let sp_new = (stk_node.len() + 1) as u32;
@@ -226,7 +231,16 @@ mod tests {
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _has_same, _depth) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
-            compute_retained(n, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct)
+            compute_retained(
+                n,
+                &shallow,
+                &class_idx,
+                1,
+                &class_obj_class_idx,
+                u32::MAX,
+                &co,
+                &ct,
+            )
         };
         assert_eq!(retained[0], 60, "0 retains all 3");
         assert_eq!(retained[1], 50, "1 retains 1+2");
@@ -243,7 +257,16 @@ mod tests {
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _, _) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
-            compute_retained(n, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct)
+            compute_retained(
+                n,
+                &shallow,
+                &class_idx,
+                1,
+                &class_obj_class_idx,
+                u32::MAX,
+                &co,
+                &ct,
+            )
         };
         // 3 propagates to 0, 1 propagates to 0, 2 propagates to 0
         // retained[0] = 1 + 2 + 3 + 4 = 10
@@ -264,7 +287,16 @@ mod tests {
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (_, has_same, _) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
-            compute_retained(n, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct)
+            compute_retained(
+                n,
+                &shallow,
+                &class_idx,
+                2,
+                &class_obj_class_idx,
+                u32::MAX,
+                &co,
+                &ct,
+            )
         };
         assert!(!has_same.get(0), "node 0 has no class-0 ancestor");
         assert!(!has_same.get(1), "node 1 has no class-1 ancestor");
@@ -287,7 +319,16 @@ mod tests {
         class_obj_class_idx.insert(0u32, 1u32);
         let (_, has_same, _) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
-            compute_retained(n, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct)
+            compute_retained(
+                n,
+                &shallow,
+                &class_idx,
+                2,
+                &class_obj_class_idx,
+                0u32,
+                &co,
+                &ct,
+            )
         };
         assert!(
             !has_same.get(0),

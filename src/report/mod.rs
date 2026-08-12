@@ -225,6 +225,7 @@ mod tests {
             system_properties: Vec::new(),
             jvm_version: None,
             class_obj_class_idx,
+            jlc_idx: u32::MAX,
             fwd_offsets: Vec::new(),
             fwd_targets: crate::chunkvec::ChunkU32::default(),
             synthetic_root_count,

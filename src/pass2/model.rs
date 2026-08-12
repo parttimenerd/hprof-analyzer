@@ -346,6 +346,10 @@ pub struct Graph {
     /// Object index of a class object -> the histogram row of the class it
     /// represents. Sparse: absent for non-class objects.
     pub class_obj_class_idx: HashMap<u32, u32>, // class-obj index -> class-histogram row (sparse; absent = not a class obj)
+    /// The class-histogram row index for java/lang/Class (the JLC_KEY row).
+    /// All class objects have `class_idx[i] == jlc_idx`, so this is the fast
+    /// pre-filter to avoid a HashMap probe for non-class objects.
+    pub jlc_idx: u32,
     // Forward CSR: node i's out-edges are `fwd_targets[fwd_offsets[i]..fwd_offsets[i+1]]`.
     /// CSR row pointers, len n+1: `fwd_offsets[i]..fwd_offsets[i+1]` slices node
     /// i's out-edge targets in `fwd_targets`. Built via prefix-sum of out-degrees.
@@ -2154,6 +2158,7 @@ mod obj_graph_tests {
             system_properties: vec![],
             jvm_version: None,
             class_obj_class_idx: Default::default(),
+            jlc_idx: u32::MAX,
             fwd_offsets,
             fwd_targets: crate::chunkvec::ChunkU32::from_vec(fwd_targets_data),
             synthetic_root_count: 0,

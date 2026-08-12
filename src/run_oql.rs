@@ -273,6 +273,7 @@ pub(crate) fn run_oql_escalated(
             &g.class_idx,
             class_count,
             &g.class_obj_class_idx,
+            g.jlc_idx,
             &dc_off,
             &dc_tgt,
         );

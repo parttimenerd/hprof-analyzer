@@ -762,8 +762,6 @@ impl Pass2 {
                 class_obj_class_idx.insert(i as u32, idx);
             }
         }
-        let _ = jlc_idx;
-        let _ = jlc_idx;
 
         // ── OQL HistogramOnly: build ClassSummary + run now ──────────────────
         // Deferred to here (after `get_or_insert_class`'s last use) because that
@@ -1431,6 +1429,7 @@ impl Pass2 {
             system_properties,
             jvm_version,
             class_obj_class_idx,
+            jlc_idx,
             fwd_offsets,
             fwd_targets,
             synthetic_root_count,

@@ -420,6 +420,7 @@ fn analyze_to_report_inner(
         &g.class_idx,
         class_count,
         &g.class_obj_class_idx,
+        g.jlc_idx,
         &dc_off,
         &dc_tgt,
     );

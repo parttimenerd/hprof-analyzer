@@ -6,6 +6,13 @@ use crate::pass2::Graph;
 
 #[inline]
 pub(crate) fn class_obj_repr(g: &Graph, i: usize) -> u32 {
+    // Fast pre-filter: only class objects have class_idx == jlc_idx (the
+    // java/lang/Class row). Avoids a HashMap probe for the ~99.99% of non-class
+    // objects. jlc_idx == u32::MAX means "not known" (test fixtures) — falls
+    // back to the full HashMap probe in that case.
+    if g.jlc_idx != u32::MAX && g.class_idx[i] != g.jlc_idx {
+        return u32::MAX;
+    }
     g.class_obj_class_idx
         .get(&(i as u32))
         .copied()
