@@ -156,7 +156,7 @@ pub fn build_exploration(
     let p1 = pass1::Pass1::run(source, false)?;
     let n = p1.class_ids.len();
 
-    let compress = cvec::Codec::Deflate9;
+    let compress = cvec::Codec::Deflate1;
     let opts = AnalyzeOptions::default();
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
@@ -306,7 +306,7 @@ fn analyze_to_report_inner(
         ));
     }
 
-    let compress = cvec::Codec::Deflate9;
+    let compress = cvec::Codec::Deflate1;
 
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();

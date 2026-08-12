@@ -815,7 +815,7 @@ fn main() {
                     Some("/dev/null"),
                     OutputFormat::Md,
                     false,
-                    cvec::Codec::Deflate9,
+                    cvec::Codec::Deflate1,
                     AnalyzeOptions {
                         skip_report: true,
                         ..DetailLevel::Default.options()
@@ -943,7 +943,7 @@ fn run_default(cli: Cli) {
             cli.output.as_deref(),
             fmt,
             cli.verbose,
-            cvec::Codec::Deflate9,
+            cvec::Codec::Deflate1,
             opts,
             mat,
         ) {
@@ -1045,7 +1045,7 @@ fn analyze_to_report_inner(
         ));
     }
 
-    let compress = cvec::Codec::Deflate9;
+    let compress = cvec::Codec::Deflate1;
 
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
@@ -2607,6 +2607,7 @@ fn run(
         g.type_ref_pairs = Some(pairs);
         g.type_ref_pair_fields = Some(pair_fields);
         crate::trace::probe("main: after capture_type_ref_graph");
+        t_dark!("capture_type_ref_graph done");
     }
 
     // Capture per-object edges for top-500K objects by shallow size only.
@@ -2623,6 +2624,7 @@ fn run(
             opts.report_size.edge_cap(),
         ));
         crate::trace::probe("main: after capture_obj_graph_edges");
+        t_dark!("capture_obj_graph_edges done");
     }
 
     // When --field-stats is requested, save the fwd CSR before inbound consumes it.
@@ -2646,6 +2648,7 @@ fn run(
         // needing fwd_targets. Inbound peak drops from ~25 GB to ~12 GB.
         drop(std::mem::take(&mut g.fwd_targets));
         drop(std::mem::take(&mut g.fwd_offsets)); // no longer needed; InboundBuilder has in_cursors
+        t_dark!("fwd_targets dropped (mat path)");
         inbound.build_mat_scan(
             &rpo.dfn,
             |_src, _fwd| Ok(()), // outbound collected later via HPROF rescan
@@ -2658,6 +2661,7 @@ fn run(
         drop(std::mem::take(&mut g.fwd_targets));
         drop(std::mem::take(&mut g.fwd_offsets));
         crate::trace::trim();
+        t_dark!("fwd_targets dropped (rescan path)");
         crate::trace::probe("main: fwd dropped (rescan-inbound path, before inb_flat alloc)");
         inbound.build_mat_scan(&rpo.dfn, |_src, _fwd| Ok(()))?
     } else {
