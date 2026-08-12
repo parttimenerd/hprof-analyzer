@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-11T21:21:19.954575000Z",
+  "generated": "2026-08-12T09:14:17.437037000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -105610,6 +105610,14 @@
       "detail": "5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case.",
       "anchor": "collections",
       "anchor_label": "Collections"
+    },
+    {
+      "id": "component-retention-imbalance",
+      "severity": "warning",
+      "title": "Component Retention Imbalance",
+      "detail": "Component `<boot>` retains 76.0% of heap (31.4 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.1%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path.",
+      "anchor": "top-components",
+      "anchor_label": "Top Components"
     },
     {
       "id": "collections-not-analyzed",
