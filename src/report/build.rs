@@ -3366,10 +3366,59 @@ pub(crate) fn build_leak_suspects(
         });
 
         for &m in members {
-            // Collect the ordered dominator-chain hops [m, idom[m], ...], stopping
-            // at the terminal GC root (idom == vroot), an unreachable node
-            // (idom == undef), or the depth cap. The terminal root IS included,
-            // exactly mirroring the single-suspect `root_path` walk.
+            // Fast path: if this member's immediate dominator is vroot (or undef),
+            // the chain is exactly [m] (depth 1). For non-class-object members the
+            // display label equals group_label (all members share the same class),
+            // so skip the per-member display_of call and reuse group_label directly.
+            let m_idom = g.idom[m as usize];
+            if m_idom == vroot_u32 || m_idom == undef {
+                let ret = g.retained[m as usize];
+                arena[0].object_count += 1;
+                arena[0].retained += ret;
+                // For class objects, display_of returns the represented-class name
+                // (varies per member); fall through to label computation. For all
+                // others, display_of == group_label (same class ⟹ same pretty name).
+                let label: std::borrow::Cow<str> = if class_obj_repr(g, m as usize) == u32::MAX {
+                    std::borrow::Cow::Borrowed(group_label)
+                } else {
+                    std::borrow::Cow::Owned(display_of(m as usize))
+                };
+                let existing = arena[0]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| arena[c].display_class == label.as_ref());
+                let child = match existing {
+                    Some(c) => c,
+                    None => {
+                        if arena.len() >= MERGED_PATH_MAX_NODES {
+                            continue;
+                        }
+                        let idx = arena.len();
+                        arena.push(MNode {
+                            display_class: label.into_owned(),
+                            object_count: 0,
+                            retained: 0,
+                            root_type_label: None,
+                            field_edge: None,
+                            children: Vec::new(),
+                        });
+                        arena[0].children.push(idx);
+                        idx
+                    }
+                };
+                arena[child].object_count += 1;
+                arena[child].retained += ret;
+                if arena[child].root_type_label.is_none() {
+                    if let Some(&ty) = root_type_of.get(&m) {
+                        if let Some(lbl) = gc_root_type_label_opt(ty) {
+                            arena[child].root_type_label = Some(lbl.to_string());
+                        }
+                    }
+                }
+                continue;
+            }
+            // General path: multi-hop chain walk for members not directly under vroot.
             let mut chain: Vec<usize> = Vec::new();
             let mut cur = m as usize;
             let mut depth = 0usize;
