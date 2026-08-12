@@ -939,8 +939,20 @@ impl Pass2 {
         // lets a single collect_blobs pass serve both, cutting ~8 sequential full
         // scans (the old sum of the two resolvers) toward ~5. Byte-exact output is
         // preserved. Runs while class_map/strings/id_map are still alive.
-        let (thread_props, (system_properties, jvm_version)) =
-            resolve_thread_and_props(&open, &p1, captured_thread_blobs, captured_props_addr)?;
+        // If the props blob was opportunistically captured during 2a, extract it
+        // so PropsWorklist can skip its first collect_blobs round.
+        let captured_props_blob: Option<(u64, Vec<u8>)> = if captured_props_addr != 0 {
+            captured_thread_blobs.remove(&captured_props_addr)
+        } else {
+            None
+        };
+        let (thread_props, (system_properties, jvm_version)) = resolve_thread_and_props(
+            &open,
+            &p1,
+            captured_thread_blobs,
+            captured_props_addr,
+            captured_props_blob,
+        )?;
         t_phase!("thread_names done");
 
         // Opt-in approximate duplicate-java.lang.String report. Runs extra
@@ -1664,6 +1676,23 @@ impl Pass2 {
 
                     // Capture blob for wanted addresses (e.g. thread objects).
                     if !capture_inst.is_empty() && capture_inst.contains(&addr) {
+                        captured_inst.insert(addr, (class_id, scratch.clone()));
+                    }
+
+                    // Opportunistic props blob capture: if System's CLASS_DUMP was
+                    // already encountered earlier in this scan (captured_props_addr
+                    // is nonzero), and this is the props INSTANCE_DUMP, capture it.
+                    // This skips the first collect_blobs round in
+                    // resolve_thread_and_props (~88s on 34GB) when the ordering
+                    // holds (CLASS_DUMP for System precedes the Properties instance,
+                    // as is typical in OpenJDK heap dumps). Falls back gracefully if
+                    // the ordering is reversed: captured_props_addr stays 0 at this
+                    // point, the capture is skipped, and PropsWorklist fetches it via
+                    // a normal collect_blobs round.
+                    if *captured_props_addr != 0
+                        && addr == *captured_props_addr
+                        && !captured_inst.contains_key(&addr)
+                    {
                         captured_inst.insert(addr, (class_id, scratch.clone()));
                     }
 

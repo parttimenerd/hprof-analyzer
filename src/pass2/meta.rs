@@ -198,12 +198,13 @@ pub(crate) fn resolve_thread_and_props<O>(
     p1: &Pass1,
     prefetched_thread_blobs: HashMap<u64, (u64, Vec<u8>)>,
     prefetched_props_addr: u64,
+    prefetched_props_blob: Option<(u64, Vec<u8>)>,
 ) -> io::Result<(HashMap<u32, ThreadProps>, SystemProps)>
 where
     O: Fn() -> io::Result<crate::reader::HprofReader>,
 {
     let mut threads = ThreadWorklist::new(p1, prefetched_thread_blobs);
-    let mut props = PropsWorklist::new(&open, p1, prefetched_props_addr)?;
+    let mut props = PropsWorklist::new(&open, p1, prefetched_props_addr, prefetched_props_blob)?;
     {
         let mut lists: [&mut dyn BlobWorklist; 2] = [&mut threads, &mut props];
         drive_shared_worklists(&open, p1.id_size, &mut lists)?;
@@ -640,7 +641,12 @@ struct PropsWorklist<'a> {
 }
 
 impl<'a> PropsWorklist<'a> {
-    fn new<O>(open: &O, p1: &'a Pass1, prefetched_props_addr: u64) -> io::Result<Self>
+    fn new<O>(
+        open: &O,
+        p1: &'a Pass1,
+        prefetched_props_addr: u64,
+        prefetched_props_blob: Option<(u64, Vec<u8>)>,
+    ) -> io::Result<Self>
     where
         O: Fn() -> io::Result<crate::reader::HprofReader>,
     {
@@ -677,12 +683,54 @@ impl<'a> PropsWorklist<'a> {
             })?;
             found
         };
+
+        // If the props instance blob was opportunistically captured during the 2a
+        // scan, derive table_addr immediately and skip stage 0 (the first
+        // collect_blobs round that would otherwise fetch just this blob).
+        let (stage, table_addr) = match prefetched_props_blob {
+            Some((class_id, ref blob)) if props_addr != 0 => {
+                let obj_ref_width = id_size as usize;
+                let off = field_offset(
+                    class_id,
+                    "table",
+                    "java/util/Hashtable",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .and_then(|(o, t)| {
+                    if t == HprofType::Object {
+                        Some(o as usize)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+                let taddr = if off != 0 && off + obj_ref_width <= blob.len() {
+                    read_ref(&blob[off..], obj_ref_width)
+                } else {
+                    0
+                };
+                // If we successfully decoded table_addr, start at stage 1
+                // (next_wants at stage 1 requests the table Object[]). Stage 0
+                // requested the props instance which we already have; skipping it
+                // removes one collect_blobs round (~88s on 34GB). If decoding
+                // failed (e.g. non-standard Hashtable layout), fall back to stage 0.
+                if taddr != 0 {
+                    (1u8, taddr)
+                } else {
+                    (0u8, 0u64)
+                }
+            }
+            _ => (0u8, 0u64),
+        };
+
         Ok(PropsWorklist {
             p1,
             obj_ref_width: id_size as usize,
-            stage: 0,
+            stage,
             props_addr,
-            table_addr: 0,
+            table_addr,
             entry_addrs: Vec::new(),
             all_entry_blobs: HashMap::new(),
             entry_off_cache: HashMap::new(),
