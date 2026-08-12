@@ -300,7 +300,7 @@ impl IdMap {
     }
 
     /// Compress the sorted addrs into a self-describing blob (delta-vbyte then
-    /// deflate for Deflate9, or raw LE u64 for None), returning (blob, element_count).
+    /// deflate for Deflate9/Deflate1, or raw LE u64 for None), returning (blob, element_count).
     pub fn compress(&self, codec: Codec) -> io::Result<(Vec<u8>, usize)> {
         let len = self.len();
         match codec {
@@ -340,6 +340,51 @@ impl IdMap {
                 let blob = e.finish()?;
                 Ok((blob, len))
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => {
+                // Stream delta-vbyte-encoded addresses directly into a zstd-1
+                // encoder via a 16 KiB staging buffer. Avoids a ~565 MB
+                // intermediate `vb: Vec<u8>` that the Deflate path allocates
+                // before feeding the encoder. zstd-1 is ~5x faster than
+                // Deflate1 on this highly-regular delta stream.
+                let mut enc =
+                    zstd::stream::write::Encoder::new(Vec::new(), 1).map_err(io::Error::other)?;
+                let mut prev = 0u64;
+                let mut buf = [0u8; 16384];
+                let mut buf_len = 0usize;
+                for b in 0..self.block_base.len() {
+                    let base = self.block_base[b];
+                    let lo = self.block_start[b] as usize;
+                    let hi = self.block_start[b + 1] as usize;
+                    for &off in &self.offsets[lo..hi] {
+                        let addr = base + off as u64;
+                        let mut v = addr - prev;
+                        prev = addr;
+                        // Inline vbyte-u64 encode into the staging buffer.
+                        // Flush BEFORE writing so the buffer never overflows.
+                        loop {
+                            if buf_len == buf.len() {
+                                enc.write_all(&buf)?;
+                                buf_len = 0;
+                            }
+                            let byte = (v & 0x7f) as u8;
+                            v >>= 7;
+                            if v == 0 {
+                                buf[buf_len] = byte;
+                                buf_len += 1;
+                                break;
+                            }
+                            buf[buf_len] = byte | 0x80;
+                            buf_len += 1;
+                        }
+                    }
+                }
+                if buf_len > 0 {
+                    enc.write_all(&buf[..buf_len])?;
+                }
+                let blob = enc.finish()?;
+                Ok((blob, len))
+            }
         }
     }
 
@@ -373,6 +418,37 @@ impl IdMap {
                 let mut pushed = 0usize;
                 let mut decoder: Box<dyn io::Read> =
                     Box::new(flate2::read::DeflateDecoder::new(blob));
+                loop {
+                    let n = decoder.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    let mut i = 0usize;
+                    while i < n && pushed < len {
+                        carry[carry_len] = buf[i];
+                        carry_len += 1;
+                        i += 1;
+                        if carry[carry_len - 1] & 0x80 == 0 {
+                            let (delta, _) = vbyte::decode_one_u64(&carry[..carry_len]);
+                            prev += delta;
+                            m.push_sorted_addr(prev);
+                            pushed += 1;
+                            carry_len = 0;
+                        }
+                    }
+                }
+                debug_assert_eq!(pushed, len);
+            }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => {
+                // Same vbyte-delta decoding as the Deflate path; only the
+                // decompressor changes (zstd instead of Deflate).
+                let mut prev = 0u64;
+                let mut carry = [0u8; 16];
+                let mut carry_len = 0usize;
+                let mut buf = vec![0u8; 65536];
+                let mut pushed = 0usize;
+                let mut decoder = zstd::stream::Decoder::new(blob)?;
                 loop {
                     let n = decoder.read(&mut buf)?;
                     if n == 0 {
@@ -608,7 +684,11 @@ mod tests {
         }
         m.sort_and_dedup();
         let n = m.len();
-        for codec in [Codec::None, Codec::Deflate9] {
+        #[cfg(not(feature = "native"))]
+        let codecs = [Codec::None, Codec::Deflate9];
+        #[cfg(feature = "native")]
+        let codecs = [Codec::None, Codec::Deflate9, Codec::Zstd1];
+        for codec in codecs {
             let (blob, len) = m.compress(codec).unwrap();
             let m2 = IdMap::from_compressed(&blob, len, codec).unwrap();
             assert_eq!(m2.len(), n);

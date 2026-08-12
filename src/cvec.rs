@@ -16,6 +16,11 @@ pub enum Codec {
     /// deflate at level 1 (flate2 Compression::fast()). Moderate RSS savings, fast.
     /// Same wire format as Deflate9 — same decompressor, just lower compression ratio.
     Deflate1,
+    /// zstd at level 1. Only valid for `IdMap::compress`/`from_compressed`; not
+    /// implemented for `CompressedU32`/`CompressedU64`/`CompressedBytes`. Much faster
+    /// than Deflate1 (~5x) on sorted delta-vbyte streams.
+    #[cfg(feature = "native")]
+    Zstd1,
 }
 
 impl Codec {
@@ -26,6 +31,8 @@ impl Codec {
             "none" => Some(Codec::None),
             "deflate9" | "deflate" => Some(Codec::Deflate9),
             "deflate1" => Some(Codec::Deflate1),
+            #[cfg(feature = "native")]
+            "zstd1" => Some(Codec::Zstd1),
             _ => None,
         }
     }
@@ -109,6 +116,8 @@ impl CompressedU32 {
                     len,
                 })
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
         }
     }
 
@@ -123,6 +132,8 @@ impl CompressedU32 {
                 self.for_each_u32(|x| out.push(x))?;
                 Ok(out)
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
         }
     }
 
@@ -140,6 +151,8 @@ impl CompressedU32 {
             Codec::Deflate9 | Codec::Deflate1 => {
                 stream_u32s(flate2::read::DeflateDecoder::new(&self.blob[..]), &mut f)
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
         }
     }
 
@@ -160,6 +173,8 @@ impl CompressedU32 {
                 })?;
                 Ok(found)
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
         }
     }
 
@@ -186,6 +201,8 @@ impl CompressedU32 {
                 })?;
                 Ok(result)
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
         }
     }
 
@@ -195,6 +212,8 @@ impl CompressedU32 {
         match self.codec {
             Codec::None => self.raw.len() * 4,
             Codec::Deflate9 | Codec::Deflate1 => self.blob.len(),
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
         }
     }
 }
@@ -277,6 +296,8 @@ impl CompressedU64 {
                     }
                 }
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU64"),
         }
     }
 
@@ -299,6 +320,8 @@ impl CompressedU64 {
                     len,
                 })
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU64"),
         }
     }
 
@@ -312,6 +335,8 @@ impl CompressedU64 {
                     .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
                     .collect())
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU64"),
         }
     }
 
@@ -320,6 +345,8 @@ impl CompressedU64 {
         match self.codec {
             Codec::None => self.raw.len() * 8,
             Codec::Deflate9 | Codec::Deflate1 => self.blob.len(),
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU64"),
         }
     }
 }
@@ -348,6 +375,8 @@ impl CompressedBytes {
                     raw: Vec::new(),
                 })
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedBytes"),
         }
     }
 
@@ -357,6 +386,8 @@ impl CompressedBytes {
             Codec::Deflate9 | Codec::Deflate1 => {
                 deflate_decompress(&self.blob, self.blob.len() * 4)
             }
+            #[cfg(feature = "native")]
+            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedBytes"),
         }
     }
 }

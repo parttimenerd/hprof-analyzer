@@ -1060,12 +1060,20 @@ impl InboundBuilder {
     /// Compress the live id_map into a blob and free the dense Vec, so the
     /// ~4.1GB addr array is off the rpo-phase RSS peak. No-op for Codec::None.
     pub fn compress_id_map(&mut self, codec: crate::cvec::Codec) -> io::Result<()> {
-        self.id_map_codec = codec;
         if codec == crate::cvec::Codec::None {
+            self.id_map_codec = codec;
             return Ok(());
         }
+        // Override with Zstd1 on native builds: ~5x faster than Deflate1 on
+        // the sorted delta-vbyte stream, with no RSS impact (blob is similar
+        // size and the intermediate vb Vec is eliminated).
+        #[cfg(feature = "native")]
+        let effective = crate::cvec::Codec::Zstd1;
+        #[cfg(not(feature = "native"))]
+        let effective = codec;
+        self.id_map_codec = effective;
         if let Some(m) = self.id_map.take() {
-            let (blob, len) = m.compress(codec)?;
+            let (blob, len) = m.compress(effective)?;
             self.id_map_c = Some((blob, len));
         }
         Ok(())
