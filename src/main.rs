@@ -1092,7 +1092,7 @@ fn analyze_to_report_inner(
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
-        let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
+        let c = cvec::CompressedU32::compress(&rpo.parent_pre, cvec::Codec::Deflate1)?;
         crate::trace::drop_vec(std::mem::take(&mut rpo.parent_pre));
         Some(c)
     } else {
@@ -2416,7 +2416,7 @@ fn run(
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
-        let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
+        let c = cvec::CompressedU32::compress(&rpo.parent_pre, cvec::Codec::Deflate1)?;
         crate::trace::drop_vec(std::mem::take(&mut rpo.parent_pre));
         Some(c)
     } else {

@@ -11,8 +11,11 @@ use std::io::{self, Read, Write};
 pub enum Codec {
     /// No compression: keep the live Vec (no RSS win; A/B escape hatch).
     None,
-    /// deflate at max level (flate2 Compression::best()).
+    /// deflate at max level (flate2 Compression::best()). High RSS savings, slow.
     Deflate9,
+    /// deflate at level 1 (flate2 Compression::fast()). Moderate RSS savings, fast.
+    /// Same wire format as Deflate9 — same decompressor, just lower compression ratio.
+    Deflate1,
 }
 
 impl Codec {
@@ -22,6 +25,7 @@ impl Codec {
         match s {
             "none" => Some(Codec::None),
             "deflate9" | "deflate" => Some(Codec::Deflate9),
+            "deflate1" => Some(Codec::Deflate1),
             _ => None,
         }
     }
@@ -40,8 +44,8 @@ fn deflate_compress(raw: &[u8]) -> io::Result<Vec<u8>> {
 /// rpo→inbound window. The compressed output is byte-identical to compressing the
 /// concatenated LE bytes in one shot (DEFLATE output depends only on the input
 /// byte stream, not on write-call boundaries).
-fn deflate_compress_u32_le(v: &[u32]) -> io::Result<Vec<u8>> {
-    let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+fn deflate_compress_u32_le(v: &[u32], level: flate2::Compression) -> io::Result<Vec<u8>> {
+    let mut e = flate2::write::DeflateEncoder::new(Vec::new(), level);
     // 16384 u32 = 64 KiB per flush.
     let mut buf = [0u8; 16384 * 4];
     let mut chunks = v.chunks(16384);
@@ -88,9 +92,18 @@ impl CompressedU32 {
                 len,
             }),
             Codec::Deflate9 => {
-                let blob = deflate_compress_u32_le(v)?;
+                let blob = deflate_compress_u32_le(v, flate2::Compression::best())?;
                 Ok(Self {
                     codec,
+                    blob,
+                    raw: Vec::new(),
+                    len,
+                })
+            }
+            Codec::Deflate1 => {
+                let blob = deflate_compress_u32_le(v, flate2::Compression::fast())?;
+                Ok(Self {
+                    codec: Codec::Deflate1,
                     blob,
                     raw: Vec::new(),
                     len,
@@ -105,7 +118,7 @@ impl CompressedU32 {
     pub fn restore(&self) -> io::Result<Vec<u32>> {
         match self.codec {
             Codec::None => Ok(self.raw.clone()),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let mut out = Vec::with_capacity(self.len);
                 self.for_each_u32(|x| out.push(x))?;
                 Ok(out)
@@ -124,7 +137,7 @@ impl CompressedU32 {
                 }
                 Ok(())
             }
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 stream_u32s(flate2::read::DeflateDecoder::new(&self.blob[..]), &mut f)
             }
         }
@@ -136,7 +149,7 @@ impl CompressedU32 {
     pub fn get_at(&self, target_idx: usize) -> io::Result<Option<u32>> {
         match self.codec {
             Codec::None => Ok(self.raw.get(target_idx).copied()),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let mut cur = 0usize;
                 let mut found = None;
                 self.for_each_u32(|x| {
@@ -162,7 +175,7 @@ impl CompressedU32 {
                 let len = self.raw.len();
                 Ok(self.raw[start.min(len)..end.min(len)].to_vec())
             }
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let mut result = Vec::with_capacity(end - start);
                 let mut i = 0usize;
                 self.for_each_u32(|x| {
@@ -181,7 +194,7 @@ impl CompressedU32 {
     pub fn held_bytes(&self) -> usize {
         match self.codec {
             Codec::None => self.raw.len() * 4,
-            Codec::Deflate9 => self.blob.len(),
+            Codec::Deflate9 | Codec::Deflate1 => self.blob.len(),
         }
     }
 }
@@ -245,7 +258,7 @@ impl CompressedU64 {
     pub fn get_at(&self, target_idx: usize) -> io::Result<Option<u64>> {
         match self.codec {
             Codec::None => Ok(self.raw.get(target_idx).copied()),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let mut r = flate2::read::DeflateDecoder::new(&self.blob[..]);
                 let mut buf = [0u8; 8];
                 let mut i = 0usize;
@@ -276,7 +289,7 @@ impl CompressedU64 {
                 raw: v.to_vec(),
                 len,
             }),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len * 8) };
                 let blob = deflate_compress(bytes)?;
                 Ok(Self {
@@ -292,7 +305,7 @@ impl CompressedU64 {
     pub fn restore(&self) -> io::Result<Vec<u64>> {
         match self.codec {
             Codec::None => Ok(self.raw.clone()),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let bytes = deflate_decompress(&self.blob, self.len * 8)?;
                 Ok(bytes
                     .chunks_exact(8)
@@ -306,7 +319,7 @@ impl CompressedU64 {
     pub fn held_bytes(&self) -> usize {
         match self.codec {
             Codec::None => self.raw.len() * 8,
-            Codec::Deflate9 => self.blob.len(),
+            Codec::Deflate9 | Codec::Deflate1 => self.blob.len(),
         }
     }
 }
@@ -327,7 +340,7 @@ impl CompressedBytes {
                 blob: Vec::new(),
                 raw: v,
             }),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 let blob = deflate_compress(&v)?;
                 Ok(Self {
                     codec,
@@ -341,7 +354,9 @@ impl CompressedBytes {
     pub fn restore(self) -> io::Result<Vec<u8>> {
         match self.codec {
             Codec::None => Ok(self.raw),
-            Codec::Deflate9 => deflate_decompress(&self.blob, self.blob.len() * 4),
+            Codec::Deflate9 | Codec::Deflate1 => {
+                deflate_decompress(&self.blob, self.blob.len() * 4)
+            }
         }
     }
 }
@@ -436,7 +451,7 @@ mod tests {
                 v.push(state);
             }
             assert_eq!(
-                deflate_compress_u32_le(&v).unwrap(),
+                deflate_compress_u32_le(&v, flate2::Compression::best()).unwrap(),
                 oneshot(&v),
                 "streaming blob differs from one-shot at n={n}"
             );
@@ -451,6 +466,7 @@ mod tests {
         assert_eq!(Codec::parse("none"), Some(Codec::None));
         assert_eq!(Codec::parse("deflate9"), Some(Codec::Deflate9));
         assert_eq!(Codec::parse("deflate"), Some(Codec::Deflate9));
+        assert_eq!(Codec::parse("deflate1"), Some(Codec::Deflate1));
         assert_eq!(Codec::parse("zstd"), None);
     }
 

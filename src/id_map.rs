@@ -311,7 +311,7 @@ impl IdMap {
                 }
                 Ok((out, len))
             }
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 // Stream the sorted absolute addrs directly out of the block
                 // structure and delta-vbyte-encode on the fly. Walking the
                 // blocks in order yields the exact same globally-sorted address
@@ -358,7 +358,7 @@ impl IdMap {
                     m.push_sorted_addr(addr);
                 }
             }
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Deflate1 => {
                 // Stream-decode the compressed vbyte-delta sequence without
                 // materializing the full decompressed buffer. A carry array
                 // handles vbytes that span decompressor read() boundaries.
