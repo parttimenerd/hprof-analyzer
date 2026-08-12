@@ -1342,11 +1342,14 @@ impl InboundBuilder {
             Some(m) => m,
             None => {
                 let (blob, len) = id_map_c.expect("id_map neither live nor compressed");
-                crate::id_map::IdMap::from_compressed(&blob, len, id_map_codec)?
+                let m = crate::id_map::IdMap::from_compressed(&blob, len, id_map_codec)?;
+                t_inb!("id_map decompress done");
+                m
             }
         };
 
         let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
+        t_inb!("inb_flat alloc done");
         if crate::trace::enabled() {
             eprintln!(
                 "[trace-rss] inbound mat-scan: total_inb={} edges, inb_flat={} MB",

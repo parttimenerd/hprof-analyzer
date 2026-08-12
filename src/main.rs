@@ -2368,6 +2368,7 @@ fn run(
     // fwd_targets alloc) to keep their ~4GB dense forms off the binding peak;
     // shallow_c/class_idx_c hold the blobs, g.shallow/g.class_idx are empty.
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
+    t_dark!("compress_id_map done");
 
     crate::trace::probe("main: after compress_id_map (before rpo_dfs)");
     let t = Instant::now();
@@ -2375,6 +2376,7 @@ fn run(
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     crate::trace::probe("main: after rpo_dfs (before compress parent_pre)");
     log(verbose, "rpo", t.elapsed().as_secs_f64());
+    t_dark!("rpo_dfs done");
 
     crate::trace::trim();
 
@@ -2405,6 +2407,7 @@ fn run(
         log(verbose, "unreachable-retained", t.elapsed().as_secs_f64());
         crate::trace::trim();
     }
+    t_dark!("unreachable_retained done");
 
     // Compress parent_pre (~2 GB dense) between RPO and inbound to reduce
     // the peak during the transpose loop. parent_pre is not needed until
@@ -2419,6 +2422,7 @@ fn run(
     } else {
         None
     };
+    t_dark!("compress_parent_pre done");
     crate::trace::probe("main: after compress parent_pre (before inbound)");
 
     // Build the inbound CSR by transposing the forward CSR, avoiding a third
