@@ -533,11 +533,12 @@ pub fn build_model(
             }
         };
     }
-    crate::trace::probe("build_model: before system_overview aggregates");
-    let overview =
-        build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
-    t_bm!("system_overview");
-    crate::trace::probe("build_model: after system_overview aggregates");
+    // Call the dc_offsets/dc_targets consumers FIRST so we can drop those ~4 GB
+    // arrays before build_system_overview. build_system_overview only needs
+    // idom/retained/shallow/class_idx — not the dominator-children CSR — so
+    // running it after the dc drop cuts ~4 GB from the build_model RSS peak.
+    // (build_stack_held_via and build_top_consumers also don't need dc, so they
+    // can run here too, before overview is available for thread/top_components.)
     let leaks = build_leak_suspects(
         g,
         &dc_offsets,
@@ -549,16 +550,6 @@ pub fn build_model(
     );
     t_bm!("leak_suspects");
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let stack_held_via = build_stack_held_via(g);
-    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via);
-    t_bm!("top_consumers");
-    crate::trace::probe("build_model: after top_consumers aggregates");
-    let threads = build_thread_overview(g, overview.total_shallow);
-    t_bm!("thread_overview");
-    crate::trace::probe("build_model: after thread_overview aggregates");
-    let top_components = build_top_components(&overview);
-    t_bm!("top_components");
-    crate::trace::probe("build_model: after top_components aggregates");
     let dominator_analysis =
         build_dominator_analysis(g, &dc_offsets, &dc_targets, depth_counts.len() as u32);
     t_bm!("dominator_analysis");
@@ -576,11 +567,27 @@ pub fn build_model(
     };
     t_bm!("obj_graph_flat");
     // dc_offsets and dc_targets are not used after this point. Drop them now
-    // (~4 GB on large dumps) before the remaining sections allocate intermediate
-    // data, reducing the report-phase peak by ~4 GB.
+    // (~4 GB on large dumps) before build_system_overview, so the ~4 GB dc
+    // arrays are off the RSS budget during that O(n) scan.
     drop(dc_offsets);
     drop(dc_targets);
     crate::trace::trim();
+    crate::trace::probe("build_model: after drop(dc) — before system_overview");
+    let stack_held_via = build_stack_held_via(g);
+    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via);
+    t_bm!("top_consumers");
+    crate::trace::probe("build_model: after top_consumers aggregates");
+    crate::trace::probe("build_model: before system_overview aggregates");
+    let overview =
+        build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
+    t_bm!("system_overview");
+    crate::trace::probe("build_model: after system_overview aggregates");
+    let threads = build_thread_overview(g, overview.total_shallow);
+    t_bm!("thread_overview");
+    crate::trace::probe("build_model: after thread_overview aggregates");
+    let top_components = build_top_components(&overview);
+    t_bm!("top_components");
+    crate::trace::probe("build_model: after top_components aggregates");
     crate::trace::probe("build_model: after drop(dc+cap) — before type_ref/references/collections");
     let type_ref_graph = if opts.obj_graph {
         build_type_ref_graph(g)
