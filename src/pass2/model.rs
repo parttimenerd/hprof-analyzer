@@ -1379,7 +1379,7 @@ impl InboundBuilder {
                 } as u64;
                 match tag {
                     tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                        Self::scan_inb_and_outbound(
+                        Self::scan_inb_and_outbound::<false>(
                             &mut r,
                             id_size,
                             ids,
@@ -1422,7 +1422,7 @@ impl InboundBuilder {
     /// Combined inbound-fill + outbound-collect for one HEAP_DUMP[_SEGMENT] record.
     /// Fills inb_flat and calls on_outbound for each object with its dense targets.
     #[allow(clippy::too_many_arguments)]
-    fn scan_inb_and_outbound(
+    fn scan_inb_and_outbound<const COLLECT_FWD: bool>(
         r: &mut HprofReader,
         id_size: u8,
         ids: u64,
@@ -1533,7 +1533,9 @@ impl InboundBuilder {
                         // inbound
                         inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
                         in_cursors[dst] += 1;
-                        fwd.push(dst as u32);
+                        if COLLECT_FWD {
+                            fwd.push(dst as u32);
+                        }
                     }
 
                     // Object-type instance fields
@@ -1548,7 +1550,9 @@ impl InboundBuilder {
                                         if let Some(dst) = cache.index_of(id_map, ref_val) {
                                             inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
                                             in_cursors[dst] += 1;
-                                            fwd.push(dst as u32);
+                                            if COLLECT_FWD {
+                                                fwd.push(dst as u32);
+                                            }
                                         }
                                     }
                                 }
@@ -1556,7 +1560,9 @@ impl InboundBuilder {
                         }
                     }
 
-                    on_outbound(src_idx, fwd)?;
+                    if COLLECT_FWD {
+                        on_outbound(src_idx, fwd)?;
+                    }
                 }
                 heap::OBJ_ARRAY_DUMP => {
                     let addr = try_read!(r.id());
@@ -1581,12 +1587,16 @@ impl InboundBuilder {
                                 if let Some(dst) = cache.index_of(id_map, ref_val) {
                                     inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
                                     in_cursors[dst] += 1;
-                                    fwd.push(dst as u32);
+                                    if COLLECT_FWD {
+                                        fwd.push(dst as u32);
+                                    }
                                 }
                             }
                         }
                     }
-                    on_outbound(src_idx, fwd)?;
+                    if COLLECT_FWD {
+                        on_outbound(src_idx, fwd)?;
+                    }
                 }
                 heap::PRIM_ARRAY_NODATA_DUMP => {
                     // Android ART: same header as PRIM_ARRAY_DUMP but no element data.
@@ -1606,8 +1616,10 @@ impl InboundBuilder {
                     let byte_len = count.saturating_mul(elem_size);
                     try_read!(r.skip(byte_len));
                     checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
-                    if let Some(src_idx) = id_map.index_of(addr) {
-                        on_outbound(src_idx, Vec::new())?;
+                    if COLLECT_FWD {
+                        if let Some(src_idx) = id_map.index_of(addr) {
+                            on_outbound(src_idx, Vec::new())?;
+                        }
                     }
                 }
                 heap::HEAP_DUMP_INFO => {
