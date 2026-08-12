@@ -1025,9 +1025,28 @@ where
             // Trailing `AS RETAINED SET` (existing MAT form, kept for compatibility).
             .then(retained_set.clone())
             .then_ignore(ident_ci("FROM"))
-            // MAT allows `FROM OBJECTS <class>` as a no-op synonym for `FROM <class>`.
-            .then_ignore(ident_ci("OBJECTS").or_not())
-            .then(from_source)
+            .then({
+                // `FROM OBJECTS OF CLASS <name>` — MAT alias for `FROM INSTANCEOF <name>`.
+                let objects_of_class = ident_ci("OBJECTS")
+                    .ignore_then(ident_ci("OF"))
+                    .ignore_then(ident_ci("CLASS"))
+                    .ignore_then(
+                        any_ident()
+                            .labelled("class name")
+                            .map(|name| (name, false))
+                            .or(select! { Token::Str(s) => (s, true) }.labelled("class regex")),
+                    )
+                    .map(|(class_name, is_regex)| {
+                        FromSource::Class(ClassSpec {
+                            instanceof: true,
+                            class_name,
+                            is_regex,
+                        })
+                    });
+                // `FROM OBJECTS <class>` — OBJECTS is a no-op (exact match, no instanceof).
+                let objects_noop = ident_ci("OBJECTS").ignore_then(from_source.clone());
+                objects_of_class.or(objects_noop).or(from_source)
+            })
             .then(any_ident().and_is(reserved_ident().not()).or_not())
             .then(ident_ci("WHERE").ignore_then(predicate.clone()).or_not())
             // GROUP BY <expr> [, <expr>]*
@@ -4167,6 +4186,71 @@ mod tests {
             with_objects.from, without.from,
             "FROM OBJECTS glob must produce identical FROM as FROM glob"
         );
+    }
+
+    // ============================================================
+    // Group — FROM OBJECTS OF CLASS (MAT instanceof alias)
+    // ============================================================
+
+    /// `SELECT * FROM OBJECTS OF CLASS java.lang.Thread` must set instanceof=true.
+    #[test]
+    fn from_objects_of_class_sets_instanceof() {
+        let q = parse("SELECT * FROM OBJECTS OF CLASS java.lang.Thread").unwrap();
+        let spec = q.from.class_spec().expect("expected class source");
+        assert!(
+            spec.instanceof,
+            "FROM OBJECTS OF CLASS must set instanceof = true"
+        );
+        assert_eq!(spec.class_name, "java.lang.Thread");
+        assert!(!spec.is_regex);
+    }
+
+    /// `FROM OBJECTS OF CLASS X` must produce the same AST as `FROM INSTANCEOF X`.
+    #[test]
+    fn from_objects_of_class_same_as_instanceof() {
+        let via_objects_of_class =
+            parse("SELECT * FROM OBJECTS OF CLASS java.lang.Thread").unwrap();
+        let via_instanceof = parse("SELECT * FROM INSTANCEOF java.lang.Thread").unwrap();
+        assert_eq!(
+            via_objects_of_class.from, via_instanceof.from,
+            "FROM OBJECTS OF CLASS and FROM INSTANCEOF must produce the same AST"
+        );
+    }
+
+    /// `SELECT COUNT(*) FROM OBJECTS OF CLASS java.lang.Runnable` — common MAT form.
+    #[test]
+    fn from_objects_of_class_count_star() {
+        let q = parse("SELECT COUNT(*) FROM OBJECTS OF CLASS java.lang.Runnable").unwrap();
+        let spec = q.from.class_spec().expect("expected class source");
+        assert!(spec.instanceof);
+        assert_eq!(spec.class_name, "java.lang.Runnable");
+    }
+
+    /// `from objects of class` is case-insensitive.
+    #[test]
+    fn from_objects_of_class_case_insensitive() {
+        for variant in &[
+            "SELECT * FROM OBJECTS OF CLASS java.lang.Thread",
+            "SELECT * FROM objects of class java.lang.Thread",
+            "SELECT * FROM Objects Of Class java.lang.Thread",
+        ] {
+            let q = parse(variant).unwrap_or_else(|e| panic!("parse failed for {variant:?}: {e}"));
+            let spec = q.from.class_spec().expect("expected class source");
+            assert!(spec.instanceof, "{variant} must set instanceof");
+            assert_eq!(spec.class_name, "java.lang.Thread");
+        }
+    }
+
+    /// Existing `FROM OBJECTS <class>` (no `OF CLASS`) must still work as before (no instanceof).
+    #[test]
+    fn from_objects_bare_still_no_instanceof() {
+        let q = parse("SELECT * FROM OBJECTS java.lang.String").unwrap();
+        let spec = q.from.class_spec().expect("expected class source");
+        assert!(
+            !spec.instanceof,
+            "FROM OBJECTS alone must not set instanceof"
+        );
+        assert_eq!(spec.class_name, "java.lang.String");
     }
 
     // ============================================================
