@@ -2266,10 +2266,16 @@ fn build_system_overview(
     // keys are human names like "byte[]"; collected then sorted by shallow desc.
     let mut unreach_prim_by_type: std::collections::HashMap<&'static str, (u64, u64)> =
         std::collections::HashMap::new();
-    // retention_concentration: collect top-level (idom==vroot) retained values.
+    // retention_concentration: top-100 buffer instead of a ~2.6GB Vec<u64>.
+    // Stores the top-100 retained values sorted descending (buf[0] = max,
+    // buf[len-1] = current minimum). Only the minimum slot is ever evicted.
+    // After the loop: total_retained / prefix sums / num_ge_1pct are all
+    // derived from this tiny buffer — no 329M-element sort.
     let vroot_u32 = n as u32;
     let undef_u32 = u32::MAX;
-    let mut tops: Vec<u64> = Vec::new();
+    let mut top100_buf = [0u64; 100];
+    let mut top100_len: usize = 0;
+    let mut top_total_retained: u64 = 0;
     // classes_loaded and classloaders_loaded (class-object walk)
     let mut classes_loaded: u64 = 0;
     let mut loader_set: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -2303,9 +2309,29 @@ fn build_system_overview(
             let b = kind_idx_of(g, i, repr);
             comp_objs[b] += 1;
             comp_sh[b] += sh;
-            // Retention concentration: collect top-level retained values.
+            // Retention concentration: maintain top-100 buffer (no 329M Vec).
             if id == vroot_u32 {
-                tops.push(g.retained[i]);
+                let ret = g.retained[i];
+                top_total_retained += ret;
+                // Insert into sorted-descending top100_buf if it belongs.
+                if top100_len < 100 {
+                    top100_buf[top100_len] = ret;
+                    top100_len += 1;
+                    // Insertion-sort the new element into position.
+                    let mut j = top100_len - 1;
+                    while j > 0 && top100_buf[j] > top100_buf[j - 1] {
+                        top100_buf.swap(j, j - 1);
+                        j -= 1;
+                    }
+                } else if ret > top100_buf[99] {
+                    // Evict minimum, insert new value, bubble up.
+                    top100_buf[99] = ret;
+                    let mut j = 99usize;
+                    while j > 0 && top100_buf[j] > top100_buf[j - 1] {
+                        top100_buf.swap(j, j - 1);
+                        j -= 1;
+                    }
+                }
             }
             // Class histogram
             if ci_raw < class_count {
@@ -2487,16 +2513,44 @@ fn build_system_overview(
         .collect();
     // B3: retention concentration over top-level dominators (idom == vroot).
     let retention_concentration = {
-        tops.sort_unstable_by(|a, b| b.cmp(a)); // retained desc
         let denom = total_shallow.max(1);
         let bp = |sum: u64| -> u32 { ((sum as u128 * 10_000) / denom as u128) as u32 };
-        let prefix = |k: usize| -> u64 { tops.iter().take(k).sum() };
-        let total_retained: u64 = tops.iter().sum();
+        let top_k = |k: usize| -> u64 { top100_buf[..top100_len.min(k)].iter().sum() };
+        let total_retained = top_total_retained;
         let one_pct = denom / 100;
-        let num_objects_ge_1pct = tops.iter().filter(|&&r| r >= one_pct).count() as u64;
-        let top1_retained = prefix(1);
-        let top10_retained = prefix(10);
-        let top100_retained = prefix(100);
+        // Count objects with retained >= one_pct.  The top-100 buffer covers the
+        // common case (one_pct > top100_buf[99] || top100_len < 100); the rare
+        // fallback re-scans all top-level dominators only when many objects exceed
+        // the 1%-of-total-shallow threshold.
+        let num_objects_ge_1pct = if one_pct == 0 {
+            // Degenerate: total_shallow is 0, threshold is 0, every top-level
+            // dominator with retained >= 0 qualifies — i.e., all of them.
+            let mut cnt = 0u64;
+            for i in 0..n {
+                if g.idom[i] == vroot_u32 {
+                    cnt += 1;
+                }
+            }
+            cnt
+        } else if top100_len < 100 || top100_buf[99] < one_pct {
+            // All qualifying objects are already in the buffer.
+            top100_buf[..top100_len]
+                .iter()
+                .filter(|&&r| r >= one_pct)
+                .count() as u64
+        } else {
+            // Full scan needed: >= 100 objects exceed the threshold (uncommon).
+            let mut cnt = 0u64;
+            for i in 0..n {
+                if g.idom[i] == vroot_u32 && g.retained[i] >= one_pct {
+                    cnt += 1;
+                }
+            }
+            cnt
+        };
+        let top1_retained = top_k(1);
+        let top10_retained = top_k(10);
+        let top100_retained = top_k(100);
         RetentionSummary {
             total_retained,
             top1_bp: bp(top1_retained),

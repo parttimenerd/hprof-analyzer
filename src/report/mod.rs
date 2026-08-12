@@ -659,7 +659,58 @@ mod tests {
         assert_eq!(rc.num_objects_ge_1pct, 3);
     }
 
-    // ── OOM Triage render lines (B2/B3/B5 surfaced) ─────────────────────────
+    #[test]
+    fn test_retention_concentration_top100_buffer_full() {
+        // Build a graph with 150 top-level dominators: 50 with retained=1000,
+        // 100 with retained=500, so top-100 = the 50 high ones + 50 of the low ones.
+        // After the buffer is full (100 elements), the 101..150 low values (500)
+        // don't evict anything — top100_buf[99] = 500, new val = 500, not strictly
+        // greater.  Verify top1/top10/top100 sums and total_retained are correct.
+        let n = 150usize;
+        let vroot = n as u32; // idom == vroot means top-level
+        let mut idom: Vec<u32> = vec![vroot; n];
+        let mut retained: Vec<u64> = std::iter::repeat_n(1000u64, 50)
+            .chain(std::iter::repeat_n(500u64, 100))
+            .collect();
+        let shallow: Vec<u32> = vec![10; n]; // total_shallow = 1500
+        let class_idx: Vec<u32> = vec![0; n];
+        // Make obj0 not top-level (dominated by obj1) to test the non-vroot path.
+        idom[0] = 1;
+        retained[0] = 1000; // still 1000 but NOT top-level — must NOT appear in top100
+        let (mut g, dc_off, dc_tgt) = make_graph(
+            idom,
+            class_idx,
+            shallow,
+            retained,
+            vec!["com/foo/A"],
+            &[],
+            &[],
+            vec![],
+            0,
+        );
+        let r = build_model_t(&mut g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let rc = &r.overview.retention_concentration;
+        // top-level dominators: 149 objects (obj0 is not top-level)
+        // top-level retained values: 49 × 1000 + 100 × 500 = 49000 + 50000 = 99000
+        assert_eq!(rc.total_retained, 99000, "total_retained mismatch");
+        // top1: the single maximum retained among top-level = 1000
+        assert_eq!(rc.top1_retained, 1000, "top1_retained mismatch");
+        // top10: 10 × 1000 = 10000
+        assert_eq!(rc.top10_retained, 10_000, "top10_retained mismatch");
+        // top100: 49 × 1000 + 51 × 500 = 49000 + 25500 = 74500
+        assert_eq!(rc.top100_retained, 74_500, "top100_retained mismatch");
+        // num_ge_1pct: total_shallow=1490 (150 objs × 10 shallow, but obj0 is dominated
+        // so total_shallow = 150 × 10 = 1500 for ALL objects, but only reachable ones
+        // are summed), one_pct = 1500/100 = 15; all 149 top-level retained >= 500 > 15.
+        // Wait — total_shallow in system_overview sums ALL reachable objects' shallow,
+        // so with idom[0]=1 (reachable but not top-level), total_shallow = 150×10 = 1500.
+        // one_pct = 15; all top-level objects have retained ≥ 500 ≥ 15 → 149.
+        // BUT our buffer only has 100 entries, and top100_buf[99] = 500.
+        // one_pct = 15 < 500 = top100_buf[99] → NOT in the buffer-only fast path.
+        // The fallback scan is triggered. The fallback counts all top-level dominators
+        // with retained >= 15 = all 149.
+        assert_eq!(rc.num_objects_ge_1pct, 149, "num_ge_1pct mismatch");
+    }
 
     #[test]
     fn test_render_includes_oom_triage_signals() {
