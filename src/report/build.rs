@@ -2247,20 +2247,31 @@ fn build_system_overview(
         "Class Objects",
     ];
     // Composition bucket index for object `i`, given its already-computed
-    // `class_obj_repr` (`repr`). This is `KIND_ORDER.position(object_kind(g,i))`
-    // computed WITHOUT the string round-trip and WITHOUT re-probing the
-    // class-object HashMap: `object_kind` returns "Class Objects" iff
-    // `class_obj_repr != MAX`, so the caller passes the `repr` it already holds.
-    // Bucket ids match KIND_ORDER: 0=Instances, 1=Object Arrays,
-    // 2=Primitive Arrays, 3=Class Objects.
-    let kind_idx_of = |g: &Graph, i: usize, repr: u32| -> usize {
+    // Precompute a kind bucket per class row (0=Instances, 1=Object Arrays,
+    // 2=Primitive Arrays). Vec<u8> of size class_count fits in L1 cache, replacing
+    // the per-object class_names string lookup in the hot fused loop.
+    // Class Objects (bucket 3) are identified by repr != MAX at call time.
+    let kind_cache: Vec<u8> = g
+        .class_names
+        .iter()
+        .map(|raw| {
+            if is_prim_array_desc(raw) {
+                2
+            } else if raw.starts_with('[') {
+                1
+            } else {
+                0
+            }
+        })
+        .collect();
+    let kind_idx_of = |ci_raw: usize, repr: u32| -> usize {
         if repr != u32::MAX {
             return 3; // Class Objects
         }
-        match g.class_names.get(g.class_idx[i] as usize) {
-            Some(raw) if is_prim_array_desc(raw) => 2, // Primitive Arrays
-            Some(raw) if raw.starts_with('[') => 1,    // Object Arrays
-            _ => 0,                                    // Instances
+        if ci_raw < class_count {
+            kind_cache[ci_raw] as usize
+        } else {
+            0
         }
     };
     let mut comp_objs = [0u64; 4];
@@ -2313,7 +2324,7 @@ fn build_system_overview(
         if id != undef_u32 {
             total_objects += 1;
             total_shallow += sh;
-            let b = kind_idx_of(g, i, repr);
+            let b = kind_idx_of(ci_raw, repr);
             comp_objs[b] += 1;
             comp_sh[b] += sh;
             // Retention concentration: maintain top-100 buffer (no 329M Vec).
@@ -2369,7 +2380,7 @@ fn build_system_overview(
         } else {
             unreachable_count += 1;
             unreachable_shallow += sh;
-            let b = kind_idx_of(g, i, repr);
+            let b = kind_idx_of(ci_raw, repr);
             unreach_comp_objs[b] += 1;
             unreach_comp_sh[b] += sh;
             // Track prim-array sub-types for the composition chart.
