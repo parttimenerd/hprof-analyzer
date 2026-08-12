@@ -4092,6 +4092,12 @@ fn build_top_consumers(
     // (task #30, which blew the RSS ceiling at ~5.3 GB) and paying the random
     // `g.retained` loads once (unlike the radix retry, task #31, which re-read
     // them per pass for no win).
+    // Precomputed size_distribution from the packed-u64 sort path.
+    // Populated inside the fast branch below (where retained values are decoded
+    // from keys, avoiding a second round of random g.retained reads after the
+    // sort). The slow fallback branch leaves this None and the distribution block
+    // below recomputes it from top_level + g.retained as before.
+    let mut precomputed_distribution: Option<TopSizeDistribution> = None;
     if !top_level.is_empty() {
         // top_level is built index-ascending, so the last element is the largest
         // index; +1 gives the count of representable ids.
@@ -4115,6 +4121,42 @@ fn build_top_consumers(
             for (slot, &k) in top_level.iter_mut().zip(keys.iter()) {
                 *slot = (k & idx_mask) as u32;
             }
+            // Build size_distribution NOW from the sorted keys, decoding each
+            // retained value as (max_retained - key >> idx_bits). This avoids a
+            // second pass of 329M random g.retained reads after the sort.
+            // Keys are sorted ascending ≡ retained descending, so:
+            //   keys[0]   → largest retained (max)
+            //   keys[k/2] → median retained
+            //   keys[k-1] → smallest retained (min)
+            let k = keys.len();
+            let retained_of = |key: u64| max_retained - (key >> idx_bits);
+            let max_r = retained_of(keys[0]);
+            let min_r = retained_of(keys[k - 1]);
+            let median_r = retained_of(keys[k / 2]);
+            let mut total_ret: u64 = 0;
+            let mut map: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+            for &key in &keys {
+                let r = retained_of(key);
+                total_ret = total_ret.saturating_add(r);
+                let upper = if r <= 1 {
+                    1
+                } else {
+                    r.checked_next_power_of_two().unwrap_or(u64::MAX)
+                };
+                *map.entry(upper).or_insert(0) += 1;
+            }
+            let buckets = map
+                .into_iter()
+                .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
+                .collect();
+            precomputed_distribution = Some(TopSizeDistribution {
+                buckets,
+                count: k as u64,
+                min: min_r,
+                max: max_r,
+                median: median_r,
+                total: total_ret,
+            });
             drop(keys);
         } else {
             top_level.sort_unstable_by(|&a, &b| {
@@ -4125,7 +4167,9 @@ fn build_top_consumers(
         }
     }
     t_tc!("sort_top_level");
-    let size_distribution = {
+    let size_distribution = if let Some(pd) = precomputed_distribution {
+        pd
+    } else {
         let k = top_level.len();
         if k == 0 {
             TopSizeDistribution::default()

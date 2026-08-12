@@ -894,6 +894,18 @@ impl InboundBuilder {
         mut fwd_targets: crate::chunkvec::ChunkU32,
         dfn: &[u32],
     ) -> io::Result<(Vec<u64>, Vec<u8>)> {
+        let t_inb = std::time::Instant::now();
+        macro_rules! t_inb {
+            ($label:expr) => {
+                if std::env::var_os("HPROF_TIMING").is_some() {
+                    eprintln!(
+                        "[timing] inbound/{}: {:.3}s",
+                        $label,
+                        t_inb.elapsed().as_secs_f64()
+                    );
+                }
+            };
+        }
         let InboundBuilder {
             n,
             in_cursors,
@@ -934,6 +946,7 @@ impl InboundBuilder {
             );
         }
         crate::trace::probe("inbound fwd-transpose: after inb_flat alloc");
+        t_inb!("inb_flat alloc done");
 
         let mut in_cursors = in_cursors;
 
@@ -1002,13 +1015,16 @@ impl InboundBuilder {
         drop(fwd_targets);
         crate::trace::trim();
         crate::trace::probe("inbound fwd-transpose: after transpose loop");
+        t_inb!("scatter transpose done");
 
         // Synthetic edges are already included in fwd_targets (they were
         // appended before the B3 restore in pass2b), so we must NOT add them
         // again here — doing so would double-count them and overflow in_cursors.
 
         crate::trace::probe("inbound: before Phase-4 (after fwd-transpose)");
-        Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn)
+        let result = Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn);
+        t_inb!("phase4 done");
+        result
     }
 
     /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
@@ -1295,6 +1311,18 @@ impl InboundBuilder {
     where
         F: FnMut(usize, Vec<u32>) -> io::Result<()>,
     {
+        let t_inb = std::time::Instant::now();
+        macro_rules! t_inb {
+            ($label:expr) => {
+                if std::env::var_os("HPROF_TIMING").is_some() {
+                    eprintln!(
+                        "[timing] inbound/{}: {:.3}s",
+                        $label,
+                        t_inb.elapsed().as_secs_f64()
+                    );
+                }
+            };
+        }
         let InboundBuilder {
             source,
             id_size,
@@ -1385,7 +1413,10 @@ impl InboundBuilder {
         }
 
         crate::trace::probe("inbound: before Phase-4 (after mat-scan + drops)");
-        Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn)
+        t_inb!("file scan done");
+        let result = Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn);
+        t_inb!("phase4 done");
+        result
     }
 
     /// Combined inbound-fill + outbound-collect for one HEAP_DUMP[_SEGMENT] record.
