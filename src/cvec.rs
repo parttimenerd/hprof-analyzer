@@ -159,8 +159,30 @@ impl CompressedU32 {
             }
             #[cfg(feature = "native")]
             Codec::Zstd1 => {
-                let mut out = Vec::with_capacity(self.len);
-                self.for_each_u32(|x| out.push(x))?;
+                // Bulk decompress directly into Vec<u32> storage, avoiding
+                // both a streaming loop and a transient Vec<u8> intermediate.
+                // The zstd::bulk API decompresses in one ZSTD_decompress call,
+                // eliminating ~32K stream-read round-trips for a 2GB array.
+                // Safety: Vec<u32> has alignment 4; we cast its backing storage
+                // to &mut [u8] for zstd, which writes the same LE bytes that
+                // zstd_compress_u32_le encoded. On LE platforms (x86_64) the
+                // resulting u32 values are correct without any byte-swap.
+                let mut out = vec![0u32; self.len];
+                let out_bytes: &mut [u8] = unsafe {
+                    std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, self.len * 4)
+                };
+                let written = zstd::bulk::decompress_to_buffer(&self.blob, out_bytes)
+                    .map_err(io::Error::other)?;
+                if written != self.len * 4 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "zstd restore: expected {} bytes, got {}",
+                            self.len * 4,
+                            written
+                        ),
+                    ));
+                }
                 Ok(out)
             }
         }
