@@ -2286,6 +2286,10 @@ fn build_system_overview(
     let mut shallow_total: Vec<u64> = vec![0; class_count];
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut max_shallow: Vec<u64> = vec![0; class_count];
+    // Highest-retained reachable object per raw class index (keyed by ci_raw,
+    // not remapped). Built during the fused loop; replaces the second O(n)
+    // scan in the root_path block below. (u32::MAX, 0) = no object seen yet.
+    let mut best_obj_per_ci: Vec<(u32, u64)> = vec![(u32::MAX, 0); class_count];
     // Per-class incoming reference count, remapped like the other per-class tallies.
     let mut incoming_ref: Vec<u64> = vec![0; class_count];
     for (ci_raw, &cnt) in g.incoming_refs_per_class.iter().enumerate() {
@@ -2345,8 +2349,13 @@ fn build_system_overview(
                 if sh > max_shallow[ci] {
                     max_shallow[ci] = sh;
                 }
+                let ret_i = g.retained[i];
                 if !g.has_same_class_ancestor.get(i) {
-                    class_retained[ci] += g.retained[i];
+                    class_retained[ci] += ret_i;
+                }
+                // Track highest-retained object per raw class (for root_path).
+                if ret_i > best_obj_per_ci[ci_raw].1 {
+                    best_obj_per_ci[ci_raw] = (i as u32, ret_i);
                 }
             }
             // Class object: add its retained to the represented class row,
@@ -2615,38 +2624,13 @@ fn build_system_overview(
         })
         .collect();
 
-    // Populate root_path for all histogram rows by retained heap.
     // Populate root_path for the top-20 histogram rows by retained heap.
-    // Single O(n) scan to find the highest-retained object per class, then
-    // walk the dominator chain for the top-20 rows only.
+    // best_obj_per_ci was built during the fused loop above — no second O(n)
+    // scan needed.
     if !g.idom.is_empty() && !g.retained.is_empty() {
         const HIST_ROOT_PATH_DEPTH: usize = 30;
 
         let top_count = histogram.len().min(hist_root_path_top);
-
-        // Collect the class indices we care about (top-20 by retained).
-        let top_class_indices: std::collections::HashSet<u32> =
-            order[..top_count].iter().map(|&ci| ci as u32).collect();
-
-        // Single O(n) scan: for each object, if its class is in top-20, update best.
-        // best_per_ci: class_index → (obj_index, retained)
-        let undef_idom = u32::MAX;
-        let mut best_per_ci: std::collections::HashMap<u32, (usize, u64)> =
-            std::collections::HashMap::new();
-        for i in 0..n {
-            let ci = g.class_idx.get(i).copied().unwrap_or(u32::MAX);
-            if !top_class_indices.contains(&ci) {
-                continue;
-            }
-            if g.idom.get(i).copied().unwrap_or(undef_idom) == undef_idom {
-                continue;
-            }
-            let ret = g.retained.get(i).copied().unwrap_or(0);
-            let entry = best_per_ci.entry(ci).or_insert((i, ret));
-            if ret > entry.1 {
-                *entry = (i, ret);
-            }
-        }
 
         // Build GC-root type map.
         let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
@@ -2660,13 +2644,18 @@ fn build_system_overview(
         let vroot = n as u32;
 
         for hist_pos in 0..top_count {
-            let ci = order[hist_pos] as u32;
-            let Some(&(start_obj, _)) = best_per_ci.get(&ci) else {
-                continue;
+            let ci = order[hist_pos];
+            let (start_obj, _) = if ci < best_obj_per_ci.len() {
+                best_obj_per_ci[ci]
+            } else {
+                (u32::MAX, 0)
             };
+            if start_obj == u32::MAX {
+                continue;
+            }
 
             let mut chain: Vec<RootPathStep> = Vec::new();
-            let mut cur = start_obj as u32;
+            let mut cur = start_obj;
             for _ in 0..HIST_ROOT_PATH_DEPTH {
                 let cur_usize = cur as usize;
                 if cur_usize >= n {
@@ -2696,8 +2685,8 @@ fn build_system_overview(
                 if root_label.is_some() {
                     break;
                 }
-                let parent = g.idom.get(cur_usize).copied().unwrap_or(undef_idom);
-                if parent == undef_idom || parent == vroot || parent == cur {
+                let parent = g.idom.get(cur_usize).copied().unwrap_or(u32::MAX);
+                if parent == u32::MAX || parent == vroot || parent == cur {
                     break;
                 }
                 cur = parent;
