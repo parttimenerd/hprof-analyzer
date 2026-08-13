@@ -378,15 +378,24 @@ impl Pass2 {
         // again until the retained/report phases. Freeing their ~2 GB dense Vecs
         // here removes ~2 GB from the 2a-scan binding peak (previously class_idx
         // was freed only after the degree arrays were already live).
-        let class_idx_c = if compress != crate::cvec::Codec::None {
-            let c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
+        // Use Zstd1 on native builds: faster compress+decompress than Deflate1.
+        #[cfg(feature = "native")]
+        let cold_codec = if compress != crate::cvec::Codec::None {
+            crate::cvec::Codec::Zstd1
+        } else {
+            crate::cvec::Codec::None
+        };
+        #[cfg(not(feature = "native"))]
+        let cold_codec = compress;
+        let class_idx_c = if cold_codec != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&class_idx, cold_codec)?;
             class_idx = Vec::new();
             c
         } else {
             crate::cvec::CompressedU32::compress(&class_idx, crate::cvec::Codec::None)?
         };
-        let alloc_serial_c = if compress != crate::cvec::Codec::None {
-            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, compress)?;
+        let alloc_serial_c = if cold_codec != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, cold_codec)?;
             p1.alloc_stack_serial = Vec::new();
             Some(c)
         } else {
@@ -1209,8 +1218,8 @@ impl Pass2 {
 
         // Compress shallow NOW, before fwd_targets (~6GB) is allocated.
         // class_idx and alloc_serial were already compressed before the 2a scan.
-        let shallow_c = crate::cvec::CompressedU32::compress(&shallow, compress)?;
-        if compress != crate::cvec::Codec::None {
+        let shallow_c = crate::cvec::CompressedU32::compress(&shallow, cold_codec)?;
+        if cold_codec != crate::cvec::Codec::None {
             crate::trace::drop_vec(shallow);
             shallow = Vec::new();
         }
@@ -1219,8 +1228,8 @@ impl Pass2 {
         // drops ~1.8 GB from the fwd-fill peak. Restored after the fwd fill for
         // the prefix-sum that builds in_cursors. Delta + zstd is very effective
         // on monotonically-constrained data (counts of edges per node).
-        let in_degree_c = if compress != crate::cvec::Codec::None {
-            let c = crate::cvec::CompressedU32::compress(&in_degree, compress)?;
+        let in_degree_c = if cold_codec != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&in_degree, cold_codec)?;
             crate::trace::drop_vec(in_degree);
             in_degree = Vec::new();
             Some(c)
