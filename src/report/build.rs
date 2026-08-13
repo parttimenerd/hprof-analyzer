@@ -190,75 +190,60 @@ fn build_obj_graph_flat(
     // histogram. O(n) time, one u32 per object (160 MB at n=40M).
     {
         const TOP_K: usize = 10;
-        const NO_SIG: u32 = u32::MAX;
 
-        // BFS from vroot level-by-level to assign nearest_sig.
-        let mut nearest_sig = vec![NO_SIG; n + 1]; // +1 for vroot slot
-        // vroot itself has no significant parent.
-        nearest_sig[n] = NO_SIG;
-
-        // BFS queue: process nodes in BFS order so parent nearest_sig is set
-        // before children.
-        let mut bfs: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
-        // Start from vroot's children.
-        let vroot_usize = vroot as usize;
-        if vroot_usize + 1 < dc_offsets.len() {
-            for &child in
-                &dc_targets[dc_offsets[vroot_usize] as usize..dc_offsets[vroot_usize + 1] as usize]
-            {
-                bfs.push_back(child);
-            }
-        }
-        while let Some(node) = bfs.pop_front() {
-            let node_usize = node as usize;
-            // Determine nearest_sig for this node.
-            let parent_sig = if node_usize + 1 < dc_offsets.len() {
-                // Find parent via idom (g.idom[node] is the immediate dominator).
-                let par = if node_usize < g.idom.len() {
-                    g.idom[node_usize]
-                } else {
-                    vroot
-                };
-                if par as usize <= n {
-                    nearest_sig[par as usize]
-                } else {
-                    NO_SIG
-                }
-            } else {
-                NO_SIG
-            };
-            nearest_sig[node_usize] = if nodes.contains_key(&node) {
-                node
-            } else {
-                parent_sig
-            };
-            // Enqueue children.
-            if node_usize + 1 < dc_offsets.len() {
-                for &child in &dc_targets
-                    [dc_offsets[node_usize] as usize..dc_offsets[node_usize + 1] as usize]
-                {
-                    bfs.push_back(child);
-                }
-            }
-        }
-
-        // Single pass: accumulate (class, shallow) for each object into its
-        // nearest significant ancestor's histogram.
+        // Subtree-class histogram: for each significant node, accumulate (class, shallow)
+        // of all objects in its dominated subtree, stopping at nested significant nodes
+        // (they handle their own subtrees).
+        //
+        // Algorithm: pruned DFS from each significant node through the dom-children CSR.
+        // The DFS stops when it reaches another significant node (that node's subtree is
+        // accounted for separately).  Total work = O(n) since each object is visited
+        // exactly once.  Avoids the 2 GB nearest_sig array and the 1.3 GB BFS queue
+        // that the prior BFS-fill approach used.
         type ClassMap = std::collections::HashMap<u32, (u32, u64)>;
         let mut histograms: HashMap<u32, ClassMap> = HashMap::with_capacity(nodes.len());
-        for i in 0..n {
-            let sig = nearest_sig[i];
-            if sig == NO_SIG {
-                continue;
+        // Reusable DFS stack (cleared between significant nodes).
+        let mut dfs: Vec<u32> = Vec::new();
+        for &sig_node in nodes.keys() {
+            let hm = histograms.entry(sig_node).or_default();
+            // Accumulate sig_node itself.
+            if (sig_node as usize) < g.class_idx.len() {
+                let ci = g.class_idx[sig_node as usize];
+                let sh = g.shallow.get(sig_node as usize).copied().unwrap_or(0) as u64;
+                let e = hm.entry(ci).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += sh;
             }
-            let ci = g.class_idx.get(i).copied().unwrap_or(0);
-            let sh = g.shallow.get(i).copied().unwrap_or(0) as u64;
-            let hm = histograms.entry(sig).or_default();
-            let e = hm.entry(ci).or_insert((0, 0));
-            e.0 += 1;
-            e.1 += sh;
+            // DFS through dom children, pruning at nested significant nodes.
+            let sn = sig_node as usize;
+            if sn + 1 < dc_offsets.len() {
+                for &child in &dc_targets[dc_offsets[sn] as usize..dc_offsets[sn + 1] as usize] {
+                    if !nodes.contains_key(&child) {
+                        dfs.push(child);
+                    }
+                    // If child is itself significant, skip (it handles its own subtree).
+                }
+            }
+            while let Some(node) = dfs.pop() {
+                let idx = node as usize;
+                if idx < g.class_idx.len() {
+                    let ci = g.class_idx[idx];
+                    let sh = g.shallow.get(idx).copied().unwrap_or(0) as u64;
+                    let e = hm.entry(ci).or_insert((0, 0));
+                    e.0 += 1;
+                    e.1 += sh;
+                }
+                if idx + 1 < dc_offsets.len() {
+                    for &child in
+                        &dc_targets[dc_offsets[idx] as usize..dc_offsets[idx + 1] as usize]
+                    {
+                        if !nodes.contains_key(&child) {
+                            dfs.push(child);
+                        }
+                    }
+                }
+            }
         }
-        drop(nearest_sig);
 
         // Extract top-K for each significant node.
         for (&node, node_entry) in nodes.iter_mut() {
