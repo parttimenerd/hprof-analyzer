@@ -3211,35 +3211,33 @@ pub(crate) fn build_leak_suspects(
     let mut suspects: Vec<RawSuspect> = Vec::new();
     let mut single_class_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    // Phase 1: single objects directly dominated by vroot with retained >= threshold
-    for &i in dom_children(n) {
-        let idx = i as usize;
-        if g.retained[idx] >= threshold {
-            let ci = g.class_idx[idx] as usize;
-            single_class_set.insert(ci);
-            suspects.push(RawSuspect {
-                is_single: true,
-                obj_idx: i,
-                class_idx: ci,
-                instance_count: 1,
-                retained: g.retained[idx],
-                shallow: g.shallow[idx] as u64,
-            });
-        }
-    }
-
-    // Phase 2: class groups of top-level dominators
+    // Fused pass: single suspects (Phase 1) + class-group accumulators (Phase 2)
+    // in one sweep over dom_children(n) = ~329M top-level dominators, reading
+    // retained/class_idx/shallow once instead of twice.
     let class_count = g.class_names.len();
     let mut group_retained: Vec<u64> = vec![0; class_count];
     let mut group_count: Vec<u64> = vec![0; class_count];
     let mut group_shallow: Vec<u64> = vec![0; class_count];
     for &i in dom_children(n) {
         let idx = i as usize;
+        let ret = g.retained[idx];
         let ci = g.class_idx[idx] as usize;
+        let sh = g.shallow[idx] as u64;
+        if ret >= threshold {
+            single_class_set.insert(ci);
+            suspects.push(RawSuspect {
+                is_single: true,
+                obj_idx: i,
+                class_idx: ci,
+                instance_count: 1,
+                retained: ret,
+                shallow: sh,
+            });
+        }
         if ci < class_count {
-            group_retained[ci] += g.retained[idx];
+            group_retained[ci] += ret;
             group_count[ci] += 1;
-            group_shallow[ci] += g.shallow[idx] as u64;
+            group_shallow[ci] += sh;
         }
     }
     for ci in 0..class_count {
