@@ -16,9 +16,9 @@ pub enum Codec {
     /// deflate at level 1 (flate2 Compression::fast()). Moderate RSS savings, fast.
     /// Same wire format as Deflate9 — same decompressor, just lower compression ratio.
     Deflate1,
-    /// zstd at level 1. Only valid for `IdMap::compress`/`from_compressed`; not
-    /// implemented for `CompressedU32`/`CompressedU64`/`CompressedBytes`. Much faster
-    /// than Deflate1 (~5x) on sorted delta-vbyte streams.
+    /// zstd at level 1. Valid for `IdMap::compress`/`from_compressed` and
+    /// `CompressedU32::compress`/`restore`. Much faster than Deflate1 (~5-10x)
+    /// on large arrays; not implemented for `CompressedU64`/`CompressedBytes`.
     #[cfg(feature = "native")]
     Zstd1,
 }
@@ -64,6 +64,23 @@ fn deflate_compress_u32_le(v: &[u32], level: flate2::Compression) -> io::Result<
         e.write_all(&buf[..nbytes])?;
     }
     e.finish()
+}
+
+/// Compress a `u32` slice as LE bytes using zstd level 1, streaming in 64 KiB
+/// chunks to avoid a full-size intermediate. ~5-10x faster than Deflate1 on
+/// the RPO parent_pre array (~2 GB). Native builds only.
+#[cfg(feature = "native")]
+fn zstd_compress_u32_le(v: &[u32]) -> io::Result<Vec<u8>> {
+    let mut enc = zstd::stream::write::Encoder::new(Vec::new(), 1).map_err(io::Error::other)?;
+    let mut buf = [0u8; 16384 * 4];
+    for chunk in v.chunks(16384) {
+        let nbytes = chunk.len() * 4;
+        for (i, &x) in chunk.iter().enumerate() {
+            buf[i * 4..i * 4 + 4].copy_from_slice(&x.to_le_bytes());
+        }
+        enc.write_all(&buf[..nbytes])?;
+    }
+    enc.finish()
 }
 
 fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
@@ -117,7 +134,15 @@ impl CompressedU32 {
                 })
             }
             #[cfg(feature = "native")]
-            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
+            Codec::Zstd1 => {
+                let blob = zstd_compress_u32_le(v)?;
+                Ok(Self {
+                    codec: Codec::Zstd1,
+                    blob,
+                    raw: Vec::new(),
+                    len,
+                })
+            }
         }
     }
 
@@ -133,7 +158,11 @@ impl CompressedU32 {
                 Ok(out)
             }
             #[cfg(feature = "native")]
-            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
+            Codec::Zstd1 => {
+                let mut out = Vec::with_capacity(self.len);
+                self.for_each_u32(|x| out.push(x))?;
+                Ok(out)
+            }
         }
     }
 
@@ -152,7 +181,7 @@ impl CompressedU32 {
                 stream_u32s(flate2::read::DeflateDecoder::new(&self.blob[..]), &mut f)
             }
             #[cfg(feature = "native")]
-            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
+            Codec::Zstd1 => stream_u32s(zstd::stream::Decoder::new(&self.blob[..])?, &mut f),
         }
     }
 
@@ -174,7 +203,17 @@ impl CompressedU32 {
                 Ok(found)
             }
             #[cfg(feature = "native")]
-            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
+            Codec::Zstd1 => {
+                let mut cur = 0usize;
+                let mut found = None;
+                self.for_each_u32(|x| {
+                    if cur == target_idx {
+                        found = Some(x);
+                    }
+                    cur += 1;
+                })?;
+                Ok(found)
+            }
         }
     }
 
@@ -202,18 +241,28 @@ impl CompressedU32 {
                 Ok(result)
             }
             #[cfg(feature = "native")]
-            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
+            Codec::Zstd1 => {
+                let mut result = Vec::with_capacity(end - start);
+                let mut i = 0usize;
+                self.for_each_u32(|x| {
+                    if i >= start && i < end {
+                        result.push(x);
+                    }
+                    i += 1;
+                })?;
+                Ok(result)
+            }
         }
     }
 
-    /// Bytes currently held (blob for Deflate9, raw*4 for None).
+    /// Bytes currently held (blob for Deflate9/Zstd1, raw*4 for None).
     #[allow(dead_code)]
     pub fn held_bytes(&self) -> usize {
         match self.codec {
             Codec::None => self.raw.len() * 4,
             Codec::Deflate9 | Codec::Deflate1 => self.blob.len(),
             #[cfg(feature = "native")]
-            Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedU32"),
+            Codec::Zstd1 => self.blob.len(),
         }
     }
 }
@@ -490,6 +539,27 @@ mod tests {
             let c = CompressedU32::compress(&v, Codec::Deflate9).unwrap();
             assert_eq!(c.restore().unwrap(), v, "roundtrip failed at n={n}");
         }
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn roundtrip_zstd1_compressed_u32() {
+        let mut v: Vec<u32> = Vec::with_capacity(50_000);
+        let mut state = 0xdeadbeef_u32;
+        for _ in 0..50_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            v.push(state);
+        }
+        v.extend_from_slice(&[0, u32::MAX, 1, 42]);
+        let c = CompressedU32::compress(&v, Codec::Zstd1).unwrap();
+        assert_eq!(c.restore().unwrap(), v);
+        // zstd may not compress small random inputs below raw size; just verify roundtrip.
+        let _ = c.held_bytes(); // must not panic
+        let mut got: Vec<u32> = Vec::with_capacity(v.len());
+        c.for_each_u32(|x| got.push(x)).unwrap();
+        assert_eq!(got, v);
     }
 
     #[test]

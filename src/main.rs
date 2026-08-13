@@ -1092,7 +1092,11 @@ fn analyze_to_report_inner(
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
-        let c = cvec::CompressedU32::compress(&rpo.parent_pre, cvec::Codec::Deflate1)?;
+        #[cfg(feature = "native")]
+        let parent_pre_codec = cvec::Codec::Zstd1;
+        #[cfg(not(feature = "native"))]
+        let parent_pre_codec = cvec::Codec::Deflate1;
+        let c = cvec::CompressedU32::compress(&rpo.parent_pre, parent_pre_codec)?;
         crate::trace::drop_vec(std::mem::take(&mut rpo.parent_pre));
         Some(c)
     } else {
@@ -2322,6 +2326,7 @@ fn run(
         &format!("pass2 n={}", g.n),
         t.elapsed().as_secs_f64(),
     );
+    t_dark!("pass2 done");
 
     // Take the per-slot source-index sidecar out of the query state now, before it
     // is consumed by `resume` far below. It is populated only when the scan armed
@@ -2417,7 +2422,11 @@ fn run(
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
-        let c = cvec::CompressedU32::compress(&rpo.parent_pre, cvec::Codec::Deflate1)?;
+        #[cfg(feature = "native")]
+        let parent_pre_codec = cvec::Codec::Zstd1;
+        #[cfg(not(feature = "native"))]
+        let parent_pre_codec = cvec::Codec::Deflate1;
+        let c = cvec::CompressedU32::compress(&rpo.parent_pre, parent_pre_codec)?;
         crate::trace::drop_vec(std::mem::take(&mut rpo.parent_pre));
         Some(c)
     } else {
