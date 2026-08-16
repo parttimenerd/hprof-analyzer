@@ -71,15 +71,14 @@ fn deflate_compress_u32_le(v: &[u32], level: flate2::Compression) -> io::Result<
 /// the RPO parent_pre array (~2 GB). Native builds only.
 #[cfg(feature = "native")]
 fn zstd_compress_u32_le(v: &[u32]) -> io::Result<Vec<u8>> {
+    // On LE platforms (x86_64), u32 is already stored as 4 LE bytes in memory
+    // — reinterpret directly as &[u8] to feed the encoder without copying.
+    // Mirrors the inverse cast in CompressedU32::restore (Zstd1 path).
+    #[cfg(not(target_endian = "little"))]
+    compile_error!("zstd_compress_u32_le assumes little-endian byte order");
+    let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) };
     let mut enc = zstd::stream::write::Encoder::new(Vec::new(), 1).map_err(io::Error::other)?;
-    let mut buf = [0u8; 16384 * 4];
-    for chunk in v.chunks(16384) {
-        let nbytes = chunk.len() * 4;
-        for (i, &x) in chunk.iter().enumerate() {
-            buf[i * 4..i * 4 + 4].copy_from_slice(&x.to_le_bytes());
-        }
-        enc.write_all(&buf[..nbytes])?;
-    }
+    enc.write_all(bytes)?;
     enc.finish()
 }
 
