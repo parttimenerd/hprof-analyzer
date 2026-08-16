@@ -971,25 +971,23 @@ impl Pass2 {
         )?;
         t_phase!("thread_names done");
 
-        // Opt-in approximate duplicate-java.lang.String report. Runs extra
-        // full-file scans and keeps only hashes+lengths+counts (never the
-        // decoded bytes), so RSS stays bounded. Must run while class_map/strings
-        // are still alive (freed just below). `None` on the default path = zero
-        // extra work, zero RSS. Pass D (holder ref-counting) is DEFERRED: the
-        // resolver returns the String-instance address set, and we fold the
-        // per-instance ref-count into the 2b forward-CSR fill below (like the
-        // boxed fold), eliminating a dedicated full-file scan.
-        let (mut dup_strings, string_addrs): (Option<DupStrings>, std::collections::HashSet<u64>) =
-            if opts.find_duplicates {
-                let (ds, addrs) = resolve_duplicate_strings(
-                    &open,
-                    &p1,
-                    std::mem::take(&mut captured_string_instances),
-                )?;
-                (Some(ds), addrs)
-            } else {
-                (None, std::collections::HashSet::new())
-            };
+        // Opt-in approximate duplicate-java.lang.String report.  Pass A was
+        // folded into the 2a scan; Pass B (backing-array hash) is now folded
+        // into the 2b forward-CSR fill below (no separate full-file scan).
+        // Pass D (holder ref-counting) is also folded into 2b.  `None` on the
+        // default path = zero extra work, zero RSS.
+        let mut dup_string_collector: Option<DupStringPassB> = if opts.find_duplicates {
+            prepare_dup_strings(std::mem::take(&mut captured_string_instances))
+        } else {
+            None
+        };
+        // Extract string_addrs from the collector before the 2b fill so we can
+        // pass &string_addrs to fill_heap_2b without conflicting with the &mut
+        // collector borrow. On the non-dup path an empty set is used (zero cost).
+        let string_addrs: std::collections::HashSet<u64> = dup_string_collector
+            .as_mut()
+            .map(|c| std::mem::take(&mut c.string_addrs))
+            .unwrap_or_default();
         t_phase!("dup_strings done");
 
         // Duplicate-primitive-array waste: collector was fed inline during the
@@ -1023,9 +1021,8 @@ impl Pass2 {
 
         // Opt-in String-holder counting (dup_strings Pass D), folded into the 2b
         // fill: owning class address → count of object-field refs to a String
-        // instance. `string_addrs` (from resolve_duplicate_strings) must stay
-        // alive until the 2b scan; the ranked holder list is built afterwards
-        // (finalize_string_holders) and attached to dup_strings.
+        // instance. string_addrs lives inside dup_string_collector; accessed via
+        // reference during the fill. Ranked holder list built after 2b.
         let mut string_holder_counts: HashMap<u64, u64> = HashMap::new();
 
         // Opt-in dup-array-holder counting (folded from compute_dup_array_holders,
@@ -1305,6 +1302,7 @@ impl Pass2 {
                         &mut string_holder_counts,
                         &dup_addrs,
                         &mut dup_array_holder_counts,
+                        dup_string_collector.as_mut(),
                     ),
                     tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
                     _ => r.skip(length),
@@ -1366,6 +1364,19 @@ impl Pass2 {
 
         // Precompute source_name before moving p1.id_map into InboundBuilder.
         let source_name = source.display_name().to_string();
+
+        // Convert dup_string_collector into DupStrings now that the 2b fill has
+        // populated arr_hash for every backing array.  Pass C (winner text recovery)
+        // runs a small targeted scan over only the top-N arrays; string_addrs was
+        // already extracted above and is no longer needed.
+        let mut dup_strings: Option<DupStrings> = if let Some(col) = dup_string_collector {
+            t_phase!("dup_strings pass_b finish start");
+            let ds = col.finish(&p1, &open)?;
+            t_phase!("dup_strings pass_b finish done");
+            Some(ds)
+        } else {
+            None
+        };
 
         let alloc_stack_serial = std::mem::take(&mut p1.alloc_stack_serial);
         let mut gc_root_tag_counts: Vec<(u8, u64)> = p1
@@ -1925,6 +1936,7 @@ impl Pass2 {
         string_holder_counts: &mut HashMap<u64, u64>,
         dup_addrs: &std::collections::HashSet<u64>,
         dup_array_holder_counts: &mut HashMap<u64, u64>,
+        mut dup_string_collector: Option<&mut DupStringPassB>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -2155,7 +2167,7 @@ impl Pass2 {
                 }
 
                 heap::PRIM_ARRAY_DUMP => {
-                    let _addr = try_read!(r.id());
+                    let addr = try_read!(r.id());
                     try_read!(r.skip(4));
                     let count = try_read!(r.u4()) as u64;
                     let elem_type = try_read!(r.u1());
@@ -2163,8 +2175,19 @@ impl Pass2 {
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
                     let byte_len = count.saturating_mul(esz);
-                    try_read!(r.skip(byte_len));
                     checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
+                    // Pass B folded in: if this array backs a java.lang.String,
+                    // read its bytes and hash them inline (no separate file scan).
+                    if let Some(ref mut col) = dup_string_collector {
+                        if col.arr_coder.contains_key(&addr) {
+                            try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
+                            col.on_prim_array(addr, scratch);
+                        } else {
+                            try_read!(r.skip(byte_len));
+                        }
+                    } else {
+                        try_read!(r.skip(byte_len));
+                    }
                     // No object edges from prim arrays
                 }
                 other => {

@@ -1323,6 +1323,7 @@ impl InboundBuilder {
                             &mut std::collections::HashMap::new(),
                             &std::collections::HashSet::new(),
                             &mut std::collections::HashMap::new(),
+                            None, // dup_string_collector: inbound pass skips Pass B
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,

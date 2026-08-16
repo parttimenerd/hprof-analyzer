@@ -16,6 +16,291 @@ use super::{
     StringHolder, field_offset, scan_prim_arrays, skip_class_dump, sub_remaining,
 };
 
+/// Intermediate state for dup-strings Pass B, populated inline during the 2b
+/// forward-CSR fill instead of running a separate `scan_prim_arrays` pass.
+/// Call `on_prim_array` for each PRIM_ARRAY_DUMP encountered in the 2b scan,
+/// then `finish` to produce the final `DupStrings`.
+pub(crate) struct DupStringPassB {
+    /// arr_addr → coder (first-seen per backing array).
+    pub(crate) arr_coder: HashMap<u64, u8>,
+    /// arr_addr → (value_hash, decoded_len) — populated by `on_prim_array`.
+    pub(crate) arr_hash: HashMap<u64, (u64, u32)>,
+    /// #15 char[]/byte[] waste counters.
+    arrays_examined: u64,
+    wasteful_arrays: u64,
+    total_wasted_bytes: u64,
+    /// Bounded min-heap: (wasted, capacity, used, arr_addr). Reverse so the
+    /// smallest-wasted is at the top (cheapest to evict when over capacity).
+    waste_heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, u64, u64, u64)>>,
+    /// Per-instance list (arr_addr, coder) — needed for the Fold step.
+    pub(crate) per_instance: Vec<(u64, u8)>,
+    /// Every java.lang.String instance address (for Pass D holder counting).
+    pub(crate) string_addrs: std::collections::HashSet<u64>,
+    pub(crate) total_string_instances: u64,
+}
+
+impl DupStringPassB {
+    /// Process one PRIM_ARRAY_DUMP seen during the 2b fill.  Only acts when
+    /// `addr` is in `arr_coder`; otherwise returns immediately (no work).
+    pub(crate) fn on_prim_array(&mut self, addr: u64, bytes: &[u8]) {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let coder = match self.arr_coder.get(&addr).copied() {
+            Some(c) => c,
+            None => return, // not a String backing array
+        };
+        let decoded = decode_java_string(bytes, coder);
+        let mut h = DefaultHasher::new();
+        decoded.hash(&mut h);
+        let hv = h.finish();
+        let len = decoded.len() as u32;
+        self.arr_hash.insert(addr, (hv, len));
+
+        // #15 waste bookkeeping (bounded top-K).
+        self.arrays_examined += 1;
+        let capacity_bytes = bytes.len() as u64;
+        let used_bytes = decoded.len() as u64;
+        let wasted = capacity_bytes.saturating_sub(used_bytes);
+        if wasted > 0 {
+            self.wasteful_arrays += 1;
+            self.total_wasted_bytes += wasted;
+            self.waste_heap.push(std::cmp::Reverse((
+                wasted,
+                capacity_bytes,
+                used_bytes,
+                addr,
+            )));
+            if self.waste_heap.len() > CHAR_ARRAY_WASTE_TOP {
+                self.waste_heap.pop();
+            }
+        }
+    }
+
+    /// Finish Pass B state into a `DupStrings`.  Runs the Fold, summary stats,
+    /// ranking, and Pass C (winners-only text recovery).  Equivalent to the
+    /// tail of the old `resolve_duplicate_strings` after the `scan_prim_arrays`
+    /// call.  `p1` is needed only for `id_map` (waste row addr→dense-idx).
+    pub(crate) fn finish<O>(self, p1: &Pass1, open: O) -> io::Result<DupStrings>
+    where
+        O: Fn() -> io::Result<HprofReader>,
+    {
+        use std::collections::HashSet;
+
+        let DupStringPassB {
+            arr_coder,
+            arr_hash,
+            arrays_examined,
+            wasteful_arrays,
+            total_wasted_bytes,
+            waste_heap,
+            per_instance,
+            string_addrs: _,
+            total_string_instances,
+        } = self;
+
+        let id_size = p1.id_size;
+
+        // Materialize char_array_waste from the bounded heap.
+        let char_array_waste: Option<CharArrayWaste> = if arrays_examined == 0 {
+            None
+        } else {
+            let mut rows: Vec<CharArrayWasteRow> = waste_heap
+                .into_iter()
+                .map(
+                    |std::cmp::Reverse((wasted, capacity_bytes, used_bytes, arr_addr))| {
+                        let array_obj_1based =
+                            p1.id_map.index_of(arr_addr).map(|i| i + 1).unwrap_or(0);
+                        CharArrayWasteRow {
+                            array_obj_1based,
+                            length: capacity_bytes,
+                            used: used_bytes,
+                            wasted_bytes: wasted,
+                        }
+                    },
+                )
+                .collect();
+            rows.sort_unstable_by(|a, b| {
+                b.wasted_bytes
+                    .cmp(&a.wasted_bytes)
+                    .then(a.array_obj_1based.cmp(&b.array_obj_1based))
+            });
+            rows.truncate(CHAR_ARRAY_WASTE_TOP);
+            Some(CharArrayWaste {
+                arrays_examined,
+                wasteful_arrays,
+                total_wasted_bytes,
+                top: rows,
+            })
+        };
+
+        // ── Fold: count per instance by its array's value hash ────────────────
+        let mut dup_map: HashMap<u64, (u32, u32)> = HashMap::new();
+        let mut hash_arr: HashMap<u64, u64> = HashMap::new();
+        for (arr_addr, _coder) in &per_instance {
+            let Some(&(hv, len)) = arr_hash.get(arr_addr) else {
+                continue;
+            };
+            let e = dup_map.entry(hv).or_insert((0, len));
+            e.0 = e.0.saturating_add(1);
+            hash_arr.entry(hv).or_insert(*arr_addr);
+        }
+        drop(per_instance);
+        drop(arr_hash);
+
+        // ── Summary + histogram ───────────────────────────────────────────────
+        let distinct_values = dup_map.len() as u64;
+        let mut duplicated_values: u64 = 0;
+        let mut approx_wasted_bytes: u64 = 0;
+        let mut len_buckets: std::collections::BTreeMap<u32, u64> =
+            std::collections::BTreeMap::new();
+        let mut lengths: Vec<u32> = Vec::with_capacity(dup_map.len());
+        let mut len_total: u64 = 0;
+        for &(count, len) in dup_map.values() {
+            if count > 1 {
+                duplicated_values += 1;
+                approx_wasted_bytes = approx_wasted_bytes
+                    .saturating_add((count as u64).saturating_sub(1).saturating_mul(len as u64));
+            }
+            let upper = len.checked_next_power_of_two().unwrap_or(u32::MAX).max(1);
+            *len_buckets.entry(upper).or_insert(0) += 1;
+            lengths.push(len);
+            len_total += len as u64;
+        }
+        let length_histogram: Vec<StrLenBucket> = len_buckets
+            .into_iter()
+            .map(|(upper_len, count)| StrLenBucket { upper_len, count })
+            .collect();
+        lengths.sort_unstable();
+        let length_stats = if lengths.is_empty() {
+            StrLenStats::default()
+        } else {
+            StrLenStats {
+                min: lengths[0],
+                max: lengths[lengths.len() - 1],
+                median: lengths[lengths.len() / 2],
+                total: len_total,
+            }
+        };
+
+        // ── Select top-N winners ──────────────────────────────────────────────
+        let mut ranked: Vec<(u64, u32, u32)> = dup_map
+            .iter()
+            .filter(|(_, (count, _))| *count > 1)
+            .map(|(&hv, &(count, len))| (hv, count, len))
+            .collect();
+        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        ranked.truncate(TOP_STRINGS_N);
+
+        let mut ranked_by_len: Vec<(u64, u32, u32)> = dup_map
+            .iter()
+            .map(|(&hv, &(count, len))| (hv, count, len))
+            .collect();
+        ranked_by_len.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+        ranked_by_len.truncate(TOP_STRINGS_BY_LEN);
+
+        let mut winner_arr_meta: HashMap<u64, (u64, u32, u32)> = HashMap::new();
+        for &(hv, count, len) in &ranked {
+            if let Some(&arr_addr) = hash_arr.get(&hv) {
+                winner_arr_meta.insert(arr_addr, (hv, count, len));
+            }
+        }
+        for &(hv, count, len) in &ranked_by_len {
+            if let Some(&arr_addr) = hash_arr.get(&hv) {
+                winner_arr_meta.insert(arr_addr, (hv, count, len));
+            }
+        }
+        drop(dup_map);
+        drop(hash_arr);
+
+        // ── Pass C: recover exact text for ≤N winners only ───────────────────
+        let mut hash_text: HashMap<u64, String> = HashMap::new();
+        if !winner_arr_meta.is_empty() {
+            let winner_arrays: HashSet<u64> = winner_arr_meta.keys().copied().collect();
+            scan_prim_arrays(&open, id_size, &winner_arrays, |addr, bytes| {
+                let Some(&(hv, _count, _len)) = winner_arr_meta.get(&addr) else {
+                    return;
+                };
+                let coder = arr_coder.get(&addr).copied().unwrap_or(1);
+                let mut decoded = decode_java_string(bytes, coder);
+                truncate_on_char_boundary(&mut decoded, MAX_STR_SAMPLE);
+                hash_text.insert(hv, decoded);
+            })?;
+        }
+        drop(arr_coder);
+
+        let top_duplicated: Vec<DupStringSample> = ranked
+            .iter()
+            .map(|&(hv, count, len)| DupStringSample {
+                text: hash_text.get(&hv).cloned().unwrap_or_default(),
+                count: count as u64,
+                len,
+                wasted_bytes: (count as u64).saturating_sub(1).saturating_mul(len as u64),
+            })
+            .collect();
+        let top_by_length: Vec<DupStringSample> = ranked_by_len
+            .iter()
+            .map(|&(hv, count, len)| DupStringSample {
+                text: hash_text.get(&hv).cloned().unwrap_or_default(),
+                count: count as u64,
+                len,
+                wasted_bytes: (count as u64).saturating_sub(1).saturating_mul(len as u64),
+            })
+            .collect();
+        drop(hash_text);
+
+        Ok(DupStrings {
+            distinct_values,
+            duplicated_values,
+            total_string_instances,
+            approx_wasted_bytes,
+            top_duplicated,
+            length_histogram,
+            length_stats,
+            top_string_holders: Vec::new(),
+            top_by_length,
+            char_array_waste,
+        })
+    }
+}
+
+/// Build a `DupStringPassB` collector from the triples captured during the 2a
+/// heap walk.  Pure computation — no file I/O.  The caller must then feed
+/// every PRIM_ARRAY_DUMP encountered in the 2b forward-CSR fill to
+/// `collector.on_prim_array`, and call `collector.finish` after the 2b scan
+/// to produce the final `DupStrings`.  Returns `None` (and an empty set) when
+/// `captured` is empty (no java.lang.String instances found).
+pub(crate) fn prepare_dup_strings(captured: Vec<(u64, u64, u8)>) -> Option<DupStringPassB> {
+    use std::collections::HashSet;
+
+    if captured.is_empty() {
+        return None;
+    }
+
+    let total_string_instances = captured.len() as u64;
+    let mut per_instance: Vec<(u64, u8)> = Vec::with_capacity(captured.len());
+    let mut arr_coder: HashMap<u64, u8> = HashMap::new();
+    let mut string_addrs: HashSet<u64> = HashSet::with_capacity(captured.len());
+
+    for (obj_addr, arr_addr, coder) in captured {
+        per_instance.push((arr_addr, coder));
+        arr_coder.entry(arr_addr).or_insert(coder);
+        string_addrs.insert(obj_addr);
+    }
+
+    Some(DupStringPassB {
+        arr_coder,
+        arr_hash: HashMap::new(),
+        arrays_examined: 0,
+        wasteful_arrays: 0,
+        total_wasted_bytes: 0,
+        waste_heap: std::collections::BinaryHeap::new(),
+        per_instance,
+        string_addrs,
+        total_string_instances,
+    })
+}
+
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
 /// RSS regardless of how long the dump's Strings are.
 pub(crate) const MAX_STR_SAMPLE: usize = 200;
@@ -185,315 +470,6 @@ pub(crate) fn string_class_info(p1: &Pass1) -> Option<(u64, usize, Option<usize>
         _ => None,
     };
     Some((string_class_id, value_off, coder_off))
-}
-
-/// Compute an approximate duplicate-`java.lang.String` report. Opt-in
-/// (`--find-duplicates`); adds up to four extra full-file scans. RSS stays bounded
-/// because decoded String bytes are NEVER retained wholesale — each value is
-/// hashed to 64 bits and only `(hash -> (count, len))` is kept; exact text is
-/// recovered for only the ≤N winners (each capped at `MAX_STR_SAMPLE` bytes).
-///
-/// Flow:
-///   Pass A (`scan_all_instances`): for EVERY INSTANCE_DUMP, a memoized
-///     per-class predicate decides whether the class is a `java.lang.String`
-///     class (via `field_offset(.,"value","java/lang/String",.)==Object`). For
-///     each String instance, read its backing-array ref + coder from the blob
-///     and record one `(arr_addr, coder)` entry per instance, its `arr_addr ->
-///     coder` (first-seen), and its own instance address into `string_addrs`.
-///   Pass B (`scan_prim_arrays`, ONE call over the wanted array-addr set):
-///     decode each DISTINCT array once, hash the decoded value, and store
-///     `arr_addr -> (value_hash, len)`. Bytes are dropped immediately.
-///   Fold: for each String INSTANCE (Pass-A list), look up its array's
-///     `(value_hash, len)` and bump `value_hash -> (count, len)`; also derive
-///     the length histogram/stats. The dedup unit is the String instance, while
-///     each array is decoded only once.
-///   Pass C (`scan_prim_arrays` over ≤N winners): recover exact truncated text
-///     for the most-duplicated values only.
-///   Pass D (`compute_string_holders`, `scan_all_instances`): credit each
-///     owning class for every object-field reference to a String instance.
-///
-/// `captured`: pre-captured `(obj_addr, arr_addr, coder)` triples collected
-/// during the 2a scan (replaces Pass A's `scan_all_instances`). When the 2a
-/// capture ran, `obj_addr` is the String instance address, `arr_addr` is the
-/// backing char[]/byte[] address (already filtered: never 0), and `coder` is
-/// 0 (UTF-8) / 1 (UTF-16) / fallback 1 for Java-8 char[].
-pub(crate) fn resolve_duplicate_strings<O>(
-    open: O,
-    p1: &Pass1,
-    captured: Vec<(u64, u64, u8)>,
-) -> io::Result<(DupStrings, std::collections::HashSet<u64>)>
-where
-    O: Fn() -> io::Result<HprofReader>,
-{
-    use std::collections::HashSet;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let id_size = p1.id_size;
-    let obj_ref_width = id_size as usize;
-    let _ = obj_ref_width; // used below in Pass B/C
-
-    // ── Pass A FOLDED INTO 2a ─────────────────────────────────────────────────
-    // Build per_instance / arr_coder / string_addrs from the pre-captured data
-    // collected during the 2a heap walk (no scan_all_instances needed here).
-    // One entry per String INSTANCE (duplicates of the same arr_addr allowed).
-    let mut per_instance: Vec<(u64, u8)> = Vec::with_capacity(captured.len());
-    // arr_addr → first-seen coder; also seeds the wanted set for Pass B.
-    let mut arr_coder: HashMap<u64, u8> = HashMap::new();
-    // Every java.lang.String instance address — bounded by #Strings * 8 bytes.
-    let mut string_addrs: HashSet<u64> = HashSet::with_capacity(captured.len());
-    let total_string_instances: u64 = captured.len() as u64;
-
-    for (obj_addr, arr_addr, coder) in captured {
-        per_instance.push((arr_addr, coder));
-        arr_coder.entry(arr_addr).or_insert(coder);
-        string_addrs.insert(obj_addr);
-    }
-
-    if per_instance.is_empty() {
-        return Ok((DupStrings::default(), std::collections::HashSet::new()));
-    }
-
-    // ── Pass B: decode each distinct backing array once → (hash, len) ────────
-    // Bytes are decoded, hashed, then DROPPED — only the 64-bit hash + length
-    // survive, so this is bounded by #distinct arrays regardless of dump size.
-    let wanted_arrays: HashSet<u64> = arr_coder.keys().copied().collect();
-    let mut arr_hash: HashMap<u64, (u64, u32)> = HashMap::new();
-    // ── #15 char[]/byte[] waste, captured HERE (only place raw capacity is
-    // visible). "used" = decoded byte length the String logically holds;
-    // "capacity" = raw backing-array byte size; "wasted" = capacity - used.
-    // Modern JDKs (7u6+ / compact strings 9+) usually size the array exactly,
-    // so this is commonly 0 — but Java-8 char[] slack and any decode shrink
-    // (e.g. a UTF-16BE array whose lossy-decoded UTF-8 is shorter) show up.
-    // Retained candidates are bounded to CHAR_ARRAY_WASTE_TOP via a min-heap
-    // keyed on wasted bytes (Reverse => smallest at top for cheap eviction),
-    // so RSS stays bounded even with millions of wasteful arrays.
-    let mut arrays_examined: u64 = 0;
-    let mut wasteful_arrays: u64 = 0;
-    let mut total_wasted_bytes: u64 = 0;
-    // Heap entry ordering: (wasted, capacity, used, arr_addr). arr_addr breaks
-    // ties deterministically; wrapped in Reverse so the *smallest* wasted is the
-    // heap root and is evicted first.
-    let mut waste_heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, u64, u64, u64)>> =
-        std::collections::BinaryHeap::new();
-    scan_prim_arrays(&open, id_size, &wanted_arrays, |addr, bytes| {
-        let coder = arr_coder.get(&addr).copied().unwrap_or(1);
-        let decoded = decode_java_string(bytes, coder);
-        let mut h = DefaultHasher::new();
-        decoded.hash(&mut h);
-        let hv = h.finish();
-        let len = decoded.len() as u32;
-        arr_hash.insert(addr, (hv, len));
-
-        // #15 waste bookkeeping (bounded top-K).
-        arrays_examined += 1;
-        let capacity_bytes = bytes.len() as u64;
-        let used_bytes = decoded.len() as u64;
-        let wasted = capacity_bytes.saturating_sub(used_bytes);
-        if wasted > 0 {
-            wasteful_arrays += 1;
-            total_wasted_bytes += wasted;
-            waste_heap.push(std::cmp::Reverse((
-                wasted,
-                capacity_bytes,
-                used_bytes,
-                addr,
-            )));
-            if waste_heap.len() > CHAR_ARRAY_WASTE_TOP {
-                waste_heap.pop(); // evict the smallest-wasted entry
-            }
-        }
-    })?;
-
-    // Materialize the #15 waste report from the bounded heap. Sort the retained
-    // candidates by wasted DESC, tie-break array_obj_1based ASC (total order).
-    let char_array_waste: Option<CharArrayWaste> = if arrays_examined == 0 {
-        None
-    } else {
-        let mut rows: Vec<CharArrayWasteRow> = waste_heap
-            .into_iter()
-            .map(
-                |std::cmp::Reverse((wasted, capacity_bytes, used_bytes, arr_addr))| {
-                    // Dense 1-based object index; 0 if the addr somehow isn't mapped.
-                    let array_obj_1based = p1.id_map.index_of(arr_addr).map(|i| i + 1).unwrap_or(0);
-                    CharArrayWasteRow {
-                        array_obj_1based,
-                        length: capacity_bytes,
-                        used: used_bytes,
-                        wasted_bytes: wasted,
-                    }
-                },
-            )
-            .collect();
-        rows.sort_unstable_by(|a, b| {
-            b.wasted_bytes
-                .cmp(&a.wasted_bytes)
-                .then(a.array_obj_1based.cmp(&b.array_obj_1based))
-        });
-        rows.truncate(CHAR_ARRAY_WASTE_TOP);
-        Some(CharArrayWaste {
-            arrays_examined,
-            wasteful_arrays,
-            total_wasted_bytes,
-            top: rows,
-        })
-    };
-    // ── Fold: count per String INSTANCE by its array's value hash ────────────
-    // dup_map: value_hash -> (count, len). hash_arr: value_hash -> one
-    // representative array address (for later exact-text recovery of winners).
-    let mut dup_map: HashMap<u64, (u32, u32)> = HashMap::new();
-    let mut hash_arr: HashMap<u64, u64> = HashMap::new();
-    for (arr_addr, _coder) in &per_instance {
-        let Some(&(hv, len)) = arr_hash.get(arr_addr) else {
-            continue;
-        };
-        let e = dup_map.entry(hv).or_insert((0, len));
-        e.0 = e.0.saturating_add(1);
-        hash_arr.entry(hv).or_insert(*arr_addr);
-    }
-    // Free the transient per-instance/per-array structures now that folding is
-    // done. `arr_coder` is still needed for the winners' text-recovery pass.
-    drop(per_instance);
-    drop(arr_hash);
-
-    // ── Summary + length histogram + length stats over DISTINCT values ───────
-    let distinct_values = dup_map.len() as u64;
-    let mut duplicated_values: u64 = 0;
-    let mut approx_wasted_bytes: u64 = 0;
-    // Power-of-two length buckets keyed by upper bound; also collect lengths for
-    // min/max/median (bounded by #distinct values, already in RAM).
-    let mut len_buckets: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
-    let mut lengths: Vec<u32> = Vec::with_capacity(dup_map.len());
-    let mut len_total: u64 = 0;
-    for &(count, len) in dup_map.values() {
-        if count > 1 {
-            duplicated_values += 1;
-            approx_wasted_bytes = approx_wasted_bytes
-                .saturating_add((count as u64).saturating_sub(1).saturating_mul(len as u64));
-        }
-        let upper = len.checked_next_power_of_two().unwrap_or(u32::MAX).max(1);
-        *len_buckets.entry(upper).or_insert(0) += 1;
-        lengths.push(len);
-        len_total += len as u64;
-    }
-    let length_histogram: Vec<StrLenBucket> = len_buckets
-        .into_iter()
-        .map(|(upper_len, count)| StrLenBucket { upper_len, count })
-        .collect();
-    lengths.sort_unstable();
-    let length_stats = if lengths.is_empty() {
-        StrLenStats::default()
-    } else {
-        StrLenStats {
-            min: lengths[0],
-            max: lengths[lengths.len() - 1],
-            median: lengths[lengths.len() / 2],
-            total: len_total,
-        }
-    };
-
-    // ── Select top-N most-duplicated values (count desc, hash asc) ───────────
-    let mut ranked: Vec<(u64, u32, u32)> = dup_map
-        .iter()
-        .filter(|(_, (count, _))| *count > 1)
-        .map(|(&hv, &(count, len))| (hv, count, len))
-        .collect();
-    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    ranked.truncate(TOP_STRINGS_N);
-
-    // ── #5 Select the LONGEST distinct values (len desc, hash asc). Unlike the
-    // duplicate ranking this is NOT filtered by count>1 — the longest Strings
-    // are interesting even when unique. Captured here (before the drops below)
-    // so their representative arrays ride along in the single Pass-C scan.
-    let mut ranked_by_len: Vec<(u64, u32, u32)> = dup_map
-        .iter()
-        .map(|(&hv, &(count, len))| (hv, count, len))
-        .collect();
-    ranked_by_len.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
-    ranked_by_len.truncate(TOP_STRINGS_BY_LEN);
-
-    // Map each winner's representative array address → its (hash, count, len).
-    let mut winner_arr_meta: HashMap<u64, (u64, u32, u32)> = HashMap::new();
-    for &(hv, count, len) in &ranked {
-        if let Some(&arr_addr) = hash_arr.get(&hv) {
-            winner_arr_meta.insert(arr_addr, (hv, count, len));
-        }
-    }
-    // Fold the length-winners into the SAME recovery set so Pass C's one scan
-    // recovers text for both rankings (no extra full-file scan).
-    for &(hv, count, len) in &ranked_by_len {
-        if let Some(&arr_addr) = hash_arr.get(&hv) {
-            winner_arr_meta.insert(arr_addr, (hv, count, len));
-        }
-    }
-    drop(dup_map);
-    drop(hash_arr);
-
-    // ── Pass C: recover exact text for ≤N winners only ───────────────────────
-    // Only ≤TOP_STRINGS_N sample texts (each ≤MAX_STR_SAMPLE bytes) are ever
-    // retained, so RSS stays bounded.
-    let mut hash_text: HashMap<u64, String> = HashMap::new();
-    if !winner_arr_meta.is_empty() {
-        let winner_arrays: HashSet<u64> = winner_arr_meta.keys().copied().collect();
-        scan_prim_arrays(&open, id_size, &winner_arrays, |addr, bytes| {
-            let Some(&(hv, _count, _len)) = winner_arr_meta.get(&addr) else {
-                return;
-            };
-            let coder = arr_coder.get(&addr).copied().unwrap_or(1);
-            let mut decoded = decode_java_string(bytes, coder);
-            truncate_on_char_boundary(&mut decoded, MAX_STR_SAMPLE);
-            hash_text.insert(hv, decoded);
-        })?;
-    }
-    drop(arr_coder);
-    let top_duplicated: Vec<DupStringSample> = ranked
-        .iter()
-        .map(|&(hv, count, len)| DupStringSample {
-            text: hash_text.get(&hv).cloned().unwrap_or_default(),
-            count: count as u64,
-            len,
-            wasted_bytes: (count as u64).saturating_sub(1).saturating_mul(len as u64),
-        })
-        .collect();
-    // #5: same text-recovery pattern, from the length ranking. wasted_bytes uses
-    // the same (count-1)*len formula (0 for unique values, where count==1).
-    let top_by_length: Vec<DupStringSample> = ranked_by_len
-        .iter()
-        .map(|&(hv, count, len)| DupStringSample {
-            text: hash_text.get(&hv).cloned().unwrap_or_default(),
-            count: count as u64,
-            len,
-            wasted_bytes: (count as u64).saturating_sub(1).saturating_mul(len as u64),
-        })
-        .collect();
-    drop(hash_text);
-
-    // ── Pass D DEFERRED ──────────────────────────────────────────────────────
-    // Classes holding the most Strings were historically computed here by a
-    // dedicated full-file `scan_all_instances` (`compute_string_holders`) that
-    // walks every instance's object-reference fields and credits the owning
-    // class for each ref pointing at a String instance. That scan is redundant
-    // with the 2b forward-CSR fill (`fill_heap_2b`), which already reads every
-    // instance's object-field refs. So we now DEFER it: return `string_addrs`
-    // to the caller, which threads it into the 2b scan to accumulate holder
-    // counts there, then calls `finalize_string_holders` to rank them. The
-    // returned `DupStrings.top_string_holders` is left empty here and filled by
-    // the caller after 2b — byte-identical to the old inline scan.
-    Ok((
-        DupStrings {
-            distinct_values,
-            duplicated_values,
-            total_string_instances,
-            approx_wasted_bytes,
-            top_duplicated,
-            length_histogram,
-            length_stats,
-            top_string_holders: Vec::new(),
-            top_by_length,
-            char_array_waste,
-        },
-        string_addrs,
-    ))
 }
 
 /// Rank the String-holder counts accumulated during the 2b scan into the top-N
