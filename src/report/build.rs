@@ -3775,19 +3775,35 @@ pub(crate) fn build_leak_suspects(
     // the top-level dominators (children of vroot) whose class row matches the
     // group's class — the same member enumeration `dom_children(n)` already used
     // twice in this fn, filtered by class. Sorted ascending for determinism.
+    //
+    // Pre-scan: build member lists for all group suspect classes in ONE pass over
+    // dom_children(n), rather than O(G) separate filter-scans over the same slice.
     {
+        let group_class_indices: std::collections::HashSet<usize> = suspects
+            .iter()
+            .filter(|s| !s.is_single)
+            .map(|s| s.class_idx)
+            .collect();
+        let mut class_members: std::collections::HashMap<usize, Vec<u32>> =
+            std::collections::HashMap::new();
+        if !group_class_indices.is_empty() {
+            for &i in dom_children(n) {
+                let ci = g.class_idx[i as usize] as usize;
+                if group_class_indices.contains(&ci) {
+                    class_members.entry(ci).or_default().push(i);
+                }
+            }
+            for v in class_members.values_mut() {
+                v.sort_unstable();
+            }
+        }
         for (k, s) in suspects.iter().enumerate() {
             if s.is_single {
                 continue;
             }
-            let mut members: Vec<u32> = dom_children(n)
-                .iter()
-                .copied()
-                .filter(|&i| g.class_idx[i as usize] as usize == s.class_idx)
-                .collect();
-            members.sort_unstable();
+            let members = class_members.get(&s.class_idx).map_or(&[] as &[u32], |v| v);
             let group_label = out[k].pretty_class.clone();
-            out[k].merged_paths = build_merged_paths(&members, &group_label);
+            out[k].merged_paths = build_merged_paths(members, &group_label);
         }
     }
 
