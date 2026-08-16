@@ -3286,9 +3286,14 @@ pub(crate) fn build_leak_suspects(
     // in one sweep over dom_children(n) = ~329M top-level dominators, reading
     // retained/class_idx/shallow once instead of twice.
     let class_count = g.class_names.len();
-    let mut group_retained: Vec<u64> = vec![0; class_count];
-    let mut group_count: Vec<u64> = vec![0; class_count];
-    let mut group_shallow: Vec<u64> = vec![0; class_count];
+    // Fuse 3 class-indexed Vecs into one struct for cache locality.
+    #[derive(Default, Clone)]
+    struct GroupEntry {
+        retained: u64,
+        count: u64,
+        shallow: u64,
+    }
+    let mut groups: Vec<GroupEntry> = vec![GroupEntry::default(); class_count];
     for &i in dom_children(n) {
         let idx = i as usize;
         let ret = g.retained[idx];
@@ -3306,20 +3311,21 @@ pub(crate) fn build_leak_suspects(
             });
         }
         if ci < class_count {
-            group_retained[ci] += ret;
-            group_count[ci] += 1;
-            group_shallow[ci] += sh;
+            let g_entry = &mut groups[ci];
+            g_entry.retained += ret;
+            g_entry.count += 1;
+            g_entry.shallow += sh;
         }
     }
     for ci in 0..class_count {
-        if group_retained[ci] >= threshold && !single_class_set.contains(&ci) {
+        if groups[ci].retained >= threshold && !single_class_set.contains(&ci) {
             suspects.push(RawSuspect {
                 is_single: false,
                 obj_idx: u32::MAX,
                 class_idx: ci,
-                instance_count: group_count[ci],
-                retained: group_retained[ci],
-                shallow: group_shallow[ci],
+                instance_count: groups[ci].count,
+                retained: groups[ci].retained,
+                shallow: groups[ci].shallow,
             });
         }
     }
