@@ -229,7 +229,33 @@ fn phase1(
     // Reused scratch buffer for path compression in eval/compress.
     // Avoids a per-call Vec allocation in the hot loop (514M+ iterations on large dumps).
     let mut chain: Vec<u32> = Vec::new();
+    // Software prefetch distance: issue a prefetch for inb_data PREFETCH_DIST iterations
+    // ahead.  Phase 1 is memory-latency bound (~100 ns/cache miss at 2 GB inb_data);
+    // prefetching the next node's block start hides most of that latency.
+    // 32 iterations × ~10 cycles/iter @ 3 GHz ≈ 107 ns — tuned to match DRAM latency.
+    // Gated on x86_64 only; other targets compile away the intrinsic call silently.
+    #[cfg(target_arch = "x86_64")]
+    const PREFETCH_DIST: usize = 32;
     for i in (1..count).rev() {
+        // Issue a prefetch for the inb_data block that will be needed PREFETCH_DIST
+        // iterations from now (i.e. for pre-order i - PREFETCH_DIST).
+        #[cfg(target_arch = "x86_64")]
+        if i >= PREFETCH_DIST + 1 && exact_offsets.is_none() {
+            let future_i = i - PREFETCH_DIST;
+            let future_node = rpo.vertex[future_i] as usize;
+            let future_block = future_node / crate::pass2::INB_BLOCK;
+            if future_block < inb_block_off.len() {
+                let future_pos = inb_block_off[future_block] as usize;
+                if future_pos < inb_data.len() {
+                    unsafe {
+                        std::arch::x86_64::_mm_prefetch(
+                            inb_data.as_ptr().add(future_pos) as *const i8,
+                            std::arch::x86_64::_MM_HINT_T0,
+                        );
+                    }
+                }
+            }
+        }
         let w_node = rpo.vertex[i] as usize;
 
         // Implicit virtual-root predecessor for GC roots
