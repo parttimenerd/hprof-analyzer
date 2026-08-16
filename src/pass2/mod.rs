@@ -1942,6 +1942,36 @@ impl Pass2 {
         let mut cache = crate::id_map::IndexCache::new();
         let do_names = fwd_field_name_idx.is_some() && do_fwd;
 
+        // Convert address-keyed HashSets to dense-index Bitsets so the hot
+        // per-field-ref holder checks become O(1) bitset reads instead of 3
+        // separate HashMap hash/compare probes per non-null field reference.
+        let n = id_map.len();
+        let has_any_holder =
+            !boxed_addrs.is_empty() || !string_addrs.is_empty() || !dup_addrs.is_empty();
+        let mut boxed_bits = crate::bitset::Bitset::default();
+        let mut string_bits = crate::bitset::Bitset::default();
+        let mut dup_bits = crate::bitset::Bitset::default();
+        if has_any_holder {
+            boxed_bits = crate::bitset::Bitset::with_len(n);
+            string_bits = crate::bitset::Bitset::with_len(n);
+            dup_bits = crate::bitset::Bitset::with_len(n);
+            for &addr in boxed_addrs.iter() {
+                if let Some(i) = id_map.index_of(addr) {
+                    boxed_bits.set(i);
+                }
+            }
+            for &addr in string_addrs.iter() {
+                if let Some(i) = id_map.index_of(addr) {
+                    string_bits.set(i);
+                }
+            }
+            for &addr in dup_addrs.iter() {
+                if let Some(i) = id_map.index_of(addr) {
+                    dup_bits.set(i);
+                }
+            }
+        }
+
         macro_rules! add_edge {
             ($src:expr, $dst_addr:expr, $excluded:expr, $name_idx:expr) => {
                 if $dst_addr != 0 {
@@ -2079,36 +2109,28 @@ impl Pass2 {
                                 let off = off as usize;
                                 if off + id_size as usize <= scratch.len() {
                                     let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                    // Boxed-holder Pass 2, folded in: count refs to
-                                    // captured boxed instances per holder class. Reuses
-                                    // this read + field iteration (byte-identical to the
-                                    // removed compute_boxed_holders ref-count scan).
-                                    if !boxed_addrs.is_empty()
-                                        && ref_val != 0
-                                        && boxed_addrs.contains(&ref_val)
-                                    {
-                                        *boxed_holder_counts.entry(class_id).or_insert(0) += 1;
-                                    }
-                                    // String-holder Pass D, folded in: count refs
-                                    // to captured String instances per holder class
-                                    // (byte-identical to the removed
-                                    // compute_string_holders scan, which summed one
-                                    // hit per matching object-field ref).
-                                    if !string_addrs.is_empty()
-                                        && ref_val != 0
-                                        && string_addrs.contains(&ref_val)
-                                    {
-                                        *string_holder_counts.entry(class_id).or_insert(0) += 1;
-                                    }
-                                    // Dup-array-holder counting, folded from
-                                    // compute_dup_array_holders (deleted dedicated
-                                    // full-file scan). Count refs to duplicate
-                                    // primitive-array instances per holder class.
-                                    if !dup_addrs.is_empty()
-                                        && ref_val != 0
-                                        && dup_addrs.contains(&ref_val)
-                                    {
-                                        *dup_array_holder_counts.entry(class_id).or_insert(0) += 1;
+                                    // Holder-count checks: convert the 3 address-keyed
+                                    // HashSet lookups into a single dense-index resolution
+                                    // (warm in IndexCache after add_edge! below) + 3 bitset
+                                    // reads. Only paid when at least one set is non-empty.
+                                    if has_any_holder && ref_val != 0 {
+                                        if let Some(dst_idx) = cache.index_of(id_map, ref_val) {
+                                            if boxed_bits.get(dst_idx) {
+                                                *boxed_holder_counts
+                                                    .entry(class_id)
+                                                    .or_insert(0) += 1;
+                                            }
+                                            if string_bits.get(dst_idx) {
+                                                *string_holder_counts
+                                                    .entry(class_id)
+                                                    .or_insert(0) += 1;
+                                            }
+                                            if dup_bits.get(dst_idx) {
+                                                *dup_array_holder_counts
+                                                    .entry(class_id)
+                                                    .or_insert(0) += 1;
+                                            }
+                                        }
                                     }
                                     let name_idx = if do_names && fi < named_plan.len() {
                                         let fname = &named_plan[fi].2;
