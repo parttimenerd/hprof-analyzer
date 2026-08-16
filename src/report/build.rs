@@ -2383,10 +2383,16 @@ fn build_system_overview(
         let id = g.idom[i];
         let sh = g.shallow[i] as u64;
         let ci_raw = g.class_idx[i] as usize;
-        // Resolve class_obj_repr ONCE (a HashMap probe) — it drives the kind
-        // bucket, the class-object rollup, AND the loader lookup below, which
-        // previously re-probed the same map two more times per object.
-        let repr = class_obj_repr(g, i);
+        // Inline the class_obj_repr fast-filter using the already-loaded ci_raw,
+        // avoiding a second g.class_idx[i] read. HashMap probe only for Class objects.
+        let repr: u32 = if g.jlc_idx != undef_u32 && ci_raw as u32 != g.jlc_idx {
+            undef_u32
+        } else {
+            g.class_obj_class_idx
+                .get(&(i as u32))
+                .copied()
+                .unwrap_or(undef_u32)
+        };
         if id != undef_u32 {
             total_objects += 1;
             total_shallow += sh;
