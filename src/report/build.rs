@@ -4408,7 +4408,12 @@ fn build_top_consumers(
         let mut total_ret: u64 = 0;
         let mut dist_max_r: u64 = 0;
         let mut dist_min_r: u64 = u64::MAX;
-        let mut dist_map: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+        // Power-of-two bucket array: dist_counts[i] counts objects whose
+        // next_power_of_two(r) = 2^i (index = trailing_zeros of upper_bytes).
+        // 64 entries cover 2^0..2^63 — the physically reachable range for any
+        // heap object. Replaces BTreeMap: O(1) write per object vs O(log n),
+        // and the whole array fits in a single cache line.
+        let mut dist_counts = [0u64; 64];
         for &key in keys.iter() {
             let r = retained_of(key);
             total_ret = total_ret.saturating_add(r);
@@ -4421,9 +4426,9 @@ fn build_top_consumers(
             let upper = if r <= 1 {
                 1
             } else {
-                r.checked_next_power_of_two().unwrap_or(u64::MAX)
+                r.checked_next_power_of_two().unwrap_or(1 << 63)
             };
-            *dist_map.entry(upper).or_insert(0) += 1;
+            dist_counts[upper.trailing_zeros() as usize] += 1;
         }
         if dist_min_r == u64::MAX {
             dist_min_r = 0;
@@ -4539,11 +4544,19 @@ fn build_top_consumers(
             }
             retained_of(median_key)
         };
+        // Reconstruct sorted (upper_bytes asc) SizeBucket vec from the flat array.
+        // 1u64 << i is already ascending, matching BTreeMap's natural iteration order.
+        let dist_buckets: Vec<SizeBucket> = dist_counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, &c)| c > 0)
+            .map(|(i, &c)| SizeBucket {
+                upper_bytes: 1u64 << i,
+                count: c,
+            })
+            .collect();
         precomputed_distribution = Some(TopSizeDistribution {
-            buckets: dist_map
-                .into_iter()
-                .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
-                .collect(),
+            buckets: dist_buckets,
             count: k as u64,
             min: dist_min_r,
             max: dist_max_r,
@@ -4570,20 +4583,25 @@ fn build_top_consumers(
             let min = g.retained[top_level[k - 1] as usize];
             let median = g.retained[top_level[k / 2] as usize];
             let mut total_ret: u64 = 0;
-            let mut map: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+            let mut dist_counts = [0u64; 64];
             for &i in &top_level {
                 let r = g.retained[i as usize];
                 total_ret = total_ret.saturating_add(r);
                 let upper = if r <= 1 {
                     1
                 } else {
-                    r.checked_next_power_of_two().unwrap_or(u64::MAX)
+                    r.checked_next_power_of_two().unwrap_or(1 << 63)
                 };
-                *map.entry(upper).or_insert(0) += 1;
+                dist_counts[upper.trailing_zeros() as usize] += 1;
             }
-            let buckets = map
-                .into_iter()
-                .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
+            let buckets: Vec<SizeBucket> = dist_counts
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| c > 0)
+                .map(|(i, &c)| SizeBucket {
+                    upper_bytes: 1u64 << i,
+                    count: c,
+                })
                 .collect();
             TopSizeDistribution {
                 buckets,
