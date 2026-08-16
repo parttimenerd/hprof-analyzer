@@ -4402,60 +4402,127 @@ fn build_top_consumers(
             dist_min_r = 0;
         }
 
-        // Partial selection: instead of sorting all 329M keys (O(n log n)),
-        // use two O(n) select calls on the cache-local keys array:
-        //   (a) partition the top_n smallest keys (= top_n largest retained) to front
-        //   (b) find the k/2-th key (exact lower-median of retained) in the remainder
-        // Then sort only the tiny top_n prefix.  Both selects are ~2-4s vs 18s sort.
+        // Selection: replace select_nth_unstable (random swaps into 2.6 GB array,
+        // cache-hostile at ThinkStation DRAM speeds) with sequential algorithms:
+        //   top-N: one sequential min-heap scan (O(n log top_n), no array mutation)
+        //   median: histogram selection with 8-bit digit passes (O(n×bytes), O(256) space)
+        // Both are pure sequential reads over `keys`, avoiding the random writes
+        // that made select_nth_unstable ~13s on the 34GB dump.
         let actual_top = top_n.min(k);
-        if actual_top < k {
-            keys.select_nth_unstable(actual_top - 1);
-            // keys[..actual_top] are the actual_top smallest keys (largest retained).
-            // keys[actual_top..] are the rest (smaller retained).  The median is at
-            // position k/2 in the full sorted order.  Since actual_top << k/2, the
-            // median lives somewhere in keys[actual_top..].  Select it there.
-            let median_pos_in_tail = k / 2 - actual_top;
-            let (_, median_key, _) = keys[actual_top..].select_nth_unstable(median_pos_in_tail);
-            let median_r = retained_of(*median_key);
-            keys[..actual_top].sort_unstable();
-            for (slot, &key) in top_level[..actual_top]
-                .iter_mut()
-                .zip(keys[..actual_top].iter())
-            {
-                *slot = (key & idx_mask) as u32;
+        // ─── Top-N extraction via min-heap ────────────────────────────────────
+        // Sort keys ascending (smallest key = largest retained). Collect the
+        // actual_top smallest keys with a fixed-size min-heap (no array mutation).
+        // After the scan, sort the tiny heap for the final ordered output.
+        let mut heap: Vec<u64> = Vec::with_capacity(actual_top + 1);
+        for &key in keys.iter() {
+            if heap.len() < actual_top {
+                heap.push(key);
+                // Sift up to maintain max-heap invariant (we track max = worst of top-N)
+                let mut i = heap.len() - 1;
+                while i > 0 {
+                    let p = (i - 1) / 2;
+                    if heap[p] < heap[i] {
+                        heap.swap(p, i);
+                        i = p;
+                    } else {
+                        break;
+                    }
+                }
+            } else if key < heap[0] {
+                // key beats current worst → replace and sift down
+                heap[0] = key;
+                let mut i = 0usize;
+                loop {
+                    let l = 2 * i + 1;
+                    let r = 2 * i + 2;
+                    let mut largest = i;
+                    if l < heap.len() && heap[l] > heap[largest] {
+                        largest = l;
+                    }
+                    if r < heap.len() && heap[r] > heap[largest] {
+                        largest = r;
+                    }
+                    if largest == i {
+                        break;
+                    }
+                    heap.swap(i, largest);
+                    i = largest;
+                }
             }
-            precomputed_distribution = Some(TopSizeDistribution {
-                buckets: dist_map
-                    .into_iter()
-                    .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
-                    .collect(),
-                count: k as u64,
-                min: dist_min_r,
-                max: dist_max_r,
-                median: median_r,
-                total: total_ret,
-            });
-        } else {
-            // k <= top_n: small list, just sort everything (fast path irrelevant).
-            keys.sort_unstable();
-            for (slot, &k_val) in top_level.iter_mut().zip(keys.iter()) {
-                *slot = (k_val & idx_mask) as u32;
-            }
-            let median_r = retained_of(keys[k / 2]);
-            let max_r = retained_of(keys[0]);
-            let min_r = retained_of(keys[k - 1]);
-            precomputed_distribution = Some(TopSizeDistribution {
-                buckets: dist_map
-                    .into_iter()
-                    .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
-                    .collect(),
-                count: k as u64,
-                min: min_r,
-                max: max_r,
-                median: median_r,
-                total: total_ret,
-            });
         }
+        heap.sort_unstable(); // sort top-N (tiny, ≤20 elements)
+        for (slot, &key) in top_level[..heap.len()].iter_mut().zip(heap.iter()) {
+            *slot = (key & idx_mask) as u32;
+        }
+        // ─── Exact median via sequential histogram selection ──────────────────
+        // We need the key at position k/2 in sorted order (lower-median for even k).
+        // Histogram-select: 8 passes over keys (pure sequential reads, no writes).
+        // Each pass narrows the [lo, hi] range to an 8-bit sub-bucket containing
+        // the target rank. After 8 passes the range has ≤ 1 element = exact median.
+        let median_pos = k / 2; // 0-based index of the median in sorted-asc order
+        let median_r = {
+            let mut lo = u64::MIN;
+            let mut hi = u64::MAX;
+            let mut target_pos = median_pos;
+            let mut median_key = keys[0]; // fallback
+
+            'outer: for shift in (0u32..64).step_by(8).rev() {
+                let lo_digit = (lo >> shift) as u8;
+                let hi_digit = (hi >> shift) as u8;
+                let mask_lo = if shift < 64 {
+                    (1u64 << shift).wrapping_sub(1)
+                } else {
+                    0
+                };
+                let mut counts = [0u64; 256];
+                for &key in keys.iter() {
+                    if key >= lo && key <= hi {
+                        counts[((key >> shift) & 0xFF) as usize] += 1;
+                    }
+                }
+                for d in lo_digit..=hi_digit {
+                    let c = counts[d as usize];
+                    if c as usize > target_pos {
+                        // Narrow [lo, hi] to the sub-range where byte@shift == d.
+                        // High bits (above the current byte) come from the old lo/hi
+                        // (both have the same high bits since we've been narrowing from MSB).
+                        let above = if shift < 56 {
+                            lo >> (shift + 8) << (shift + 8)
+                        } else {
+                            0
+                        };
+                        lo = above
+                            | ((d as u64) << shift)
+                            | (if d == lo_digit { lo & mask_lo } else { 0 });
+                        hi = above
+                            | ((d as u64) << shift)
+                            | (if d == hi_digit { hi & mask_lo } else { mask_lo });
+                        if c == 1 || shift == 0 {
+                            for &key in keys.iter() {
+                                if key >= lo && key <= hi {
+                                    median_key = key;
+                                    break 'outer;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    target_pos -= c as usize;
+                }
+            }
+            retained_of(median_key)
+        };
+        precomputed_distribution = Some(TopSizeDistribution {
+            buckets: dist_map
+                .into_iter()
+                .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
+                .collect(),
+            count: k as u64,
+            min: dist_min_r,
+            max: dist_max_r,
+            median: median_r,
+            total: total_ret,
+        });
         drop(sort_keys);
     } else if !top_level.is_empty() {
         top_level.sort_unstable_by(|&a, &b| {
@@ -4739,6 +4806,138 @@ mod top_level_sort_tests {
         // idx_bits is tiny, retained_bits huge, so packing must not overflow.
         let retained = vec![900_000_000u64, 100, 500_000_000, 900_000_000, 0];
         assert_matches(&[0, 1, 2, 3, 4], &retained);
+    }
+}
+
+#[cfg(test)]
+mod histogram_select_tests {
+    // Tests for the sequential top-N + histogram median used in sort_top_level.
+
+    fn histogram_median(keys: &[u64]) -> u64 {
+        let k = keys.len();
+        if k == 0 {
+            return 0;
+        }
+        let median_pos = k / 2;
+        let mut lo = u64::MIN;
+        let mut hi = u64::MAX;
+        let mut target_pos = median_pos;
+        let mut median_key = keys[0];
+
+        'outer: for shift in (0u32..64).step_by(8).rev() {
+            let lo_digit = (lo >> shift) as u8;
+            let hi_digit = (hi >> shift) as u8;
+            let mask_lo = if shift < 64 {
+                (1u64 << shift).wrapping_sub(1)
+            } else {
+                0
+            };
+            let mut counts = [0u64; 256];
+            for &key in keys.iter() {
+                if key >= lo && key <= hi {
+                    counts[((key >> shift) & 0xFF) as usize] += 1;
+                }
+            }
+            for d in lo_digit..=hi_digit {
+                let c = counts[d as usize];
+                if c as usize > target_pos {
+                    let above = if shift < 56 {
+                        lo >> (shift + 8) << (shift + 8)
+                    } else {
+                        0
+                    };
+                    lo = above
+                        | ((d as u64) << shift)
+                        | (if d == lo_digit { lo & mask_lo } else { 0 });
+                    hi = above
+                        | ((d as u64) << shift)
+                        | (if d == hi_digit { hi & mask_lo } else { mask_lo });
+                    if c == 1 || shift == 0 {
+                        for &key in keys.iter() {
+                            if key >= lo && key <= hi {
+                                median_key = key;
+                                break 'outer;
+                            }
+                        }
+                    }
+                    break;
+                }
+                target_pos -= c as usize;
+            }
+        }
+        median_key
+    }
+
+    fn reference_median(keys: &[u64]) -> u64 {
+        let mut v = keys.to_vec();
+        v.sort_unstable();
+        v[v.len() / 2]
+    }
+
+    #[test]
+    fn single_element() {
+        assert_eq!(histogram_median(&[42]), 42);
+    }
+
+    #[test]
+    fn two_elements() {
+        assert_eq!(histogram_median(&[1, 5]), reference_median(&[1, 5]));
+    }
+
+    #[test]
+    fn odd_sorted() {
+        let keys = vec![1u64, 3, 7, 9, 11];
+        assert_eq!(histogram_median(&keys), reference_median(&keys));
+    }
+
+    #[test]
+    fn even_sorted() {
+        let keys = vec![1u64, 2, 4, 8];
+        assert_eq!(histogram_median(&keys), reference_median(&keys));
+    }
+
+    #[test]
+    fn duplicates() {
+        let keys = vec![5u64, 5, 5, 10, 10];
+        assert_eq!(histogram_median(&keys), reference_median(&keys));
+    }
+
+    #[test]
+    fn large_values() {
+        let keys = vec![
+            1_000_000_000u64,
+            2_000_000_000,
+            3_000_000_000,
+            4_000_000_000,
+            5_000_000_000,
+        ];
+        assert_eq!(histogram_median(&keys), reference_median(&keys));
+    }
+
+    #[test]
+    fn max_u64() {
+        let keys = vec![0u64, u64::MAX / 2, u64::MAX];
+        assert_eq!(histogram_median(&keys), reference_median(&keys));
+    }
+
+    #[test]
+    fn randomized() {
+        let mut state = 0xDEADBEEF_CAFEBABEu64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for trial in 0..500 {
+            let n = (next() % 200) as usize + 1;
+            let keys: Vec<u64> = (0..n).map(|_| next()).collect();
+            assert_eq!(
+                histogram_median(&keys),
+                reference_median(&keys),
+                "trial {trial}: n={n}"
+            );
+        }
     }
 }
 
