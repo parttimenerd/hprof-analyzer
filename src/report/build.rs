@@ -4095,6 +4095,29 @@ fn build_top_consumers(
     // `Vec<u32>` replay per dominator. `u32::MAX` marks "not yet computed".
     // Byte-exact: same interned ids, same tree, same `convert` output.
     let mut class_seg_path: Vec<Option<Vec<u32>>> = vec![None; class_count];
+
+    // Pre-compute packed sort keys during the package_tree_build loop below,
+    // sharing the g.retained[idx] loads already made there. This eliminates the
+    // second O(top_level) random read into the 2.6 GB g.retained array that the
+    // old sort-key build made separately (~6s win on the 34GB dump).
+    let (sort_max_retained, sort_idx_bits, sort_idx_mask, sort_fits) = if !top_level.is_empty() {
+        let max_idx = *top_level.last().unwrap(); // top_level is index-ascending
+        let idx_bits = (u32::BITS - max_idx.leading_zeros()).max(1);
+        let retained_bits = 64u32.saturating_sub(idx_bits);
+        let max_retained = g.retained.iter().copied().max().unwrap_or(0);
+        let fits = retained_bits >= 64 || max_retained < (1u64 << retained_bits);
+        let idx_mask = (1u64 << idx_bits.min(63)) - 1;
+        (max_retained, idx_bits, idx_mask, fits && idx_bits < 64)
+    } else {
+        (0u64, 1u32, 0u64, false)
+    };
+    // Pre-allocated key buffer for the fast sort path (capacity = top_level.len()).
+    let mut sort_keys: Vec<u64> = if sort_fits {
+        Vec::with_capacity(top_level.len())
+    } else {
+        Vec::new()
+    };
+
     for &i in &top_level {
         let idx = i as usize;
         let ci_raw = g.class_idx[idx] as usize;
@@ -4163,6 +4186,12 @@ fn build_top_consumers(
             node.top_dominator_count += 1;
             node.shallow_heap += shallow;
             node.retained_heap += retained;
+        }
+        // Build packed sort key here, sharing the `retained` load already made
+        // above — avoids a second O(top_level) random pass into g.retained.
+        if sort_fits {
+            let inv = sort_max_retained - retained;
+            sort_keys.push((inv << sort_idx_bits) | (i as u64 & sort_idx_mask));
         }
     }
     t_tc!("package_tree_build");
@@ -4250,122 +4279,110 @@ fn build_top_consumers(
     // is one `Vec<u64>` (8 B/elem) — half the 16 B of a `(u64,u32)` decorate
     // (task #30, which blew the RSS ceiling at ~5.3 GB) and paying the random
     // `g.retained` loads once (unlike the radix retry, task #31, which re-read
-    // them per pass for no win).
+    // them per pass for no win). sort_keys was built in the package_tree_build loop
+    // above, sharing the g.retained reads already paid there.
     // Precomputed size_distribution from the packed-u64 sort path.
     // Populated inside the fast branch below (where retained values are decoded
     // from keys, avoiding a second round of random g.retained reads after the
     // sort). The slow fallback branch leaves this None and the distribution block
     // below recomputes it from top_level + g.retained as before.
     let mut precomputed_distribution: Option<TopSizeDistribution> = None;
-    if !top_level.is_empty() {
-        // top_level is built index-ascending, so the last element is the largest
-        // index; +1 gives the count of representable ids.
-        let max_idx = *top_level.last().unwrap();
-        let idx_bits = (u32::BITS - max_idx.leading_zeros()).max(1);
-        let retained_bits = 64u32.saturating_sub(idx_bits);
-        // Max retained over ALL objects (sequential scan, cache-friendly ~0.3s);
-        // this is >= the max over top_level, so it is a conservative width bound.
-        let max_retained = g.retained.iter().copied().max().unwrap_or(0);
-        let fits = retained_bits >= 64 || max_retained < (1u64 << retained_bits);
-        if fits && idx_bits < 64 {
-            let idx_mask = (1u64 << idx_bits) - 1;
-            let mut keys: Vec<u64> = top_level
-                .iter()
-                .map(|&i| {
-                    let inv = max_retained - g.retained[i as usize];
-                    (inv << idx_bits) | (i as u64 & idx_mask)
-                })
-                .collect();
-            let k = keys.len();
-            let retained_of = |key: u64| max_retained - (key >> idx_bits);
+    if sort_fits && !sort_keys.is_empty() {
+        let keys = &mut sort_keys;
+        let k = keys.len();
+        let idx_mask = sort_idx_mask;
+        let idx_bits = sort_idx_bits;
+        let max_retained = sort_max_retained;
+        let retained_of = |key: u64| max_retained - (key >> idx_bits);
 
-            // Compute distribution in one sequential pass over keys (no sort needed).
-            // Keys are not yet sorted; we decode retained from each key without
-            // touching g.retained again.
-            let mut total_ret: u64 = 0;
-            let mut dist_max_r: u64 = 0;
-            let mut dist_min_r: u64 = u64::MAX;
-            let mut dist_map: std::collections::BTreeMap<u64, u64> =
-                std::collections::BTreeMap::new();
-            for &key in &keys {
-                let r = retained_of(key);
-                total_ret = total_ret.saturating_add(r);
-                if r > dist_max_r {
-                    dist_max_r = r;
-                }
-                if r < dist_min_r {
-                    dist_min_r = r;
-                }
-                let upper = if r <= 1 {
-                    1
-                } else {
-                    r.checked_next_power_of_two().unwrap_or(u64::MAX)
-                };
-                *dist_map.entry(upper).or_insert(0) += 1;
+        // Compute distribution in one sequential pass over keys (no sort needed).
+        // Keys are not yet sorted; we decode retained from each key without
+        // touching g.retained again.
+        let mut total_ret: u64 = 0;
+        let mut dist_max_r: u64 = 0;
+        let mut dist_min_r: u64 = u64::MAX;
+        let mut dist_map: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+        for &key in keys.iter() {
+            let r = retained_of(key);
+            total_ret = total_ret.saturating_add(r);
+            if r > dist_max_r {
+                dist_max_r = r;
             }
-            if dist_min_r == u64::MAX {
-                dist_min_r = 0;
+            if r < dist_min_r {
+                dist_min_r = r;
             }
-
-            // Partial selection: instead of sorting all 329M keys (O(n log n)),
-            // use two O(n) select calls on the cache-local keys array:
-            //   (a) partition the top_n smallest keys (= top_n largest retained) to front
-            //   (b) find the k/2-th key (exact lower-median of retained) in the remainder
-            // Then sort only the tiny top_n prefix.  Both selects are ~2-4s vs 18s sort.
-            let actual_top = top_n.min(k);
-            if actual_top < k {
-                keys.select_nth_unstable(actual_top - 1);
-                // keys[..actual_top] are the actual_top smallest keys (largest retained).
-                // keys[actual_top..] are the rest (smaller retained).  The median is at
-                // position k/2 in the full sorted order.  Since actual_top << k/2, the
-                // median lives somewhere in keys[actual_top..].  Select it there.
-                let median_pos_in_tail = k / 2 - actual_top;
-                let (_, median_key, _) = keys[actual_top..].select_nth_unstable(median_pos_in_tail);
-                let median_r = retained_of(*median_key);
-                keys[..actual_top].sort_unstable();
-                for (slot, &key) in top_level[..actual_top].iter_mut().zip(&keys[..actual_top]) {
-                    *slot = (key & idx_mask) as u32;
-                }
-                precomputed_distribution = Some(TopSizeDistribution {
-                    buckets: dist_map
-                        .into_iter()
-                        .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
-                        .collect(),
-                    count: k as u64,
-                    min: dist_min_r,
-                    max: dist_max_r,
-                    median: median_r,
-                    total: total_ret,
-                });
+            let upper = if r <= 1 {
+                1
             } else {
-                // k <= top_n: small list, just sort everything (fast path irrelevant).
-                keys.sort_unstable();
-                for (slot, &k_val) in top_level.iter_mut().zip(keys.iter()) {
-                    *slot = (k_val & idx_mask) as u32;
-                }
-                let median_r = retained_of(keys[k / 2]);
-                let max_r = retained_of(keys[0]);
-                let min_r = retained_of(keys[k - 1]);
-                precomputed_distribution = Some(TopSizeDistribution {
-                    buckets: dist_map
-                        .into_iter()
-                        .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
-                        .collect(),
-                    count: k as u64,
-                    min: min_r,
-                    max: max_r,
-                    median: median_r,
-                    total: total_ret,
-                });
+                r.checked_next_power_of_two().unwrap_or(u64::MAX)
+            };
+            *dist_map.entry(upper).or_insert(0) += 1;
+        }
+        if dist_min_r == u64::MAX {
+            dist_min_r = 0;
+        }
+
+        // Partial selection: instead of sorting all 329M keys (O(n log n)),
+        // use two O(n) select calls on the cache-local keys array:
+        //   (a) partition the top_n smallest keys (= top_n largest retained) to front
+        //   (b) find the k/2-th key (exact lower-median of retained) in the remainder
+        // Then sort only the tiny top_n prefix.  Both selects are ~2-4s vs 18s sort.
+        let actual_top = top_n.min(k);
+        if actual_top < k {
+            keys.select_nth_unstable(actual_top - 1);
+            // keys[..actual_top] are the actual_top smallest keys (largest retained).
+            // keys[actual_top..] are the rest (smaller retained).  The median is at
+            // position k/2 in the full sorted order.  Since actual_top << k/2, the
+            // median lives somewhere in keys[actual_top..].  Select it there.
+            let median_pos_in_tail = k / 2 - actual_top;
+            let (_, median_key, _) = keys[actual_top..].select_nth_unstable(median_pos_in_tail);
+            let median_r = retained_of(*median_key);
+            keys[..actual_top].sort_unstable();
+            for (slot, &key) in top_level[..actual_top]
+                .iter_mut()
+                .zip(keys[..actual_top].iter())
+            {
+                *slot = (key & idx_mask) as u32;
             }
-            drop(keys);
+            precomputed_distribution = Some(TopSizeDistribution {
+                buckets: dist_map
+                    .into_iter()
+                    .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
+                    .collect(),
+                count: k as u64,
+                min: dist_min_r,
+                max: dist_max_r,
+                median: median_r,
+                total: total_ret,
+            });
         } else {
-            top_level.sort_unstable_by(|&a, &b| {
-                g.retained[b as usize]
-                    .cmp(&g.retained[a as usize])
-                    .then(a.cmp(&b))
+            // k <= top_n: small list, just sort everything (fast path irrelevant).
+            keys.sort_unstable();
+            for (slot, &k_val) in top_level.iter_mut().zip(keys.iter()) {
+                *slot = (k_val & idx_mask) as u32;
+            }
+            let median_r = retained_of(keys[k / 2]);
+            let max_r = retained_of(keys[0]);
+            let min_r = retained_of(keys[k - 1]);
+            precomputed_distribution = Some(TopSizeDistribution {
+                buckets: dist_map
+                    .into_iter()
+                    .map(|(upper_bytes, count)| SizeBucket { upper_bytes, count })
+                    .collect(),
+                count: k as u64,
+                min: min_r,
+                max: max_r,
+                median: median_r,
+                total: total_ret,
             });
         }
+        drop(sort_keys);
+    } else if !top_level.is_empty() {
+        top_level.sort_unstable_by(|&a, &b| {
+            g.retained[b as usize]
+                .cmp(&g.retained[a as usize])
+                .then(a.cmp(&b))
+        });
     }
     t_tc!("sort_top_level");
     let size_distribution = if let Some(pd) = precomputed_distribution {
