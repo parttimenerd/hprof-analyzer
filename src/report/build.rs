@@ -518,6 +518,21 @@ pub fn build_model(
             }
         };
     }
+    // Precompute total_shallow once here and pass it to build_leak_suspects and
+    // build_dominator_analysis, eliminating two redundant O(n) scans over idom/shallow.
+    // build_system_overview recomputes it inside its own fused loop (unavoidable there),
+    // but the value it produces matches: both include the synthetic classloader object.
+    let precomputed_total_shallow: u64 = {
+        let undef = u32::MAX;
+        let mut s: u64 = (0..g.n)
+            .filter(|&i| g.idom[i] != undef)
+            .map(|i| g.shallow[i] as u64)
+            .sum();
+        if let Some(sz) = g.system_classloader_shallow {
+            s += sz as u64;
+        }
+        s
+    };
     // Call the dc_offsets/dc_targets consumers FIRST so we can drop those ~4 GB
     // arrays before build_system_overview. build_system_overview only needs
     // idom/retained/shallow/class_idx — not the dominator-children CSR — so
@@ -532,11 +547,17 @@ pub fn build_model(
         opts.root_path_max_depth,
         opts.dominator_tree_max_nodes,
         opts.dominator_tree_max_depth,
+        precomputed_total_shallow,
     );
     t_bm!("leak_suspects");
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let dominator_analysis =
-        build_dominator_analysis(g, &dc_offsets, &dc_targets, depth_counts.len() as u32);
+    let dominator_analysis = build_dominator_analysis(
+        g,
+        &dc_offsets,
+        &dc_targets,
+        depth_counts.len() as u32,
+        precomputed_total_shallow,
+    );
     t_bm!("dominator_analysis");
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let obj_graph_flat = if opts.obj_graph {
@@ -1647,6 +1668,7 @@ fn build_dominator_analysis(
     dc_offsets: &[u32],
     dc_targets: &[u32],
     longest_chain_depth: u32,
+    total_shallow: u64,
 ) -> DominatorAnalysis {
     let n = g.n;
     let undef = u32::MAX;
@@ -1663,11 +1685,6 @@ fn build_dominator_analysis(
         }
     };
 
-    // Total reachable shallow, for the big-drops significance threshold (1%).
-    let total_shallow: u64 = (0..n)
-        .filter(|&i| g.idom[i] != undef)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
     const DROP_THRESHOLD_PCT: f64 = 1.0;
     let threshold = (total_shallow as f64 * DROP_THRESHOLD_PCT / 100.0) as u64;
 
@@ -3171,20 +3188,10 @@ pub(crate) fn build_leak_suspects(
     root_path_max_depth: usize,
     dom_max_nodes: usize,
     dom_max_depth: usize,
+    total_shallow: u64,
 ) -> LeakSuspects {
     let n = g.n;
     let undef = u32::MAX;
-
-    // Total shallow heap of reachable objects
-    let mut total_shallow: u64 = (0..n)
-        .filter(|&i| g.idom[i] != undef)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
-    // Include MAT's synthetic <system class loader> object for internal
-    // consistency with build_system_overview's total_shallow.
-    if let Some(sz) = g.system_classloader_shallow {
-        total_shallow += sz as u64;
-    }
 
     let threshold = (total_shallow as f64 * THRESHOLD_PCT / 100.0) as u64;
 
