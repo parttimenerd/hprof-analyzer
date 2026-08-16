@@ -5,6 +5,36 @@ use super::*;
 use crate::pass2::Graph;
 use crate::pass2::{ATTRIBUTION_TOP_N, AttributionRaw};
 
+// Fast non-cryptographic hasher for integer keys (package tree children, pair_map).
+// Uses a multiplicative Fibonacci hash — ~3× faster than SipHash for integer keys,
+// safe because keys are internal sequential IDs, never user-controlled input.
+#[derive(Default)]
+struct IntHasher(u64);
+impl std::hash::Hasher for IntHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut v = 0u64;
+        for &b in bytes {
+            v = v.wrapping_shl(8) | b as u64;
+        }
+        self.0 = v.wrapping_mul(0x9e3779b97f4a7c15);
+    }
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0 = (i as u64).wrapping_mul(0x9e3779b97f4a7c15);
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i.wrapping_mul(0x9e3779b97f4a7c15);
+    }
+}
+type U32HashMap<V> = std::collections::HashMap<u32, V, std::hash::BuildHasherDefault<IntHasher>>;
+type U64HashMap<V> = std::collections::HashMap<u64, V, std::hash::BuildHasherDefault<IntHasher>>;
+
 const THRESHOLD_PCT: f64 = 10.0;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
 /// dominated children + by-class histogram), used as the `leak_children_cap`
@@ -1700,8 +1730,8 @@ fn build_dominator_analysis(
     let mut domd_shallow = vec![0u64; class_count];
     // pair_map: packed u64 key (pci << 32 | cci) -> (count, shallow, retained)
     // Packing avoids the tuple-hash overhead of HashMap<(u32, u32), _>.
-    let mut pair_map: std::collections::HashMap<u64, (u64, u64, u64)> =
-        std::collections::HashMap::new();
+    // U64HashMap uses a fast multiplicative hash for integer keys (~3× faster than SipHash).
+    let mut pair_map: U64HashMap<(u64, u64, u64)> = U64HashMap::default();
     for i in 0..n {
         if g.idom[i] == undef {
             continue;
@@ -4019,7 +4049,7 @@ fn build_top_consumers(
         top_dominator_count: u64,
         shallow_heap: u64,
         retained_heap: u64,
-        children: std::collections::HashMap<u32, Builder>,
+        children: U32HashMap<Builder>,
     }
     impl Builder {
         fn new() -> Builder {
@@ -4027,7 +4057,7 @@ fn build_top_consumers(
                 top_dominator_count: 0,
                 shallow_heap: 0,
                 retained_heap: 0,
-                children: std::collections::HashMap::new(),
+                children: U32HashMap::default(),
             }
         }
     }
