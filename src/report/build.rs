@@ -1753,8 +1753,9 @@ fn build_dominator_analysis(
     let mut domd_count = vec![0u64; class_count]; // #objects immediately dominated
     let mut dom_shallow = vec![0u64; class_count];
     let mut domd_shallow = vec![0u64; class_count];
-    // pair_map: (parent_remapped_ci, child_remapped_ci) -> (count, shallow, retained)
-    let mut pair_map: std::collections::HashMap<(u32, u32), (u64, u64, u64)> =
+    // pair_map: packed u64 key (pci << 32 | cci) -> (count, shallow, retained)
+    // Packing avoids the tuple-hash overhead of HashMap<(u32, u32), _>.
+    let mut pair_map: std::collections::HashMap<u64, (u64, u64, u64)> =
         std::collections::HashMap::new();
     for p in 0..n {
         if g.idom[p] == undef {
@@ -1779,7 +1780,8 @@ fn build_dominator_analysis(
             let cci_raw = g.class_idx[cu] as usize;
             if cci_raw < class_count {
                 let cci = remap[cci_raw];
-                let e = pair_map.entry((pci as u32, cci)).or_insert((0, 0, 0));
+                let key = ((pci as u64) << 32) | (cci as u64);
+                let e = pair_map.entry(key).or_insert((0, 0, 0));
                 e.0 += 1;
                 e.1 += g.shallow[cu] as u64;
                 e.2 += g.retained[cu];
@@ -1809,12 +1811,16 @@ fn build_dominator_analysis(
     // Sort pairs by dominated_retained desc, cap.
     let mut pairs_vec: Vec<ImmDomPair> = pair_map
         .into_iter()
-        .map(|((pci, cci), (cnt, shl, ret))| ImmDomPair {
-            dominator_class: pretty_class_name(&g.class_names[pci as usize]),
-            dominated_class: pretty_class_name(&g.class_names[cci as usize]),
-            pair_count: cnt,
-            dominated_shallow: shl,
-            dominated_retained: ret,
+        .map(|(key, (cnt, shl, ret))| {
+            let pci = (key >> 32) as usize;
+            let cci = (key & 0xFFFF_FFFF) as usize;
+            ImmDomPair {
+                dominator_class: pretty_class_name(&g.class_names[pci]),
+                dominated_class: pretty_class_name(&g.class_names[cci]),
+                pair_count: cnt,
+                dominated_shallow: shl,
+                dominated_retained: ret,
+            }
         })
         .collect();
     pairs_vec.sort_unstable_by(|a, b| {
