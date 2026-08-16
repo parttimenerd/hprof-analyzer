@@ -4162,6 +4162,13 @@ fn build_top_consumers(
     let mut seg_names: Vec<String> = Vec::new();
     let mut seg_ids: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
 
+    // Per-class accumulators for the package tree. Decoupling the O(top_level)
+    // accumulation from the tree traversal replaces ~329M × 6 HashMap probes
+    // (one per segment per dominator) with ~100K × 6 probes (one per class).
+    // The single O(top_level) pass below only does sequential reads + flat writes.
+    // Layout: (retained_sum, shallow_sum, count).
+    let mut class_tl: Vec<(u64, u64, u64)> = vec![(0, 0, 0); class_count];
+
     let mut root = Builder::new();
     // Reused across dominators so only its capacity persists (no per-dominator
     // Vec alloc); segments borrow from `raw_name` within each iteration.
@@ -4228,14 +4235,23 @@ fn build_top_consumers(
         } else if ci_raw < class_count {
             ci_raw
         } else {
+            // Build sort key even if name_ci is invalid — retained is known.
+            if sort_fits {
+                let inv = sort_max_retained - retained;
+                sort_keys.push((inv << sort_idx_bits) | (i as u64 & sort_idx_mask));
+            }
             continue;
         };
 
-        // Resolve (and memoize) the interned segment-id path for this class.
-        // On a cache miss, parse the name into borrowed segments and intern each
-        // (allocating a seg_name only on a segment's first global sighting), then
-        // store the id path so future dominators of this class skip the parse and
-        // the per-segment string hashing entirely.
+        // Accumulate into the per-class bucket (no tree traversal here — the tree
+        // is built in a second pass below over the ~100K classes, not 329M objects).
+        let e = &mut class_tl[name_ci];
+        e.0 += retained;
+        e.1 += shallow;
+        e.2 += 1;
+
+        // Memoize the segment-id path for this class on first encounter. No tree
+        // traversal yet — just intern the segments and store the path.
         if class_seg_path[name_ci].is_none() {
             let raw_name: &str = &g.class_names[name_ci];
             package_segments(raw_name, &mut segs);
@@ -4254,24 +4270,35 @@ fn build_top_consumers(
             }
             class_seg_path[name_ci] = Some(path);
         }
-        let path = class_seg_path[name_ci].as_ref().unwrap();
 
-        // Accumulate at the root and at every node along the package path.
-        root.top_dominator_count += 1;
-        root.shallow_heap += shallow;
-        root.retained_heap += retained;
-        let mut node = &mut root;
-        for &id in path {
-            node = node.children.entry(id).or_insert_with(Builder::new);
-            node.top_dominator_count += 1;
-            node.shallow_heap += shallow;
-            node.retained_heap += retained;
-        }
-        // Build packed sort key here, sharing the `retained` load already made
-        // above — avoids a second O(top_level) random pass into g.retained.
+        // Build packed sort key, sharing the `retained` load already made above.
         if sort_fits {
             let inv = sort_max_retained - retained;
             sort_keys.push((inv << sort_idx_bits) | (i as u64 & sort_idx_mask));
+        }
+    }
+
+    // Second pass: fold per-class accumulators into the package tree. This runs
+    // ~class_count (~100K) times instead of top_level.len() (~329M) times, cutting
+    // the tree-traversal HashMap probes by ~3000×.
+    for name_ci in 0..class_count {
+        let (ret_sum, sh_sum, cnt) = class_tl[name_ci];
+        if cnt == 0 {
+            continue;
+        }
+        let path = match class_seg_path[name_ci].as_ref() {
+            Some(p) => p,
+            None => continue,
+        };
+        root.top_dominator_count += cnt;
+        root.shallow_heap += sh_sum;
+        root.retained_heap += ret_sum;
+        let mut node = &mut root;
+        for &id in path {
+            node = node.children.entry(id).or_insert_with(Builder::new);
+            node.top_dominator_count += cnt;
+            node.shallow_heap += sh_sum;
+            node.retained_heap += ret_sum;
         }
     }
     t_tc!("package_tree_build");
