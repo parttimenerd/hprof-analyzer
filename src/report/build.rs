@@ -1775,16 +1775,18 @@ fn build_dominator_analysis(
                 dom_shallow[pci] += g.shallow[i] as u64;
                 for &c in kids {
                     let cu = c as usize;
-                    domd_count[pci] += 1;
-                    domd_shallow[pci] += g.shallow[cu] as u64;
+                    let cu_sh = g.shallow[cu] as u64;
+                    let cu_ret = g.retained[cu];
                     let cci_raw = g.class_idx[cu] as usize;
+                    domd_count[pci] += 1;
+                    domd_shallow[pci] += cu_sh;
                     if cci_raw < class_count {
                         let cci = remap[cci_raw];
                         let key = ((pci as u64) << 32) | (cci as u64);
                         let e = pair_map.entry(key).or_insert((0, 0, 0));
                         e.0 += 1;
-                        e.1 += g.shallow[cu] as u64;
-                        e.2 += g.retained[cu];
+                        e.1 += cu_sh;
+                        e.2 += cu_ret;
                     }
                 }
             }
