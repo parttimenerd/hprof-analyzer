@@ -4194,7 +4194,11 @@ fn build_top_consumers(
         let max_idx = *top_level.last().unwrap(); // top_level is index-ascending
         let idx_bits = (u32::BITS - max_idx.leading_zeros()).max(1);
         let retained_bits = 64u32.saturating_sub(idx_bits);
-        let max_retained = g.retained.iter().copied().max().unwrap_or(0);
+        let max_retained = top_level
+            .iter()
+            .map(|&i| g.retained[i as usize])
+            .max()
+            .unwrap_or(0);
         let fits = retained_bits >= 64 || max_retained < (1u64 << retained_bits);
         let idx_mask = (1u64 << idx_bits.min(63)) - 1;
         (max_retained, idx_bits, idx_mask, fits && idx_bits < 64)
