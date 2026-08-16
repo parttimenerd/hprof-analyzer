@@ -104,33 +104,42 @@ pub fn compute_retained(
     let mut class_to_last_depth: Vec<u32> = vec![0u32; class_count];
     let mut class_obj_depth: Vec<u32> = vec![0u32; class_count];
 
-    // Parallel stacks for iterative DFS.
-    let mut stk_node: Vec<u32> = Vec::new();
-    let mut stk_child_idx: Vec<u32> = Vec::new();
-    let mut stk_saved_depth: Vec<u32> = Vec::new(); // saved class_to_last_depth value
-    let mut stk_saved_obj_depth: Vec<u32> = Vec::new(); // saved class_obj_depth value
-    let mut stk_cls: Vec<u32> = Vec::new(); // class index of node (u32::MAX = vroot/none)
-    let mut stk_ci: Vec<u32> = Vec::new(); // class-obj class idx (u32::MAX = not a class obj)
+    // Fused DFS stack: all 6 per-frame fields in one struct so the hot-path
+    // push/pop touches one contiguous memory region instead of 6 separate Vecs.
+    // 24 bytes per frame; the top frame and a few neighbours fit in one cache line.
+    struct StackFrame {
+        node: u32,
+        child_idx: u32,
+        saved_depth: u32,
+        saved_obj_depth: u32,
+        cls: u32,
+        ci: u32,
+    }
+    let mut stk: Vec<StackFrame> = Vec::new();
 
     // Push virtual root (index n) to seed the DFS.
-    stk_node.push(vroot);
-    stk_child_idx.push(child_off[n]);
-    stk_saved_depth.push(0);
-    stk_saved_obj_depth.push(0);
-    stk_cls.push(undef);
-    stk_ci.push(undef);
+    stk.push(StackFrame {
+        node: vroot,
+        child_idx: child_off[n],
+        saved_depth: 0,
+        saved_obj_depth: 0,
+        cls: undef,
+        ci: undef,
+    });
 
-    while !stk_node.is_empty() {
-        let top = stk_node.len() - 1;
-        let v = stk_node[top];
-        let next_child_pos = stk_child_idx[top];
+    while !stk.is_empty() {
+        let top = stk.len() - 1;
+        let (v, next_child_pos) = {
+            let f = &stk[top];
+            (f.node, f.child_idx)
+        };
         // child_off[v+1] is safe: v is 0..=n and child_off has length n+2.
         let end_child = child_off[v as usize + 1];
 
         if next_child_pos < end_child {
             // Advance child iterator on the current frame.
             let child = child_tgt[next_child_pos as usize];
-            stk_child_idx[top] = next_child_pos + 1;
+            stk[top].child_idx = next_child_pos + 1;
 
             let cls = if (child as usize) < n {
                 class_idx[child as usize]
@@ -144,7 +153,7 @@ pub fn compute_retained(
             };
 
             // sp_new = depth the child will have on the stack (1-based, vroot is depth 1).
-            let sp_new = (stk_node.len() + 1) as u32;
+            let sp_new = (stk.len() + 1) as u32;
 
             // B2 tally: the child's dominator depth (vroot's direct children = 1)
             // is sp_new - 1. Every reachable node is pushed exactly once here, so
@@ -177,38 +186,35 @@ pub fn compute_retained(
             };
 
             // Push child frame.
-            stk_node.push(child);
-            stk_child_idx.push(child_off[child as usize]);
-            stk_saved_depth.push(saved_depth);
-            stk_saved_obj_depth.push(saved_obj_depth);
-            stk_cls.push(cls);
-            stk_ci.push(ci);
+            stk.push(StackFrame {
+                node: child,
+                child_idx: child_off[child as usize],
+                saved_depth,
+                saved_obj_depth,
+                cls,
+                ci,
+            });
         } else {
             // All children of v processed — roll up retained size into parent
             // (subtree total now final), then restore saved state and pop.
-            // Parent is stk_node[top-1]: the node that pushed v in this DFS
+            // Parent is stk[top-1].node: the node that pushed v in this DFS
             // over the dominator tree, which is exactly idom[v]. This avoids
             // keeping the ~2 GB idom array live during compute_retained.
             if top > 0 {
-                let parent = stk_node[top - 1];
+                let parent = stk[top - 1].node;
                 if parent != vroot {
                     retained[parent as usize] += retained[v as usize];
                 }
             }
-            let cls = stk_cls[top];
-            let ci = stk_ci[top];
+            let cls = stk[top].cls;
+            let ci = stk[top].ci;
             if cls != undef && (cls as usize) < class_count {
-                class_to_last_depth[cls as usize] = stk_saved_depth[top];
+                class_to_last_depth[cls as usize] = stk[top].saved_depth;
             }
             if ci != undef && (ci as usize) < class_count {
-                class_obj_depth[ci as usize] = stk_saved_obj_depth[top];
+                class_obj_depth[ci as usize] = stk[top].saved_obj_depth;
             }
-            stk_node.pop();
-            stk_child_idx.pop();
-            stk_saved_depth.pop();
-            stk_saved_obj_depth.pop();
-            stk_cls.pop();
-            stk_ci.pop();
+            stk.pop();
         }
     }
     crate::trace::probe("retained: after hasSame DFS");
