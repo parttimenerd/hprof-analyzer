@@ -564,7 +564,13 @@ pub fn build_model(
     t_bm!("system_overview");
     crate::trace::probe("build_model: after system_overview aggregates");
     let stack_held_via = build_stack_held_via(g);
-    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via, top_level_list);
+    let top = build_top_consumers(
+        g,
+        opts.top_consumers,
+        &stack_held_via,
+        top_level_list,
+        overview.total_shallow,
+    );
     t_bm!("top_consumers");
     let threads = build_thread_overview(g, overview.total_shallow);
     t_bm!("thread_overview");
@@ -3946,8 +3952,8 @@ fn build_top_consumers(
     top_n: usize,
     stack_held_via: &std::collections::HashMap<u32, String>,
     mut top_level: Vec<u32>,
+    total_shallow: u64,
 ) -> TopConsumers {
-    let n = g.n;
     let undef = u32::MAX;
     let class_count = g.class_names.len();
 
@@ -3973,11 +3979,6 @@ fn build_top_consumers(
     // a redundant O(n) scan over g.idom.
     t_tc!("collect_top_level");
 
-    // Total shallow of all reachable objects (MAT parity: pct base for Biggest Objects)
-    let total_shallow: u64 = (0..n)
-        .filter(|&i| g.idom[i] != undef)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
     t_tc!("total_shallow");
 
     // Biggest Classes by Retained Heap + Biggest Packages: fused single pass over
