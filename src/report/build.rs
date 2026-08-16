@@ -1744,10 +1744,16 @@ fn build_dominator_analysis(
     // number of O(n) passes over these ~6.6 GB of arrays.
     let mut drops: Vec<BigDropRow> = Vec::new();
     let remap = class_row_remap(g);
-    let mut dom_count = vec![0u64; class_count]; // #dominator objects of this class
-    let mut domd_count = vec![0u64; class_count]; // #objects immediately dominated
-    let mut dom_shallow = vec![0u64; class_count];
-    let mut domd_shallow = vec![0u64; class_count];
+    // Class-indexed aggregates fused into a single struct so dom/domd writes
+    // share one cache line per class instead of four.
+    #[derive(Default, Clone)]
+    struct DomEntry {
+        dom_count: u64,
+        domd_count: u64,
+        dom_shallow: u64,
+        domd_shallow: u64,
+    }
+    let mut dom_entries: Vec<DomEntry> = vec![DomEntry::default(); class_count];
     // pair_map: packed u64 key (pci << 32 | cci) -> (count, shallow, retained)
     // Packing avoids the tuple-hash overhead of HashMap<(u32, u32), _>.
     // U64HashMap uses a fast multiplicative hash for integer keys (~3× faster than SipHash).
@@ -1791,15 +1797,16 @@ fn build_dominator_analysis(
             let pci_raw = g.class_idx[i] as usize;
             if pci_raw < class_count {
                 let pci = remap[pci_raw] as usize;
-                dom_count[pci] += 1;
-                dom_shallow[pci] += g.shallow[i] as u64;
+                let de = &mut dom_entries[pci];
+                de.dom_count += 1;
+                de.dom_shallow += g.shallow[i] as u64;
                 for &c in kids {
                     let cu = c as usize;
                     let cu_sh = g.shallow[cu] as u64;
                     let cu_ret = g.retained[cu];
                     let cci_raw = g.class_idx[cu] as usize;
-                    domd_count[pci] += 1;
-                    domd_shallow[pci] += cu_sh;
+                    de.domd_count += 1;
+                    de.domd_shallow += cu_sh;
                     if cci_raw < class_count {
                         let cci = remap[cci_raw];
                         let key = ((pci as u64) << 32) | (cci as u64);
@@ -1823,12 +1830,13 @@ fn build_dominator_analysis(
         rows: drops,
     };
     let mut order: Vec<usize> = (0..class_count)
-        .filter(|&ci| remap[ci] as usize == ci && dom_count[ci] > 0)
+        .filter(|&ci| remap[ci] as usize == ci && dom_entries[ci].dom_count > 0)
         .collect();
     order.sort_unstable_by(|&a, &b| {
-        domd_shallow[b]
-            .cmp(&domd_shallow[a])
-            .then(domd_count[b].cmp(&domd_count[a]))
+        dom_entries[b]
+            .domd_shallow
+            .cmp(&dom_entries[a].domd_shallow)
+            .then(dom_entries[b].domd_count.cmp(&dom_entries[a].domd_count))
             .then(a.cmp(&b))
     });
     order.truncate(IMMEDIATE_DOMINATORS_CAP);
@@ -1836,10 +1844,10 @@ fn build_dominator_analysis(
         .into_iter()
         .map(|ci| ImmediateDominatorRow {
             dominator_class: pretty_class_name(&g.class_names[ci]),
-            dominator_count: dom_count[ci],
-            dominated_count: domd_count[ci],
-            dominator_shallow: dom_shallow[ci],
-            dominated_shallow: domd_shallow[ci],
+            dominator_count: dom_entries[ci].dom_count,
+            dominated_count: dom_entries[ci].domd_count,
+            dominator_shallow: dom_entries[ci].dom_shallow,
+            dominated_shallow: dom_entries[ci].domd_shallow,
         })
         .collect();
     // Sort pairs by dominated_retained desc, cap.
