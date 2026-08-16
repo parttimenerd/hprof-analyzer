@@ -4110,8 +4110,16 @@ fn build_top_consumers(
         }
 
         // Use the class the object represents (for class objects), else own class.
-        // Resolve class_obj_repr ONCE (it is a HashMap probe) rather than twice.
-        let repr = class_obj_repr(g, idx);
+        // Inline the jlc_idx fast-filter from class_obj_repr using the already-loaded
+        // ci_raw, avoiding a second g.class_idx[idx] load. HashMap probe only for Class objects.
+        let repr: u32 = if g.jlc_idx != undef && ci_raw as u32 != g.jlc_idx {
+            undef
+        } else {
+            g.class_obj_class_idx
+                .get(&(idx as u32))
+                .copied()
+                .unwrap_or(undef)
+        };
         let name_ci: usize = if repr != undef && (repr as usize) < class_count {
             repr as usize
         } else if ci_raw < class_count {
