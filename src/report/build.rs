@@ -232,6 +232,15 @@ fn build_obj_graph_flat(
         // that the prior BFS-fill approach used.
         type ClassMap = std::collections::HashMap<u32, (u32, u64)>;
         let mut histograms: HashMap<u32, ClassMap> = HashMap::with_capacity(nodes.len());
+        // Bitset marking which node indices are "significant" (in `nodes`).
+        // Replaces O(1) `nodes.contains_key(&child)` SipHash probes (called 329M
+        // times during the DFS) with a single bit read per child. 41 MB at n=329M.
+        let mut sig_set = crate::bitset::Bitset::with_len(n);
+        for &sig_node in nodes.keys() {
+            if (sig_node as usize) < n {
+                sig_set.set(sig_node as usize);
+            }
+        }
         // Reusable DFS stack (cleared between significant nodes).
         let mut dfs: Vec<u32> = Vec::new();
         for &sig_node in nodes.keys() {
@@ -248,7 +257,7 @@ fn build_obj_graph_flat(
             let sn = sig_node as usize;
             if sn + 1 < dc_offsets.len() {
                 for &child in &dc_targets[dc_offsets[sn] as usize..dc_offsets[sn + 1] as usize] {
-                    if !nodes.contains_key(&child) {
+                    if (child as usize) < n && !sig_set.get(child as usize) {
                         dfs.push(child);
                     }
                     // If child is itself significant, skip (it handles its own subtree).
@@ -267,7 +276,7 @@ fn build_obj_graph_flat(
                     for &child in
                         &dc_targets[dc_offsets[idx] as usize..dc_offsets[idx + 1] as usize]
                     {
-                        if !nodes.contains_key(&child) {
+                        if (child as usize) < n && !sig_set.get(child as usize) {
                             dfs.push(child);
                         }
                     }
