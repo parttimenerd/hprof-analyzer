@@ -4409,9 +4409,8 @@ fn build_top_consumers(
         let max_retained = sort_max_retained;
         let retained_of = |key: u64| max_retained - (key >> idx_bits);
 
-        // Compute distribution in one sequential pass over keys (no sort needed).
-        // Keys are not yet sorted; we decode retained from each key without
-        // touching g.retained again.
+        // Fused pass: distribution + top-N min-heap in one sequential scan over keys.
+        // Avoids a second 2.6 GB pass (min-heap scan ran separately before this fusion).
         let mut total_ret: u64 = 0;
         let mut dist_max_r: u64 = 0;
         let mut dist_min_r: u64 = u64::MAX;
@@ -4421,8 +4420,14 @@ fn build_top_consumers(
         // heap object. Replaces BTreeMap: O(1) write per object vs O(log n),
         // and the whole array fits in a single cache line.
         let mut dist_counts = [0u64; 64];
+        let actual_top = top_n.min(k);
+        // ─── Top-N extraction via min-heap (fused with distribution pass) ────
+        // Collect the actual_top smallest keys (= largest retained) with a
+        // fixed-size max-heap. Fused here to avoid a separate O(n) scan.
+        let mut heap: Vec<u64> = Vec::with_capacity(actual_top + 1);
         for &key in keys.iter() {
             let r = retained_of(key);
+            // Distribution
             total_ret = total_ret.saturating_add(r);
             if r > dist_max_r {
                 dist_max_r = r;
@@ -4436,24 +4441,7 @@ fn build_top_consumers(
                 r.checked_next_power_of_two().unwrap_or(1 << 63)
             };
             dist_counts[upper.trailing_zeros() as usize] += 1;
-        }
-        if dist_min_r == u64::MAX {
-            dist_min_r = 0;
-        }
-
-        // Selection: replace select_nth_unstable (random swaps into 2.6 GB array,
-        // cache-hostile at ThinkStation DRAM speeds) with sequential algorithms:
-        //   top-N: one sequential min-heap scan (O(n log top_n), no array mutation)
-        //   median: histogram selection with 8-bit digit passes (O(n×bytes), O(256) space)
-        // Both are pure sequential reads over `keys`, avoiding the random writes
-        // that made select_nth_unstable ~13s on the 34GB dump.
-        let actual_top = top_n.min(k);
-        // ─── Top-N extraction via min-heap ────────────────────────────────────
-        // Sort keys ascending (smallest key = largest retained). Collect the
-        // actual_top smallest keys with a fixed-size min-heap (no array mutation).
-        // After the scan, sort the tiny heap for the final ordered output.
-        let mut heap: Vec<u64> = Vec::with_capacity(actual_top + 1);
-        for &key in keys.iter() {
+            // Min-heap top-N: maintain a max-heap of the actual_top smallest keys.
             if heap.len() < actual_top {
                 heap.push(key);
                 // Sift up to maintain max-heap invariant (we track max = worst of top-N)
@@ -4473,13 +4461,13 @@ fn build_top_consumers(
                 let mut i = 0usize;
                 loop {
                     let l = 2 * i + 1;
-                    let r = 2 * i + 2;
+                    let r_idx = 2 * i + 2;
                     let mut largest = i;
                     if l < heap.len() && heap[l] > heap[largest] {
                         largest = l;
                     }
-                    if r < heap.len() && heap[r] > heap[largest] {
-                        largest = r;
+                    if r_idx < heap.len() && heap[r_idx] > heap[largest] {
+                        largest = r_idx;
                     }
                     if largest == i {
                         break;
@@ -4488,6 +4476,9 @@ fn build_top_consumers(
                     i = largest;
                 }
             }
+        }
+        if dist_min_r == u64::MAX {
+            dist_min_r = 0;
         }
         heap.sort_unstable(); // sort top-N (tiny, ≤20 elements)
         for (slot, &key) in top_level[..heap.len()].iter_mut().zip(heap.iter()) {
