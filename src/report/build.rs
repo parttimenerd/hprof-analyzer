@@ -79,11 +79,11 @@ fn build_obj_graph_flat(
     dc_targets: &[u32],
     edge_cap: usize,
     size_tier: &str,
+    total_shallow: u64,
 ) -> ObjGraphFlat {
     use std::collections::{HashMap, HashSet, VecDeque};
     let n = g.n;
     let vroot = n as u32;
-    let total_shallow: u64 = g.shallow.iter().map(|&s| s as u64).sum();
     // Show objects retaining >= 0.1% of total heap, but at least 64 KB so tiny
     // heaps (test fixtures) still produce visible nodes.
     let sig_floor: u64 = (total_shallow / 1000).max(65_536);
@@ -548,20 +548,30 @@ pub fn build_model(
             }
         };
     }
-    // Precompute total_shallow once here and pass it to build_leak_suspects and
-    // build_dominator_analysis, eliminating two redundant O(n) scans over idom/shallow.
-    // build_system_overview recomputes it inside its own fused loop (unavoidable there),
-    // but the value it produces matches: both include the synthetic classloader object.
-    let precomputed_total_shallow: u64 = {
+    // Precompute total_shallow (reachable only) and total_shallow_all (all objects)
+    // in one O(n) pass over g.idom + g.shallow:
+    // - precomputed_total_shallow is passed to build_leak_suspects and
+    //   build_dominator_analysis, eliminating two redundant O(n) scans.
+    // - total_shallow_all is passed to build_obj_graph_flat (--obj-graph only),
+    //   eliminating that function's separate g.shallow.iter().sum() pass.
+    // build_system_overview recomputes precomputed_total_shallow inside its fused
+    // loop (unavoidable there), but the value matches: both include the synthetic
+    // classloader object.
+    let (precomputed_total_shallow, total_shallow_all): (u64, u64) = {
         let undef = u32::MAX;
-        let mut s: u64 = (0..g.n)
-            .filter(|&i| g.idom[i] != undef)
-            .map(|i| g.shallow[i] as u64)
-            .sum();
-        if let Some(sz) = g.system_classloader_shallow {
-            s += sz as u64;
+        let mut reachable: u64 = 0u64;
+        let mut all: u64 = 0u64;
+        for i in 0..g.n {
+            let sh = g.shallow[i] as u64;
+            all += sh;
+            if g.idom[i] != undef {
+                reachable += sh;
+            }
         }
-        s
+        if let Some(sz) = g.system_classloader_shallow {
+            reachable += sz as u64;
+        }
+        (reachable, all)
     };
     // Call the dc_offsets/dc_targets consumers FIRST so we can drop those ~4 GB
     // arrays before build_system_overview. build_system_overview only needs
@@ -597,6 +607,7 @@ pub fn build_model(
             &dc_targets,
             opts.report_size.edge_cap(),
             opts.report_size.tier_name(),
+            total_shallow_all,
         ))
     } else {
         None
