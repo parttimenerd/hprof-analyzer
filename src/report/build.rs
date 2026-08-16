@@ -3392,6 +3392,12 @@ pub(crate) fn build_leak_suspects(
             children: Vec::new(),
         });
 
+        // Cache the child index for non-class-object members (label = group_label).
+        // Members of a group suspect all share the same class, so almost all will
+        // map to group_label. After the first hit, subsequent members skip the
+        // O(children) find scan entirely.
+        let mut normal_child_cache: Option<usize> = None;
+
         for &m in members {
             // Fast path: if this member's immediate dominator is vroot (or undef),
             // the chain is exactly [m] (depth 1). For non-class-object members the
@@ -3405,33 +3411,63 @@ pub(crate) fn build_leak_suspects(
                 // For class objects, display_of returns the represented-class name
                 // (varies per member); fall through to label computation. For all
                 // others, display_of == group_label (same class ⟹ same pretty name).
-                let label: std::borrow::Cow<str> = if class_obj_repr(g, m as usize) == u32::MAX {
-                    std::borrow::Cow::Borrowed(group_label)
+                let child = if class_obj_repr(g, m as usize) == u32::MAX {
+                    // Normal instance: use cached child index or find/create once.
+                    if let Some(c) = normal_child_cache {
+                        c
+                    } else {
+                        let existing = arena[0]
+                            .children
+                            .iter()
+                            .copied()
+                            .find(|&c| arena[c].display_class == group_label);
+                        let c = match existing {
+                            Some(c) => c,
+                            None => {
+                                if arena.len() >= MERGED_PATH_MAX_NODES {
+                                    continue;
+                                }
+                                let idx = arena.len();
+                                arena.push(MNode {
+                                    display_class: group_label.to_string(),
+                                    object_count: 0,
+                                    retained: 0,
+                                    root_type_label: None,
+                                    field_edge: None,
+                                    children: Vec::new(),
+                                });
+                                arena[0].children.push(idx);
+                                idx
+                            }
+                        };
+                        normal_child_cache = Some(c);
+                        c
+                    }
                 } else {
-                    std::borrow::Cow::Owned(display_of(m as usize))
-                };
-                let existing = arena[0]
-                    .children
-                    .iter()
-                    .copied()
-                    .find(|&c| arena[c].display_class == label.as_ref());
-                let child = match existing {
-                    Some(c) => c,
-                    None => {
-                        if arena.len() >= MERGED_PATH_MAX_NODES {
-                            continue;
+                    let label = display_of(m as usize);
+                    let existing = arena[0]
+                        .children
+                        .iter()
+                        .copied()
+                        .find(|&c| arena[c].display_class == label);
+                    match existing {
+                        Some(c) => c,
+                        None => {
+                            if arena.len() >= MERGED_PATH_MAX_NODES {
+                                continue;
+                            }
+                            let idx = arena.len();
+                            arena.push(MNode {
+                                display_class: label,
+                                object_count: 0,
+                                retained: 0,
+                                root_type_label: None,
+                                field_edge: None,
+                                children: Vec::new(),
+                            });
+                            arena[0].children.push(idx);
+                            idx
                         }
-                        let idx = arena.len();
-                        arena.push(MNode {
-                            display_class: label.into_owned(),
-                            object_count: 0,
-                            retained: 0,
-                            root_type_label: None,
-                            field_edge: None,
-                            children: Vec::new(),
-                        });
-                        arena[0].children.push(idx);
-                        idx
                     }
                 };
                 arena[child].object_count += 1;
