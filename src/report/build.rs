@@ -2383,7 +2383,10 @@ fn build_system_overview(
         }
     }
 
-    let mut top_level_list: Vec<u32> = Vec::new();
+    // Pre-size with depth_counts[0] (= #objects at dom-depth 1 = #top-level
+    // dominators) to avoid repeated reallocs during the O(n) push loop.
+    let tl_cap = depth_counts.first().copied().unwrap_or(0) as usize;
+    let mut top_level_list: Vec<u32> = Vec::with_capacity(tl_cap);
     // Single fused pass over all objects — computes totals, composition,
     // top-level retained, class histogram, and class-loader rollup together
     // to avoid 5 separate O(n) scans on large dumps.
