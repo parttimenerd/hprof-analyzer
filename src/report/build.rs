@@ -4477,15 +4477,33 @@ fn build_top_consumers(
         let bucket_median_pos = median_pos - cum as usize;
         let bucket_count = dist_counts[med_bucket_idx] as usize;
         let mut bucket_vals: Vec<u64> = Vec::with_capacity(bucket_count);
+        // Precompute the bucket range as direct u64 bounds to avoid calling
+        // checked_next_power_of_two for every element in the scan.
+        // Bucket bi=0: r in [0,1] (next_power_of_two(0)==1, next_power_of_two(1)==1).
+        // Bucket bi in [1,62]: r in (2^(bi-1), 2^bi].
+        // Bucket bi=63: r in (2^62, u64::MAX] (checked_next_power_of_two returns None
+        //               for r > 2^63, which is mapped to bucket 63 via unwrap_or(1<<63)).
+        let buck_hi: u64 = if med_bucket_idx == 63 {
+            u64::MAX
+        } else {
+            1u64 << med_bucket_idx
+        };
+        let buck_lo_excl: u64 = if med_bucket_idx == 0 {
+            0
+        } else {
+            1u64 << (med_bucket_idx - 1)
+        };
         // top_level[..k] is still the original unmodified list here.
         for &oi in &top_level[..k] {
             let r = g.retained[oi as usize];
-            let upper = if r <= 1 {
-                1
+            // bi=0: r <= 1 (r > 0 is NOT required: {0,1} both qualify)
+            // bi>=1: buck_lo_excl < r <= buck_hi
+            let in_bucket = if med_bucket_idx == 0 {
+                r <= 1
             } else {
-                r.checked_next_power_of_two().unwrap_or(1 << 63)
+                r > buck_lo_excl && r <= buck_hi
             };
-            if upper.trailing_zeros() as usize == med_bucket_idx {
+            if in_bucket {
                 bucket_vals.push(r);
             }
         }
