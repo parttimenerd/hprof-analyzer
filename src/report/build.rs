@@ -2344,20 +2344,34 @@ fn build_system_overview(
     // classes_loaded and classloaders_loaded (class-object walk)
     let mut classes_loaded: u64 = 0;
     let mut loader_set: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    // Class histogram
-    let mut inst_count: Vec<u64> = vec![0; class_count];
-    let mut shallow_total: Vec<u64> = vec![0; class_count];
-    let mut class_retained: Vec<u64> = vec![0; class_count];
-    let mut max_shallow: Vec<u64> = vec![0; class_count];
+    // Class histogram — fused into a single struct so all 5 per-class writes
+    // during the O(n) loop below touch ONE cache line per class instead of 5.
+    // 40 bytes × class_count ≈ 4 MB for a typical large dump — fits in L2.
+    #[derive(Clone)]
+    struct ClassHistEntry {
+        count: u64,
+        shallow: u64,
+        retained: u64,
+        max_shallow: u64,
+        incoming_ref: u64,
+    }
+    let mut hist: Vec<ClassHistEntry> = vec![
+        ClassHistEntry {
+            count: 0,
+            shallow: 0,
+            retained: 0,
+            max_shallow: 0,
+            incoming_ref: 0,
+        };
+        class_count
+    ];
     // Highest-retained reachable object per raw class index (keyed by ci_raw,
     // not remapped). Built during the fused loop; replaces the second O(n)
     // scan in the root_path block below. (u32::MAX, 0) = no object seen yet.
     let mut best_obj_per_ci: Vec<(u32, u64)> = vec![(u32::MAX, 0); class_count];
-    // Per-class incoming reference count, remapped like the other per-class tallies.
-    let mut incoming_ref: Vec<u64> = vec![0; class_count];
     for (ci_raw, &cnt) in g.incoming_refs_per_class.iter().enumerate() {
         if ci_raw < class_count {
-            incoming_ref[remap[ci_raw] as usize] += cnt;
+            hist[remap[ci_raw] as usize].incoming_ref += cnt;
         }
     }
 
@@ -2407,14 +2421,15 @@ fn build_system_overview(
             // Class histogram
             if ci_raw < class_count {
                 let ci = remap[ci_raw] as usize;
-                inst_count[ci] += 1;
-                shallow_total[ci] += sh;
-                if sh > max_shallow[ci] {
-                    max_shallow[ci] = sh;
+                let h = &mut hist[ci];
+                h.count += 1;
+                h.shallow += sh;
+                if sh > h.max_shallow {
+                    h.max_shallow = sh;
                 }
                 let ret_i = g.retained[i];
                 if !g.has_same_class_ancestor.get(i) {
-                    class_retained[ci] += ret_i;
+                    h.retained += ret_i;
                 }
                 // Track highest-retained object per raw class (for root_path).
                 if ret_i > best_obj_per_ci[ci_raw].1 {
@@ -2426,7 +2441,7 @@ fn build_system_overview(
             if repr != undef_u32 {
                 if (repr as usize) < class_count {
                     let ci = remap[repr as usize] as usize;
-                    class_retained[ci] += g.retained[i];
+                    hist[ci].retained += g.retained[i];
                 }
                 classes_loaded += 1;
                 // `repr` IS `class_obj_class_idx[i]`, so reuse it as the row
@@ -2648,8 +2663,8 @@ fn build_system_overview(
             if remap[ci] as usize == ci
                 && pretty_class_name(&g.class_names[ci]) == "java.lang.ClassLoader"
             {
-                inst_count[ci] += 1;
-                shallow_total[ci] += sz as u64;
+                hist[ci].count += 1;
+                hist[ci].shallow += sz as u64;
                 break;
             }
         }
@@ -2662,17 +2677,17 @@ fn build_system_overview(
     let mut order: Vec<usize> = (0..class_count)
         .filter(|&ci| remap[ci] as usize == ci)
         .collect();
-    order.sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
+    order.sort_unstable_by(|&a, &b| hist[b].retained.cmp(&hist[a].retained).then(a.cmp(&b)));
     let mut histogram: Vec<HistRow> = order
         .iter()
         .copied()
         .map(|ci| HistRow {
             pretty_class: pretty_class_name(&g.class_names[ci]),
-            instances: inst_count[ci],
-            shallow: shallow_total[ci],
-            retained: class_retained[ci],
-            max_instance_shallow: max_shallow[ci],
-            incoming_ref_count: incoming_ref[ci],
+            instances: hist[ci].count,
+            shallow: hist[ci].shallow,
+            retained: hist[ci].retained,
+            max_instance_shallow: hist[ci].max_shallow,
+            incoming_ref_count: hist[ci].incoming_ref,
             loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
             loader_label: {
                 // `ci` is the histogram row index, aligned with class_loader_id.
