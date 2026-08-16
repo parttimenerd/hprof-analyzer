@@ -4486,17 +4486,21 @@ fn build_top_consumers(
         for (slot, &key) in top_level[..heap.len()].iter_mut().zip(heap.iter()) {
             *slot = (key & idx_mask) as u32;
         }
-        // ─── Exact median via sequential histogram selection ──────────────────
+        // ─── Exact median via cascading histogram selection ───────────────────
         // We need the key at position k/2 in sorted order (lower-median for even k).
-        // Histogram-select: 8 passes over keys (pure sequential reads, no writes).
-        // Each pass narrows the [lo, hi] range to an 8-bit sub-bucket containing
-        // the target rank. After 8 passes the range has ≤ 1 element = exact median.
+        // Pass 1: scan all 329M keys once with 256-bucket histogram (O(n)).
+        // Passes 2-8: scan only the ~n/256 keys that fell into the target bucket
+        // (cascading filter). Total work O(n) vs the naive O(8n) — 8× fewer
+        // comparisons for passes 2-8.
         let median_pos = k / 2; // 0-based index of the median in sorted-asc order
         let median_r = {
             let mut lo = u64::MIN;
             let mut hi = u64::MAX;
             let mut target_pos = median_pos;
             let mut median_key = keys[0]; // fallback
+            // After pass 1 we filter down to ~n/256 keys; passes 2+ use this buf.
+            let mut filtered: Vec<u64> = Vec::new();
+            let mut use_filtered = false;
 
             'outer: for shift in (0u32..64).step_by(8).rev() {
                 let lo_digit = (lo >> shift) as u8;
@@ -4507,39 +4511,55 @@ fn build_top_consumers(
                     0
                 };
                 let mut counts = [0u64; 256];
-                for &key in keys.iter() {
+                let working: &[u64] = if use_filtered { &filtered } else { keys };
+                for &key in working {
                     if key >= lo && key <= hi {
                         counts[((key >> shift) & 0xFF) as usize] += 1;
                     }
                 }
+                let mut new_lo = lo;
+                let mut new_hi = hi;
+                let mut found = false;
                 for d in lo_digit..=hi_digit {
                     let c = counts[d as usize];
                     if c as usize > target_pos {
-                        // Narrow [lo, hi] to the sub-range where byte@shift == d.
-                        // High bits (above the current byte) come from the old lo/hi
-                        // (both have the same high bits since we've been narrowing from MSB).
                         let above = if shift < 56 {
                             lo >> (shift + 8) << (shift + 8)
                         } else {
                             0
                         };
-                        lo = above
+                        new_lo = above
                             | ((d as u64) << shift)
                             | (if d == lo_digit { lo & mask_lo } else { 0 });
-                        hi = above
+                        new_hi = above
                             | ((d as u64) << shift)
                             | (if d == hi_digit { hi & mask_lo } else { mask_lo });
                         if c == 1 || shift == 0 {
-                            for &key in keys.iter() {
-                                if key >= lo && key <= hi {
+                            let scan: &[u64] = if use_filtered { &filtered } else { keys };
+                            for &key in scan {
+                                if key >= new_lo && key <= new_hi {
                                     median_key = key;
                                     break 'outer;
                                 }
                             }
                         }
+                        found = true;
                         break;
                     }
                     target_pos -= c as usize;
+                }
+                if !found {
+                    break;
+                }
+                lo = new_lo;
+                hi = new_hi;
+                // After narrowing: filter down to only the keys in range so subsequent
+                // passes scan ~n/256 elements instead of all 329M — ~256× cheaper.
+                if !use_filtered && keys.len() > 4096 {
+                    filtered.extend(keys.iter().copied().filter(|&k| k >= lo && k <= hi));
+                    use_filtered = true;
+                } else if use_filtered {
+                    filtered.retain(|&k| k >= lo && k <= hi);
                 }
             }
             retained_of(median_key)
