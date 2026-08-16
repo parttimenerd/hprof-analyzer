@@ -4009,11 +4009,13 @@ fn build_top_consumers(
     // allocs). Keying by id changes the BTreeMap's traversal order vs the old
     // string keys, but `convert` re-sorts every node's children by
     // (retained desc, name asc), so the emitted tree is byte-identical.
+    // HashMap is faster than BTreeMap for the hot per-dominator insertions;
+    // `convert` sorts children explicitly anyway, so insertion order is irrelevant.
     struct Builder {
         top_dominator_count: u64,
         shallow_heap: u64,
         retained_heap: u64,
-        children: std::collections::BTreeMap<u32, Builder>,
+        children: std::collections::HashMap<u32, Builder>,
     }
     impl Builder {
         fn new() -> Builder {
@@ -4021,7 +4023,7 @@ fn build_top_consumers(
                 top_dominator_count: 0,
                 shallow_heap: 0,
                 retained_heap: 0,
-                children: std::collections::BTreeMap::new(),
+                children: std::collections::HashMap::new(),
             }
         }
     }
