@@ -4081,6 +4081,65 @@ fn build_top_retainers(
     rows
 }
 
+/// Push (r, idx) into a max-heap of capacity `cap`, maintaining the max-heap
+/// invariant (heap[0] = worst = smallest retained, or largest idx on tie).
+/// A new entry beats the worst when: r > heap[0].0 || (r == heap[0].0 && idx < heap[0].1).
+#[inline]
+fn heap_push_topn(heap: &mut Vec<(u64, u32)>, r: u64, idx: u32, cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    if heap.len() < cap {
+        heap.push((r, idx));
+        // Sift up: parent at (i-1)/2; child beats parent if child.retained < parent.retained
+        // (or equal retained + child.idx > parent.idx), i.e., child is "worse".
+        let mut i = heap.len() - 1;
+        while i > 0 {
+            let p = (i - 1) / 2;
+            if heap_worse(heap[i], heap[p]) {
+                heap.swap(p, i);
+                i = p;
+            } else {
+                break;
+            }
+        }
+    } else if heap_beats_worst(r, idx, heap[0]) {
+        heap[0] = (r, idx);
+        // Sift down.
+        let mut i = 0usize;
+        loop {
+            let l = 2 * i + 1;
+            let r_c = 2 * i + 2;
+            let mut worst = i;
+            if l < heap.len() && heap_worse(heap[l], heap[worst]) {
+                worst = l;
+            }
+            if r_c < heap.len() && heap_worse(heap[r_c], heap[worst]) {
+                worst = r_c;
+            }
+            if worst == i {
+                break;
+            }
+            heap.swap(i, worst);
+            i = worst;
+        }
+    }
+}
+
+/// Returns true if entry `a` is "worse" than `b` (should be closer to the top
+/// of the max-heap, i.e., should be evicted first when the heap is full).
+/// "Worse" means: smaller retained, or equal retained + larger idx.
+#[inline(always)]
+fn heap_worse(a: (u64, u32), b: (u64, u32)) -> bool {
+    a.0 < b.0 || (a.0 == b.0 && a.1 > b.1)
+}
+
+/// Returns true if new entry (r, idx) beats the current worst heap[0].
+#[inline(always)]
+fn heap_beats_worst(r: u64, idx: u32, worst: (u64, u32)) -> bool {
+    r > worst.0 || (r == worst.0 && idx < worst.1)
+}
+
 /// Build the "Top Consumers" model: biggest objects (top-level dominators by
 /// retained), biggest classes, and the pruned package tree. Bounded reductions
 /// over the graph; no per-object Vec is retained.
@@ -4186,31 +4245,22 @@ fn build_top_consumers(
     // Byte-exact: same interned ids, same tree, same `convert` output.
     let mut class_seg_path: Vec<Option<Vec<u32>>> = vec![None; class_count];
 
-    // Pre-compute packed sort keys during the package_tree_build loop below,
-    // sharing the g.retained[idx] loads already made there. This eliminates the
-    // second O(top_level) random read into the 2.6 GB g.retained array that the
-    // old sort-key build made separately (~6s win on the 34GB dump).
-    let (sort_max_retained, sort_idx_bits, sort_idx_mask, sort_fits) = if !top_level.is_empty() {
-        let max_idx = *top_level.last().unwrap(); // top_level is index-ascending
-        let idx_bits = (u32::BITS - max_idx.leading_zeros()).max(1);
-        let retained_bits = 64u32.saturating_sub(idx_bits);
-        let max_retained = top_level
-            .iter()
-            .map(|&i| g.retained[i as usize])
-            .max()
-            .unwrap_or(0);
-        let fits = retained_bits >= 64 || max_retained < (1u64 << retained_bits);
-        let idx_mask = (1u64 << idx_bits.min(63)) - 1;
-        (max_retained, idx_bits, idx_mask, fits && idx_bits < 64)
-    } else {
-        (0u64, 1u32, 0u64, false)
-    };
-    // Pre-allocated key buffer for the fast sort path (capacity = top_level.len()).
-    let mut sort_keys: Vec<u64> = if sort_fits {
-        Vec::with_capacity(top_level.len())
-    } else {
-        Vec::new()
-    };
+    // Size-distribution, top-N extraction, and median are all computed inline
+    // during the package_tree_build loop below, sharing the retained reads already
+    // paid there.  This eliminates the old sort_keys Vec (2.6 GB on the 34 GB
+    // dump) and the two extra sequential passes over it.
+    let k = top_level.len();
+    let actual_top = top_n.min(k);
+    let mut total_ret: u64 = 0;
+    let mut dist_max_r: u64 = 0;
+    let mut dist_min_r: u64 = u64::MAX;
+    // Power-of-two bucket histogram: dist_counts[i] counts objects where
+    // next_power_of_two(retained) == 2^i.  64 entries cover the full u64 range.
+    let mut dist_counts = [0u64; 64];
+    // Top-N extraction: max-heap of (retained, obj_index) pairs.
+    // heap[0] = worst current entry (smallest retained, or largest idx on tie).
+    // A new entry (r, i) beats the worst if r > heap[0].0 || (r == heap[0].0 && i < heap[0].1).
+    let mut heap: Vec<(u64, u32)> = Vec::with_capacity(actual_top + 1);
 
     for &i in &top_level {
         let idx = i as usize;
@@ -4242,11 +4292,21 @@ fn build_top_consumers(
         } else if ci_raw < class_count {
             ci_raw
         } else {
-            // Build sort key even if name_ci is invalid — retained is known.
-            if sort_fits {
-                let inv = sort_max_retained - retained;
-                sort_keys.push((inv << sort_idx_bits) | (i as u64 & sort_idx_mask));
+            // Distribution + top-N even for objects with no valid name_ci.
+            total_ret = total_ret.saturating_add(retained);
+            if retained > dist_max_r {
+                dist_max_r = retained;
             }
+            if retained < dist_min_r {
+                dist_min_r = retained;
+            }
+            let upper = if retained <= 1 {
+                1
+            } else {
+                retained.checked_next_power_of_two().unwrap_or(1 << 63)
+            };
+            dist_counts[upper.trailing_zeros() as usize] += 1;
+            heap_push_topn(&mut heap, retained, i, actual_top);
             continue;
         };
 
@@ -4278,11 +4338,21 @@ fn build_top_consumers(
             class_seg_path[name_ci] = Some(path);
         }
 
-        // Build packed sort key, sharing the `retained` load already made above.
-        if sort_fits {
-            let inv = sort_max_retained - retained;
-            sort_keys.push((inv << sort_idx_bits) | (i as u64 & sort_idx_mask));
+        // Distribution + top-N tracking, sharing the `retained` load above.
+        total_ret = total_ret.saturating_add(retained);
+        if retained > dist_max_r {
+            dist_max_r = retained;
         }
+        if retained < dist_min_r {
+            dist_min_r = retained;
+        }
+        let upper = if retained <= 1 {
+            1
+        } else {
+            retained.checked_next_power_of_two().unwrap_or(1 << 63)
+        };
+        dist_counts[upper.trailing_zeros() as usize] += 1;
+        heap_push_topn(&mut heap, retained, i, actual_top);
     }
 
     // Second pass: fold per-class accumulators into the package tree. This runs
@@ -4376,194 +4446,72 @@ fn build_top_consumers(
     let biggest_packages = convert(String::new(), root, total, threshold_bp, &seg_names);
     t_tc!("package_tree_convert");
 
-    // Sort top_level by retained desc, tie-broken by index asc. The natural
-    // comparator does two random-access loads into the ~4 GB `g.retained` array
-    // per comparison (~O(n log n) of them) — cache-hostile and the dominant cost
-    // of this phase (task #29 attribution). When the values fit, replace it with
-    // a single-key sort that reads each `g.retained[idx]` EXACTLY ONCE into a
-    // packed `u64` key, then sorts the cache-local key array (no indirection):
-    //
-    //   key = ((max_retained - retained) << idx_bits) | idx
-    //
-    // Sorting keys ASCENDING orders by `(max_retained - retained)` asc = retained
-    // DESC, with `idx` in the low bits breaking ties ASC — byte-identical to the
-    // old `retained desc, idx asc` comparator. This needs `idx` and
-    // `max_retained` to co-fit in 64 bits; when they don't we fall back to the
-    // exact comparator, so output is identical either way. The packed-key buffer
-    // is one `Vec<u64>` (8 B/elem) — half the 16 B of a `(u64,u32)` decorate
-    // (task #30, which blew the RSS ceiling at ~5.3 GB) and paying the random
-    // `g.retained` loads once (unlike the radix retry, task #31, which re-read
-    // them per pass for no win). sort_keys was built in the package_tree_build loop
-    // above, sharing the g.retained reads already paid there.
-    // Precomputed size_distribution from the packed-u64 sort path.
-    // Populated inside the fast branch below (where retained values are decoded
-    // from keys, avoiding a second round of random g.retained reads after the
-    // sort). The slow fallback branch leaves this None and the distribution block
-    // below recomputes it from top_level + g.retained as before.
-    let mut precomputed_distribution: Option<TopSizeDistribution> = None;
-    if sort_fits && !sort_keys.is_empty() {
-        let keys = &mut sort_keys;
-        let k = keys.len();
-        let idx_mask = sort_idx_mask;
-        let idx_bits = sort_idx_bits;
-        let max_retained = sort_max_retained;
-        let retained_of = |key: u64| max_retained - (key >> idx_bits);
+    // ── Post-loop finalization ────────────────────────────────────────────────
+    // distribution + heap were computed inline in the package_tree_build loop.
+    if dist_min_r == u64::MAX {
+        dist_min_r = 0;
+    }
 
-        // Fused pass: distribution + top-N min-heap in one sequential scan over keys.
-        // Avoids a second 2.6 GB pass (min-heap scan ran separately before this fusion).
-        let mut total_ret: u64 = 0;
-        let mut dist_max_r: u64 = 0;
-        let mut dist_min_r: u64 = u64::MAX;
-        // Power-of-two bucket array: dist_counts[i] counts objects whose
-        // next_power_of_two(r) = 2^i (index = trailing_zeros of upper_bytes).
-        // 64 entries cover 2^0..2^63 — the physically reachable range for any
-        // heap object. Replaces BTreeMap: O(1) write per object vs O(log n),
-        // and the whole array fits in a single cache line.
-        let mut dist_counts = [0u64; 64];
-        let actual_top = top_n.min(k);
-        // ─── Top-N extraction via min-heap (fused with distribution pass) ────
-        // Collect the actual_top smallest keys (= largest retained) with a
-        // fixed-size max-heap. Fused here to avoid a separate O(n) scan.
-        let mut heap: Vec<u64> = Vec::with_capacity(actual_top + 1);
-        for &key in keys.iter() {
-            let r = retained_of(key);
-            // Distribution
-            total_ret = total_ret.saturating_add(r);
-            if r > dist_max_r {
-                dist_max_r = r;
+    // ── Exact median via power-of-two bucket + targeted second scan ───────────
+    // dist_counts[i] is the complete histogram already computed during the main loop.
+    // Find the 64-bucket containing the median (position k/2 in descending order).
+    // Then do ONE sequential pass over top_level (still unmodified here) collecting
+    // retained values in that bucket, sort the small result, pick the exact value.
+    // This eliminates the old sort_keys Vec (2.6 GB on the 34 GB dump) and its
+    // two extra O(n) passes.
+    let median_r = if k == 0 {
+        0u64
+    } else {
+        let median_pos = k / 2; // 0-based position in descending order
+        // Walk dist_counts from the LARGEST bucket downward, accumulating counts.
+        let mut cum = 0u64;
+        let mut med_bucket_idx = 0usize;
+        'find_bucket: for bi in (0..64usize).rev() {
+            let cnt = dist_counts[bi];
+            if cum + cnt > median_pos as u64 {
+                med_bucket_idx = bi;
+                break 'find_bucket;
             }
-            if r < dist_min_r {
-                dist_min_r = r;
-            }
+            cum += cnt;
+        }
+        let bucket_median_pos = median_pos - cum as usize;
+        let bucket_count = dist_counts[med_bucket_idx] as usize;
+        let mut bucket_vals: Vec<u64> = Vec::with_capacity(bucket_count);
+        // top_level[..k] is still the original unmodified list here.
+        for &oi in &top_level[..k] {
+            let r = g.retained[oi as usize];
             let upper = if r <= 1 {
                 1
             } else {
                 r.checked_next_power_of_two().unwrap_or(1 << 63)
             };
-            dist_counts[upper.trailing_zeros() as usize] += 1;
-            // Min-heap top-N: maintain a max-heap of the actual_top smallest keys.
-            if heap.len() < actual_top {
-                heap.push(key);
-                // Sift up to maintain max-heap invariant (we track max = worst of top-N)
-                let mut i = heap.len() - 1;
-                while i > 0 {
-                    let p = (i - 1) / 2;
-                    if heap[p] < heap[i] {
-                        heap.swap(p, i);
-                        i = p;
-                    } else {
-                        break;
-                    }
-                }
-            } else if key < heap[0] {
-                // key beats current worst → replace and sift down
-                heap[0] = key;
-                let mut i = 0usize;
-                loop {
-                    let l = 2 * i + 1;
-                    let r_idx = 2 * i + 2;
-                    let mut largest = i;
-                    if l < heap.len() && heap[l] > heap[largest] {
-                        largest = l;
-                    }
-                    if r_idx < heap.len() && heap[r_idx] > heap[largest] {
-                        largest = r_idx;
-                    }
-                    if largest == i {
-                        break;
-                    }
-                    heap.swap(i, largest);
-                    i = largest;
-                }
+            if upper.trailing_zeros() as usize == med_bucket_idx {
+                bucket_vals.push(r);
             }
         }
-        if dist_min_r == u64::MAX {
-            dist_min_r = 0;
+        if bucket_vals.is_empty() {
+            0
+        } else {
+            bucket_vals.sort_unstable_by(|a, b| b.cmp(a));
+            bucket_vals[bucket_median_pos.min(bucket_vals.len() - 1)]
         }
-        heap.sort_unstable(); // sort top-N (tiny, ≤20 elements)
-        for (slot, &key) in top_level[..heap.len()].iter_mut().zip(heap.iter()) {
-            *slot = (key & idx_mask) as u32;
-        }
-        // ─── Exact median via cascading histogram selection ───────────────────
-        // We need the key at position k/2 in sorted order (lower-median for even k).
-        // Pass 1: scan all 329M keys once with 256-bucket histogram (O(n)).
-        // Passes 2-8: scan only the ~n/256 keys that fell into the target bucket
-        // (cascading filter). Total work O(n) vs the naive O(8n) — 8× fewer
-        // comparisons for passes 2-8.
-        let median_pos = k / 2; // 0-based index of the median in sorted-asc order
-        let median_r = {
-            let mut lo = u64::MIN;
-            let mut hi = u64::MAX;
-            let mut target_pos = median_pos;
-            let mut median_key = keys[0]; // fallback
-            // After pass 1 we filter down to ~n/256 keys; passes 2+ use this buf.
-            let mut filtered: Vec<u64> = Vec::new();
-            let mut use_filtered = false;
+    };
 
-            'outer: for shift in (0u32..64).step_by(8).rev() {
-                let lo_digit = (lo >> shift) as u8;
-                let hi_digit = (hi >> shift) as u8;
-                let mask_lo = if shift < 64 {
-                    (1u64 << shift).wrapping_sub(1)
-                } else {
-                    0
-                };
-                let mut counts = [0u64; 256];
-                let working: &[u64] = if use_filtered { &filtered } else { keys };
-                for &key in working {
-                    if key >= lo && key <= hi {
-                        counts[((key >> shift) & 0xFF) as usize] += 1;
-                    }
-                }
-                let mut new_lo = lo;
-                let mut new_hi = hi;
-                let mut found = false;
-                for d in lo_digit..=hi_digit {
-                    let c = counts[d as usize];
-                    if c as usize > target_pos {
-                        let above = if shift < 56 {
-                            lo >> (shift + 8) << (shift + 8)
-                        } else {
-                            0
-                        };
-                        new_lo = above
-                            | ((d as u64) << shift)
-                            | (if d == lo_digit { lo & mask_lo } else { 0 });
-                        new_hi = above
-                            | ((d as u64) << shift)
-                            | (if d == hi_digit { hi & mask_lo } else { mask_lo });
-                        if c == 1 || shift == 0 {
-                            let scan: &[u64] = if use_filtered { &filtered } else { keys };
-                            for &key in scan {
-                                if key >= new_lo && key <= new_hi {
-                                    median_key = key;
-                                    break 'outer;
-                                }
-                            }
-                        }
-                        found = true;
-                        break;
-                    }
-                    target_pos -= c as usize;
-                }
-                if !found {
-                    break;
-                }
-                lo = new_lo;
-                hi = new_hi;
-                // After narrowing: filter down to only the keys in range so subsequent
-                // passes scan ~n/256 elements instead of all 329M — ~256× cheaper.
-                if !use_filtered && keys.len() > 4096 {
-                    filtered.extend(keys.iter().copied().filter(|&k| k >= lo && k <= hi));
-                    use_filtered = true;
-                } else if use_filtered {
-                    filtered.retain(|&k| k >= lo && k <= hi);
-                }
-            }
-            retained_of(median_key)
-        };
-        // Reconstruct sorted (upper_bytes asc) SizeBucket vec from the flat array.
-        // 1u64 << i is already ascending, matching BTreeMap's natural iteration order.
+    // ── Top-N extraction: write heap into top_level[..top_n] ─────────────────
+    // Sort the heap (tiny, ≤top_n elements) descending by (retained DESC, idx ASC)
+    // and fill top_level[0..heap.len()] with the top-N object indices.
+    // NOTE: this must happen AFTER the median scan above, which needs the original
+    // top_level[..k] contents.
+    heap.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (slot, &(_, oi)) in top_level[..heap.len()].iter_mut().zip(heap.iter()) {
+        *slot = oi;
+    }
+    t_tc!("sort_top_level");
+
+    // ── Size distribution (from dist_counts already computed) ─────────────────
+    let size_distribution = if k == 0 {
+        TopSizeDistribution::default()
+    } else {
         let dist_buckets: Vec<SizeBucket> = dist_counts
             .iter()
             .enumerate()
@@ -4573,62 +4521,13 @@ fn build_top_consumers(
                 count: c,
             })
             .collect();
-        precomputed_distribution = Some(TopSizeDistribution {
+        TopSizeDistribution {
             buckets: dist_buckets,
             count: k as u64,
             min: dist_min_r,
             max: dist_max_r,
             median: median_r,
             total: total_ret,
-        });
-        drop(sort_keys);
-    } else if !top_level.is_empty() {
-        top_level.sort_unstable_by(|&a, &b| {
-            g.retained[b as usize]
-                .cmp(&g.retained[a as usize])
-                .then(a.cmp(&b))
-        });
-    }
-    t_tc!("sort_top_level");
-    let size_distribution = if let Some(pd) = precomputed_distribution {
-        pd
-    } else {
-        let k = top_level.len();
-        if k == 0 {
-            TopSizeDistribution::default()
-        } else {
-            let max = g.retained[top_level[0] as usize];
-            let min = g.retained[top_level[k - 1] as usize];
-            let median = g.retained[top_level[k / 2] as usize];
-            let mut total_ret: u64 = 0;
-            let mut dist_counts = [0u64; 64];
-            for &i in &top_level {
-                let r = g.retained[i as usize];
-                total_ret = total_ret.saturating_add(r);
-                let upper = if r <= 1 {
-                    1
-                } else {
-                    r.checked_next_power_of_two().unwrap_or(1 << 63)
-                };
-                dist_counts[upper.trailing_zeros() as usize] += 1;
-            }
-            let buckets: Vec<SizeBucket> = dist_counts
-                .iter()
-                .enumerate()
-                .filter(|&(_, &c)| c > 0)
-                .map(|(i, &c)| SizeBucket {
-                    upper_bytes: 1u64 << i,
-                    count: c,
-                })
-                .collect();
-            TopSizeDistribution {
-                buckets,
-                count: k as u64,
-                min,
-                max,
-                median,
-                total: total_ret,
-            }
         }
     };
 
