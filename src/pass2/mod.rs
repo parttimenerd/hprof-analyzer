@@ -2176,10 +2176,11 @@ impl Pass2 {
                         .unwrap_or(1);
                     let byte_len = count.saturating_mul(esz);
                     checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
-                    // Pass B folded in: if this array backs a java.lang.String,
-                    // read its bytes and hash them inline (no separate file scan).
+                    // Pass B folded in: String backing arrays are byte[] (8) or
+                    // char[] (5) only — skip the HashMap check for all other types.
+                    let is_string_type = elem_type == 5 || elem_type == 8;
                     if let Some(ref mut col) = dup_string_collector {
-                        if col.arr_coder.contains_key(&addr) {
+                        if is_string_type && col.arr_coder.contains_key(&addr) {
                             try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                             col.on_prim_array(addr, scratch);
                         } else {
