@@ -230,7 +230,7 @@ fn build_obj_graph_flat(
         // accounted for separately).  Total work = O(n) since each object is visited
         // exactly once.  Avoids the 2 GB nearest_sig array and the 1.3 GB BFS queue
         // that the prior BFS-fill approach used.
-        type ClassMap = std::collections::HashMap<u32, (u32, u64)>;
+        type ClassMap = U32HashMap<(u32, u64)>;
         let mut histograms: HashMap<u32, ClassMap> = HashMap::with_capacity(nodes.len());
         // Bitset marking which node indices are "significant" (in `nodes`).
         // Replaces O(1) `nodes.contains_key(&child)` SipHash probes (called 329M
