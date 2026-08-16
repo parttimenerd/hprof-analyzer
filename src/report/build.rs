@@ -1688,43 +1688,77 @@ fn build_dominator_analysis(
     const DROP_THRESHOLD_PCT: f64 = 1.0;
     let threshold = (total_shallow as f64 * DROP_THRESHOLD_PCT / 100.0) as u64;
 
-    // ---- Big Drops (#1) ----
-    // Walk every reachable node that is itself "significant" (retained >=
-    // threshold). For each, find its largest dominator child; a big drop is
-    // where retained(node) - retained(largest_child) is large (heap
-    // concentrates here rather than flowing to one dominated child).
+    // ---- Fused pass: Big Drops (#1) + Immediate Dominators (#2) ────────────
+    // Both walk every reachable node and read the same arrays (idom, retained,
+    // shallow, class_idx) plus the dom-children CSR. Fusing them halves the
+    // number of O(n) passes over these ~6.6 GB of arrays.
     let mut drops: Vec<BigDropRow> = Vec::new();
+    let remap = class_row_remap(g);
+    let mut dom_count = vec![0u64; class_count]; // #dominator objects of this class
+    let mut domd_count = vec![0u64; class_count]; // #objects immediately dominated
+    let mut dom_shallow = vec![0u64; class_count];
+    let mut domd_shallow = vec![0u64; class_count];
+    // pair_map: packed u64 key (pci << 32 | cci) -> (count, shallow, retained)
+    // Packing avoids the tuple-hash overhead of HashMap<(u32, u32), _>.
+    let mut pair_map: std::collections::HashMap<u64, (u64, u64, u64)> =
+        std::collections::HashMap::new();
     for i in 0..n {
         if g.idom[i] == undef {
             continue;
         }
-        if g.retained[i] < threshold {
-            continue;
-        }
         let kids = dom_children(i);
-        let child_count = kids.len() as u64;
-        let (largest_child_retained, largest_child_idx) = kids
-            .iter()
-            .map(|&c| (g.retained[c as usize], c))
-            .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)))
-            .unwrap_or((0, u32::MAX));
-        let drop_bytes = g.retained[i].saturating_sub(largest_child_retained);
-        if drop_bytes == 0 {
-            continue;
+        let kids_empty = kids.is_empty();
+        let ret_i = g.retained[i];
+
+        // ── Big Drops ───────────────────────────────────────────────────────
+        if ret_i >= threshold {
+            let child_count = kids.len() as u64;
+            let (largest_child_retained, largest_child_idx) = kids
+                .iter()
+                .map(|&c| (g.retained[c as usize], c))
+                .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)))
+                .unwrap_or((0, u32::MAX));
+            let drop_bytes = ret_i.saturating_sub(largest_child_retained);
+            if drop_bytes > 0 {
+                drops.push(BigDropRow {
+                    obj_index_1based: (i as u64) + 1,
+                    display_class: display_of(i),
+                    retained: ret_i,
+                    child_count,
+                    largest_child_retained,
+                    largest_child_class: if largest_child_idx != u32::MAX {
+                        display_of(largest_child_idx as usize)
+                    } else {
+                        String::new()
+                    },
+                    drop_bytes,
+                });
+            }
         }
-        drops.push(BigDropRow {
-            obj_index_1based: (i as u64) + 1,
-            display_class: display_of(i),
-            retained: g.retained[i],
-            child_count,
-            largest_child_retained,
-            largest_child_class: if largest_child_idx != u32::MAX {
-                display_of(largest_child_idx as usize)
-            } else {
-                String::new()
-            },
-            drop_bytes,
-        });
+
+        // ── Immediate Dominators ─────────────────────────────────────────────
+        if !kids_empty {
+            let pci_raw = g.class_idx[i] as usize;
+            if pci_raw < class_count {
+                let pci = remap[pci_raw] as usize;
+                dom_count[pci] += 1;
+                dom_shallow[pci] += g.shallow[i] as u64;
+                for &c in kids {
+                    let cu = c as usize;
+                    domd_count[pci] += 1;
+                    domd_shallow[pci] += g.shallow[cu] as u64;
+                    let cci_raw = g.class_idx[cu] as usize;
+                    if cci_raw < class_count {
+                        let cci = remap[cci_raw];
+                        let key = ((pci as u64) << 32) | (cci as u64);
+                        let e = pair_map.entry(key).or_insert((0, 0, 0));
+                        e.0 += 1;
+                        e.1 += g.shallow[cu] as u64;
+                        e.2 += g.retained[cu];
+                    }
+                }
+            }
+        }
     }
     drops.sort_unstable_by(|a, b| {
         b.drop_bytes
@@ -1736,58 +1770,6 @@ fn build_dominator_analysis(
         threshold,
         rows: drops,
     };
-
-    // ---- Immediate Dominators (#2) ----
-    // For dominator node p (any reachable node with >=1 dom child), key the
-    // rollup by class_of(p). Sum dominated_count/dominated_shallow over p's
-    // children; count p once in dominator_count and add its shallow. Class
-    // keys are folded through `class_row_remap` so they match the main
-    // histogram.
-    //
-    // Simultaneously build a (dominator_class, dominated_class) pair map for
-    // the V5 two-sided sankey. The pair map uses (remapped_parent_ci,
-    // remapped_child_ci) as the key and accumulates (pair_count,
-    // dominated_shallow, dominated_retained).
-    let remap = class_row_remap(g);
-    let mut dom_count = vec![0u64; class_count]; // #dominator objects of this class
-    let mut domd_count = vec![0u64; class_count]; // #objects immediately dominated
-    let mut dom_shallow = vec![0u64; class_count];
-    let mut domd_shallow = vec![0u64; class_count];
-    // pair_map: packed u64 key (pci << 32 | cci) -> (count, shallow, retained)
-    // Packing avoids the tuple-hash overhead of HashMap<(u32, u32), _>.
-    let mut pair_map: std::collections::HashMap<u64, (u64, u64, u64)> =
-        std::collections::HashMap::new();
-    for p in 0..n {
-        if g.idom[p] == undef {
-            continue;
-        }
-        let kids = dom_children(p);
-        if kids.is_empty() {
-            continue;
-        }
-        let pci = g.class_idx[p] as usize;
-        if pci >= class_count {
-            continue;
-        }
-        let pci = remap[pci] as usize;
-        dom_count[pci] += 1;
-        dom_shallow[pci] += g.shallow[p] as u64;
-        for &c in kids {
-            let cu = c as usize;
-            domd_count[pci] += 1;
-            domd_shallow[pci] += g.shallow[cu] as u64;
-            // pair aggregation
-            let cci_raw = g.class_idx[cu] as usize;
-            if cci_raw < class_count {
-                let cci = remap[cci_raw];
-                let key = ((pci as u64) << 32) | (cci as u64);
-                let e = pair_map.entry(key).or_insert((0, 0, 0));
-                e.0 += 1;
-                e.1 += g.shallow[cu] as u64;
-                e.2 += g.retained[cu];
-            }
-        }
-    }
     let mut order: Vec<usize> = (0..class_count)
         .filter(|&ci| remap[ci] as usize == ci && dom_count[ci] > 0)
         .collect();
