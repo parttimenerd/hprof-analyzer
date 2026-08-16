@@ -26,7 +26,8 @@ pub(crate) fn sub_remaining(remaining: &mut u64, n: u64) -> io::Result<()> {
 
 /// Full-file sequential scan invoking `f(addr, elem_bytes)` for each
 /// PRIM_ARRAY_DUMP whose array address is in `wanted`. Only wanted arrays'
-/// element bytes are materialized; everything else is skipped.
+/// element bytes are materialized; everything else is skipped.  Stops scanning
+/// as soon as every address in `wanted` has been found (early exit).
 pub(crate) fn scan_prim_arrays<O, F>(
     open: O,
     id_size: u8,
@@ -37,9 +38,14 @@ where
     O: Fn() -> io::Result<HprofReader>,
     F: FnMut(u64, &[u8]),
 {
+    if wanted.is_empty() {
+        return Ok(());
+    }
     let ids = id_size as u64;
     let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    let mut found: std::collections::HashSet<u64> =
+        std::collections::HashSet::with_capacity(wanted.len());
     loop {
         let (tag, length) = match r.next_record()? {
             None => break,
@@ -116,9 +122,16 @@ where
                                 .unwrap_or(1);
                             let byte_len = count.saturating_mul(esz);
                             sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
-                            if wanted.contains(&addr) {
+                            if wanted.contains(&addr) && found.insert(addr) {
                                 r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
                                 f(addr, &scratch);
+                                if found.len() == wanted.len() {
+                                    // All wanted arrays found — no need to scan further.
+                                    return Err(io::Error::new(
+                                        HEAP_DUMP_END_KIND,
+                                        "scan_prim_arrays: all wanted found",
+                                    ));
+                                }
                             } else {
                                 r.skip(byte_len)?;
                             }
