@@ -248,18 +248,21 @@ fn phase1(
             let block = w_node / crate::pass2::INB_BLOCK;
             let mut p = inb_block_off[block] as usize;
             for _ in (block * crate::pass2::INB_BLOCK)..w_node {
+                // Fast-path: most nodes have 0 predecessors (single 0x00 byte).
+                if p < inb_data.len() && inb_data[p] == 0 {
+                    p += 1;
+                    continue;
+                }
                 let (cnt, c0) = decode_checked(inb_data, p).ok_or(DesyncErr {
                     at: i,
                     why: "skip count ran off end",
                 })?;
                 p += c0;
-                for _ in 0..cnt {
-                    let (_, c1) = decode_checked(inb_data, p).ok_or(DesyncErr {
-                        at: i,
-                        why: "skip delta ran off end",
-                    })?;
-                    p += c1;
-                }
+                // Skip cnt vbyte-encoded delta values without decoding them.
+                p = skip_vbytes(inb_data, p, cnt).ok_or(DesyncErr {
+                    at: i,
+                    why: "skip delta ran off end",
+                })?;
             }
             p
         };
@@ -335,6 +338,25 @@ fn build_exact_offsets(n: usize, inb_data: &[u8]) -> std::io::Result<Vec<u64>> {
         ));
     }
     Ok(offsets)
+}
+
+/// Advance `pos` past `count` vbyte-encoded values in `data` without decoding them.
+/// Returns the new position, or None on out-of-bounds.
+#[inline]
+fn skip_vbytes(data: &[u8], mut pos: usize, count: u32) -> Option<usize> {
+    for _ in 0..count {
+        if pos >= data.len() {
+            return None;
+        }
+        while data[pos] & 0x80 != 0 {
+            pos += 1;
+            if pos >= data.len() {
+                return None;
+            }
+        }
+        pos += 1;
+    }
+    Some(pos)
 }
 
 /// eval(v): find the vertex on the path v..root (in the union-find forest)
