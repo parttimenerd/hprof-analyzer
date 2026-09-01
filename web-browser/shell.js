@@ -91,6 +91,7 @@ const LAST_URL_KEY = 'hprof-analyzer.last-url';
 const BOOKMARKS_KEY = 'hprof-analyzer.bookmarks';
 const STORED_QUERIES_KEY = 'hprof-analyzer.stored-queries';
 const STARRED_KEY = 'hprof-analyzer.starred';
+const LAST_FILE_KEY = 'hprof-analyzer.last-file';
 
 // Restore last-used server URL into the input on page load
 (function restoreLastUrl() {
@@ -156,6 +157,68 @@ function showToast(msg, type = 'info', durationMs = 3500) {
 // Sample dumps served from docs/samples/ on GitHub Pages (and locally when
 // running from the repo root with e.g. python -m http.server).
 const SAMPLE_DUMPS = [
+
+// ── ZIP decompression ─────────────────────────────────────────────────────────
+// Extract the first .hprof entry from a ZIP archive (bytes) using only the
+// browser's native DecompressionStream('deflate-raw'). Returns a Uint8Array of
+// the raw HPROF bytes, or throws if no .hprof entry is found.
+// ZIP local-file-header layout (little-endian):
+//   4  signature 0x04034b50
+//   2  version, 2 flags, 2 method (0=store, 8=deflate), 2 mtime, 2 mdate
+//   4  crc32, 4 compressed-size, 4 uncompressed-size
+//   2  filename-len, 2 extra-len, then filename bytes, then extra bytes, then data.
+async function extractHprofFromZip(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = 0;
+  while (pos + 30 <= bytes.length) {
+    const sig = view.getUint32(pos, true);
+    if (sig !== 0x04034b50) break;  // not a local file header
+    const method      = view.getUint16(pos + 8,  true);
+    const cmpSize     = view.getUint32(pos + 18, true);
+    const uncmpSize   = view.getUint32(pos + 22, true);
+    const nameLen     = view.getUint16(pos + 26, true);
+    const extraLen    = view.getUint16(pos + 28, true);
+    const dataStart   = pos + 30 + nameLen + extraLen;
+    const nameBytes   = bytes.subarray(pos + 30, pos + 30 + nameLen);
+    const entryName   = new TextDecoder().decode(nameBytes);
+
+    if (entryName.endsWith('.hprof') || entryName.endsWith('.HPROF')) {
+      const compressed = bytes.subarray(dataStart, dataStart + cmpSize);
+      if (method === 0) {
+        // STORE — no compression
+        return compressed.slice();
+      } else if (method === 8) {
+        // DEFLATE — use DecompressionStream('deflate-raw')
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        const reader = ds.readable.getReader();
+        writer.write(compressed);
+        writer.close();
+        const chunks = [];
+        let totalLen = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          totalLen += value.length;
+        }
+        const out = new Uint8Array(uncmpSize || totalLen);
+        let off = 0;
+        for (const chunk of chunks) { out.set(chunk, off); off += chunk.length; }
+        return out;
+      } else {
+        throw new Error(`ZIP entry '${entryName}' uses unsupported compression method ${method}`);
+      }
+    }
+    pos = dataStart + cmpSize;
+  }
+  throw new Error('No .hprof entry found in ZIP archive');
+}
+
+// ── Upload screen ─────────────────────────────────────────────────────────────
+// Sample dumps served from docs/samples/ on GitHub Pages (and locally when
+// running from the repo root with e.g. python -m http.server).
+const SAMPLE_DUMPS = [
   { name: 'mnemonics',     path: 'samples/dump_1_mnemonics.hprof',     sizeMb: 20 },
   { name: 'scala-doku',    path: 'samples/dump_2_scala-doku.hprof',    sizeMb: 51 },
   { name: 'philosophers',  path: 'samples/dump_4_philosophers.hprof',  sizeMb: 23 },
@@ -175,6 +238,8 @@ const SAMPLE_DUMPS = [
     document.getElementById('drop-zone-text').innerHTML =
       `<strong>${escHtml(file.name)}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
     modeButtons.style.display = 'flex';
+    // Remember file name for the "last file" quick-reload prompt
+    try { localStorage.setItem(LAST_FILE_KEY, file.name); } catch (_) {}
   }
 
   fileInput.addEventListener('change', () => {
@@ -243,6 +308,21 @@ const SAMPLE_DUMPS = [
       });
     })
     .catch(() => {});  // silently hide sample section if not accessible
+
+  // Show "last file" quick-reload prompt if a previous file was remembered
+  const lastFileName = (() => { try { return localStorage.getItem(LAST_FILE_KEY); } catch { return null; } })();
+  if (lastFileName) {
+    const lastFileSection = document.getElementById('last-file-section');
+    const lastFileItem    = document.getElementById('last-file-item');
+    if (lastFileSection && lastFileItem) {
+      lastFileSection.style.display = '';
+      const item = document.createElement('div');
+      item.className = 'sample-item';
+      item.innerHTML = `<span class="sample-name">${escHtml(lastFileName)}</span><span class="sample-size">click to select again</span>`;
+      item.addEventListener('click', () => fileInput.click());
+      lastFileItem.appendChild(item);
+    }
+  }
 })();
 
 // ── WASM session loading ───────────────────────────────────────────────────────
@@ -274,6 +354,42 @@ async function loadSampleDump(sample) {
   document.getElementById('drop-zone-text').innerHTML =
     `<strong>${escHtml(file.name)}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
   modeButtons.style.display = 'flex';
+}
+
+// ── File format preparation ───────────────────────────────────────────────────
+// Detects the format (gzip, zip, plain) and returns { bytes, isGzip, sizeMB }
+// where `bytes` is always either already-gzip or will be gzip-compressed by the
+// caller.  For ZIP: decompresses the .hprof entry, then gzip-compresses it.
+// `onProgress(readBytes, totalBytes)` is called during streaming for plain files.
+// `setStage(label, pct)` is called to update UI during each phase.
+async function _prepareFileBytes(file, { compBarEnd, setStage, onProgress }) {
+  const headerBuf = await file.slice(0, 4).arrayBuffer();
+  const header = new Uint8Array(headerBuf);
+  const isGzip = header[0] === 0x1f && header[1] === 0x8b;
+  const isZip  = header[0] === 0x50 && header[1] === 0x4b;
+
+  if (isGzip) {
+    setStage(`Reading ${file.name}…`, 0);
+    await new Promise(r => setTimeout(r, 20));
+    return { bytes: new Uint8Array(await file.arrayBuffer()), isGzip: true };
+  }
+
+  if (isZip) {
+    setStage(`Extracting .hprof from ${file.name}…`, 0);
+    await new Promise(r => setTimeout(r, 20));
+    const zipBytes = new Uint8Array(await file.arrayBuffer());
+    const hprofBytes = await extractHprofFromZip(zipBytes);
+    setStage(`Compressing extracted dump…`, Math.round(compBarEnd * 0.3));
+    await new Promise(r => setTimeout(r, 20));
+    const compressed = await gzipCompress(hprofBytes);
+    return { bytes: compressed, isGzip: false };
+  }
+
+  // Plain HPROF — stream through CompressionStream
+  setStage(`Compressing ${file.name}…`, 0);
+  await new Promise(r => setTimeout(r, 20));
+  const bytes = await gzipCompressFile(file, onProgress);
+  return { bytes, isGzip: false };
 }
 
 // Stream-compress a File through CompressionStream, collecting into Uint8Array.
@@ -481,13 +597,13 @@ async function loadWasmSession(file) {
 
   const fileMB = file.size / (1024 * 1024);
 
-  // Peek at first 2 bytes to detect existing gzip — without loading the whole file.
-  const headerBuf = await file.slice(0, 2).arrayBuffer();
+  // Pre-compute ETAs — treat zip as not-yet-gzip (needs compress step)
+  const headerBuf = await file.slice(0, 4).arrayBuffer();
   const header = new Uint8Array(headerBuf);
-  const isGzip = header[0] === 0x1f && header[1] === 0x8b;
+  const isGzipUpfront = header[0] === 0x1f && header[1] === 0x8b;
 
   // Pre-compute ETAs so we can show proportional bar
-  const compEtaMs  = isGzip ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
+  const compEtaMs  = isGzipUpfront ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
   const estInst    = Math.round(fileMB * _ETA_BASE.instPerMB);
   const parseEtaMs = _etaPredict('parse', estInst);
   const totalLoadMs = compEtaMs + parseEtaMs;
@@ -513,27 +629,23 @@ async function loadWasmSession(file) {
     updateBlocking(label, loadBarEnd, remainMs);
   };
 
-  // Stream the file through CompressionStream (or read as-is if already gzip).
-  // Raw bytes are never fully materialised in JS — only the compressed output
-  // accumulates, keeping peak JS memory at ~N/4 instead of N.
+  // Detect format and produce gzip bytes for the WASM parser.
   let bytes;
+  let isGzip;
   try {
-    setStage(isGzip ? `Reading ${file.name}…` : `Compressing ${file.name}…`, 0);
-    await new Promise(r => setTimeout(r, 20));
-    if (isGzip) {
-      bytes = new Uint8Array(await file.arrayBuffer());
-    } else {
-      const compT0 = performance.now();
-      bytes = await gzipCompressFile(file, (inputRead, total) => {
+    const compT0 = performance.now();
+    ({ bytes, isGzip } = await _prepareFileBytes(file, {
+      compBarEnd,
+      setStage,
+      onProgress: (inputRead, total) => {
         const frac = total > 0 ? inputRead / total : 0;
         const pct = Math.round(frac * compBarEnd);
         const readMB = (inputRead / 1048576).toFixed(0);
         const totMB  = (total    / 1048576).toFixed(0);
         setStage(`Compressing ${file.name}… (${readMB} / ${totMB} MB)`, pct);
-      });
-      const compActual = performance.now() - compT0;
-      _etaRecord('compress', compEtaMs, compActual);
-    }
+      },
+    }));
+    if (!isGzip) _etaRecord('compress', compEtaMs, performance.now() - compT0);
   } catch (e) {
     if (statusEl) statusEl.innerHTML = _errorHtml('Reading file', file.name, e);
     if (modeButtons) modeButtons.style.display = 'flex';
@@ -609,12 +721,12 @@ async function loadWasmSessionWithReport(file, opts = {}) {
 
   const fileMB = file.size / (1024 * 1024);
 
-  // Peek at first 2 bytes to detect existing gzip — without loading the whole file.
-  const headerBuf2 = await file.slice(0, 2).arrayBuffer();
+  // Peek at first 4 bytes to detect format
+  const headerBuf2 = await file.slice(0, 4).arrayBuffer();
   const header2 = new Uint8Array(headerBuf2);
-  const isGzip2 = header2[0] === 0x1f && header2[1] === 0x8b;
+  const isGzipUpfront2 = header2[0] === 0x1f && header2[1] === 0x8b;
 
-  const compEtaMs  = isGzip2 ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
+  const compEtaMs  = isGzipUpfront2 ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
   const estInst    = Math.round(fileMB * _ETA_BASE.instPerMB);
   const parseEtaMs = _etaPredict('parse', estInst);
   const totalLoadMs = compEtaMs + parseEtaMs;
@@ -633,24 +745,22 @@ async function loadWasmSessionWithReport(file, opts = {}) {
     updateBlocking(_loadPhaseLabel(phase, remainMs, estInst), loadBarEnd, remainMs);
   };
 
-  // Stream through CompressionStream so raw bytes never accumulate in JS.
+  // Detect format and produce gzip bytes for the WASM parser.
   let bytes;
   try {
-    setStage(isGzip2 ? `Reading ${file.name}…` : `Compressing ${file.name}…`, 0);
-    await new Promise(r => setTimeout(r, 20));
-    if (isGzip2) {
-      bytes = new Uint8Array(await file.arrayBuffer());
-    } else {
-      const compT0 = performance.now();
-      bytes = await gzipCompressFile(file, (inputRead, total) => {
+    const compT0 = performance.now();
+    ({ bytes } = await _prepareFileBytes(file, {
+      compBarEnd: compBarEnd2,
+      setStage,
+      onProgress: (inputRead, total) => {
         const frac = total > 0 ? inputRead / total : 0;
         const pct = Math.round(frac * compBarEnd2);
         const readMB = (inputRead / 1048576).toFixed(0);
         const totMB  = (total    / 1048576).toFixed(0);
         setStage(`Compressing ${file.name}… (${readMB} / ${totMB} MB)`, pct);
-      });
-      _etaRecord('compress', compEtaMs, performance.now() - compT0);
-    }
+      },
+    }));
+    if (!isGzipUpfront2) _etaRecord('compress', compEtaMs, performance.now() - compT0);
   } catch (e) {
     msg.innerHTML = _errorHtml('Reading file', file.name, e);
     return;

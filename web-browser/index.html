@@ -32,12 +32,16 @@
   </div>
 
   <div id="drop-zone">
-    <input type="file" id="file-input" accept=".hprof">
+    <input type="file" id="file-input" accept=".hprof,.hprof.gz,.hprof.zip,.gz,.zip">
     <label for="file-input">
       <div id="drop-zone-icon">📂</div>
       <div id="drop-zone-text">Drop a <strong>.hprof</strong> file here, or click to select</div>
-      <div id="drop-zone-hint">Supports up to <strong>3 GB</strong> · gzip-compressed dumps accepted</div>
+      <div id="drop-zone-hint">Supports up to <strong>3 GB</strong> · gzip and zip archives accepted</div>
     </label>
+  </div>
+  <div id="last-file-section" style="display:none">
+    <p class="sample-label">— or re-open last file —</p>
+    <div id="last-file-item"></div>
   </div>
 
   <div id="mode-buttons" style="display:none">
