@@ -2,6 +2,28 @@
 
 All notable changes to hprof-analyzer are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Holder breakdown in HTML report.** The Biggest Classes section now shows
+  a collapsible "Held by (immediate dominators)" widget. For each top class,
+  it lists the immediate-dominator classes (with instance count and retained
+  size) and their own immediate dominators (level 2), making it easy to
+  answer "which classes are keeping all these HashMaps alive?" without
+  leaving the Top Consumers section. Computed via two O(n) passes over all
+  objects after the class ranking is built; capped at 10 holders per class
+  and 10 level-2 entries per holder.
+
+- **`holder_chain` on biggest objects.** `ObjRow` now carries up to 2
+  immediate-dominator class names toward the GC root, available in the JSON
+  model for tooling that consumes the report programmatically.
+
+### Changed
+
+- Holder breakdown is omitted from the plain Markdown renderer (it is
+  present in the JSON model and HTML report only).
+
 ## [0.2.0] — 2026-08-10
 
 ### Added
