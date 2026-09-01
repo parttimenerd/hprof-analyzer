@@ -153,66 +153,147 @@ function showToast(msg, type = 'info', durationMs = 3500) {
   toast.addEventListener('click', () => { clearTimeout(timer); remove(); });
 }
 
-// ── Upload screen ─────────────────────────────────────────────────────────────
-// Sample dumps served from docs/samples/ on GitHub Pages (and locally when
-// running from the repo root with e.g. python -m http.server).
-const SAMPLE_DUMPS = [
-
 // ── ZIP decompression ─────────────────────────────────────────────────────────
 // Extract the first .hprof entry from a ZIP archive (bytes) using only the
-// browser's native DecompressionStream('deflate-raw'). Returns a Uint8Array of
-// the raw HPROF bytes, or throws if no .hprof entry is found.
-// ZIP local-file-header layout (little-endian):
-//   4  signature 0x04034b50
-//   2  version, 2 flags, 2 method (0=store, 8=deflate), 2 mtime, 2 mdate
-//   4  crc32, 4 compressed-size, 4 uncompressed-size
-//   2  filename-len, 2 extra-len, then filename bytes, then extra bytes, then data.
-async function extractHprofFromZip(bytes) {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let pos = 0;
-  while (pos + 30 <= bytes.length) {
-    const sig = view.getUint32(pos, true);
-    if (sig !== 0x04034b50) break;  // not a local file header
-    const method      = view.getUint16(pos + 8,  true);
-    const cmpSize     = view.getUint32(pos + 18, true);
-    const uncmpSize   = view.getUint32(pos + 22, true);
-    const nameLen     = view.getUint16(pos + 26, true);
-    const extraLen    = view.getUint16(pos + 28, true);
-    const dataStart   = pos + 30 + nameLen + extraLen;
-    const nameBytes   = bytes.subarray(pos + 30, pos + 30 + nameLen);
-    const entryName   = new TextDecoder().decode(nameBytes);
+// browser's native DecompressionStream('deflate-raw'). Returns
+// { hprofBytes: Uint8Array, uncmpSize: number } where uncmpSize is the true
+// uncompressed size from the central directory (reliable even when flag bit 3
+// sets cmpSize=0 in the local header — "data descriptor" ZIPs).
+//
+// Algorithm: always parse the EOCD + central directory first to get authoritative
+// cmpSize/uncmpSize for every entry, then seek to the local-header data offset.
 
-    if (entryName.endsWith('.hprof') || entryName.endsWith('.HPROF')) {
-      const compressed = bytes.subarray(dataStart, dataStart + cmpSize);
-      if (method === 0) {
-        // STORE — no compression
-        return compressed.slice();
-      } else if (method === 8) {
-        // DEFLATE — use DecompressionStream('deflate-raw')
-        const ds = new DecompressionStream('deflate-raw');
-        const writer = ds.writable.getWriter();
-        const reader = ds.readable.getReader();
-        writer.write(compressed);
-        writer.close();
-        const chunks = [];
-        let totalLen = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          totalLen += value.length;
-        }
-        const out = new Uint8Array(uncmpSize || totalLen);
-        let off = 0;
-        for (const chunk of chunks) { out.set(chunk, off); off += chunk.length; }
-        return out;
-      } else {
-        throw new Error(`ZIP entry '${entryName}' uses unsupported compression method ${method}`);
+// ── ZIP pre-peek: read just the EOCD+CD tail to get .hprof uncompressed size ──
+// Reads at most 65557 + cdSize bytes from the file (no full arrayBuffer needed).
+// Returns the uncmpSize of the first .hprof entry, or 0 on any error.
+async function _peekZipUncmpSize(file) {
+  try {
+    // Read the last 65557 bytes (max EOCD offset) to find EOCD
+    const tailSize = Math.min(file.size, 65535 + 22);
+    const tailBuf  = await file.slice(file.size - tailSize).arrayBuffer();
+    const tail     = new Uint8Array(tailBuf);
+    const tailView = new DataView(tailBuf);
+
+    // Locate EOCD by scanning backward
+    let eocdRelOff = -1;
+    for (let i = tailSize - 22; i >= 0; i--) {
+      if (tailView.getUint32(i, true) === 0x06054b50) { eocdRelOff = i; break; }
+    }
+    if (eocdRelOff < 0) return 0;
+
+    const cdOffset  = tailView.getUint32(eocdRelOff + 16, true);
+    const cdEntries = tailView.getUint16(eocdRelOff + 10, true);
+
+    // Estimate CD size: from cdOffset to start of EOCD in file
+    const eocdAbsOff = file.size - tailSize + eocdRelOff;
+    const cdSize     = eocdAbsOff - cdOffset;
+    if (cdSize <= 0 || cdSize > 64 * 1024 * 1024) return 0; // sanity
+
+    // Read the central directory
+    const cdBuf  = await file.slice(cdOffset, cdOffset + cdSize).arrayBuffer();
+    const cdView = new DataView(cdBuf);
+    let pos = 0;
+    for (let i = 0; i < cdEntries && pos + 46 <= cdSize; i++) {
+      if (cdView.getUint32(pos, true) !== 0x02014b50) break;
+      const uncmpSize  = cdView.getUint32(pos + 24, true);
+      const nameLen    = cdView.getUint16(pos + 28, true);
+      const extraLen   = cdView.getUint16(pos + 30, true);
+      const commentLen = cdView.getUint16(pos + 32, true);
+      const nameBytes  = new Uint8Array(cdBuf, pos + 46, nameLen);
+      const entryName  = new TextDecoder().decode(nameBytes);
+      pos += 46 + nameLen + extraLen + commentLen;
+      if (entryName.endsWith('.hprof') || entryName.endsWith('.HPROF')) {
+        return uncmpSize;
       }
     }
-    pos = dataStart + cmpSize;
+    return 0;
+  } catch (_) { return 0; }
+}
+//
+// ZIP central-directory entry layout (little-endian):
+//   4  sig 0x02014b50, 2 versionMade, 2 versionNeeded, 2 flags, 2 method
+//   2  mtime, 2 mdate, 4 crc32
+//   4  compressed-size, 4 uncompressed-size
+//   2  filename-len, 2 extra-len, 2 comment-len, 2 diskNum
+//   2  intAttr, 4 extAttr, 4 local-header-offset
+// EOCD record (last 22 bytes when no comment):
+//   4  sig 0x06054b50, 2 diskNum, 2 startDisk, 2 entriesHere, 2 totalEntries
+//   4  cdSize, 4 cdOffset, 2 comment-len
+async function extractHprofFromZip(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const len  = bytes.length;
+
+  // ── 1. Locate End-of-Central-Directory (EOCD) ─────────────────────────────
+  // Scan backward for 0x06054b50, allowing up to 65535 bytes of comment.
+  const maxEocdScan = Math.min(len, 65535 + 22);
+  let eocdOff = -1;
+  for (let i = len - 22; i >= len - maxEocdScan; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocdOff = i; break; }
   }
-  throw new Error('No .hprof entry found in ZIP archive');
+  if (eocdOff < 0) throw new Error('ZIP: EOCD record not found');
+
+  const cdOffset = view.getUint32(eocdOff + 16, true);
+  const cdEntries = view.getUint16(eocdOff + 10, true);
+
+  // ── 2. Walk central directory to find the first .hprof entry ──────────────
+  let cdPos = cdOffset;
+  let found = null;
+  for (let i = 0; i < cdEntries; i++) {
+    if (view.getUint32(cdPos, true) !== 0x02014b50)
+      throw new Error('ZIP: invalid central-directory signature');
+    const method      = view.getUint16(cdPos + 10, true);
+    const cmpSize     = view.getUint32(cdPos + 20, true);
+    const uncmpSize   = view.getUint32(cdPos + 24, true);
+    const nameLen     = view.getUint16(cdPos + 28, true);
+    const extraLen    = view.getUint16(cdPos + 30, true);
+    const commentLen  = view.getUint16(cdPos + 32, true);
+    const localHdrOff = view.getUint32(cdPos + 42, true);
+    const nameBytes   = bytes.subarray(cdPos + 46, cdPos + 46 + nameLen);
+    const entryName   = new TextDecoder().decode(nameBytes);
+    cdPos += 46 + nameLen + extraLen + commentLen;
+
+    if (!found && (entryName.endsWith('.hprof') || entryName.endsWith('.HPROF'))) {
+      found = { method, cmpSize, uncmpSize, localHdrOff, entryName };
+    }
+  }
+  if (!found) throw new Error('No .hprof entry found in ZIP archive');
+
+  // ── 3. Read compressed data via the local-header offset ───────────────────
+  // Local header has its own nameLen/extraLen fields (may differ from CD).
+  const lhv      = view;
+  const lhNameLen  = lhv.getUint16(found.localHdrOff + 26, true);
+  const lhExtraLen = lhv.getUint16(found.localHdrOff + 28, true);
+  const dataStart  = found.localHdrOff + 30 + lhNameLen + lhExtraLen;
+  // Use central-directory cmpSize — it's authoritative even for data-descriptor ZIPs.
+  const compressed = bytes.subarray(dataStart, dataStart + found.cmpSize);
+
+  // ── 4. Decompress ──────────────────────────────────────────────────────────
+  if (found.method === 0) {
+    // STORE — no compression
+    return { hprofBytes: compressed.slice(), uncmpSize: found.uncmpSize };
+  } else if (found.method === 8) {
+    // DEFLATE — use DecompressionStream('deflate-raw')
+    const ds = new DecompressionStream('deflate-raw');
+    const writer = ds.writable.getWriter();
+    const reader = ds.readable.getReader();
+    writer.write(compressed);
+    writer.close();
+    const chunks = [];
+    let totalLen = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      totalLen += value.length;
+    }
+    const realSize = found.uncmpSize || totalLen;
+    const out = new Uint8Array(realSize);
+    let off = 0;
+    for (const chunk of chunks) { out.set(chunk, off); off += chunk.length; }
+    return { hprofBytes: out, uncmpSize: realSize };
+  } else {
+    throw new Error(`ZIP entry '${found.entryName}' uses unsupported compression method ${found.method}`);
+  }
 }
 
 // ── Upload screen ─────────────────────────────────────────────────────────────
@@ -362,6 +443,9 @@ async function loadSampleDump(sample) {
 // caller.  For ZIP: decompresses the .hprof entry, then gzip-compresses it.
 // `onProgress(readBytes, totalBytes)` is called during streaming for plain files.
 // `setStage(label, pct)` is called to update UI during each phase.
+// Returns { bytes, isGzip, decompressedSize }.
+// decompressedSize is the known uncompressed HPROF size in bytes (for the wasm32
+// pre-check); 0 means unknown (gzip / plain — use file.size as approximation).
 async function _prepareFileBytes(file, { compBarEnd, setStage, onProgress }) {
   const headerBuf = await file.slice(0, 4).arrayBuffer();
   const header = new Uint8Array(headerBuf);
@@ -371,25 +455,29 @@ async function _prepareFileBytes(file, { compBarEnd, setStage, onProgress }) {
   if (isGzip) {
     setStage(`Reading ${file.name}…`, 0);
     await new Promise(r => setTimeout(r, 20));
-    return { bytes: new Uint8Array(await file.arrayBuffer()), isGzip: true };
+    return { bytes: new Uint8Array(await file.arrayBuffer()), isGzip: true, decompressedSize: 0 };
   }
 
   if (isZip) {
-    setStage(`Extracting .hprof from ${file.name}…`, 0);
+    setStage(`Extracting .hprof from ${file.name}… (step 1/3: reading ZIP)`, 0);
     await new Promise(r => setTimeout(r, 20));
-    const zipBytes = new Uint8Array(await file.arrayBuffer());
-    const hprofBytes = await extractHprofFromZip(zipBytes);
-    setStage(`Compressing extracted dump…`, Math.round(compBarEnd * 0.3));
+    let zipBytes = new Uint8Array(await file.arrayBuffer());
+    setStage(`Extracting .hprof from ${file.name}… (step 2/3: decompressing)`, Math.round(compBarEnd * 0.15));
+    await new Promise(r => setTimeout(r, 20));
+    let { hprofBytes, uncmpSize } = await extractHprofFromZip(zipBytes);
+    zipBytes = null;  // free compressed ZIP bytes before gzip-compressing the extract
+    setStage(`Compressing extracted dump… (step 3/3: re-compressing for WASM)`, Math.round(compBarEnd * 0.3));
     await new Promise(r => setTimeout(r, 20));
     const compressed = await gzipCompress(hprofBytes);
-    return { bytes: compressed, isGzip: false };
+    hprofBytes = null;  // free plain hprof bytes before WASM allocates its heap
+    return { bytes: compressed, isGzip: false, decompressedSize: uncmpSize };
   }
 
   // Plain HPROF — stream through CompressionStream
   setStage(`Compressing ${file.name}…`, 0);
   await new Promise(r => setTimeout(r, 20));
   const bytes = await gzipCompressFile(file, onProgress);
-  return { bytes, isGzip: false };
+  return { bytes, isGzip: false, decompressedSize: 0 };
 }
 
 // Stream-compress a File through CompressionStream, collecting into Uint8Array.
@@ -601,10 +689,20 @@ async function loadWasmSession(file) {
   const headerBuf = await file.slice(0, 4).arrayBuffer();
   const header = new Uint8Array(headerBuf);
   const isGzipUpfront = header[0] === 0x1f && header[1] === 0x8b;
+  const isZipUpfront  = header[0] === 0x50 && header[1] === 0x4b;
+
+  // For ZIP files, peek at the central directory to get the true uncompressed size.
+  // This makes the compress-segment ETA proportional to actual work (uncmp MB),
+  // not the tiny compressed ZIP size.
+  let effectiveMB = fileMB;
+  if (isZipUpfront) {
+    const uncmp = await _peekZipUncmpSize(file);
+    if (uncmp > 0) effectiveMB = uncmp / (1024 * 1024);
+  }
 
   // Pre-compute ETAs so we can show proportional bar
-  const compEtaMs  = isGzipUpfront ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
-  const estInst    = Math.round(fileMB * _ETA_BASE.instPerMB);
+  const compEtaMs  = isGzipUpfront ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * effectiveMB * (_etaFactors().compress ?? 1.0)));
+  const estInst    = Math.round(effectiveMB * _ETA_BASE.instPerMB);
   const parseEtaMs = _etaPredict('parse', estInst);
   const totalLoadMs = compEtaMs + parseEtaMs;
 
@@ -632,9 +730,10 @@ async function loadWasmSession(file) {
   // Detect format and produce gzip bytes for the WASM parser.
   let bytes;
   let isGzip;
+  let decompressedSize = 0;
   try {
     const compT0 = performance.now();
-    ({ bytes, isGzip } = await _prepareFileBytes(file, {
+    ({ bytes, isGzip, decompressedSize } = await _prepareFileBytes(file, {
       compBarEnd,
       setStage,
       onProgress: (inputRead, total) => {
@@ -655,7 +754,7 @@ async function loadWasmSession(file) {
   const tLoad0 = performance.now();
   try {
     await enterBlocking(`Parsing ${escHtml(file.name)}…`, compBarEnd, loadBarEnd, parseEtaMs);
-    wasmSession = await _loadWithFallback(bytes, file, onLoadPhase);
+    wasmSession = await _loadWithFallback(bytes, file, onLoadPhase, decompressedSize, 'wasm-load-label');
     wasmSession._fileName = file.name;
   } catch (e) {
     if (statusEl) { statusEl.innerHTML = _errorHtml('Loading', file.name, e); }
@@ -725,9 +824,17 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   const headerBuf2 = await file.slice(0, 4).arrayBuffer();
   const header2 = new Uint8Array(headerBuf2);
   const isGzipUpfront2 = header2[0] === 0x1f && header2[1] === 0x8b;
+  const isZipUpfront2  = header2[0] === 0x50 && header2[1] === 0x4b;
 
-  const compEtaMs  = isGzipUpfront2 ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
-  const estInst    = Math.round(fileMB * _ETA_BASE.instPerMB);
+  // For ZIP: peek CD for true uncompressed size so ETA is based on actual work.
+  let effectiveMB2 = fileMB;
+  if (isZipUpfront2) {
+    const uncmp2 = await _peekZipUncmpSize(file);
+    if (uncmp2 > 0) effectiveMB2 = uncmp2 / (1024 * 1024);
+  }
+
+  const compEtaMs  = isGzipUpfront2 ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * effectiveMB2 * (_etaFactors().compress ?? 1.0)));
+  const estInst    = Math.round(effectiveMB2 * _ETA_BASE.instPerMB);
   const parseEtaMs = _etaPredict('parse', estInst);
   const totalLoadMs = compEtaMs + parseEtaMs;
   const loadBarEnd = 55;
@@ -747,9 +854,10 @@ async function loadWasmSessionWithReport(file, opts = {}) {
 
   // Detect format and produce gzip bytes for the WASM parser.
   let bytes;
+  let decompressedSize = 0;
   try {
     const compT0 = performance.now();
-    ({ bytes } = await _prepareFileBytes(file, {
+    ({ bytes, decompressedSize } = await _prepareFileBytes(file, {
       compBarEnd: compBarEnd2,
       setStage,
       onProgress: (inputRead, total) => {
@@ -769,7 +877,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   const tParse0 = performance.now();
   try {
     await enterBlocking(`Parsing ${escHtml(file.name)}…`, compBarEnd2, loadBarEnd, parseEtaMs);
-    wasmSession = await _loadWithFallback(bytes, file, onLoadPhase);
+    wasmSession = await _loadWithFallback(bytes, file, onLoadPhase, decompressedSize, 'wasm-progress-label');
   } catch (e) {
     msg.innerHTML = _errorHtml('Loading', file.name, e);
     return;
@@ -816,21 +924,14 @@ async function loadWasmSessionWithReport(file, opts = {}) {
 const _WASM32_PLAIN_LIMIT = 3.2 * 1024 * 1024 * 1024;   // ~3.2 GiB plain .hprof
 const _WASM32_GZIP_LIMIT  = 1.0 * 1024 * 1024 * 1024;   // ~1 GiB gzip (expands)
 
-// Confirm + switch to the experimental wasm64 module. Returns true if now on
-// wasm64, false if the user declined or the switch failed (caller stays wasm32).
-async function _confirmSwitchToWasm64() {
+// Silently switch to the experimental wasm64 module, updating `statusLabel`
+// (an element id or null) with a brief notice. Returns true on success.
+async function _switchToWasm64Silent(statusLabel) {
   if (window._hprofOnWasm64 && window._hprofOnWasm64()) return true;
-  const ok = confirm(
-    'This heap dump is too large for the standard (wasm32) build, which is ' +
-    'capped at 4 GiB of memory.\n\n' +
-    'Load the EXPERIMENTAL wasm64 build?\n\n' +
-    'WARNING: this build is compiled for the wasm64 (memory64) target using a ' +
-    'Rust NIGHTLY toolchain with an unstable, build-from-source std — a truly ' +
-    'experimental toolchain. It lifts the 4 GiB memory cap so larger dumps can ' +
-    'be analysed, but it may be slower, less stable, or fail to parse some ' +
-    'dumps (aborting the tab). If it fails, use the native CLI instead — it has ' +
-    'no memory cap and handles dumps of any size.');
-  if (!ok) return false;
+  if (statusLabel) {
+    const el = document.getElementById(statusLabel);
+    if (el) el.textContent = 'Dump is large — switching to experimental wasm64 build…';
+  }
   try {
     await window._switchToWasm64();
     return true;
@@ -848,17 +949,30 @@ async function _confirmSwitchToWasm64() {
 //      the SAME in-scope bytes (the File is never re-picked).
 // The wasm32 session is freed before switching; the wasm64 module has its own
 // independent linear memory. `bytes` is the (gzip-compressed) buffer already
-// prepared by the caller. Returns the loaded HprofSession, or throws.
-async function _loadWithFallback(bytes, file, onLoadPhase) {
+// prepared by the caller. `decompressedSize` is the known uncompressed size in
+// bytes (from ZIP central directory), or 0 if unknown. `statusLabel` is an
+// element id for wasm64 switch notices (may be null). Returns the loaded
+// HprofSession, or throws.
+async function _loadWithFallback(bytes, file, onLoadPhase, decompressedSize = 0, statusLabel = null) {
   const onWasm64 = () => window._hprofOnWasm64 && window._hprofOnWasm64();
 
-  // Pre-check: obviously-too-big files prompt for wasm64 before we even try.
+  // Pre-check: obviously-too-big files silently switch to wasm64 before loading.
+  // For ZIP files we have the authoritative uncompressed size (decompressedSize);
+  // for plain/gzip we fall back to file.size as a heuristic.
   if (!onWasm64()) {
     const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
-    const overLimit = isGzip
-      ? file.size > _WASM32_GZIP_LIMIT
-      : file.size > _WASM32_PLAIN_LIMIT;
-    if (overLimit) await _confirmSwitchToWasm64();
+    let overLimit;
+    if (decompressedSize > 0) {
+      // Known uncompressed size (from ZIP central directory): treat same as a
+      // plain .hprof of that size — native peak RSS is ~1× the dump size so
+      // the 3.2 GiB threshold is appropriate. The OOM catch is the safety net.
+      overLimit = decompressedSize > _WASM32_PLAIN_LIMIT;
+    } else {
+      overLimit = isGzip
+        ? file.size > _WASM32_GZIP_LIMIT
+        : file.size > _WASM32_PLAIN_LIMIT;
+    }
+    if (overLimit) await _switchToWasm64Silent(statusLabel);
   }
 
   // Free any prior wasm32 session before loading (frees its linear memory).
@@ -867,9 +981,9 @@ async function _loadWithFallback(bytes, file, onLoadPhase) {
   try {
     return activeHprof.load_with_progress(bytes, file.name, onLoadPhase);
   } catch (e) {
-    // OOM fallback: retry on wasm64 with the same bytes.
+    // OOM fallback: silently retry on wasm64 with the same bytes.
     if (_isOomError(e) && !onWasm64()) {
-      const switched = await _confirmSwitchToWasm64();
+      const switched = await _switchToWasm64Silent(statusLabel);
       if (switched) {
         return activeHprof.load_with_progress(bytes, file.name, onLoadPhase);
       }
@@ -879,41 +993,33 @@ async function _loadWithFallback(bytes, file, onLoadPhase) {
 }
 
 // Detect out-of-memory conditions from WASM/browser errors.
+// Note: Rust panics produce "unreachable" RuntimeErrors — those are NOT OOM,
+// they are logic errors. Only treat allocation failures as OOM.
 function _isOomError(e) {
   const s = String(e).toLowerCase();
   return s.includes('out of memory') || s.includes('allocation failed') ||
-         s.includes('memory access out of bounds') || s.includes('unreachable') ||
+         s.includes('memory access out of bounds') ||
          s.includes('rangeerror') || (e instanceof RangeError);
 }
 
 // Return an HTML string for load/analysis errors, with OOM-specific guidance.
 function _errorHtml(action, fileName, e) {
   const raw = String(e);
+  const readmeUrl = 'https://github.com/parttimenerd/hprof-analyzer#quick-start';
+  const onWasm64 = window._hprofOnWasm64 && window._hprofOnWasm64();
+  if (onWasm64 && (raw.toLowerCase().includes('unreachable') ||
+                   raw.toLowerCase().includes('runtimeerror'))) {
+    // Rust panic inside wasm64 — not an OOM, a hard abort.
+    return `<strong>Experimental wasm64 build failed</strong> — the memory64 build ` +
+           `aborted while processing <em>${escHtml(fileName)}</em>.<br>` +
+           `Use the <strong>CLI</strong> instead — it handles dumps of any size:<br>` +
+           `<code>hprof-analyzer ${escHtml(fileName)}</code><br>` +
+           `<a href="${readmeUrl}" target="_blank" rel="noopener">Install &amp; quick-start guide →</a>`;
+  }
   if (_isOomError(e)) {
-    const readmeUrl = 'https://github.com/parttimenerd/hprof-analyzer#quick-start';
-    const onWasm64 = window._hprofOnWasm64 && window._hprofOnWasm64();
-    // A wasm64 trap ("unreachable"/RuntimeError) is NOT a true OOM — the
-    // experimental memory64 build aborted (e.g. failed to parse this dump).
-    // Don't mislabel it as "Out of memory"; say the experimental build failed.
-    if (onWasm64 && (raw.toLowerCase().includes('unreachable') ||
-                     raw.toLowerCase().includes('runtimeerror'))) {
-      return `<strong>Experimental wasm64 build failed</strong> — the memory64 build ` +
-             `(built with an unstable Rust nightly toolchain) aborted while processing ` +
-             `<em>${escHtml(fileName)}</em>.<br>` +
-             `This is a known limitation of the experimental toolchain. Use the ` +
-             `<strong>CLI</strong> instead — it has no memory cap and is fully stable:<br>` +
-             `<code>hprof-analyzer ${escHtml(fileName)}</code><br>` +
-             `<a href="${readmeUrl}" target="_blank" rel="noopener">Install &amp; quick-start guide →</a>`;
-    }
-    // On wasm32 the experimental wasm64 build may still fit the dump; only when
-    // wasm64 itself OOMs (or is unavailable) do we fall back to the CLI message.
-    const wasm64Hint = onWasm64
-      ? ''
-      : `The experimental <strong>wasm64</strong> build lifts the browser's 4 GiB memory cap — ` +
-        `reload the file to be prompted to switch to it.<br>`;
-    return `<strong>Out of memory</strong> — <em>${escHtml(fileName)}</em> is too large for the browser's WASM heap.<br>` +
-           wasm64Hint +
-           `Or use the <strong>CLI</strong> — it has no memory cap and handles dumps of any size:<br>` +
+    return `<strong>Out of memory</strong> — <em>${escHtml(fileName)}</em> is too large for ` +
+           `the browser's WASM heap.<br>` +
+           `Use the <strong>CLI</strong> — it has no memory cap and handles dumps of any size:<br>` +
            `<code>hprof-analyzer ${escHtml(fileName)}</code><br>` +
            `<a href="${readmeUrl}" target="_blank" rel="noopener">Install &amp; quick-start guide →</a>`;
   }

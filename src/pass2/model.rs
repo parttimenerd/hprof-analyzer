@@ -1099,9 +1099,11 @@ impl InboundBuilder {
         mut fwd_targets: crate::chunkvec::ChunkU32,
         dfn: &[u32],
     ) -> io::Result<(Vec<u64>, Vec<u8>)> {
+        #[cfg(not(target_family = "wasm"))]
         let t_inb = std::time::Instant::now();
         macro_rules! t_inb {
             ($label:expr) => {
+                #[cfg(not(target_family = "wasm"))]
                 if std::env::var_os("HPROF_TIMING").is_some() {
                     eprintln!(
                         "[timing] inbound/{}: {:.3}s",
@@ -1517,9 +1519,11 @@ impl InboundBuilder {
     where
         F: FnMut(usize, Vec<u32>) -> io::Result<()>,
     {
+        #[cfg(not(target_family = "wasm"))]
         let t_inb = std::time::Instant::now();
         macro_rules! t_inb {
             ($label:expr) => {
+                #[cfg(not(target_family = "wasm"))]
                 if std::env::var_os("HPROF_TIMING").is_some() {
                     eprintln!(
                         "[timing] inbound/{}: {:.3}s",
