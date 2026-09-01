@@ -44,13 +44,26 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --release --all-targets -- -D warnings
+        run: cargo clippy --release --all-targets --features native -- -D warnings
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --features native
 
       - name: Test (unit + integration + parity)
-        run: cargo test --release
+        run: cargo test --release --features native
+
+      - name: Smoke test — heap docs (no dump required)
+        run: |
+          ./target/release/hprof-analyzer heap docs --topic syntax | grep -q "SELECT"
+          ./target/release/hprof-analyzer heap docs --topic examples | grep -q "GROUP BY"
+
+      - name: Smoke test — MCP tools/list
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}
+          {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
+          {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | timeout 10 ./target/release/hprof-analyzer mcp \
+            | grep -q '"get_session_info"'
 
       - name: Upload binary artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -59,7 +72,6 @@ jobs:
           name: hprof-analyzer-linux
           path: target/release/hprof-analyzer
           retention-days: 1
-
   # Deploy GitHub Pages only on main push, after build-test passes.
   # Re-uses the binary artifact from build-test to avoid a second full Rust build.
   deploy:

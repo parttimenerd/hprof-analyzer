@@ -336,7 +336,18 @@ ENDOFFORMULA
           sed -i "s|SHA_LINUX_X86_PLACEHOLDER|${SHA_LINUX_X86}|g" Formula/hprof-analyzer-nightly.rb
           sed -i "s|SHA_LINUX_ARM_PLACEHOLDER|${SHA_LINUX_ARM}|g" Formula/hprof-analyzer-nightly.rb
 
-          git add Formula/hprof-analyzer-nightly.rb
+          # Also keep the stable formula pointing at nightly until a tagged release exists.
+          # Once a tagged release is published, the update-homebrew-tap job takes over.
+          if grep -q "releases/download/nightly" Formula/hprof-analyzer.rb; then
+            sed -i "s|sha256 \"[0-9a-f]\{64\}\"\( *# mac_arm\)\?|sha256 \"REPLACE\"|g" Formula/hprof-analyzer.rb || true
+            # Simpler: regenerate the stable formula from scratch with nightly URLs
+            cp Formula/hprof-analyzer-nightly.rb /tmp/nightly_copy.rb
+            sed 's/class HprofAnalyzerNightly/class HprofAnalyzer/' /tmp/nightly_copy.rb \
+              | sed 's/hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)/Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine/' \
+              > Formula/hprof-analyzer.rb
+          fi
+
+          git add Formula/hprof-analyzer-nightly.rb Formula/hprof-analyzer.rb
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Update nightly formula (${COMMIT::8})"
           git push origin main
