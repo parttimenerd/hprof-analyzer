@@ -352,10 +352,18 @@ export interface ObjRow {
   held_via?: string | null;
 }
 
+export interface HolderRow {
+  holder_class: string;
+  count: number;
+  retained: number;
+  level2?: HolderRow[];
+}
+
 export interface ClassRow {
   pretty_class: string;
   instances: number;
   retained: number;
+  holders?: HolderRow[];
 }
 
 export interface PackageNode {

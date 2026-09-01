@@ -3107,6 +3107,46 @@ function TopConsumersTreemap({ rows }: { rows: Array<{ pretty_class: string; ret
   );
 }
 
+function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow[]; total: number }) {
+  const [open, setOpen] = React.useState(false);
+  const [fmtB] = useFmtBytes();
+  const withHolders = rows.filter(c => c.holders && c.holders.length > 0);
+  if (withHolders.length === 0) return null;
+  return (
+    <div style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+      <button onClick={() => setOpen(v => !v)} style={{
+        fontSize: "0.85rem", padding: "0.2rem 0.7rem",
+        border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+        background: "transparent", color: "var(--fg)",
+      }}>
+        {open ? "▾" : "▸"} Held by (immediate dominators)
+      </button>
+      {open && (
+        <div style={{ marginTop: "0.5rem", fontSize: "0.84rem", lineHeight: 1.6 }}>
+          {withHolders.map(cls => (
+            <div key={cls.pretty_class} style={{ marginBottom: "0.6rem" }}>
+              <code style={{ fontWeight: 600 }}>{cls.pretty_class}</code>
+              <div style={{ paddingLeft: "1.2rem" }}>
+                {(cls.holders ?? []).map(h => (
+                  <div key={h.holder_class} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline" }}>
+                    <span>↳ <code>{h.holder_class}</code></span>
+                    <span className="muted">({fmtCount(h.count)}, {fmtB(h.retained)})</span>
+                    {h.level2 && h.level2.length > 0 && (
+                      <span className="muted" style={{ fontSize: "0.8rem" }}>
+                        ← {h.level2.map(l2 => <span key={l2.holder_class}><code>{l2.holder_class}</code> ({fmtCount(l2.count)}) </span>)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TopConsumersSection({ report }: { report: Report }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const [fmtBcls, kbBtnCls, useKBcls] = useFmtBytes();
@@ -3230,6 +3270,9 @@ function TopConsumersSection({ report }: { report: Report }) {
       <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
         extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
       />
+      {t.biggest_classes.some(c => c.holders && c.holders.length > 0) && (
+        <BiggestClassHolders rows={t.biggest_classes} total={total} />
+      )}
 
       {pkgRoot.children.length > 0 && (
         <>
