@@ -637,6 +637,7 @@ mod tests {
             pct: 0.0,
             owner: None,
             held_via: None,
+            holder_chain: vec![],
         }
     }
     fn classrow(name: &str, inst: u64, ret: u64) -> report::ClassRow {
@@ -644,6 +645,7 @@ mod tests {
             pretty_class: name.to_string(),
             instances: inst,
             retained: ret,
+            holders: vec![],
         }
     }
     fn pkg(

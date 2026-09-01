@@ -4151,6 +4151,8 @@ fn build_top_consumers(
     total_shallow: u64,
 ) -> TopConsumers {
     let undef = u32::MAX;
+    let n = g.n;
+    let vroot = n as u32;
     let class_count = g.class_names.len();
 
     // Sub-step timing (HPROF_TIMING-gated, stderr-only, byte-exact): splits the
@@ -4387,13 +4389,149 @@ fn build_top_consumers(
         .collect();
     class_order
         .sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
+
+    // ── Holder breakdown: two O(n) passes over all objects ────────────────────
+    // Pass 1: for each obj whose class is in top-N, accumulate
+    //   level1[top_ci][idom_ci] += (count=1, retained)
+    // Pass 2: for each level-1 holder class that emerged, accumulate
+    //   level2[holder_ci][idom2_ci] += (count=1, retained)
+    const HOLDER_CAP: usize = 10;
+
+    // top_class_flag[ci] = index in top-N (usize::MAX = not in top-N)
+    let mut top_class_flag: Vec<usize> = vec![usize::MAX; class_count];
+    for (rank, &ci) in class_order.iter().take(top_n).enumerate() {
+        top_class_flag[ci] = rank;
+    }
+
+    // biggest_classes_holders[rank] = Vec<HolderRow> (populated below)
+    let top_class_n = top_n.min(class_order.len());
+    let mut biggest_classes_holders: Vec<Vec<crate::report::HolderRow>> = vec![vec![]; top_class_n];
+
+    // level1_accum[rank] = HashMap<holder_ci, (count, retained_sum)>
+    let mut level1_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
+        vec![std::collections::HashMap::new(); top_class_n];
+
+    if !g.idom.is_empty() && !g.class_idx.is_empty() {
+        // Pass 1
+        for obj in 0..n {
+            let ci = g.class_idx[obj] as usize;
+            if ci >= class_count {
+                continue;
+            }
+            let rank = top_class_flag[ci];
+            if rank == usize::MAX {
+                continue;
+            }
+            let par = g.idom[obj];
+            if par == undef || par == vroot || par as usize >= n {
+                continue;
+            }
+            let par_ci = g.class_idx[par as usize] as usize;
+            if par_ci >= class_count {
+                continue;
+            }
+            let e = level1_accum[rank].entry(par_ci).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += g.retained[obj];
+        }
+
+        // Collect the set of level-1 holder class indices for Pass 2
+        let mut holder_flag: Vec<usize> = vec![usize::MAX; class_count];
+        for (rank, map) in level1_accum.iter().enumerate() {
+            for &hci in map.keys() {
+                if hci < class_count {
+                    holder_flag[hci] = rank; // any rank is fine; we just need the flag
+                }
+            }
+        }
+
+        // level2_accum[holder_ci] = HashMap<idom2_ci, (count, retained_sum)>
+        let mut level2_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
+            vec![std::collections::HashMap::new(); class_count];
+
+        // Pass 2
+        for obj in 0..n {
+            let ci = g.class_idx[obj] as usize;
+            if ci >= class_count || holder_flag[ci] == usize::MAX {
+                continue;
+            }
+            let par = g.idom[obj];
+            if par == undef || par == vroot || par as usize >= n {
+                continue;
+            }
+            let par_ci = g.class_idx[par as usize] as usize;
+            if par_ci >= class_count {
+                continue;
+            }
+            let e = level2_accum[ci].entry(par_ci).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += g.retained[obj];
+        }
+
+        // Build level-2 HolderRows per holder class
+        let build_level2 = |hci: usize| -> Vec<crate::report::HolderRow> {
+            let mut v: Vec<(usize, u64, u64)> = level2_accum[hci]
+                .iter()
+                .map(|(&ci, &(cnt, ret))| (ci, cnt, ret))
+                .collect();
+            v.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+            v.into_iter()
+                .take(HOLDER_CAP)
+                .filter_map(|(ci, cnt, ret)| {
+                    if ci < g.class_names.len() {
+                        Some(crate::report::HolderRow {
+                            holder_class: pretty_class_name(&g.class_names[ci]),
+                            count: cnt,
+                            retained: ret,
+                            level2: vec![],
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Attach holders to biggest_classes entries
+        for (rank, map) in level1_accum.iter().enumerate() {
+            let mut v: Vec<(usize, u64, u64)> = map
+                .iter()
+                .map(|(&ci, &(cnt, ret))| (ci, cnt, ret))
+                .collect();
+            v.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+            if let Some(row) = biggest_classes_holders.get_mut(rank) {
+                *row = v
+                    .into_iter()
+                    .take(HOLDER_CAP)
+                    .filter_map(|(hci, cnt, ret)| {
+                        if hci < g.class_names.len() {
+                            Some(crate::report::HolderRow {
+                                holder_class: pretty_class_name(&g.class_names[hci]),
+                                count: cnt,
+                                retained: ret,
+                                level2: build_level2(hci),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+            }
+        }
+    }
+
     let biggest_classes: Vec<ClassRow> = class_order
         .iter()
         .take(top_n)
-        .map(|&ci| ClassRow {
+        .enumerate()
+        .map(|(rank, &ci)| ClassRow {
             pretty_class: pretty_class_name(&g.class_names[ci]),
             instances: class_count_map[ci],
             retained: class_retained[ci],
+            holders: biggest_classes_holders
+                .get(rank)
+                .cloned()
+                .unwrap_or_default(),
         })
         .collect();
     drop(class_retained);
@@ -4619,6 +4757,25 @@ fn build_top_consumers(
             } else {
                 None
             };
+            // holder_chain: walk up to 2 idom hops toward the GC root
+            let holder_chain = if !g.idom.is_empty() {
+                let mut chain = Vec::with_capacity(2);
+                let mut cur = idx;
+                for _ in 0..2 {
+                    let par = g.idom[cur];
+                    if par == undef || par == vroot || par as usize >= n {
+                        break;
+                    }
+                    let par_ci = g.class_idx[par as usize] as usize;
+                    if par_ci < g.class_names.len() {
+                        chain.push(pretty_class_name(&g.class_names[par_ci]));
+                    }
+                    cur = par as usize;
+                }
+                chain
+            } else {
+                vec![]
+            };
             ObjRow {
                 obj_index_1based: idx + 1,
                 display_class,
@@ -4628,6 +4785,7 @@ fn build_top_consumers(
                 pct,
                 owner,
                 held_via,
+                holder_chain,
             }
         })
         .collect();

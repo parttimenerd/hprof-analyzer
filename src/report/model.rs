@@ -751,6 +751,26 @@ pub struct ObjRow {
     /// owner was found. `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_via: Option<String>,
+    /// First 1–2 dominator-chain hops toward a GC root (class names only).
+    /// `[0]` = immediate dominator class, `[1]` = its immediate dominator.
+    /// Empty when the object is a direct GC root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holder_chain: Vec<String>,
+}
+
+/// One holder-class entry in the `ClassRow.holders` breakdown.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct HolderRow {
+    /// Class name of the immediate dominator.
+    pub holder_class: String,
+    /// Number of instances of the target class dominated by this holder class.
+    pub count: u64,
+    /// Sum of retained heap of those instances.
+    pub retained: u64,
+    /// Top immediate dominators of this holder class (level 2). Empty when
+    /// holder is a GC root or level-2 data was not available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub level2: Vec<HolderRow>,
 }
 
 /// One row of "Biggest Classes".
@@ -759,6 +779,11 @@ pub struct ClassRow {
     pub pretty_class: String,
     pub instances: u64,
     pub retained: u64,
+    /// Top immediate-dominator classes for instances of this class, sorted by
+    /// retained desc. Each entry shows which class holds the most retained bytes
+    /// of this class. Empty when idom data is unavailable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holders: Vec<HolderRow>,
 }
 
 /// One node of the pruned package tree (MAT PackageTreeResult parity).

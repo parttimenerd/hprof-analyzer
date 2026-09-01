@@ -731,6 +731,13 @@
       "description": "One row of \"Biggest Classes\".",
       "type": "object",
       "properties": {
+        "holders": {
+          "description": "Top immediate-dominator classes for instances of this class, sorted by\nretained desc. Each entry shows which class holds the most retained bytes\nof this class. Empty when idom data is unavailable.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HolderRow"
+          }
+        },
         "instances": {
           "type": "integer",
           "format": "uint64",
@@ -2031,6 +2038,40 @@
         "loader_id"
       ]
     },
+    "HolderRow": {
+      "description": "One holder-class entry in the `ClassRow.holders` breakdown.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Number of instances of the target class dominated by this holder class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "holder_class": {
+          "description": "Class name of the immediate dominator.",
+          "type": "string"
+        },
+        "level2": {
+          "description": "Top immediate dominators of this holder class (level 2). Empty when\nholder is a GC root or level-2 data was not available.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HolderRow"
+          }
+        },
+        "retained": {
+          "description": "Sum of retained heap of those instances.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "holder_class",
+        "count",
+        "retained"
+      ]
+    },
     "ImmDomPair": {
       "description": "One (dominator_class, dominated_class) pair for the V5 two-sided sankey.\nPowers \"who holds X\" (rows where dominated_class == target) and\n\"what does X hold\" (rows where dominator_class == target) from a single dataset.",
       "type": "object",
@@ -2577,6 +2618,13 @@
             "string",
             "null"
           ]
+        },
+        "holder_chain": {
+          "description": "First 1–2 dominator-chain hops toward a GC root (class names only).\n`[0]` = immediate dominator class, `[1]` = its immediate dominator.\nEmpty when the object is a direct GC root.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "obj_index_1based": {
           "type": "integer",

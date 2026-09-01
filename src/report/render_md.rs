@@ -1572,6 +1572,7 @@ directly held by a GC root, sorted largest first._\n\n",
     // (the primary referrer; an object may have others). Present only when
     // attribution data exists (i.e. `--collections` was passed).
     let obj_has_owner = t.biggest_objects.iter().any(|r| r.owner.is_some());
+    let obj_has_chain = t.biggest_objects.iter().any(|r| !r.holder_chain.is_empty());
     if obj_has_owner {
         out.push_str(
             "_The **Held via** column names the dominant incoming `Class#field` reference \
@@ -1590,6 +1591,10 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
         obj_headers.push("Held via (Class#field)");
         obj_aligns.push(Align::Left);
     }
+    if obj_has_chain {
+        obj_headers.push("Held by");
+        obj_aligns.push(Align::Left);
+    }
     let mut objs = Table::new(&obj_headers, &obj_aligns);
     for (rank, row) in t.biggest_objects.iter().enumerate() {
         let pct = pct_of_heap(row.retained, total_shallow);
@@ -1604,6 +1609,17 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
             cells.push(match &row.owner {
                 Some(o) => format!("`{o}`"),
                 None => "—".to_string(),
+            });
+        }
+        if obj_has_chain {
+            cells.push(if row.holder_chain.is_empty() {
+                "_(GC root)_".to_string()
+            } else {
+                row.holder_chain
+                    .iter()
+                    .map(|c| format!("`{c}`"))
+                    .collect::<Vec<_>>()
+                    .join(" → ")
             });
         }
         objs.row(cells);
@@ -1627,6 +1643,36 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     }
     classes.render(out);
     out.push('\n');
+    // Holder breakdown: nested bullet list per class, same visual style as
+    // render_merged_paths_plain. Only emitted when idom data is available.
+    let any_holders = t.biggest_classes.iter().any(|r| !r.holders.is_empty());
+    if any_holders {
+        out.push_str("**Held by (immediate dominators):**\n\n");
+        for row in &t.biggest_classes {
+            if row.holders.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("- `{}`\n", row.pretty_class));
+            for h in &row.holders {
+                out.push_str(&format!(
+                    "  - `{}` ({}, {})",
+                    h.holder_class,
+                    fmt_count(h.count),
+                    format_bytes(h.retained),
+                ));
+                if !h.level2.is_empty() {
+                    let parts: Vec<String> = h
+                        .level2
+                        .iter()
+                        .map(|h2| format!("`{}` ({})", h2.holder_class, fmt_count(h2.count)))
+                        .collect();
+                    out.push_str(&format!(" ← {}", parts.join(", ")));
+                }
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
 
     // Top-Dominator Size Distribution (basic stats + compact bucket table; the
     // md-graphs variant adds a sparkline and bar column).
