@@ -540,20 +540,18 @@ async function gzipCompress(bytes) {
 // in localStorage and updated after each run so estimates improve over time.
 const _ETA_KEY = 'hprof-analyzer.eta-factors';
 const _ETA_BASE = {
-  // nanoseconds per instance (from linear regression R²≈0.8)
-  parseNsPerInst: 10244,
-  domNsPerInst:   11129,
-  // millisecond offsets (regression intercepts, clamped to 0 for display)
-  parseOffsetMs:  0,
-  domOffsetMs:    0,
+  // nanoseconds per instance — measured in browser on 712 MB / 9.4M-object dump
+  parseNsPerInst: 1957,
+  domNsPerInst:   1850,
   // compress: ms per raw MB (for non-gzip files). Gzip files skip JS compress.
-  compMsPerMB:    57,
+  compMsPerMB:    11,
   // estimated instances per raw MB (for compress-phase parse estimate)
-  instPerMB:      1548,
+  instPerMB:      13200,
 };
 
-// Sub-phase fractions of total parse time (pass1_a + pass1_b + pass2 = 1.0)
-const _LOAD_PHASE_FRACS = { pass1_a: 0.33, pass1_b: 0.33, pass2: 0.34 };
+// Sub-phase fractions of total parse time (pass1_a + pass1_b + pass2 = 1.0).
+// Pass2 is the dominant phase (~70%), pass1 scans are quick.
+const _LOAD_PHASE_FRACS = { pass1_a: 0.12, pass1_b: 0.18, pass2: 0.70 };
 // Cumulative share of dominator-analysis time consumed after each phase fires.
 const _ANAL_PHASE_CUM_FRACS = { pass1: 0.03, pass2: 0.15, rpo: 0.25, inbound: 0.45, dominators: 0.80, retained: 0.95 };
 
@@ -579,13 +577,8 @@ function _etaPredict(phase, instances) {
   const f = _etaFactors();
   const correction = f[phase] ?? 1.0;
   const base = _ETA_BASE;
-  let ms;
-  if (phase === 'parse') {
-    ms = (base.parseNsPerInst * instances / 1e6) + base.parseOffsetMs;
-  } else {
-    ms = (base.domNsPerInst * instances / 1e6) + base.domOffsetMs;
-  }
-  return Math.max(0, Math.round(ms * correction));
+  const nsPerInst = phase === 'parse' ? base.parseNsPerInst : base.domNsPerInst;
+  return Math.max(0, Math.round((nsPerInst * instances / 1e6) * correction));
 }
 
 function _fmtEta(ms) {
@@ -762,7 +755,7 @@ async function loadWasmSession(file) {
     return;
   }
   const loadActual = performance.now() - tLoad0;
-  _etaRecord('parse', parseEtaMs, loadActual - (isGzip ? 0 : loadActual * compEtaMs / Math.max(totalLoadMs, 1)));
+  _etaRecord('parse', parseEtaMs, loadActual);
   bytes = null;
 
   classNames = JSON.parse(wasmSession.class_names());
@@ -882,6 +875,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
     msg.innerHTML = _errorHtml('Loading', file.name, e);
     return;
   }
+  _etaRecord('parse', parseEtaMs, performance.now() - tParse0);
   bytes = null;
 
   let instanceCount = estInst;
