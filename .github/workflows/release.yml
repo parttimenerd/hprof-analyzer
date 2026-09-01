@@ -176,62 +176,60 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
 
-          cat > Formula/hprof-analyzer.rb << 'ENDOFFORMULA'
-class HprofAnalyzer < Formula
-  desc "Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine"
-  homepage "https://github.com/parttimenerd/hprof-analyzer"
-  license "MIT"
+          python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" "$VERSION" <<'PYEOF'
+          import sys
+          base_url, sha_mac, sha_x86, sha_arm, version = sys.argv[1:]
+          formula = f'''class HprofAnalyzer < Formula
+            desc "Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine"
+            homepage "https://github.com/parttimenerd/hprof-analyzer"
+            license "MIT"
 
-  on_macos do
-    on_arm do
-      url "BASE_URL_PLACEHOLDER/hprof-analyzer-aarch64-apple-darwin.tar.gz"
-      sha256 "SHA_MAC_ARM_PLACEHOLDER"
-      version "VERSION_PLACEHOLDER"
-    end
-  end
+            on_macos do
+              on_arm do
+                url "{base_url}/hprof-analyzer-aarch64-apple-darwin.tar.gz"
+                sha256 "{sha_mac}"
+                version "{version}"
+              end
+            end
 
-  on_linux do
-    on_intel do
-      url "BASE_URL_PLACEHOLDER/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "SHA_LINUX_X86_PLACEHOLDER"
-      version "VERSION_PLACEHOLDER"
-    end
-    on_arm do
-      url "BASE_URL_PLACEHOLDER/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "SHA_LINUX_ARM_PLACEHOLDER"
-      version "VERSION_PLACEHOLDER"
-    end
-  end
+            on_linux do
+              on_intel do
+                url "{base_url}/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "{sha_x86}"
+                version "{version}"
+              end
+              on_arm do
+                url "{base_url}/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "{sha_arm}"
+                version "{version}"
+              end
+            end
 
-  def install
-    bin.install "hprof-analyzer"
-  end
+            def install
+              bin.install "hprof-analyzer"
+            end
 
-  def caveats
-    <<~EOS
-      Add the MCP server to Claude Code:
-        claude mcp add hprof -- hprof-analyzer mcp
+            def caveats
+              <<~EOS
+                Add the MCP server to Claude Code:
+                  claude mcp add hprof -- hprof-analyzer mcp
 
-      Or add to Claude Desktop (~/.claude/mcp.json):
-        { "mcpServers": { "hprof": { "command": "hprof-analyzer", "args": ["mcp"] } } }
+                Or add to Claude Desktop (~/.claude/mcp.json):
+                  {{ "mcpServers": {{ "hprof": {{ "command": "hprof-analyzer", "args": ["mcp"] }} }} }}
 
-      See https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration
-    EOS
-  end
+                See https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration
+              EOS
+            end
 
-  test do
-    system "#{bin}/hprof-analyzer", "--version"
-    assert_match "SELECT", shell_output("#{bin}/hprof-analyzer heap docs --topic syntax")
-  end
-end
-ENDOFFORMULA
-
-          # Substitute placeholders (no heredoc variable expansion needed)
-          sed -i "s|BASE_URL_PLACEHOLDER|${BASE_URL}|g" Formula/hprof-analyzer.rb
-          sed -i "s|SHA_MAC_ARM_PLACEHOLDER|${SHA_MAC_ARM}|g" Formula/hprof-analyzer.rb
-          sed -i "s|SHA_LINUX_X86_PLACEHOLDER|${SHA_LINUX_X86}|g" Formula/hprof-analyzer.rb
-          sed -i "s|SHA_LINUX_ARM_PLACEHOLDER|${SHA_LINUX_ARM}|g" Formula/hprof-analyzer.rb
-          sed -i "s|VERSION_PLACEHOLDER|${VERSION}|g" Formula/hprof-analyzer.rb
+            test do
+              system "#{{bin}}/hprof-analyzer", "--version"
+              assert_match "SELECT", shell_output("#{{bin}}/hprof-analyzer heap docs --topic syntax")
+            end
+          end
+          '''
+          with open("Formula/hprof-analyzer.rb", "w") as f:
+              f.write(formula)
+          PYEOF
 
           git add Formula/hprof-analyzer.rb
           git commit -m "Update hprof-analyzer formula to ${TAG}"
@@ -286,66 +284,69 @@ ENDOFFORMULA
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          cat > Formula/hprof-analyzer-nightly.rb << 'ENDOFFORMULA'
-class HprofAnalyzerNightly < Formula
-  desc "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)"
-  homepage "https://github.com/parttimenerd/hprof-analyzer"
-  license "MIT"
-  version "nightly"
+          python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" <<'PYEOF'
+          import sys
+          base_url, sha_mac, sha_x86, sha_arm = sys.argv[1:]
+          nightly = f'''class HprofAnalyzerNightly < Formula
+            desc "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)"
+            homepage "https://github.com/parttimenerd/hprof-analyzer"
+            license "MIT"
+            version "nightly"
 
-  on_macos do
-    on_arm do
-      url "BASE_URL_PLACEHOLDER/hprof-analyzer-aarch64-apple-darwin.tar.gz"
-      sha256 "SHA_MAC_ARM_PLACEHOLDER"
-    end
-  end
+            on_macos do
+              on_arm do
+                url "{base_url}/hprof-analyzer-aarch64-apple-darwin.tar.gz"
+                sha256 "{sha_mac}"
+              end
+            end
 
-  on_linux do
-    on_intel do
-      url "BASE_URL_PLACEHOLDER/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "SHA_LINUX_X86_PLACEHOLDER"
-    end
-    on_arm do
-      url "BASE_URL_PLACEHOLDER/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "SHA_LINUX_ARM_PLACEHOLDER"
-    end
-  end
+            on_linux do
+              on_intel do
+                url "{base_url}/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "{sha_x86}"
+              end
+              on_arm do
+                url "{base_url}/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "{sha_arm}"
+              end
+            end
 
-  def install
-    bin.install "hprof-analyzer"
-  end
+            def install
+              bin.install "hprof-analyzer"
+            end
 
-  def caveats
-    <<~EOS
-      Add the MCP server to Claude Code:
-        claude mcp add hprof -- hprof-analyzer mcp
+            def caveats
+              <<~EOS
+                Add the MCP server to Claude Code:
+                  claude mcp add hprof -- hprof-analyzer mcp
 
-      See https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration
-    EOS
-  end
+                See https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration
+              EOS
+            end
 
-  test do
-    system "#{bin}/hprof-analyzer", "--version"
-    assert_match "SELECT", shell_output("#{bin}/hprof-analyzer heap docs --topic syntax")
-  end
-end
-ENDOFFORMULA
-
-          sed -i "s|BASE_URL_PLACEHOLDER|${BASE_URL}|g" Formula/hprof-analyzer-nightly.rb
-          sed -i "s|SHA_MAC_ARM_PLACEHOLDER|${SHA_MAC_ARM}|g" Formula/hprof-analyzer-nightly.rb
-          sed -i "s|SHA_LINUX_X86_PLACEHOLDER|${SHA_LINUX_X86}|g" Formula/hprof-analyzer-nightly.rb
-          sed -i "s|SHA_LINUX_ARM_PLACEHOLDER|${SHA_LINUX_ARM}|g" Formula/hprof-analyzer-nightly.rb
-
-          # Also keep the stable formula pointing at nightly until a tagged release exists.
-          # Once a tagged release is published, the update-homebrew-tap job takes over.
-          if grep -q "releases/download/nightly" Formula/hprof-analyzer.rb; then
-            sed -i "s|sha256 \"[0-9a-f]\{64\}\"\( *# mac_arm\)\?|sha256 \"REPLACE\"|g" Formula/hprof-analyzer.rb || true
-            # Simpler: regenerate the stable formula from scratch with nightly URLs
-            cp Formula/hprof-analyzer-nightly.rb /tmp/nightly_copy.rb
-            sed 's/class HprofAnalyzerNightly/class HprofAnalyzer/' /tmp/nightly_copy.rb \
-              | sed 's/hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)/Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine/' \
-              > Formula/hprof-analyzer.rb
-          fi
+            test do
+              system "#{{bin}}/hprof-analyzer", "--version"
+              assert_match "SELECT", shell_output("#{{bin}}/hprof-analyzer heap docs --topic syntax")
+            end
+          end
+          '''
+          stable = nightly.replace(
+              "class HprofAnalyzerNightly",
+              "class HprofAnalyzer",
+          ).replace(
+              "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)",
+              "Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine",
+          )
+          with open("Formula/hprof-analyzer-nightly.rb", "w") as f:
+              f.write(nightly)
+          # Only overwrite stable formula if it still points to nightly URLs
+          # (once a tagged release is published, update-homebrew-tap takes over).
+          with open("Formula/hprof-analyzer.rb") as f:
+              current_stable = f.read()
+          if "releases/download/nightly" in current_stable:
+              with open("Formula/hprof-analyzer.rb", "w") as f:
+                  f.write(stable)
+          PYEOF
 
           git add Formula/hprof-analyzer-nightly.rb Formula/hprof-analyzer.rb
           git diff --cached --quiet && echo "No changes" && exit 0
