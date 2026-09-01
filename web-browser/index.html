@@ -29,6 +29,25 @@
       <li><span class="feat-icon">💬</span> SQL-like OQL query shell with tab-completion</li>
       <li><span class="feat-icon">🔒</span> Fully private — no upload, no server, no telemetry</li>
     </ul>
+    <div id="landing-cli-box">
+      <p class="cli-box-title">For dumps above 3 GB — install the CLI</p>
+      <div class="cli-box-options">
+        <div class="cli-option">
+          <code>cargo install hprof-analyzer</code>
+          <span class="cli-option-desc">any platform</span>
+        </div>
+        <div class="cli-option">
+          <code>brew tap parttimenerd/hprof-analyzer &amp;&amp; brew trust parttimenerd/hprof-analyzer &amp;&amp; brew install hprof-analyzer</code>
+          <span class="cli-option-desc">macOS / Linux</span>
+        </div>
+      </div>
+      <p class="cli-box-features">
+        CLI extras: <strong>cached interactive analysis</strong> (<code>heap query</code>, <code>heap browse</code>, <code>heap inspect</code>)
+        · <strong>MCP server</strong> for Claude &amp; Cline (<code>hprof-analyzer mcp</code>
+        or <code>claude mcp add hprof -- hprof-analyzer mcp</code>)
+        · <a href="https://github.com/parttimenerd/hprof-analyzer#readme" target="_blank" rel="noopener">full docs ↗</a>
+      </p>
+    </div>
   </div>
 
   <div id="drop-zone">
@@ -73,6 +92,8 @@
     <a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     <span class="sep">·</span>
     <span>CLI: <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener"><code>cargo install hprof-analyzer</code></a></span>
+    <span class="sep">·</span>
+    <a href="https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration" target="_blank" rel="noopener">MCP for Claude &amp; Cline</a>
     <span class="sep">·</span>
     <button id="btn-theme-toggle" title="Cycle theme: auto / light / dark" class="footer-theme-btn">◐ Theme: Auto</button>
   </div>

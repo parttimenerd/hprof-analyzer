@@ -16,7 +16,7 @@ mod build;
 pub(crate) mod format;
 mod model;
 mod render_graphs;
-mod render_md;
+pub mod render_md;
 mod triage;
 
 pub use anchors::*;

@@ -1,11 +1,15 @@
 //! Library interface for hprof-analyzer, used by the hprof-wasm WASM crate.
 
 mod bitset;
+#[cfg(feature = "native")]
+pub mod cache;
 mod chunkvec;
 mod collection_config;
 pub mod cvec;
 mod dominator;
 mod id_map;
+#[cfg(feature = "native")]
+pub mod mcp;
 mod md;
 #[cfg(test)]
 mod md_test;
@@ -481,4 +485,329 @@ fn analyze_to_report_inner(
     let retained = std::mem::take(&mut g.retained);
 
     Ok((report, retained))
+}
+
+/// Run full analysis with disk caching (native only).
+///
+/// On first call: runs the full pipeline (5–15 min), writes cache files.
+/// On subsequent calls: loads from cache in ~1 s.
+///
+/// `progress(stage)` is called with stage names during a fresh analysis;
+/// ignored when loading from cache.
+#[cfg(feature = "native")]
+pub fn analyze_with_cache(
+    path: &std::path::Path,
+    opts: &AnalyzeOptions,
+    mode: cache::CacheMode,
+    mut progress: impl FnMut(&str),
+) -> std::io::Result<cache::CachedSession> {
+    use cache::{CacheDir, CachedSession};
+
+    let cache = CacheDir::for_dump(path)?;
+
+    // Fast path: load from cache.
+    if cache.is_valid(mode) {
+        let report = cache
+            .read_report()?
+            .ok_or_else(|| std::io::Error::other("cache corrupt: missing report"))?;
+        let pass1 = cache
+            .read_pass1()?
+            .ok_or_else(|| std::io::Error::other("cache corrupt: missing pass1"))?;
+        let class_names = cache.read_class_names()?.unwrap_or_default();
+        return Ok(CachedSession {
+            dump_path: path.to_path_buf(),
+            report,
+            pass1,
+            cache,
+            mode,
+            class_names,
+        });
+    }
+
+    // Slow path: run full pipeline, then write cache.
+    progress("pass1");
+    let source = HprofSource::from(
+        path.to_str()
+            .ok_or_else(|| std::io::Error::other("non-UTF8 path"))?,
+    );
+    let p1 = pass1::Pass1::run(&source, false)?;
+    let snap = pass1::Pass1Snapshot::from_pass1(&p1);
+
+    let mut prog_fn = |stage: &str, _frac: f32| progress(stage);
+    let (report, _retained, class_names) =
+        analyze_to_report_inner_with_cache(&source, p1, opts, &mut prog_fn, &cache, mode)?;
+
+    cache.write_report(&report)?;
+    cache.write_pass1(&snap)?;
+    if let Err(e) = cache.write_class_names(&class_names) {
+        eprintln!("hprof-cache: failed to write class_names.json.zst: {e}");
+    }
+
+    Ok(CachedSession {
+        dump_path: path.to_path_buf(),
+        report,
+        pass1: snap,
+        cache,
+        mode,
+        class_names,
+    })
+}
+
+/// Parse and run an OQL query string against a dump file (native only).
+///
+/// Handles parse → plan → optimize → execute. Returns one `QueryResult` per
+/// SELECT (or UNION branch). The `reachable_only` flag prunes unreachable objects
+/// from results (pass `true` for normal use; `false` for `--all`).
+#[cfg(feature = "native")]
+pub fn run_oql_query(
+    dump_path: &str,
+    oql: &str,
+    reachable_only: bool,
+    opts: &AnalyzeOptions,
+) -> std::io::Result<Vec<query::model::QueryResult>> {
+    let q = query::parse::parse_or_report(oql)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let plan = query::plan::plan_query(&q, opts::DEFAULT_QUERY_PATH_DEPTH)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.0))?;
+    let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
+    let flat_plans = vec![(q, plan)];
+    let (flat, union_groups) = query::run::expand_union_queries(&flat_plans);
+    run_oql::run_oql_escalated(dump_path, &flat, &union_groups, reachable_only, opts)
+}
+
+/// Render one section of a Report to Markdown text.
+///
+/// `section` is one of `"leaks"`, `"top"`, `"threads"`, `"overview"`, or `"all"`.
+/// Unknown section names fall back to `"all"` (full report).
+pub fn render_report_section(r: &report::Report, section: &str) -> String {
+    use report::render_md;
+    let mut out = String::new();
+    match section {
+        "leaks" => render_md::render_leak_suspects(&r.leaks, &mut out),
+        "top" => render_md::render_top_consumers(&r.top, r.overview.total_shallow, &mut out),
+        "threads" => render_md::render_threads(&r.threads, false, &mut out),
+        "overview" => render_md::render_system_overview(&r.overview, 0, &mut out),
+        _ => return render_md::render_markdown(r),
+    }
+    out
+}
+
+/// arrays at the appropriate point in the pipeline (native only).
+#[cfg(feature = "native")]
+fn analyze_to_report_inner_with_cache(
+    source: &HprofSource,
+    p1: pass1::Pass1,
+    opts: &AnalyzeOptions,
+    progress: &mut dyn FnMut(&str, f32),
+    cache: &cache::CacheDir,
+    mode: cache::CacheMode,
+) -> std::io::Result<(crate::report::Report, Vec<u64>, Vec<String>)> {
+    use cache::{ArraysForCache, GraphForCache};
+    use std::io;
+    let truncated_input = p1.truncated_input;
+    progress("pass1", 1.0);
+
+    if p1.class_ids.len() > u32::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "dump has {} objects, exceeding the {} (u32::MAX) limit of the \
+                 analyzer's index scheme; cannot analyze",
+                p1.class_ids.len(),
+                u32::MAX
+            ),
+        ));
+    }
+
+    let compress = cvec::Codec::Deflate1;
+    let mut no_in_sets = std::collections::HashMap::new();
+    let mut no_exists_bools = std::collections::HashMap::new();
+    let (
+        mut g,
+        mut inbound,
+        shallow_c,
+        class_idx_c,
+        alloc_serial_c,
+        _query_state,
+        _refwalk_csr,
+        _string_values,
+        _string_values_truncated,
+    ) = pass2::Pass2::build(
+        source,
+        p1,
+        compress,
+        opts,
+        &[],
+        &mut no_in_sets,
+        &mut no_exists_bools,
+    )?;
+    progress("pass2", 1.0);
+
+    inbound.compress_id_map(compress)?;
+
+    let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    progress("rpo", 1.0);
+
+    {
+        g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
+            g.n,
+            &rpo.dfn,
+            &g.fwd_offsets,
+            &g.fwd_targets,
+            &shallow_c,
+            &class_idx_c,
+            g.class_names.len(),
+            &g.class_obj_class_idx,
+            &g.class_names,
+        )?;
+    }
+
+    let mut rpo = rpo;
+    let parent_pre_count = rpo.parent_pre.len();
+    let parent_pre_c = if compress != cvec::Codec::None {
+        let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
+        rpo.parent_pre = Vec::new();
+        Some(c)
+    } else {
+        None
+    };
+
+    // Save fwd CSR for graph cache before inbound consumes it.
+    let fwd_for_cache: Option<(Vec<u32>, Vec<u32>)> = if mode == cache::CacheMode::Graph {
+        let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
+        let fwd_off = g.fwd_offsets.clone();
+        let fwd_tgt: Vec<u32> = (0..total_edges).map(|i| g.fwd_targets.get(i)).collect();
+        Some((fwd_off, fwd_tgt))
+    } else {
+        None
+    };
+    let field_stats_fwd: Option<(Vec<u32>, crate::chunkvec::ChunkU32)> = if opts.field_stats {
+        let total_edges = g.fwd_offsets.last().copied().unwrap_or(0) as usize;
+        let fwd_off_copy = g.fwd_offsets.clone();
+        let mut fwd_tgt_copy = crate::chunkvec::ChunkU32::zeroed(total_edges);
+        for i in 0..total_edges {
+            fwd_tgt_copy.set(i, g.fwd_targets.get(i));
+        }
+        Some((fwd_off_copy, fwd_tgt_copy))
+    } else {
+        None
+    };
+    let (inb_block_off, inb_data) = inbound.build_from_fwd(
+        std::mem::take(&mut g.fwd_offsets),
+        std::mem::take(&mut g.fwd_targets),
+        &rpo.dfn,
+    )?;
+    progress("inbound", 1.0);
+
+    let count = parent_pre_count;
+    rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
+    rpo.dfn = Vec::new();
+
+    if let Some(c) = parent_pre_c {
+        rpo.parent_pre = c.restore()?;
+    }
+
+    g.idom =
+        dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
+    progress("dominators", 1.0);
+    drop(inb_block_off);
+    drop(inb_data);
+
+    let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+
+    if compress != cvec::Codec::None {
+        g.shallow = shallow_c.restore()?;
+        g.class_idx = class_idx_c.restore()?;
+    }
+    drop(shallow_c);
+    drop(class_idx_c);
+
+    let class_count = g.class_names.len();
+    let (retained, has_same, depth_counts) = retained::compute_retained(
+        g.n,
+        &g.shallow,
+        &g.class_idx,
+        class_count,
+        &g.class_obj_class_idx,
+        g.jlc_idx,
+        &dc_off,
+        &dc_tgt,
+    );
+    progress("retained", 1.0);
+    g.retained = retained;
+    g.has_same_class_ancestor = has_same;
+
+    // Write arrays cache (shallow, class_idx, idom, retained, dc_off, dc_tgt).
+    let arrays = ArraysForCache {
+        shallow: &g.shallow,
+        class_idx: &g.class_idx,
+        idom: &g.idom,
+        retained: &g.retained,
+        dc_off: &dc_off,
+        dc_tgt: &dc_tgt,
+        n_objects: g.n,
+    };
+    if let Err(e) = cache.write_arrays(&arrays) {
+        eprintln!("hprof-cache: failed to write arrays.bin: {e}");
+    }
+
+    // Write graph cache (forward edges; inbound CSR omitted for now).
+    if mode == cache::CacheMode::Graph {
+        if let Some((fwd_off, fwd_tgt)) = fwd_for_cache {
+            let graph = GraphForCache {
+                fwd_off: &fwd_off,
+                fwd_tgt: &fwd_tgt,
+                inb_off: &[],
+                inb_tgt: &[],
+                fwd_field_idx: g.fwd_field_name_idx.as_deref(),
+            };
+            if let Err(e) = cache.write_graph(&graph) {
+                eprintln!("hprof-cache: failed to write graph.bin: {e}");
+            }
+        }
+    }
+
+    let precomputed_field_stats: Option<crate::report::FieldStats> =
+        if let Some((fwd_off, fwd_tgt)) = field_stats_fwd {
+            g.fwd_offsets = fwd_off;
+            g.fwd_targets = fwd_tgt;
+            let fs = crate::report::build_field_stats(&g);
+            g.fwd_offsets = Vec::new();
+            g.fwd_targets = crate::chunkvec::ChunkU32::default();
+            Some(fs)
+        } else {
+            None
+        };
+
+    let alloc_sites = if let Some(c) = alloc_serial_c {
+        let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
+        c.for_each_u32(|serial| agg.push(serial))?;
+        let a = agg.finish();
+        g.alloc_frames_by_serial = None;
+        Some(a)
+    } else {
+        let a = report::build_alloc_sites(&g, opts.alloc_sites_top);
+        g.alloc_stack_serial = Vec::new();
+        g.alloc_frames_by_serial = None;
+        Some(a)
+    };
+
+    let mut report = report::build_model(
+        &mut g,
+        dc_off,
+        dc_tgt,
+        opts.leak_children_cap,
+        &depth_counts,
+        opts,
+        alloc_sites,
+        precomputed_field_stats,
+    );
+    report.truncated_input = truncated_input;
+
+    let retained = std::mem::take(&mut g.retained);
+    let class_names: Vec<String> = std::mem::take(&mut g.class_names)
+        .into_iter()
+        .map(|n| crate::report::format::pretty_class_name(&n))
+        .collect();
+    Ok((report, retained, class_names))
 }

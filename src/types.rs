@@ -56,7 +56,7 @@ pub mod heap {
 }
 
 /// A field/array element's primitive type, as encoded by HPROF type codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HprofType {
     Object,
     Boolean,

@@ -265,6 +265,21 @@ To see your current version and what's available without updating:
 hprof-analyzer update
 ```
 
+### With Homebrew (macOS / Linux)
+
+```sh
+brew tap parttimenerd/hprof-analyzer
+brew trust parttimenerd/hprof-analyzer   # required once for third-party taps
+brew install hprof-analyzer
+```
+
+Homebrew prints MCP setup instructions after install. To follow the rolling nightly build
+(same as the prebuilt binary downloads):
+
+```sh
+brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly
+```
+
 ### With Cargo
 
 Requires Rust 1.85+. If you don't have it, install [rustup](https://rustup.rs/) first:
@@ -297,7 +312,9 @@ hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
 Named subcommands:
   compare      Compare reports (MAT export vs ours, or two of ours across time)
   completions  Generate a shell completion script
+  heap         Cached interactive analysis: query, browse, inspect (see below)
   mat          Generate Eclipse MAT index cache files (low-RSS alternative to MAT's first parse)
+  mcp          Start the MCP server for AI assistant integration (Claude, Cline, etc.)
   query        Run OQL queries against a heap dump (no full report needed)
   server       Serve OQL + report sections over HTTP
   dev          Developer / diagnostic commands
@@ -521,6 +538,106 @@ curl -s http://127.0.0.1:7070/ -d 'SELECT COUNT(*) FROM java.lang.String'
 See [docs/OQL.md — server subcommand](docs/OQL.md#server-subcommand) for the
 full endpoint reference, body format, `?limit=N`, NDJSON streaming, and error
 response shapes.
+
+### `heap` subcommand group — cached interactive analysis
+
+The `heap` subcommand group runs the full analysis pipeline once, caches the
+results, and makes all results available in ~1 s on every subsequent invocation.
+No flags or setup needed — the cache is transparent.
+
+```sh
+# First run: full analysis (5–15 min on large dumps), writes cache
+hprof-analyzer heap summary heap.hprof
+
+# All subsequent runs: loads from cache in ~1 s
+hprof-analyzer heap summary heap.hprof
+```
+
+Available subcommands:
+
+| Subcommand | Description |
+|------------|-------------|
+| `heap summary <dump>` | Top leak suspects + top classes by retained size |
+| `heap report <dump> [--section leaks\|top\|threads\|overview]` | Full or section report |
+| `heap histogram <dump> [--limit N]` | Class histogram with instance + retained counts |
+| `heap query <dump> --oql "..."` | Run an OQL query (add `--json` for machine-readable output) |
+| `heap browse <dump> [--index N] [--depth D] [--width W]` | Browse dominator tree (omit `--index` to start at root) |
+| `heap inspect <dump> --index N` | Inspect a specific object by index |
+| `heap docs [--topic syntax\|attributes\|examples\|workflow]` | Full OQL reference (no dump needed) |
+| `heap load <dump> [--with-graph]` | Pre-populate cache; `--with-graph` adds field-value queries |
+| `heap cache-list [<dump>]` | Show cache entries and sizes |
+| `heap cache-clear <dump>` | Delete cache for a dump |
+
+Add `--json` to any subcommand for machine-readable output.
+
+Object indices for `heap inspect` come from the `@objectId` column in query
+results or from `heap browse` output.
+
+## MCP server — AI integration
+
+`hprof-analyzer` ships a built-in **Model Context Protocol (MCP) server** that
+lets Claude, Cline, and other MCP-compatible AI assistants query a heap dump
+interactively without a separate server process.
+
+### Quick setup
+
+**Claude Code:**
+
+```sh
+claude mcp add hprof -- hprof-analyzer mcp
+```
+
+**Claude Desktop** — add to `~/.claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**With a specific dump pre-loaded** (recommended for single-dump sessions; avoids
+the race between `load_dump` and other tool calls):
+
+```sh
+claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
+```
+
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `get_session_info` | Check if a dump is loaded and see basic stats |
+| `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file |
+| `get_summary` | Top 5 leak suspects + top 5 classes by retained size |
+| `get_report` | Full or section report as JSON |
+| `get_histogram` | Class histogram with instance + retained counts |
+| `query` | Run an OQL query; returns plain JSON rows |
+| `browse_dominators` | Navigate the dominator tree (omit `object_index` to start at root) |
+| `inspect_object` | Details on a specific object (class, sizes, fields in graph mode) |
+| `get_oql_docs` | Full OQL language reference and workflow guide |
+
+### Typical AI workflow
+
+```
+1. get_session_info     — check if a dump is already loaded
+2. load_dump({path})    — load the dump (fast from cache after first run)
+3. get_summary          — top leak suspects + top classes
+4. get_histogram        — class-level breakdown
+5. query({oql})         — drill in with OQL queries
+6. browse_dominators    — navigate the dominator tree from root or a suspect
+7. inspect_object       — detailed view of a specific object
+```
+
+Call `get_oql_docs` for a complete OQL reference and worked examples.
+
+**Cache:** The first `load_dump` call may take 5–15 min for large dumps and
+writes a cache alongside the dump (`<name>.hprof-cache/`). Subsequent calls
+load in ~1 s. Delete the cache directory to force re-analysis.
 
 ## Use with AI agents
 

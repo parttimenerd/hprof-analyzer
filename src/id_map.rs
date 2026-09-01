@@ -299,6 +299,29 @@ impl IdMap {
         self.block_base[b] + self.offsets[i] as u64
     }
 
+    /// Extract the internal block structure for serialization (native only).
+    /// Use `from_pages` to reconstruct. The staging Vec is always empty after
+    /// `sort_and_dedup`/`finalize_sorted` so it is not serialized.
+    #[cfg(feature = "native")]
+    pub fn to_pages(&self) -> IdMapPages {
+        IdMapPages {
+            block_base: self.block_base.clone(),
+            block_start: self.block_start.clone(),
+            offsets: self.offsets.clone(),
+        }
+    }
+
+    /// Reconstruct an IdMap from serialized pages (native only).
+    #[cfg(feature = "native")]
+    pub fn from_pages(pages: IdMapPages) -> Self {
+        Self {
+            block_base: pages.block_base,
+            block_start: pages.block_start,
+            offsets: pages.offsets,
+            staging: Vec::new(),
+        }
+    }
+
     /// Compress the sorted addrs into a self-describing blob (delta-vbyte then
     /// deflate for Deflate9/Deflate1, or raw LE u64 for None), returning (blob, element_count).
     pub fn compress(&self, codec: Codec) -> io::Result<(Vec<u8>, usize)> {
@@ -545,6 +568,16 @@ impl Default for IndexCache {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Serializable snapshot of IdMap's internal block structure (native only).
+/// Produced by `IdMap::to_pages()`, consumed by `IdMap::from_pages()`.
+#[cfg(feature = "native")]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct IdMapPages {
+    pub block_base: Vec<u64>,
+    pub block_start: Vec<u32>,
+    pub offsets: Vec<u32>,
 }
 
 #[cfg(test)]

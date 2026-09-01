@@ -30,7 +30,7 @@ pub type ThreadLocalRoot = (u32, u32, u64);
 /// `class_serial` resolves against `class_serial_to_addr` → `class_map`.
 /// `line_number` uses the HPROF conventions (>0 = line; -1 unknown; -2 compiled
 /// method; -3 native method) stored as the raw i32.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct StackFrame {
     pub method_name_id: u64,
     pub source_file_id: u64,
@@ -39,7 +39,7 @@ pub struct StackFrame {
 }
 
 /// Per-class metadata gathered from LOAD_CLASS + CLASS_DUMP records.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClassInfo {
     pub name_id: u64,
     pub super_id: u64,
@@ -1171,5 +1171,62 @@ mod tests {
         // At least 90% of classes should have resolvable names
         let pct = resolved * 100 / p.class_map.len();
         assert!(pct >= 90, "only {pct}% of classes have resolvable names");
+    }
+}
+
+/// Serializable subset of Pass1 metadata (native only).
+///
+/// This captures the class/string/stack metadata that is expensive to re-parse
+/// from the dump file. The large per-object arrays (class_ids, kind, etc.) are
+/// NOT included here — they are stored separately in `arrays.bin` by CacheDir.
+#[cfg(feature = "native")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+pub struct Pass1Snapshot {
+    /// Class-object address → per-class metadata.
+    pub class_map: std::collections::HashMap<u64, ClassInfo>,
+    /// String id → decoded UTF-8 from STRING_IN_UTF8 records.
+    pub strings: std::collections::HashMap<u64, String>,
+    /// IdMap internal pages for address→index lookup reconstruction.
+    pub id_map_pages: crate::id_map::IdMapPages,
+    /// Addresses of direct GC roots.
+    pub gc_root_addrs: Vec<u64>,
+    /// STACK_FRAME records, keyed by frame_id.
+    pub stack_frames: std::collections::HashMap<u64, StackFrame>,
+    /// STACK_TRACE records: stack_serial → ordered frame_ids.
+    pub stack_traces: std::collections::HashMap<u32, Vec<u64>>,
+    /// STACK_TRACE: stack_serial → thread_serial.
+    pub stack_trace_thread: std::collections::HashMap<u32, u32>,
+    /// LOAD_CLASS serial → class-object address.
+    pub class_serial_to_addr: std::collections::HashMap<u32, u64>,
+    /// Distinct class-object addresses (class_ids indexes this for instances).
+    pub class_addr_table: Vec<u64>,
+    /// Object-id byte width from the HPROF header (typically 8).
+    pub id_size: u8,
+    /// HPROF header base timestamp (millis since Unix epoch).
+    pub header_timestamp_ms: u64,
+    /// Total dump file size in bytes (for cache validation).
+    pub file_size: u64,
+}
+
+#[cfg(feature = "native")]
+#[allow(dead_code)]
+impl Pass1Snapshot {
+    /// Build a snapshot from a completed Pass1.
+    pub fn from_pass1(p: &Pass1) -> Self {
+        Self {
+            class_map: p.class_map.clone(),
+            strings: p.strings.clone(),
+            id_map_pages: p.id_map.to_pages(),
+            gc_root_addrs: p.gc_root_addrs.clone(),
+            stack_frames: p.stack_frames.clone(),
+            stack_traces: p.stack_traces.clone(),
+            stack_trace_thread: p.stack_trace_thread.clone(),
+            class_serial_to_addr: p.class_serial_to_addr.clone(),
+            class_addr_table: p.class_addr_table.clone(),
+            id_size: p.id_size,
+            header_timestamp_ms: p.header_timestamp_ms,
+            file_size: p.file_size,
+        }
     }
 }
