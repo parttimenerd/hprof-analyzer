@@ -240,7 +240,7 @@ fn phase1(
         // Issue a prefetch for the inb_data block that will be needed PREFETCH_DIST
         // iterations from now (i.e. for pre-order i - PREFETCH_DIST).
         #[cfg(target_arch = "x86_64")]
-        if i >= PREFETCH_DIST + 1 && exact_offsets.is_none() {
+        if i > PREFETCH_DIST && exact_offsets.is_none() {
             let future_i = i - PREFETCH_DIST;
             let future_node = rpo.vertex[future_i] as usize;
             let future_block = future_node / crate::pass2::INB_BLOCK;
