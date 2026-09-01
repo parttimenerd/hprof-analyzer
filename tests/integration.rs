@@ -262,7 +262,7 @@ fn json_golden_snapshot() {
         got, want,
         "JSON report drifted from the golden snapshot at {golden_path}. If this \
          change is intended, regenerate the golden with:\n  \
-         cargo run --release -- analyze tests/fixtures/dump_4_philosophers.hprof \
+         cargo run --release -- tests/fixtures/dump_4_philosophers.hprof \
          --format json > tests/fixtures/dump_4_philosophers_report.json"
     );
 }

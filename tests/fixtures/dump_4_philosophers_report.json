@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-08-12T09:14:17.437037000Z",
+  "generated": "2026-09-01T23:14:57.515148000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -68551,12 +68551,279 @@
       {
         "pretty_class": "java.lang.Class",
         "instances": 1697,
-        "retained": 3593040
+        "retained": 3593040,
+        "holders": [
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 806,
+            "retained": 130640,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+            "count": 70,
+            "retained": 4608,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 118,
+                "retained": 21648
+              },
+              {
+                "holder_class": "jdk.internal.reflect.DirectConstructorHandleAccessor",
+                "count": 1,
+                "retained": 144
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.MemberName",
+            "count": 61,
+            "retained": 976,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle",
+                "count": 169,
+                "retained": 19608
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm",
+                "count": 128,
+                "retained": 10928
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 242,
+                "retained": 9680
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Special",
+                "count": 63,
+                "retained": 7568
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$NamedFunction",
+                "count": 99,
+                "retained": 5120
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName[]",
+                "count": 8,
+                "retained": 448
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 6,
+                "retained": 336
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 8,
+                "retained": 320
+              },
+              {
+                "holder_class": "java.lang.invoke.MethodType",
+                "count": 1,
+                "retained": 56
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 56
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Class",
+            "count": 18,
+            "retained": 432,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+            "count": 1,
+            "retained": 48,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.BoundMethodHandle$Species_L",
+                "count": 1,
+                "retained": 64
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+            "count": 1,
+            "retained": 48,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 1,
+                "retained": 64
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+            "count": 1,
+            "retained": 48
+          },
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+            "count": 1,
+            "retained": 48
+          },
+          {
+            "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+            "count": 1,
+            "retained": 48,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 64
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+            "count": 1,
+            "retained": 48,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.BoundMethodHandle$Species_L",
+                "count": 1,
+                "retained": 64
+              }
+            ]
+          }
+        ]
       },
       {
         "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl",
         "instances": 94,
-        "retained": 2791424
+        "retained": 2791424,
+        "holders": [
+          {
+            "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+            "count": 34,
+            "retained": 1009392
+          },
+          {
+            "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
+            "count": 1,
+            "retained": 29688,
+            "level2": [
+              {
+                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry[]",
+                "count": 261,
+                "retained": 42368
+              }
+            ]
+          }
+        ]
       },
       {
         "pretty_class": "java.util.zip.ZipFile$Source",
@@ -68576,12 +68843,381 @@
       {
         "pretty_class": "java.lang.String",
         "instances": 9412,
-        "retained": 641944
+        "retained": 641944,
+        "holders": [
+          {
+            "holder_class": "java.util.HashMap$Node",
+            "count": 7097,
+            "retained": 585920,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node[]",
+                "count": 7466,
+                "retained": 1531400
+              },
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 2410,
+                "retained": 501696
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 1695,
+            "retained": 250968,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Class",
+            "count": 1721,
+            "retained": 109336,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.LinkedHashMap$Entry",
+            "count": 1139,
+            "retained": 107784,
+            "level2": [
+              {
+                "holder_class": "java.util.LinkedHashMap",
+                "count": 1199,
+                "retained": 156392
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+            "count": 909,
+            "retained": 61512,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+                "count": 5713,
+                "retained": 477040
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 1447,
+                "retained": 107440
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.MethodType",
+            "count": 286,
+            "retained": 31688,
+            "level2": [
+              {
+                "holder_class": "jdk.internal.util.WeakReferenceKey",
+                "count": 6,
+                "retained": 240
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.MemberName",
+            "count": 283,
+            "retained": 18472,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle",
+                "count": 169,
+                "retained": 19608
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm",
+                "count": 128,
+                "retained": 10928
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 242,
+                "retained": 9680
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Special",
+                "count": 63,
+                "retained": 7568
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$NamedFunction",
+                "count": 99,
+                "retained": 5120
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName[]",
+                "count": 8,
+                "retained": 448
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 6,
+                "retained": 336
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 8,
+                "retained": 320
+              },
+              {
+                "holder_class": "java.lang.invoke.MethodType",
+                "count": 1,
+                "retained": 56
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 56
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.String[]",
+            "count": 252,
+            "retained": 14808,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 24,
+                "retained": 17912
+              },
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 82,
+                "retained": 4608
+              },
+              {
+                "holder_class": "sun.security.util.KnownOIDs",
+                "count": 264,
+                "retained": 4504
+              },
+              {
+                "holder_class": "java.util.Arrays$ArrayList",
+                "count": 1,
+                "retained": 2432
+              },
+              {
+                "holder_class": "java.util.HashMap$Node[]",
+                "count": 40,
+                "retained": 1736
+              },
+              {
+                "holder_class": "java.lang.String[][]",
+                "count": 25,
+                "retained": 600
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 128
+              },
+              {
+                "holder_class": "sun.nio.cs.UTF_8",
+                "count": 1,
+                "retained": 24
+              },
+              {
+                "holder_class": "sun.security.util.KnownOIDs$2",
+                "count": 1,
+                "retained": 16
+              },
+              {
+                "holder_class": "sun.security.util.KnownOIDs$1",
+                "count": 1,
+                "retained": 16
+              }
+            ]
+          },
+          {
+            "holder_class": "java.net.URI",
+            "count": 129,
+            "retained": 7672,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 3,
+                "retained": 576
+              },
+              {
+                "holder_class": "jdk.internal.module.ModuleReferenceImpl",
+                "count": 1,
+                "retained": 200
+              }
+            ]
+          },
+          {
+            "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+            "count": 128,
+            "retained": 7168
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.Thread",
         "instances": 25,
-        "retained": 315936
+        "retained": 315936,
+        "holders": [
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 2,
+            "retained": 576,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          }
+        ]
       },
       {
         "pretty_class": "java.net.URLClassLoader",
@@ -68596,12 +69232,358 @@
       {
         "pretty_class": "java.lang.Object[]",
         "instances": 4,
-        "retained": 109120
+        "retained": 109120,
+        "holders": [
+          {
+            "holder_class": "java.lang.Class",
+            "count": 1288,
+            "retained": 2855112,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+            "count": 129,
+            "retained": 599312,
+            "level2": [
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+                "count": 34,
+                "retained": 1009392
+              },
+              {
+                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
+                "count": 1,
+                "retained": 29688
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.ArrayList",
+            "count": 102,
+            "retained": 151928,
+            "level2": [
+              {
+                "holder_class": "java.net.URLClassLoader",
+                "count": 2,
+                "retained": 143680
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+                "count": 1,
+                "retained": 3080
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 31,
+                "retained": 2864
+              },
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 22,
+                "retained": 1768
+              },
+              {
+                "holder_class": "java.security.Provider$Service",
+                "count": 30,
+                "retained": 1568
+              },
+              {
+                "holder_class": "jdk.internal.loader.URLClassPath",
+                "count": 6,
+                "retained": 504
+              },
+              {
+                "holder_class": "java.util.logging.LogManager$RootLogger",
+                "count": 1,
+                "retained": 208
+              },
+              {
+                "holder_class": "scala.collection.convert.JavaCollectionWrappers$JListWrapper",
+                "count": 1,
+                "retained": 176
+              },
+              {
+                "holder_class": "java.lang.module.ModuleDescriptor$Version",
+                "count": 3,
+                "retained": 152
+              },
+              {
+                "holder_class": "java.util.logging.Logger",
+                "count": 1,
+                "retained": 128
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.collection.mutable.ArrayBuffer",
+            "count": 1,
+            "retained": 128792,
+            "level2": [
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
+                "count": 1,
+                "retained": 128816
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.ImmutableCollections$SetN",
+            "count": 149,
+            "retained": 92256,
+            "level2": [
+              {
+                "holder_class": "sun.util.cldr.CLDRLocaleProviderAdapter",
+                "count": 1,
+                "retained": 61736
+              },
+              {
+                "holder_class": "java.lang.module.ModuleDescriptor",
+                "count": 92,
+                "retained": 28800
+              },
+              {
+                "holder_class": "java.lang.module.ModuleDescriptor$Exports",
+                "count": 26,
+                "retained": 2136
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 23,
+                "retained": 1736
+              },
+              {
+                "holder_class": "jdk.internal.module.SystemModuleFinders$SystemModuleFinder",
+                "count": 1,
+                "retained": 536
+              },
+              {
+                "holder_class": "java.lang.module.Configuration",
+                "count": 1,
+                "retained": 536
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 4,
+                "retained": 312
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 137,
+            "retained": 55648,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+            "count": 2,
+            "retained": 13152,
+            "level2": [
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.TxnSlotManager",
+                "count": 1,
+                "retained": 8456
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.WakeupManager",
+                "count": 1,
+                "retained": 4728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.LambdaForm$Name",
+            "count": 277,
+            "retained": 7840,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name[]",
+                "count": 330,
+                "retained": 24760
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm",
+                "count": 4,
+                "retained": 128
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+            "count": 77,
+            "retained": 7696,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 71,
+                "retained": 9488
+              },
+              {
+                "holder_class": "java.util.logging.Logger$ConfigurationData",
+                "count": 4,
+                "retained": 1168
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 64
+              },
+              {
+                "holder_class": "java.util.logging.LogManager",
+                "count": 1,
+                "retained": 56
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.ImmutableCollections$MapN",
+            "count": 6,
+            "retained": 6728,
+            "level2": [
+              {
+                "holder_class": "java.lang.module.Configuration",
+                "count": 2,
+                "retained": 4688
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 2,
+                "retained": 1144
+              },
+              {
+                "holder_class": "jdk.internal.module.SystemModuleFinders$SystemModuleFinder",
+                "count": 1,
+                "retained": 1040
+              }
+            ]
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.invoke.MethodType",
         "instances": 660,
-        "retained": 86000
+        "retained": 86000,
+        "holders": [
+          {
+            "holder_class": "jdk.internal.util.WeakReferenceKey",
+            "count": 6,
+            "retained": 240,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 666,
+                "retained": 21552
+              },
+              {
+                "holder_class": "jdk.internal.util.ReferencedKeyMap",
+                "count": 3,
+                "retained": 96
+              }
+            ]
+          }
+        ]
       },
       {
         "pretty_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
@@ -68616,7 +69598,98 @@
       {
         "pretty_class": "java.lang.Module",
         "instances": 61,
-        "retained": 64640
+        "retained": 64640,
+        "holders": [
+          {
+            "holder_class": "java.util.HashMap$Node",
+            "count": 4,
+            "retained": 1696,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node[]",
+                "count": 7466,
+                "retained": 1531400
+              },
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 2410,
+                "retained": 501696
+              }
+            ]
+          },
+          {
+            "holder_class": "java.net.URLClassLoader",
+            "count": 2,
+            "retained": 96
+          },
+          {
+            "holder_class": "java.lang.Class",
+            "count": 1,
+            "retained": 48,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$BootClassLoader",
+            "count": 1,
+            "retained": 48
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+            "count": 1,
+            "retained": 48
+          }
+        ]
       },
       {
         "pretty_class": "sun.security.provider.Sun",
@@ -68636,7 +69709,164 @@
       {
         "pretty_class": "java.lang.invoke.LambdaForm",
         "instances": 93,
-        "retained": 35992
+        "retained": 35992,
+        "holders": [
+          {
+            "holder_class": "java.lang.ref.SoftReference",
+            "count": 26,
+            "retained": 10272,
+            "level2": [
+              {
+                "holder_class": "java.util.jar.JarFile",
+                "count": 8,
+                "retained": 1139104
+              },
+              {
+                "holder_class": "java.lang.ref.SoftReference[]",
+                "count": 129,
+                "retained": 15432
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$BootClassLoader",
+                "count": 1,
+                "retained": 984
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+                "count": 1,
+                "retained": 984
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+                "count": 1,
+                "retained": 984
+              },
+              {
+                "holder_class": "sun.util.locale.BaseLocale$Key",
+                "count": 10,
+                "retained": 400
+              },
+              {
+                "holder_class": "sun.security.util.CryptoAlgorithmConstraints",
+                "count": 1,
+                "retained": 280
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.LambdaFormEditor$Transform",
+            "count": 6,
+            "retained": 2488,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.LambdaForm",
+                "count": 8,
+                "retained": 2080
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaFormEditor$Transform[]",
+                "count": 4,
+                "retained": 984
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.LambdaForm[]",
+            "count": 1,
+            "retained": 480,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 3,
+                "retained": 1104
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.DirectMethodHandle",
+            "count": 1,
+            "retained": 200,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 118,
+                "retained": 20200
+              },
+              {
+                "holder_class": "java.lang.invoke.MethodHandleImpl$AsVarargsCollector",
+                "count": 34,
+                "retained": 4656
+              },
+              {
+                "holder_class": "java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle",
+                "count": 3,
+                "retained": 336
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 296
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$List12",
+                "count": 2,
+                "retained": 192
+              },
+              {
+                "holder_class": "java.lang.invoke.BoundMethodHandle$Species_LL",
+                "count": 1,
+                "retained": 96
+              },
+              {
+                "holder_class": "java.lang.invoke.BoundMethodHandle$SpeciesData",
+                "count": 1,
+                "retained": 96
+              },
+              {
+                "holder_class": "java.lang.invoke.MethodType",
+                "count": 1,
+                "retained": 40
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 40
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.BoundMethodHandle$Species_LL",
+            "count": 1,
+            "retained": 192,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 8,
+                "retained": 744
+              },
+              {
+                "holder_class": "jdk.internal.reflect.DirectMethodHandleAccessor",
+                "count": 1,
+                "retained": 368
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle",
+                "count": 1,
+                "retained": 80
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 2,
+                "retained": 80
+              },
+              {
+                "holder_class": "java.lang.invoke.BoundMethodHandle$Species_LL",
+                "count": 2,
+                "retained": 80
+              }
+            ]
+          }
+        ]
       },
       {
         "pretty_class": "java.io.PrintStream",
@@ -68646,7 +69876,156 @@
       {
         "pretty_class": "java.util.concurrent.ConcurrentHashMap",
         "instances": 1,
-        "retained": 34864
+        "retained": 34864,
+        "holders": [
+          {
+            "holder_class": "java.lang.Class",
+            "count": 27,
+            "retained": 120016,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "java.time.zone.TzdbZoneRulesProvider",
+            "count": 1,
+            "retained": 118480,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 121008
+              }
+            ]
+          },
+          {
+            "holder_class": "java.net.URLClassLoader",
+            "count": 8,
+            "retained": 94720
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+            "count": 7,
+            "retained": 62376
+          },
+          {
+            "holder_class": "sun.security.provider.Sun",
+            "count": 3,
+            "retained": 54440
+          },
+          {
+            "holder_class": "jdk.internal.util.ReferencedKeyMap",
+            "count": 1,
+            "retained": 51328,
+            "level2": [
+              {
+                "holder_class": "jdk.internal.util.ReferencedKeySet",
+                "count": 1,
+                "retained": 51504
+              }
+            ]
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+            "count": 7,
+            "retained": 51136
+          },
+          {
+            "holder_class": "jdk.internal.module.ServicesCatalog",
+            "count": 4,
+            "retained": 12736,
+            "level2": [
+              {
+                "holder_class": "java.lang.ModuleLayer",
+                "count": 1,
+                "retained": 7656
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.Properties",
+            "count": 4,
+            "retained": 8576,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 3,
+                "retained": 7112
+              },
+              {
+                "holder_class": "java.util.logging.LogManager",
+                "count": 1,
+                "retained": 1688
+              }
+            ]
+          },
+          {
+            "holder_class": "java.security.Permissions",
+            "count": 9,
+            "retained": 3888,
+            "level2": [
+              {
+                "holder_class": "java.security.ProtectionDomain",
+                "count": 7,
+                "retained": 3640
+              },
+              {
+                "holder_class": "sun.security.util.LazyCodeSourcePermissionCollection",
+                "count": 2,
+                "retained": 536
+              }
+            ]
+          }
+        ]
       }
     ],
     "threshold_bp": 100,
