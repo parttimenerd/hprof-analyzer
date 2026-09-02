@@ -43,12 +43,13 @@ pub struct LoadDumpParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetReportParams {
-    /// Which section to return.
-    /// "leaks"    – leak suspects with root paths and class holders
-    /// "top"      – biggest classes and objects by retained size
-    /// "threads"  – per-thread retained size and stack traces
-    /// "overview" – heap totals, GC root counts, identifier size
-    /// "all"      – all sections combined (large; prefer a specific section)
+    /// Which section to return. Core: "leaks", "top", "threads", "overview".
+    /// Analysis: "triage" (⭐ severity signals), "waste" (reclaimable bytes),
+    /// "indicators" (anon class/DirectByteBuffer counts), "retainers" (stack frames by retained),
+    /// "arrays" (length distribution), "collections" (fill ratios/load factors),
+    /// "references" (Soft/Weak/Phantom counts), "dominators" (big-drop table),
+    /// "components" (per-classloader retained), "alloc_sites", "thread_locals", "framework",
+    /// "field_stats". Default "all" (everything, large — prefer targeted sections).
     pub section: Option<String>,
 }
 
@@ -232,7 +233,7 @@ impl HprofMcpServer {
              {classes}\n\
              NEXT STEPS — To answer \"find the leak\" or \"why OOM\":\n\
              1. get_summary()                           — full suspect list + suggested OQL\n\
-             2. get_report({{\"section\":\"leaks\"}})           — root paths, holder chains, stack traces\n\
+             2. get_report({{\"section\":\"leaks\"}})           — root paths, accumulation points, dominated objects\n\
              3. query({{\"oql\":\"top-retained-by-class\"}})    — which class retains most memory\n\
              4. query({{\"oql\":\"<view-name>\"}})              — any view below (no SQL needed)\
              {views}",
@@ -288,8 +289,8 @@ impl HprofMcpServer {
             for s in r.leaks.suspects.iter().take(2) {
                 out.push_str(&format!(
                     "```sql\n-- Largest {} instances (get @objectId for browse_dominators/inspect_object)\n\
-                     SELECT @objectId AS idx, @retainedHeapSize AS retained FROM {} \
-                     ORDER BY retained DESC LIMIT 10\n```\n\n",
+                     SELECT @objectId AS idx, @retainedHeapSize AS ret FROM {} \
+                     ORDER BY ret DESC LIMIT 10\n```\n\n",
                     s.pretty_class, s.pretty_class
                 ));
             }
@@ -306,13 +307,29 @@ impl HprofMcpServer {
     /// Return a section of the full analysis report as JSON.
     #[tool(description = "Return a report section as JSON. \
                           BEST TOOL FOR 'find the leak' or 'why OOM' — use get_report({section:\"leaks\"}) first. \
-                          Sections: \"leaks\" (suspects with root paths + holder chains — always reliable), \
-                          \"top\" (biggest classes/objects + what's holding them), \
-                          \"threads\" (per-thread retained + stacks), \"overview\" (totals), \"all\" (everything, large). \
-                          Unlike the leak-suspects OQL view (which has a >10 MB threshold), this works for all heap sizes. \
-                          In leaks JSON: each suspect has 'root_path', 'holders' (single suspects) or 'merged_paths' (group suspects), \
-                          AND a 'dominator_tree' field with pre-built subtree. \
-                          WARNING: obj_index_1based in root_path and dominator_tree is 1-BASED — subtract 1 for browse_dominators/inspect_object. \
+                          \n\nCORE SECTIONS (always available):\
+                          \n  \"leaks\"      — suspects with root_path (single), merged_paths (group), dominated objects + dominator_tree (always reliable, all heap sizes)\
+                          \n  \"top\"        — biggest classes/objects + what's holding them (holder chains)\
+                          \n  \"threads\"    — per-thread retained sizes + stack traces\
+                          \n  \"overview\"   — heap totals, object count, identifier size\
+                          \n\nANALYSIS SECTIONS (granular, targeted):\
+                          \n  \"triage\"          — ⭐ automated severity signals (critical/warning/info), best quick entry point after leaks\
+                          \n  \"waste\"           — reclaimable memory: duplicate strings, empty collections, boxed primitives\
+                          \n  \"indicators\"      — leak indicator counts: anon classes, ThreadLocal null keys, DirectByteBuffer total\
+                          \n  \"retainers\"       — top stack frames/fields by retained size (who is keeping things alive)\
+                          \n  \"arrays\"          — array length distribution by power-of-two buckets\
+                          \n  \"collections\"     — collection fill ratios, map load factors, kind stats, constant arrays\
+                          \n  \"references\"      — Soft/Weak/Phantom reference counts + referent class breakdown\
+                          \n  \"dominators\"      — big-drop objects (retain >> largest child), immediate-dominator class pairs\
+                          \n  \"components\"      — retained heap per class loader with top classes per component\
+                          \n  \"alloc_sites\"     — allocation sites (only present when dump has allocation tracking)\
+                          \n  \"thread_locals\"   — ThreadLocal leak rows (full-analysis only, may be empty)\
+                          \n  \"framework\"       — detected framework signatures + recommendations (full-analysis only)\
+                          \n  \"field_stats\"     — field-level size statistics (full-analysis with --with-graph only)\
+                          \n  \"all\"             — everything above merged (large, use targeted sections for LLM workflows)\
+                          \n\nIn leaks JSON: each suspect has root_path (single), merged_paths (group), \
+                          dominated (objects at accumulation point), and dominator_tree. \
+                          WARNING: obj_index_1based in root_path, dominator_tree, dominated, and accumulation_obj_1based is 1-BASED — subtract 1 for browse_dominators/inspect_object. \
                           browse_dominators 'index' and query @objectId are 0-based (use directly).")]
     async fn get_report(
         &self,
@@ -328,6 +345,19 @@ impl HprofMcpServer {
             "top" => serde_json::to_string_pretty(&r.top),
             "threads" => serde_json::to_string_pretty(&r.threads),
             "overview" => serde_json::to_string_pretty(&r.overview),
+            "triage" => serde_json::to_string_pretty(&r.triage),
+            "waste" => serde_json::to_string_pretty(&r.waste_summary),
+            "indicators" => serde_json::to_string_pretty(&r.leak_indicators),
+            "retainers" => serde_json::to_string_pretty(&r.top_retainers),
+            "arrays" => serde_json::to_string_pretty(&r.arrays_by_size),
+            "collections" => serde_json::to_string_pretty(&r.collections),
+            "references" => serde_json::to_string_pretty(&r.references),
+            "dominators" => serde_json::to_string_pretty(&r.dominator_analysis),
+            "components" => serde_json::to_string_pretty(&r.top_components),
+            "alloc_sites" => serde_json::to_string_pretty(&r.alloc_sites),
+            "thread_locals" => serde_json::to_string_pretty(&r.thread_local_analysis),
+            "framework" => serde_json::to_string_pretty(&r.framework_analysis),
+            "field_stats" => serde_json::to_string_pretty(&r.field_stats),
             _ => serde_json::to_string_pretty(r),
         }
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -413,13 +443,16 @@ impl HprofMcpServer {
             result
         };
 
-        // Append a hint when the result has object index columns.
+        // Add hint inside the JSON when the result has object index columns.
         let hint = build_query_hint(&result);
-        let mut output = serde_json::to_string_pretty(&result)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let mut result = result;
         if let Some(h) = hint {
-            output.push_str(&format!("\n\n/* HINT: {h} */"));
+            if let serde_json::Value::Object(ref mut m) = result {
+                m.insert("_hint".to_string(), serde_json::Value::String(h));
+            }
         }
+        let output = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
@@ -495,17 +528,24 @@ impl HprofMcpServer {
             &class_idx,
             &class_by_idx,
         );
+        let mut tree = serde_json::to_value(&tree)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        // Add hint as a JSON field so it doesn't break json.loads() on the response.
+        if let serde_json::Value::Object(ref mut m) = tree {
+            m.insert(
+                "_hint".to_string(),
+                serde_json::Value::String(
+                    "Each node has an 'index' field (0-based). \
+                     Use browse_dominators({\"object_index\": <index>}) to expand a node, \
+                     or inspect_object({\"object_index\": <index>}) for class and size. \
+                     Children are sorted by retained_bytes desc — follow the largest child to find the root cause."
+                        .to_string(),
+                ),
+            );
+        }
         let json = serde_json::to_string_pretty(&tree)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Append usage hint so LLMs know what to do with index values.
-        let hint = "\n\n/* HINT: Each node has an 'index' field. \
-                    Use browse_dominators({\"object_index\": <index>}) to expand a specific node, \
-                    or inspect_object({\"object_index\": <index>}) for class and size details. \
-                    Children are sorted by retained_bytes desc — follow the largest child to find the memory root cause. */";
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            json + hint,
-        )]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
     /// Inspect a single object by dense index.
@@ -733,24 +773,29 @@ impl ServerHandler for HprofMcpServer {
              - object_index values: @objectId from query and 'index' from browse_dominators are 0-based (use directly).\n\
              - obj_index_1based in get_report (dominator_tree + root_path) is 1-BASED — subtract 1 for browse_dominators/inspect_object!\n\n\
              ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
-             1. load_dump({path})            — load the file; the response already shows top suspects + top classes\n\
-             2. get_report({\"section\":\"leaks\"}) — root paths, holder chains, stack traces + dominator_tree per suspect\n\
-             3. browse_dominators({object_index: suspect.dominator_tree.obj_index_1based - 1}) — drill into suspect\n\
-             4. query({\"oql\":\"top-retained-by-class\"}) — confirm which class dominates memory\n\
-             5. browse_dominators({})        — dominator tree from GC root; follow largest child\n\n\
-             GENERAL WORKFLOW:\n\
-             1. get_session_info()  — check if a dump is already loaded (skip load_dump if loaded=true)\n\
-             2. load_dump({path})   — load the .hprof file; response includes immediate suspects\n\
-             3. get_summary()       — read top suspects + suggested OQL queries\n\
-             4. get_histogram({limit:20})  — class breakdown by retained size\n\
-             5. query({oql:\"top-retained-by-class\"}) or any view name — drill into top classes\n\
-             6. browse_dominators({object_index: <idx>})  — see what the suspect retains\n\
-             7. inspect_object({object_index: <idx>})    — class and size for a specific object\n\
-             8. get_oql_docs({topic:\"examples\"})        — more query patterns for deeper investigation\n\n\
-             SHORTCUT: All 20 view names are usable directly in query() — e.g. query({oql:\"leak-suspects\"}).\n\
-               Call list_views() to see all names + groups. View names are also listed in load_dump response.\n\n\
-             NOTE on leak-suspects view: uses a >10 MB threshold — returns empty for small/medium heaps.\n\
-             Always use get_report({section:\"leaks\"}) for reliable suspect detection regardless of heap size.\n\n\
+             1. load_dump({path})               — load the file; response shows top suspects + classes\n\
+             2. get_report({\"section\":\"triage\"}) — ⭐ severity-tagged signals (critical/warning/info); fastest diagnosis\n\
+             3. get_report({\"section\":\"leaks\"})  — root paths, holder chains, dominated objects + dominator_tree per suspect\n\
+             4. browse_dominators({object_index: suspect.accumulation_obj_1based - 1}) — drill into accumulation point\n\
+               (accumulation_obj_1based is 1-based; also dominator_tree.obj_index_1based is the same value)\n\
+             5. query({oql:\"top-retained-by-class\"}) — confirm which class dominates memory\n\n\
+             DEEP ANALYSIS WORKFLOW:\n\
+             1. get_session_info()                    — check if a dump is already loaded\n\
+             2. load_dump({path})                     — load .hprof; response includes immediate suspects\n\
+             3. get_report({\"section\":\"triage\"})      — automated severity signals; read first\n\
+             4. get_summary()                         — top suspects + suggested OQL queries\n\
+             5. get_histogram({limit:20})             — class breakdown by retained size\n\
+             6. get_report({\"section\":\"collections\"}) — fill ratios, map load factors, waste budget\n\
+             7. get_report({\"section\":\"waste\"})       — reclaimable bytes: duplicate strings, empty colls\n\
+             8. get_report({\"section\":\"retainers\"})   — which stack frames/fields keep things alive\n\
+             9. get_report({\"section\":\"references\"})  — Soft/Weak/Phantom reference breakdown\n\
+             10. query({oql:\"...\"})                   — custom OQL for any remaining questions\n\
+             11. browse_dominators({}) / inspect_object — follow object references\n\n\
+             ALL get_report SECTIONS: leaks, top, threads, overview, triage, waste, indicators,\n\
+               retainers, arrays, collections, references, dominators, components, alloc_sites,\n\
+               thread_locals, framework, field_stats, all\n\n\
+             SHORTCUT: All 20 view names usable in query() — e.g. query({oql:\"leak-suspects\"}).\n\
+               list_views() shows all names. leak-suspects view has >10 MB threshold; use get_report(leaks) instead.\n\n\
              QUERY TIPS:\n\
              - Always SELECT @objectId to get indices for follow-up calls\n\
              - Objects in results appear as 'ClassName@index' — the number after '@' is the object_index\n\

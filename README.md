@@ -558,7 +558,7 @@ Available subcommands:
 | Subcommand | Description |
 |------------|-------------|
 | `heap summary <dump>` | Top leak suspects + top classes by retained size |
-| `heap report <dump> [--section leaks\|top\|threads\|overview]` | Full or section report |
+| `heap report <dump> [--section S]` | Full or section report. Sections: `leaks`, `top`, `threads`, `overview`, `triage`, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`, `all` |
 | `heap histogram <dump> [--limit N]` | Class histogram with instance + retained counts |
 | `heap query <dump> --oql "..."` | Run an OQL query (add `--json` for machine-readable output) |
 | `heap browse <dump> [--index N] [--depth D] [--width W]` | Browse dominator tree (omit `--index` to start at root) |
@@ -599,7 +599,7 @@ claude mcp add hprof -- hprof-analyzer mcp
 }
 ```
 
-**Claude Desktop** — add to `~/.claude.json` (or via Claude Desktop → Settings → MCP):
+**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 ```json
 {
   "mcpServers": {
@@ -625,22 +625,24 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 | `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file. Fast after first run. |
 | `get_summary` | Top 5 leak suspects + top 5 classes by retained size. |
 | `get_histogram` | Class histogram with instance + retained counts. |
-| `get_report` | Full report or a section (`leaks`, `top`, `threads`, `overview`) as JSON. |
-| `query` | Run an OQL query; returns `{columns, rows, row_count, truncated}`. |
+| `get_report` | Full report or a named section as JSON. Core: `leaks`, `top`, `threads`, `overview`. Analysis: `triage` ⭐, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`. Default: `all`. |
+| `list_views` | List all 20 built-in named query views (usable directly in `query()`). |
+| `query` | Run an OQL query or a built-in view by name; returns `{columns, rows, row_count, truncated}`. |
 | `browse_dominators` | Navigate dominator tree. Omit `object_index` to start at the GC root. |
 | `inspect_object` | Class, shallow/retained sizes for a specific object. |
 
 ### Typical investigation
 
 ```
-1. get_session_info          — check if a dump is already loaded
-2. get_oql_docs({topic:"workflow"})  — learn what tools are available
-3. load_dump({path})         — load the dump (fast from cache after first run)
-4. get_summary               — top leak suspects + top classes
-5. get_histogram             — class-level breakdown
-6. query({oql:"..."})        — drill in with OQL
-7. browse_dominators         — navigate the dominator tree from root or a suspect
-8. inspect_object            — details on a specific object
+1. get_session_info                     — check if a dump is already loaded
+2. load_dump({path})                    — load the dump (fast from cache after first run)
+3. get_report({section:"triage"})  ⭐  — automated severity signals; fastest orientation
+4. get_report({section:"leaks"})        — root paths, accumulation points, dominated objects
+5. get_summary                          — top suspects + suggested OQL queries
+6. get_histogram                        — class-level breakdown by retained size
+7. query({oql:"..."})                   — drill in with OQL (or use a view name)
+8. browse_dominators                    — navigate the dominator tree from root or a suspect
+9. inspect_object                       — details on a specific object
 ```
 
 **Tip:** call `get_oql_docs({topic:"examples"})` for 20 worked queries covering

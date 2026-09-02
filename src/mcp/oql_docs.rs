@@ -98,10 +98,11 @@ The inner subquery must project `@objectAddress` for the outer `IN` check.
 ## AS RETAINED SET
 
 Computes the retained set of a class (all objects kept alive only by instances
-of this class). Produces a synthetic object count + retained size summary:
+of this class). Produces a synthetic object count + retained size summary.
+The `AS RETAINED SET` clause goes after the SELECT expression:
 
 ```sql
-SELECT * FROM java.lang.Thread AS RETAINED SET
+SELECT x AS RETAINED SET FROM java.lang.Thread x
 ```
 
 ## dominators()
@@ -198,15 +199,15 @@ const EXAMPLES: &str = r#"# OQL Examples
 
 ```sql
 -- Top classes by retained size
-SELECT classof(x) AS class, SUM(@retainedHeapSize) AS retained
+SELECT classof(x) AS class, SUM(@retainedHeapSize) AS ret_bytes
 FROM INSTANCEOF java.lang.Object x
-GROUP BY classof(x) ORDER BY retained DESC LIMIT 20
+GROUP BY classof(x) ORDER BY ret_bytes DESC LIMIT 20
 ```
 
 ```sql
 -- Largest individual objects (idx usable with browse_dominators/inspect_object)
-SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS retained
-FROM INSTANCEOF java.lang.Object x ORDER BY retained DESC LIMIT 10
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret_bytes
+FROM INSTANCEOF java.lang.Object x ORDER BY ret_bytes DESC LIMIT 10
 ```
 
 ## String analysis
@@ -259,9 +260,9 @@ ORDER BY bytes DESC LIMIT 20
 
 ```sql
 -- Objects with retained size over 10 MB (potential leak suspects)
-SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS retained
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret_bytes
 FROM INSTANCEOF java.lang.Object x
-WHERE @retainedHeapSize > 10000000 ORDER BY retained DESC LIMIT 20
+WHERE @retainedHeapSize > 10000000 ORDER BY ret_bytes DESC LIMIT 20
 ```
 
 ```sql
@@ -272,25 +273,25 @@ FROM com.example.MyCache* ORDER BY bytes DESC
 
 ```sql
 -- Thread locals by thread (idx usable with browse_dominators)
-SELECT @objectId AS idx, t.name AS thread_name, @retainedHeapSize AS retained
-FROM java.lang.Thread t ORDER BY retained DESC
+SELECT @objectId AS idx, t.name AS thread_name, @retainedHeapSize AS ret_bytes
+FROM java.lang.Thread t ORDER BY ret_bytes DESC
 ```
 
 ## Retained set analysis
 
 ```sql
 -- What does this class retain?
-SELECT * FROM java.util.WeakHashMap AS RETAINED SET
+SELECT x AS RETAINED SET FROM java.util.WeakHashMap x
 ```
 
 ```sql
 -- Shallow vs retained ratio (identifies objects that dominate large subgraphs)
 SELECT classof(x) AS class,
        SUM(@usedHeapSize) AS shallow,
-       SUM(@retainedHeapSize) AS retained
+       SUM(@retainedHeapSize) AS ret_bytes
 FROM INSTANCEOF java.lang.Object x
 GROUP BY classof(x)
-ORDER BY retained DESC LIMIT 20
+ORDER BY ret_bytes DESC LIMIT 20
 ```
 
 ## Class loader analysis
@@ -327,10 +328,10 @@ LIMIT 20
 
 ```sql
 -- Get the object index for inspection
-SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS retained
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret_bytes
 FROM INSTANCEOF java.lang.Object x
 WHERE @retainedHeapSize > 50000000
-ORDER BY retained DESC LIMIT 5
+ORDER BY ret_bytes DESC LIMIT 5
 ```
 
 Then: `heap inspect --index <idx>` or `heap browse --index <idx>` (idx is 0-based, use directly)
@@ -350,26 +351,32 @@ Step 1: load_dump({"path": "/absolute/path/to/dump.hprof"})
   → Response immediately shows: top suspects + top classes by retained size
   → WAIT for this to complete (5–15 min first time, ~1 s cached)
 
-Step 2: get_report({"section": "leaks"})
-  → Root paths, holder chains, stack traces for EVERY suspect
-  → This is the most reliable leak detection — uses dominator-tree analysis
+Step 2: get_report({"section": "triage"})
+  → ⭐ Severity-tagged signals (critical/warning/info)
+  → Fastest way to identify the main problem category
+  → Read "critical" signals first — they point directly to the issue
 
-Step 3: get_report({"section": "top"})
+Step 3: get_report({"section": "leaks"})
+  → Root paths, dominated objects, accumulation point, dominator_tree per suspect
+  → Most reliable leak detection — uses dominator-tree analysis
+  → obj_index_1based in root_path, dominated, dominator_tree is 1-BASED: subtract 1!
+
+Step 4: get_report({"section": "top"})
   → Biggest classes by retained size + what holds them (2-level breakdown)
   → Confirms which class is retaining the most memory
 
-Step 4 (if you want to drill into a specific class):
+Step 5 (optional — drill into a specific class):
   query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
   → The idx values can be passed to browse_dominators or inspect_object
 
-Step 5: browse_dominators({"object_index": <idx>})
+Step 6: browse_dominators({"object_index": <idx>})
   → Shows what this object keeps alive; follow largest child to root cause
 ```
 
 NOTE: The "leak-suspects" view (query({oql:"leak-suspects"})) uses a >10 MB threshold —
 returns empty for small/medium heaps. Always use get_report({section:"leaks"}) instead.
 
-## General workflow
+## Comprehensive deep-dive workflow
 
 ```
 Step 1: get_session_info({})
@@ -384,28 +391,37 @@ Step 2: load_dump({"path": "/absolute/path/to/dump.hprof"})
   IMPORTANT: this blocks for 5–15 min on first load; ~1 s on repeat (cached). Wait for it.
   The response already shows top suspects and top classes — read it before calling get_summary.
 
-Step 3: get_summary({})
-  → Returns top suspects + top classes + suggested OQL queries for each suspect.
+Step 3: get_report({"section": "triage"})
+  → Automated severity signals; read "critical" first. Best quick orientation.
+
+Step 4: get_summary({})
+  → Top suspects + top classes + suggested OQL queries for each suspect.
     Read the "Suggested OQL Queries" section — it has ready-to-run queries.
 
-Step 4: get_histogram({"limit": 20})
-  → Confirms which classes dominate. Pick the top class and run step 5.
+Step 5: get_histogram({"limit": 20})
+  → Confirms which classes dominate. Pick the top class and run step 6.
 
-Step 5: query({"oql": "top-retained-by-class"})  ← VIEW NAME (no SQL needed)
+Step 6: query({"oql": "top-retained-by-class"})  ← VIEW NAME (no SQL needed)
   → Top classes by retained size. All 20 view names: list_views({})
 
   Or custom OQL:
   query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
-  → Replace <ClassName> with the top suspect from step 3 or 4.
-    The idx column gives object_index values for steps 6 and 7.
+  → Replace <ClassName> with the top suspect from step 4 or 5.
+    The idx column gives object_index values for steps 7 and 8.
 
-Step 6: browse_dominators({"object_index": <idx_from_step5>})
+Step 7: browse_dominators({"object_index": <idx_from_step6>})
   → Tree of what this object retains. Children sorted by retained_bytes desc.
     Follow the largest child to find the root cause.
     Each node has an "index" field for drilling deeper.
 
-Step 7: inspect_object({"object_index": <index_from_step6>})
+Step 8: inspect_object({"object_index": <index_from_step7>})
   → Class name + shallow_bytes + retained_bytes for a specific object.
+
+Step 9 (collection/reference analysis):
+  get_report({"section": "collections"})  → fill ratios, map load factors, waste budget
+  get_report({"section": "waste"})        → reclaimable bytes by source
+  get_report({"section": "references"})  → Soft/Weak/Phantom reference breakdown
+  get_report({"section": "retainers"})   → which stack frames/fields keep things alive
 ```
 
 ## Tool reference
@@ -432,31 +448,104 @@ Good for confirming which class dominates before writing OQL.
 
 ### get_report({ section? })
 Full report section as JSON. **Best tool for leak investigation** — use before query().
+
+**Core sections (always available):**
 - `"leaks"` — ranked suspects with root paths, holder chains, stack traces ← START HERE for OOM/leak
 - `"top"` — biggest classes + objects with 2-level holder breakdown
 - `"threads"` — per-thread retained size and stack traces
-- `"overview"` — heap totals
+- `"overview"` — heap totals, object count
 
-**leaks JSON structure** (each suspect):
+**Analysis sections (granular, targeted):**
+- `"triage"` — ⭐ automated severity signals (critical/warning/info) — fastest diagnosis after leaks
+- `"waste"` — reclaimable memory: duplicate strings, empty collections, boxed primitives
+- `"indicators"` — anonymous class count, ThreadLocal null keys, DirectByteBuffer total
+- `"retainers"` — which stack frames and fields are keeping objects alive by retained size
+- `"arrays"` — array length distribution by power-of-two buckets
+- `"collections"` — fill ratios, map load factors, kind stats, constant arrays
+- `"references"` — Soft/Weak/Phantom reference counts + which classes are referenced
+- `"dominators"` — big-drop objects (retain >> largest child) + immediate-dominator class pairs
+- `"components"` — retained heap per class loader with top classes per component
+- `"alloc_sites"` — allocation sites (only present when dump has allocation tracking)
+- `"thread_locals"` — ThreadLocal leak analysis (full-analysis only, may be empty list)
+- `"framework"` — detected framework signatures + recommendations (full-analysis only)
+- `"field_stats"` — field-level size statistics (requires --with-graph, may be null)
+- `"all"` — everything merged (large, use targeted sections for efficiency)
+
+**triage JSON structure** (array of signals):
+```json
+[
+  {
+    "id": "headline-retainer",      // signal identifier
+    "severity": "critical",         // "critical", "warning", or "info"
+    "title": "Headline Retainer",   // short label
+    "detail": "java.lang.Thread retains 5.5 MB (48.8% of heap). ...",
+    "anchor": "leak-suspects",      // HTML anchor in the full report
+    "anchor_label": "Leak Suspects",
+    "nav_class": "java.lang.Thread" // class name for navigation (may be null)
+  }
+]
+```
+Read triage first — it surfaces the most important signals without requiring manual search.
+
+**waste JSON structure:**
+```json
+{
+  "total_bytes": 754336,        // total estimated reclaimable bytes
+  "reachable_bytes": 713497,    // reachable portion
+  "sources": [
+    {
+      "label": "Under-filled Object Arrays",
+      "bytes": 754336,
+      "anchor": "collections"   // which section to inspect for details
+    }
+  ]
+}
+```
+
+**leaks JSON structure** (`suspects` array, each element):
 ```json
 {
   "pretty_class": "com.example.MyClass",
-  "retained": 123456789,         // bytes retained by all instances
-  "is_single": true,             // true=one object, false=class group
-  "root_path": [...],            // single suspect: path from GC root → each step has obj_index_1based
-  "holders": [...],              // single suspect: what classes hold this
-  "merged_paths": [...],         // group suspect: top N root paths
-  "root_type_label": "Thread",   // what kind of GC root holds it
-  "dominator_tree": {            // pre-built subtree for this suspect (ready to drill into)
-    "obj_index_1based": 12345,   // ⚠️ SUBTRACT 1 to get object_index for browse_dominators/inspect_object
-    "display_class": "com.example.MyClass",
+  "retained": 123456789,      // bytes retained by all instances of this class
+  "shallow": 48,              // shallow bytes
+  "instance_count": 1,        // number of instances in this suspect group
+  "is_single": true,          // true = one object; false = class group
+  "root_type_label": "Thread", // GC root type ("Thread", "JNI Global", etc.)
+  "keywords": ["com.example.MyClass"],
+  "path": [...],              // accumulation path: steps from suspect → accumulation point
+  "accumulation_obj_1based": 67891, // ⚠️ 1-based → subtract 1 for browse_dominators
+  "accumulation_class": "java.util.HashMap",
+  "accumulation_retained": 123000000,
+  "dominated": [              // top objects directly dominated by accumulation point
+    {"obj_index_1based": 999, "display_class": "...", "retained": 1234, "shallow": 32}
+  ],
+  "dominated_total_count": 5000,  // total children (dominated list is capped)
+  "dominated_shown": 50,          // how many are shown in "dominated"
+  "dominated_by_class": [...],    // class-aggregated histogram of dominated objects
+
+  // Single suspects only (is_single=true):
+  "root_path": [              // chain from GC root → this suspect
+    {"obj_index_1based": 314096, "display_class": "java.lang.Thread",
+     "retained": 5761696, "root_type_label": "Thread", "depth": 0}
+  ],
+  "dominator_tree": {         // pre-built subtree at the accumulation point
+    "obj_index_1based": 67891, // ⚠️ 1-based → subtract 1
+    "display_class": "java.util.HashMap",
+    "retained": 123000000,
     "shallow": 48,
-    "retained": 123456789,
-    "children": [...]            // each child has same structure (obj_index_1based, display_class, retained, children)
+    "children": [...]
+  },
+
+  // Group suspects only (is_single=false):
+  "merged_paths": {           // class-keyed prefix tree of top root paths
+    "display_class": "com.example.MyClass",
+    "object_count": 94,
+    "retained": 2791424,
+    "children": [...]
   }
 }
 ```
-⚠️ **CRITICAL**: `obj_index_1based` values in `root_path` and `dominator_tree` are **1-based indices**.
+⚠️ **CRITICAL**: `obj_index_1based` values in `root_path`, `dominator_tree`, `dominated`, and `accumulation_obj_1based` are **1-based indices**.
 You MUST subtract 1 before passing to `browse_dominators` or `inspect_object`:
   `object_index = obj_index_1based - 1`
 
@@ -529,8 +618,9 @@ Details for one object: class, shallow_bytes, retained_bytes.
 3. get_report({"section": "leaks"})
    → suspects[0].pretty_class = "com.example.CacheManager"
    → suspects[0].retained = 850000000
-   → suspects[0].dominator_tree.obj_index_1based = 12346  ← 1-based!
-   → suspects[0].dominator_tree.children[0] = {obj_index_1based: 67891, class: "HashMap", retained: 849MB}
+   → suspects[0].accumulation_obj_1based = 12346  ← 1-based!
+   → suspects[0].dominator_tree.obj_index_1based = 12346  ← same, 1-based!
+   → suspects[0].dominator_tree.children[0] = {obj_index_1based: 67891, display_class: "HashMap", retained: 849MB}
 
    IMPORTANT: object_index = obj_index_1based - 1
    So: browse_dominators({object_index: 12345})  ← 12346 - 1 = 12345

@@ -587,6 +587,39 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
         "top" => render_md::render_top_consumers(&r.top, r.overview.total_shallow, &mut out),
         "threads" => render_md::render_threads(&r.threads, false, &mut out),
         "overview" => render_md::render_system_overview(&r.overview, 0, &mut out),
+        "triage" => render_md::render_oom_triage(r, &mut out),
+        "waste" => render_md::render_waste_summary(r, &mut out),
+        "indicators" => render_md::render_leak_indicators(&r.leak_indicators, &mut out),
+        "retainers" => render_md::render_top_retainers(&r.top_retainers, &mut out),
+        "arrays" => render_md::render_arrays_by_size(
+            &r.arrays_by_size,
+            r.overview.total_shallow,
+            false,
+            &mut out,
+        ),
+        "collections" => render_md::render_collections(
+            &r.collections,
+            &r.collection_attribution,
+            false,
+            &mut out,
+        ),
+        "references" => render_md::render_references(&r.references, false, &mut out),
+        "dominators" => {
+            render_md::render_dominator_analysis(&r.dominator_analysis, false, &mut out)
+        }
+        "components" => render_md::render_top_components(&r.top_components, false, &mut out),
+        "alloc_sites" => {
+            if let Some(a) = &r.alloc_sites {
+                render_md::render_alloc_sites(a, false, &mut out);
+            } else {
+                out.push_str("No allocation sites in this dump.\n");
+            }
+        }
+        "thread_locals" => {
+            render_md::render_thread_local_analysis(&r.thread_local_analysis, &mut out)
+        }
+        "framework" => render_md::render_framework_analysis(&r.framework_analysis, &mut out),
+        "field_stats" => render_md::render_fields_by_size(&r.fields_by_size, false, &mut out),
         _ => return render_md::render_markdown(r),
     }
     out

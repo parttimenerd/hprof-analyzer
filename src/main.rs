@@ -433,7 +433,9 @@ enum HeapCmd {
         /// Path to the .hprof dump.
         #[arg(value_hint = ValueHint::FilePath)]
         dump: String,
-        /// Section to print: leaks, top, threads, overview, or all (default).
+        /// Section to print: leaks, top, threads, overview, triage, waste, indicators,
+        /// retainers, arrays, collections, references, dominators, components, alloc_sites,
+        /// thread_locals, framework, field_stats, or all (default).
         #[arg(long, value_name = "SECTION")]
         section: Option<String>,
         /// Emit JSON instead of Markdown.
@@ -1050,6 +1052,19 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                     "top" => serde_json::to_value(&r.top)?,
                     "threads" => serde_json::to_value(&r.threads)?,
                     "overview" => serde_json::to_value(&r.overview)?,
+                    "triage" => serde_json::to_value(&r.triage)?,
+                    "waste" => serde_json::to_value(&r.waste_summary)?,
+                    "indicators" => serde_json::to_value(&r.leak_indicators)?,
+                    "retainers" => serde_json::to_value(&r.top_retainers)?,
+                    "arrays" => serde_json::to_value(&r.arrays_by_size)?,
+                    "collections" => serde_json::to_value(&r.collections)?,
+                    "references" => serde_json::to_value(&r.references)?,
+                    "dominators" => serde_json::to_value(&r.dominator_analysis)?,
+                    "components" => serde_json::to_value(&r.top_components)?,
+                    "alloc_sites" => serde_json::to_value(&r.alloc_sites)?,
+                    "thread_locals" => serde_json::to_value(&r.thread_local_analysis)?,
+                    "framework" => serde_json::to_value(&r.framework_analysis)?,
+                    "field_stats" => serde_json::to_value(&r.field_stats)?,
                     _ => serde_json::to_value(r)?,
                 };
                 println!("{}", serde_json::to_string_pretty(&val)?);
