@@ -469,7 +469,7 @@ enum HeapCmd {
         /// Path to the .hprof dump.
         #[arg(value_hint = ValueHint::FilePath)]
         dump: String,
-        /// Object index to start from (@objectId). Omit to start at GC root.
+        /// Object index (0-based @objectId from query results, or 'index' from browse output). Omit to start at GC root.
         #[arg(long = "index", value_name = "N")]
         index: Option<u64>,
         /// Levels of children to expand (default 3).
@@ -487,7 +487,7 @@ enum HeapCmd {
         /// Path to the .hprof dump.
         #[arg(value_hint = ValueHint::FilePath)]
         dump: String,
-        /// Dense object index from @objectId (query) or browse.
+        /// Dense object index (0-based): from @objectId in query results or 'index' in browse output. NOT from obj_index_1based in get_report.
         #[arg(long = "index", value_name = "N")]
         index: u64,
         /// Emit JSON.
@@ -1094,7 +1094,13 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
         }
         HeapCmd::Query { dump, oql, json } => {
             let dump_str = dump.as_str();
-            let results = hprof_analyzer::run_oql_query(dump_str, &oql, true, &lib_opts)
+            // Resolve view name or raw OQL
+            let resolved_oql = named_queries::NAMED_QUERIES
+                .iter()
+                .find(|nq| nq.name.eq_ignore_ascii_case(oql.trim()))
+                .map(|nq| nq.oql.to_string())
+                .unwrap_or_else(|| oql.clone());
+            let results = hprof_analyzer::run_oql_query(dump_str, &resolved_oql, true, &lib_opts)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             for r in results {
                 if json {

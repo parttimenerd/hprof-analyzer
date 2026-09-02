@@ -118,14 +118,19 @@ const ATTRIBUTES: &str = r#"# OQL Attributes and Functions
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `@objectId` | integer | Dense object index (stable within one run) |
-| `@objectAddress` | integer | Raw heap address from the HPROF file |
+| `@objectId` | integer | Dense object index, **0-based** (use directly with browse_dominators/inspect_object) |
+| `@objectAddress` | integer | Raw heap address from the HPROF file (⚠️ not the same as object_index) |
 | `@usedHeapSize` | integer | Shallow size in bytes |
 | `@retainedHeapSize` | integer | Retained size in bytes (requires full pipeline) |
 | `@displayName` | string | `ClassName@hexAddr` label |
 | `@length` | integer | Array element count (arrays only; null for non-arrays) |
 | `@inbounds` | objects | Incoming references (requires `--with-graph`) |
 | `@outbounds` | objects | Outgoing references (requires `--with-graph`) |
+
+**Index types summary:**
+- `@objectId` from OQL: **0-based** → use directly with `browse_dominators({object_index: N})`
+- `index` from `browse_dominators` output: **0-based** → use directly
+- `obj_index_1based` from `get_report` (dominator_tree + root_path): **1-based** → subtract 1 before using
 
 `@retainedHeapSize` is always available when running via `heap query` (it uses
 the cached pipeline). In the REPL without full analysis it may require `--full`.
@@ -194,8 +199,8 @@ GROUP BY classof(x) ORDER BY retained DESC LIMIT 20
 ```
 
 ```sql
--- Largest individual objects
-SELECT @objectAddress, classof(x) AS class, @retainedHeapSize AS retained
+-- Largest individual objects (idx usable with browse_dominators/inspect_object)
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS retained
 FROM INSTANCEOF java.lang.Object x ORDER BY retained DESC LIMIT 10
 ```
 
@@ -209,8 +214,8 @@ GROUP BY toString(s) ORDER BY count DESC LIMIT 20
 ```
 
 ```sql
--- Largest string objects
-SELECT @objectAddress, toString(s) AS value, @usedHeapSize AS bytes
+-- Largest string objects (idx usable with browse_dominators)
+SELECT @objectId AS idx, toString(s) AS value, @usedHeapSize AS bytes
 FROM java.lang.String s ORDER BY bytes DESC LIMIT 10
 ```
 
@@ -224,23 +229,23 @@ FROM java.lang.String
 
 ```sql
 -- Large collections (over 10k elements)
-SELECT @objectAddress, classof(x) AS class, x.size() AS size
+SELECT @objectId AS idx, classof(x) AS class, x.size() AS size
 FROM INSTANCEOF java.util.AbstractCollection x
 WHERE x.size() > 10000 ORDER BY size DESC LIMIT 20
 ```
 
 ```sql
 -- Empty collections (wasted overhead)
-SELECT @objectAddress, classof(x) AS class
+SELECT @objectId AS idx, classof(x) AS class
 FROM INSTANCEOF java.util.AbstractCollection x
 WHERE x.size() = 0 LIMIT 50
 ```
 
 ```sql
 -- Large primitive arrays (over 1 MB)
-SELECT @objectAddress, classof(x) AS class, @usedHeapSize AS bytes
+SELECT @objectId AS idx, classof(x) AS class, @usedHeapSize AS bytes
 FROM byte[] x WHERE @usedHeapSize > 1048576
-UNION SELECT @objectAddress, classof(x) AS class, @usedHeapSize AS bytes
+UNION SELECT @objectId AS idx, classof(x) AS class, @usedHeapSize AS bytes
 FROM int[] x WHERE @usedHeapSize > 1048576
 ORDER BY bytes DESC LIMIT 20
 ```
@@ -249,20 +254,20 @@ ORDER BY bytes DESC LIMIT 20
 
 ```sql
 -- Objects with retained size over 10 MB (potential leak suspects)
-SELECT @objectAddress, classof(x) AS class, @retainedHeapSize AS retained
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS retained
 FROM INSTANCEOF java.lang.Object x
 WHERE @retainedHeapSize > 10000000 ORDER BY retained DESC LIMIT 20
 ```
 
 ```sql
 -- Find specific cached objects
-SELECT @objectAddress, @usedHeapSize AS bytes
+SELECT @objectId AS idx, @usedHeapSize AS bytes
 FROM com.example.MyCache* ORDER BY bytes DESC
 ```
 
 ```sql
--- Thread locals by thread
-SELECT @objectAddress, t.name AS thread_name, @retainedHeapSize AS retained
+-- Thread locals by thread (idx usable with browse_dominators)
+SELECT @objectId AS idx, t.name AS thread_name, @retainedHeapSize AS retained
 FROM java.lang.Thread t ORDER BY retained DESC
 ```
 
@@ -287,7 +292,7 @@ ORDER BY retained DESC LIMIT 20
 
 ```sql
 -- All class loaders
-SELECT @objectAddress, classof(x) AS class
+SELECT @objectId AS idx, classof(x) AS class
 FROM INSTANCEOF java.lang.ClassLoader
 ```
 
@@ -302,7 +307,7 @@ GROUP BY classof(x) ORDER BY class_count DESC
 
 ```sql
 -- Objects that hold a reference to a specific address
-SELECT @objectAddress, classof(x) AS class
+SELECT @objectId AS idx, classof(x) AS class
 FROM INSTANCEOF java.lang.Object x
 WHERE <target_address> IN (SELECT @objectAddress FROM @outbounds)
 LIMIT 20
@@ -310,18 +315,20 @@ LIMIT 20
 
 ## Working with object indices
 
-Object indices from `@objectId` (dense index) and `@objectAddress` (heap
-address) can be used with `heap inspect --index N` and `heap browse --index N`.
+`@objectId` gives a **0-based** dense integer — use directly with `heap inspect --index N`,
+`heap browse --index N`, `browse_dominators({object_index: N})`, `inspect_object({object_index: N})`.
+
+`obj_index_1based` from `get_report` (dominator_tree + root_path) is **1-based** — subtract 1 before using.
 
 ```sql
 -- Get the object index for inspection
-SELECT @objectId AS idx, @objectAddress AS addr, classof(x) AS class
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS retained
 FROM INSTANCEOF java.lang.Object x
 WHERE @retainedHeapSize > 50000000
-ORDER BY @retainedHeapSize DESC LIMIT 5
+ORDER BY retained DESC LIMIT 5
 ```
 
-Then: `heap inspect --index <idx>` or `heap browse --index <idx>`
+Then: `heap inspect --index <idx>` or `heap browse --index <idx>` (idx is 0-based, use directly)
 "#;
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
@@ -431,14 +438,26 @@ Full report section as JSON. **Best tool for leak investigation** — use before
   "pretty_class": "com.example.MyClass",
   "retained": 123456789,         // bytes retained by all instances
   "is_single": true,             // true=one object, false=class group
-  "root_path": [...],            // single suspect: path from GC root
+  "root_path": [...],            // single suspect: path from GC root → each step has obj_index_1based
   "holders": [...],              // single suspect: what classes hold this
   "merged_paths": [...],         // group suspect: top N root paths
-  "root_type_label": "Thread"    // what kind of GC root holds it
+  "root_type_label": "Thread",   // what kind of GC root holds it
+  "dominator_tree": {            // pre-built subtree for this suspect (ready to drill into)
+    "obj_index_1based": 12345,   // ⚠️ SUBTRACT 1 to get object_index for browse_dominators/inspect_object
+    "display_class": "com.example.MyClass",
+    "shallow": 48,
+    "retained": 123456789,
+    "children": [...]            // each child has same structure (obj_index_1based, display_class, retained, children)
+  }
 }
 ```
+⚠️ **CRITICAL**: `obj_index_1based` values in `root_path` and `dominator_tree` are **1-based indices**.
+You MUST subtract 1 before passing to `browse_dominators` or `inspect_object`:
+  `object_index = obj_index_1based - 1`
+
 Look at `retained` (highest = biggest leak), `pretty_class`, and `root_path`/`merged_paths`
 to understand what's holding the leaking objects alive.
+The `dominator_tree` gives you a pre-built subtree — use `obj_index_1based - 1` with `browse_dominators`.
 
 ### query({ oql })
 Runs an OQL query. Returns `{columns, rows, truncated, row_count}`.
@@ -500,30 +519,37 @@ Details for one object: class, shallow_bytes, retained_bytes.
    → {loaded: false}
 
 2. load_dump({"path": "/tmp/app.hprof"})
-   → Loaded. Suspects: com.example.CacheManager
+   → Loaded. Suspects: com.example.CacheManager (850 MB retained)
 
-3. get_summary({})
-   → #1 suspect: CacheManager (850 MB retained)
-     Suggested query: SELECT @objectId AS idx, @retainedHeapSize AS ret FROM com.example.CacheManager ORDER BY ret DESC LIMIT 10
+3. get_report({"section": "leaks"})
+   → suspects[0].pretty_class = "com.example.CacheManager"
+   → suspects[0].retained = 850000000
+   → suspects[0].dominator_tree.obj_index_1based = 12346  ← 1-based!
+   → suspects[0].dominator_tree.children[0] = {obj_index_1based: 67891, class: "HashMap", retained: 849MB}
 
-4. query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM com.example.CacheManager ORDER BY ret DESC LIMIT 10"})
-   → rows: [[12345, 850000000], ...]
-   (object_index 12345 retains 850 MB)
+   IMPORTANT: object_index = obj_index_1based - 1
+   So: browse_dominators({object_index: 12345})  ← 12346 - 1 = 12345
 
-5. browse_dominators({"object_index": 12345})
+4. browse_dominators({"object_index": 12345})
    → {index:12345, class:"CacheManager", retained_bytes:850000000,
-      children: [{index:67890, class:"java.util.HashMap", retained_bytes:849000000, children:[...]}]}
+      children: [{index:67890, class:"java.util.HashMap", retained_bytes:849000000}]}
+   (index here is 0-based, same as object_index — use directly)
 
-6. browse_dominators({"object_index": 67890, "depth": 5})
+5. browse_dominators({"object_index": 67890, "depth": 5})
    → Drill into the HashMap — see what entries it holds
 
-7. inspect_object({"object_index": 67890})
+6. inspect_object({"object_index": 67890})
    → {class:"java.util.HashMap", shallow_bytes:48, retained_bytes:849000000}
+
+7. query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM com.example.CacheManager ORDER BY ret DESC LIMIT 10"})
+   → rows: [[12345, 850000000], ...]  ← @objectId is 0-based, use directly with browse_dominators
 ```
 
 ## Tips
 
-- `@objectId` indices are dense integers, stable within one session but NOT across sessions/reloads.
+- `@objectId` values from OQL queries are **0-based** dense integers — use directly with `browse_dominators`/`inspect_object`.
+- `obj_index_1based` values from `get_report` (in `dominator_tree` and `root_path`) are **1-based** — subtract 1 before passing to `browse_dominators`/`inspect_object`.
+- `index` values returned by `browse_dominators` itself are **0-based** — use directly.
 - `@objectAddress` is the raw heap address — for cross-referencing with other JVM tools.
 - Cache files live next to the dump as `<dump>.hprof-cache/`. Safe to delete to force re-analysis.
 - To analyze a different dump: call `load_dump` again with the new path (replaces current session).

@@ -310,8 +310,10 @@ impl HprofMcpServer {
                           \"top\" (biggest classes/objects + what's holding them), \
                           \"threads\" (per-thread retained + stacks), \"overview\" (totals), \"all\" (everything, large). \
                           Unlike the leak-suspects OQL view (which has a >10 MB threshold), this works for all heap sizes. \
-                          In leaks JSON: single suspects have 'root_path' + 'holders'; group suspects have 'merged_paths'. \
-                          Both tell you the GC root path — the chain of references keeping the object alive.")]
+                          In leaks JSON: each suspect has 'root_path', 'holders' (single suspects) or 'merged_paths' (group suspects), \
+                          AND a 'dominator_tree' field with pre-built subtree. \
+                          WARNING: obj_index_1based in root_path and dominator_tree is 1-BASED — subtract 1 for browse_dominators/inspect_object. \
+                          browse_dominators 'index' and query @objectId are 0-based (use directly).")]
     async fn get_report(
         &self,
         Parameters(p): Parameters<GetReportParams>,
@@ -425,8 +427,9 @@ impl HprofMcpServer {
     #[tool(
         description = "Navigate the dominator tree. Each node shows what an object retains. \
                        Omit object_index to start at the GC root (recommended first call). \
-                       Use the 'index' field from results with inspect_object or a nested browse_dominators call \
-                       to drill deeper into a specific subtree. \
+                       The 'index' field in results is 0-based — use directly with browse_dominators or inspect_object. \
+                       NOTE: obj_index_1based from get_report (dominator_tree/root_path) is 1-BASED — subtract 1 before using here. \
+                       Children sorted by retained_bytes desc — follow the largest child to find the root cause. \
                        retained_bytes = everything kept alive exclusively by this object/subtree."
     )]
     async fn browse_dominators(
@@ -507,11 +510,11 @@ impl HprofMcpServer {
 
     /// Inspect a single object by dense index.
     #[tool(description = "Get class name and memory sizes for one object. \
-                       object_index comes from: (a) @objectId column in a query result, \
-                       (b) 'index' field in browse_dominators output. \
+                       object_index comes from: (a) @objectId column in a query result (0-based, use directly), \
+                       (b) 'index' field in browse_dominators output (0-based, use directly), \
+                       (c) obj_index_1based from get_report dominator_tree/root_path (1-BASED — subtract 1 first!). \
                        Returns shallow_bytes (object itself) and retained_bytes (everything kept alive only by this object). \
-                       To find what references this object, run: \
-                       query({oql:\"SELECT @objectId, classof(x) FROM INSTANCEOF java.lang.Object x WHERE @objectId IN (SELECT @objectId FROM @outbounds)\"})")]
+                       After inspect, call browse_dominators({object_index: <same>}) to see what it retains.")]
     async fn inspect_object(
         &self,
         Parameters(p): Parameters<InspectObjectParams>,
@@ -727,11 +730,12 @@ impl ServerHandler for HprofMcpServer {
              IMPORTANT RULES:\n\
              - Send ONE tool call at a time and wait for the response before sending the next.\n\
              - load_dump BLOCKS for 5–15 min on first load (subsequent loads ~1 s from cache). Wait for it.\n\
-             - object_index values are dense integers — get them from @objectId in query results or 'index' in browse_dominators.\n\n\
+             - object_index values: @objectId from query and 'index' from browse_dominators are 0-based (use directly).\n\
+             - obj_index_1based in get_report (dominator_tree + root_path) is 1-BASED — subtract 1 for browse_dominators/inspect_object!\n\n\
              ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
              1. load_dump({path})            — load the file; the response already shows top suspects + top classes\n\
-             2. get_summary()                — more detail on suspects; includes ready-to-run OQL queries\n\
-             3. get_report({\"section\":\"leaks\"}) — root paths, holder chains, stack traces for each suspect\n\
+             2. get_report({\"section\":\"leaks\"}) — root paths, holder chains, stack traces + dominator_tree per suspect\n\
+             3. browse_dominators({object_index: suspect.dominator_tree.obj_index_1based - 1}) — drill into suspect\n\
              4. query({\"oql\":\"top-retained-by-class\"}) — confirm which class dominates memory\n\
              5. browse_dominators({})        — dominator tree from GC root; follow largest child\n\n\
              GENERAL WORKFLOW:\n\
