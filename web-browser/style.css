@@ -239,49 +239,163 @@ body {
 }
 #landing-features li { display: flex; align-items: baseline; gap: 7px; line-height: 1.4; }
 .feat-icon { flex-shrink: 0; font-size: .9rem; }
-#landing-cli-box {
+
+/* ── Install strip (replaces old cli-box) ────────────────────────────────── */
+#landing-install-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 14px;
+  padding: 10px 14px;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 16px;
+  font-size: .8rem;
   width: 100%;
   box-sizing: border-box;
   text-align: left;
 }
-.cli-box-title {
-  font-size: .8rem;
-  font-weight: 600;
-  color: var(--muted);
-  margin: 0 0 8px;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-}
-.cli-box-options { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.cli-option { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.cli-option code {
+.install-strip-label { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.install-strip-code {
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 3px 8px;
-  font-size: .78rem;
+  font-size: .76rem;
   color: var(--fg);
-  word-break: break-all;
+  white-space: nowrap;
 }
-.cli-option-desc { font-size: .74rem; color: var(--muted); }
-.cli-box-features {
+.install-strip-or { color: var(--muted); font-size: .74rem; }
+.setup-guide-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
   font-size: .78rem;
-  color: var(--muted);
-  margin: 0;
-  line-height: 1.5;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
 }
-.cli-box-features code {
+.setup-guide-btn:hover { background: var(--bg3); }
+
+/* ── Setup modal ─────────────────────────────────────────────────────────── */
+#setup-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+#setup-modal-inner {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 40px rgba(0,0,0,.18);
+  overflow: hidden;
+}
+#setup-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#setup-modal-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--fg);
+}
+#btn-close-setup {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: .9rem;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1.6;
+}
+#btn-close-setup:hover { background: var(--bg2); color: var(--fg); }
+#setup-modal-body {
+  overflow-y: auto;
+  padding: 0 20px 20px;
+  flex: 1;
+}
+.setup-section {
+  padding: 16px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.setup-section:last-child { border-bottom: none; }
+.setup-section h3 { margin: 0 0 8px; font-size: .95rem; color: var(--fg); }
+.setup-desc { margin: 0 0 8px; font-size: .82rem; color: var(--muted); }
+.setup-note { margin: 6px 0 0; font-size: .78rem; color: var(--muted); }
+.setup-note em { color: var(--fg); font-style: italic; }
+.setup-note code {
   background: var(--bg3);
   border-radius: 3px;
   padding: 1px 5px;
-  font-size: .75rem;
+  font-size: .74rem;
   color: var(--fg);
 }
+.setup-code-block {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.setup-code-block code {
+  font-size: .78rem;
+  color: var(--fg);
+  word-break: break-all;
+  display: block;
+}
+.setup-code-block pre {
+  margin: 0;
+  font-size: .78rem;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+}
+.setup-code-json { font-family: monospace; }
+
+/* Setup tabs */
+.setup-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.setup-tab {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: .78rem;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.setup-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.setup-tab:hover:not(.active) { background: var(--bg3); color: var(--fg); }
+
+/* Keep old cli-box classes in case anything references them */
+.cli-box-features { font-size: .78rem; color: var(--muted); margin: 0; line-height: 1.5; }
+.cli-box-features code { background: var(--bg3); border-radius: 3px; padding: 1px 5px; font-size: .75rem; color: var(--fg); }
 .cli-box-features a { color: var(--accent); text-decoration: none; }
 .cli-box-features a:hover { opacity: 0.8; }
 #landing-footer {

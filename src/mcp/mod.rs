@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     cache::{CacheMode, CachedSession},
+    named_queries::NAMED_QUERIES,
     opts::AnalyzeOptions,
 };
 
@@ -22,50 +23,91 @@ use crate::{
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetOqlDocsParams {
     /// Topic: "syntax", "attributes", "examples", "workflow", or "all" (default).
+    /// Use "examples" to get ready-to-run query patterns. Use "workflow" for the
+    /// recommended LLM analysis sequence.
     pub topic: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoadDumpParams {
-    /// Absolute path to the .hprof file (also accepts .hprof.gz and .hprof.zip).
+    /// Absolute path to the .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
+    /// First load takes 5–15 min and writes a disk cache; every subsequent load of
+    /// the same file completes in ~1 s.
     pub path: String,
-    /// Load reference graph for field-value traversal (@inbounds/@outbounds).
-    /// Adds 1–3 min and 200–600 MB disk cache. Rarely needed.
+    /// Load the reference graph for OQL @inbounds/@outbounds field traversal.
+    /// Adds 1–3 min and 200–600 MB to the disk cache. Leave false (default) unless
+    /// you specifically need to trace object references field-by-field.
     #[serde(default)]
     pub with_graph: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetReportParams {
-    /// Section: "leaks", "top", "threads", "overview", or "all" (default).
+    /// Which section to return.
+    /// "leaks"    – leak suspects with root paths and class holders
+    /// "top"      – biggest classes and objects by retained size
+    /// "threads"  – per-thread retained size and stack traces
+    /// "overview" – heap totals, GC root counts, identifier size
+    /// "all"      – all sections combined (large; prefer a specific section)
     pub section: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetHistogramParams {
-    /// Number of top classes to return (default 50).
+    /// Number of top classes to return sorted by retained size (default 50, max 500).
+    /// Start with 20–50 to orient, then query specific classes with OQL.
     pub limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct QueryParams {
-    /// OQL query, e.g. "SELECT * FROM java.lang.String LIMIT 10".
+    /// OQL query string OR a built-in view name (no SQL needed).
+    ///
+    /// VIEW NAMES — use these directly instead of writing OQL:
+    ///   "top-classes-by-count"    — top 30 classes by instance count
+    ///   "top-classes-by-size"     — top 30 classes by shallow size
+    ///   "largest-objects"         — 20 largest individual objects
+    ///   "heap-summary"            — class count + bytes, top 50
+    ///   "duplicate-strings"       — duplicate string values (memory waste)
+    ///   "largest-strings"         — 20 largest String objects
+    ///   "string-count"            — total string count and size
+    ///   "all-threads"             — all Thread objects
+    ///   "thread-count"            — thread count
+    ///   "large-arrays"            — primitive arrays > 64 KB
+    ///   "large-collections"       — collections with > 1000 elements
+    ///   "empty-collections"       — empty collections (overhead waste)
+    ///   "class-loaders"           — all ClassLoader instances
+    ///   "classes-per-loader"      — class count per loader
+    ///   "top-retained-by-class"   — top 30 classes by RETAINED size (*)
+    ///   "largest-retained-objects"— 20 objects with most retained bytes (*)
+    ///   "leak-suspects"           — objects retaining > 10 MB (*)
+    ///   "retained-threads"        — threads by retained size (*)
+    ///   "retained-summary"        — shallow vs retained by class (*)
+    ///   "object-count-total"      — total object count
+    ///  (*) = needs full analysis; always available after load_dump
+    ///
+    /// OQL EXAMPLES (for custom queries):
+    ///   "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM java.lang.String ORDER BY ret DESC LIMIT 10"
+    ///   "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"
     pub oql: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrowseDominatorsParams {
-    /// Dense object index to start from (@objectId). Omit for GC root.
+    /// Dense object index to start from. Use @objectId values from query results.
+    /// Omit (or pass null) to start at the GC root — the recommended entry point.
     pub object_index: Option<u64>,
-    /// Levels to expand (default 3, max 8).
+    /// How many levels deep to expand (default 3, max 8).
+    /// Use depth=1 to expand only immediate children of a node.
     pub depth: Option<u8>,
-    /// Max children per node (default 10, max 50).
+    /// Max children per node, sorted by retained size descending (default 10, max 50).
     pub width: Option<u8>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct InspectObjectParams {
-    /// Dense object index from @objectId in a query or from browse_dominators.
+    /// Dense object index. Obtain from: (a) @objectId column in a query result,
+    /// (b) the "index" field in browse_dominators output.
     pub object_index: u64,
 }
 
@@ -107,7 +149,10 @@ impl Default for HprofMcpServer {
 #[tool_router]
 impl HprofMcpServer {
     #[tool(
-        description = "Return OQL documentation (syntax/attributes/examples/workflow). No dump needed."
+        description = "Return OQL documentation. topic: \"syntax\", \"attributes\", \"examples\", \"workflow\", or \"all\". \
+                       Call with topic=\"examples\" before writing queries — it contains 20 ready-to-use patterns. \
+                       Call with topic=\"workflow\" to see the recommended LLM investigation sequence. \
+                       No dump needed; call this at any time."
     )]
     async fn get_oql_docs(
         &self,
@@ -118,9 +163,9 @@ impl HprofMcpServer {
     }
 
     /// Load a heap dump file. First run takes 5–15 min; subsequent calls load in ~1 s from cache.
-    #[tool(
-        description = "Load a .hprof dump file. Caches results — fast on re-load. Returns summary."
-    )]
+    #[tool(description = "Load a .hprof dump file and cache analysis results. \
+                       IMPORTANT: wait for this to complete before calling any other tool — it may take 5–15 min on first load, ~1 s on repeat loads. \
+                       After loading, call get_summary to orient, then get_histogram for class breakdown, then query for drill-down.")]
     async fn load_dump(
         &self,
         Parameters(p): Parameters<LoadDumpParams>,
@@ -139,12 +184,35 @@ impl HprofMcpServer {
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
+        let suspect_names: Vec<&str> = result
+            .report
+            .leaks
+            .suspects
+            .iter()
+            .take(3)
+            .map(|s| s.pretty_class.as_str())
+            .collect();
+
         let summary = format!(
-            "Loaded: {}\nTotal heap: {} MB\nObjects: {}\nLeak suspects: {}",
-            p.path,
-            result.report.overview.total_shallow / 1_000_000,
-            result.report.overview.total_objects,
-            result.report.leaks.suspects.len(),
+            "Loaded: {path}\n\
+             Total heap: {heap} MB  |  Objects: {objs}  |  Leak suspects: {suspects}\n\
+             Top suspects: {top}\n\n\
+             NEXT STEPS (one at a time, wait for each response):\n\
+             1. get_summary()               — top suspects with suggested OQL\n\
+             2. query({{\"oql\":\"leak-suspects\"}})       — objects retaining >10 MB RIGHT NOW\n\
+             3. query({{\"oql\":\"top-retained-by-class\"}}) — which class retains most memory\n\
+             4. query({{\"oql\":\"<view-name-or-OQL>\"}})  — any view below or custom OQL\
+             {views}",
+            path = p.path,
+            heap = result.report.overview.total_shallow / 1_000_000,
+            objs = result.report.overview.total_objects,
+            suspects = result.report.leaks.suspects.len(),
+            top = if suspect_names.is_empty() {
+                "none".to_string()
+            } else {
+                suspect_names.join(", ")
+            },
+            views = views_reference_table(),
         );
         *session_ref.lock().await = Some(result);
         Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
@@ -152,7 +220,10 @@ impl HprofMcpServer {
 
     /// Return a Markdown summary: top 5 suspects + top 5 classes by retained size.
     #[tool(
-        description = "Return a Markdown summary of the loaded dump: top suspects + top classes."
+        description = "Return a Markdown summary: top leak suspects and top classes by retained size. \
+                       Good first call after load_dump. \
+                       Follow up: query({oql:\"SELECT @objectId, @retainedHeapSize FROM <ClassName> ORDER BY @retainedHeapSize DESC LIMIT 10\"}) \
+                       replacing <ClassName> with the top suspect class to find the largest instances."
     )]
     async fn get_summary(&self) -> Result<CallToolResult, McpError> {
         let guard = self.session.lock().await;
@@ -180,11 +251,34 @@ impl HprofMcpServer {
                 row.retained / 1_000_000
             ));
         }
+
+        // Suggest concrete follow-up OQL queries for the top 2 suspects.
+        if !r.leaks.suspects.is_empty() {
+            out.push_str("\n## Suggested OQL Queries\n\n");
+            for s in r.leaks.suspects.iter().take(2) {
+                out.push_str(&format!(
+                    "```sql\n-- Largest {} instances (get @objectId for browse_dominators/inspect_object)\n\
+                     SELECT @objectId AS idx, @retainedHeapSize AS retained FROM {} \
+                     ORDER BY retained DESC LIMIT 10\n```\n\n",
+                    s.pretty_class, s.pretty_class
+                ));
+            }
+            out.push_str(
+                "After running a query, use the `idx` value with:\n\
+                 - `browse_dominators({\"object_index\": <idx>})` — see what this object retains\n\
+                 - `inspect_object({\"object_index\": <idx>})` — class and size details\n",
+            );
+        }
+
         Ok(CallToolResult::success(vec![ContentBlock::text(out)]))
     }
 
     /// Return a section of the full analysis report as JSON.
-    #[tool(description = "Return a report section as JSON: leaks, top, threads, overview, or all.")]
+    #[tool(description = "Return a report section as JSON. \
+                          Sections: \"leaks\" (suspects with root paths), \"top\" (biggest classes/objects), \
+                          \"threads\" (per-thread retained + stacks), \"overview\" (totals), \"all\" (everything, large). \
+                          Use \"leaks\" first to see ranked suspects with their holder chains. \
+                          Use \"top\" to see class-level holder breakdowns showing what's keeping objects alive.")]
     async fn get_report(
         &self,
         Parameters(p): Parameters<GetReportParams>,
@@ -206,7 +300,13 @@ impl HprofMcpServer {
     }
 
     /// Return a class histogram sorted by retained size.
-    #[tool(description = "Return [{class, instances, retained_bytes}] histogram, default 50 rows.")]
+    #[tool(
+        description = "Return class histogram sorted by retained size: [{class, instances, retained_bytes}]. \
+                          Use limit=20 for a quick overview. \
+                          After identifying a suspect class, run: \
+                          query({oql:\"SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10\"}) \
+                          to find the largest instances and get their object indices."
+    )]
     async fn get_histogram(
         &self,
         Parameters(p): Parameters<GetHistogramParams>,
@@ -238,9 +338,12 @@ impl HprofMcpServer {
     /// Run an OQL query against the loaded dump. Returns {columns, rows, truncated, row_count}.
     /// Rows are arrays of plain JSON values (strings, numbers, null). Object references
     /// appear as "ClassName@index" — use the index with inspect_object or browse_dominators.
-    #[tool(
-        description = "Run an OQL query. Returns {columns, rows, truncated, row_count}. Rows are plain JSON. Objects appear as 'ClassName@index'."
-    )]
+    #[tool(description = "Run an OQL query OR a built-in view by name. \
+                       SHORTCUT: pass a view name like \"top-retained-by-class\" instead of writing OQL. \
+                       All 20 view names are listed in the oql parameter description — use them directly. \
+                       Returns {columns, rows, truncated, row_count, view_name?}. \
+                       Rows are plain JSON. Objects appear as 'ClassName@index' — the number after '@' is object_index. \
+                       Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object.")]
     async fn query(
         &self,
         Parameters(p): Parameters<QueryParams>,
@@ -255,19 +358,43 @@ impl HprofMcpServer {
                 .dump_path
                 .clone()
         };
-        let oql = p.oql.clone();
+
+        // Resolve view name → OQL. Accept bare names, "/run name", or raw OQL.
+        let (oql, view_name) = resolve_view_or_oql(&p.oql);
+        let oql = oql.to_string();
+        let vname = view_name.map(|s| s.to_string());
+
         let result = tokio::task::spawn_blocking(move || run_query_on_dump(&dump_path, &oql))
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let json = serde_json::to_string_pretty(&result)
+
+        // Inject view_name into result so LLM knows which view ran.
+        let result = if let (Some(name), Some(obj)) = (&vname, result.as_object()) {
+            let mut m = obj.clone();
+            m.insert("view_name".to_string(), serde_json::json!(name));
+            serde_json::Value::Object(m)
+        } else {
+            result
+        };
+
+        // Append a hint when the result has object index columns.
+        let hint = build_query_hint(&result);
+        let mut output = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+        if let Some(h) = hint {
+            output.push_str(&format!("\n\n/* HINT: {h} */"));
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     /// Browse the dominator tree. Omit object_index to start at the GC root.
     #[tool(
-        description = "Browse dominator tree. Omit object_index for GC root. depth=3 width=10 by default."
+        description = "Navigate the dominator tree. Each node shows what an object retains. \
+                       Omit object_index to start at the GC root (recommended first call). \
+                       Use the 'index' field from results with inspect_object or a nested browse_dominators call \
+                       to drill deeper into a specific subtree. \
+                       retained_bytes = everything kept alive exclusively by this object/subtree."
     )]
     async fn browse_dominators(
         &self,
@@ -334,13 +461,24 @@ impl HprofMcpServer {
         );
         let json = serde_json::to_string_pretty(&tree)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+
+        // Append usage hint so LLMs know what to do with index values.
+        let hint = "\n\n/* HINT: Each node has an 'index' field. \
+                    Use browse_dominators({\"object_index\": <index>}) to expand a specific node, \
+                    or inspect_object({\"object_index\": <index>}) for class and size details. \
+                    Children are sorted by retained_bytes desc — follow the largest child to find the memory root cause. */";
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json + hint,
+        )]))
     }
 
     /// Inspect a single object by dense index.
-    #[tool(
-        description = "Inspect object: class, shallow/retained sizes. object_index from @objectId in a query or from browse_dominators."
-    )]
+    #[tool(description = "Get class name and memory sizes for one object. \
+                       object_index comes from: (a) @objectId column in a query result, \
+                       (b) 'index' field in browse_dominators output. \
+                       Returns shallow_bytes (object itself) and retained_bytes (everything kept alive only by this object). \
+                       To find what references this object, run: \
+                       query({oql:\"SELECT @objectId, classof(x) FROM INSTANCEOF java.lang.Object x WHERE @objectId IN (SELECT @objectId FROM @outbounds)\"})")]
     async fn inspect_object(
         &self,
         Parameters(p): Parameters<InspectObjectParams>,
@@ -433,6 +571,11 @@ impl HprofMcpServer {
             "class": class_name,
             "shallow_bytes": shallow[idx],
             "retained_bytes": retained[idx],
+            "_hint": format!(
+                "To see what this {} retains: browse_dominators({{\"object_index\":{}}}). \
+                 To find objects that reference it: query with @inbounds (requires with_graph=true on load_dump).",
+                class_name, idx
+            ),
         });
 
         if let Some(refs) = inbound_refs {
@@ -447,31 +590,93 @@ impl HprofMcpServer {
     /// Return information about the currently loaded dump (path, heap size, object count).
     /// Call this to check if a dump is already loaded before calling load_dump.
     #[tool(
-        description = "Return info about the currently loaded dump (path, heap size, objects). Returns null if no dump is loaded."
+        description = "ALWAYS call this first to check if a dump is already loaded. \
+                       Returns {loaded:true, path, total_heap_bytes, total_objects, leak_suspects} if loaded, \
+                       or {loaded:false} if not. \
+                       If loaded=true, skip load_dump and call get_summary directly."
     )]
     async fn get_session_info(&self) -> Result<CallToolResult, McpError> {
         let guard = self.session.lock().await;
         let result = match guard.as_ref() {
             None => serde_json::json!({
                 "loaded": false,
-                "message": "No dump loaded. Call load_dump with the path to a .hprof file."
+                "message": "No dump loaded. Call load_dump with the path to a .hprof file.",
+                "_next": "load_dump({\"path\": \"/absolute/path/to/dump.hprof\"})"
             }),
             Some(sess) => {
                 let r = &sess.report;
+                let top_suspect = r
+                    .leaks
+                    .suspects
+                    .first()
+                    .map(|s| s.pretty_class.as_str())
+                    .unwrap_or("none");
                 serde_json::json!({
                     "loaded": true,
                     "path": sess.dump_path.display().to_string(),
                     "total_heap_bytes": r.overview.total_shallow,
                     "total_objects": r.overview.total_objects,
                     "leak_suspects": r.leaks.suspects.len(),
+                    "top_suspect": top_suspect,
                     "graph_loaded": sess.mode == CacheMode::Graph,
-                    "tip": "Use get_summary for a human-readable overview, or get_histogram for a class breakdown."
+                    "_next": "get_summary() — human-readable overview with suspects and suggested OQL queries"
                 })
             }
         };
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// List the 20 built-in named query views, grouped by category.
+    #[tool(
+        description = "List all 20 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained). \
+                       Each entry has: name, display (human label), group, needs_retained (bool), oql (full SQL for reference). \
+                       SHORTCUT: pass the 'name' directly to query() — query({\"oql\":\"leak-suspects\"}) runs the view by name. \
+                       No need to copy the SQL. 'needs_retained' views always work after load_dump."
+    )]
+    async fn list_views(&self) -> Result<CallToolResult, McpError> {
+        // Group by category.
+        let mut groups: std::collections::BTreeMap<&str, Vec<serde_json::Value>> =
+            std::collections::BTreeMap::new();
+        for nq in NAMED_QUERIES {
+            groups.entry(nq.group).or_default().push(serde_json::json!({
+                "name": nq.name,
+                "display": nq.display,
+                "group": nq.group,
+                "needs_retained": nq.needs_retained,
+                "oql": nq.oql,
+            }));
+        }
+
+        let grouped: Vec<serde_json::Value> = groups
+            .into_iter()
+            .map(|(group, queries)| serde_json::json!({ "group": group, "queries": queries }))
+            .collect();
+
+        let mut out = String::from(
+            "# Built-in Named Query Views\n\nUse view names directly in query() — e.g. query({\"oql\":\"leak-suspects\"}).\n\n",
+        );
+        for nq in NAMED_QUERIES {
+            out.push_str(&format!(
+                "## {} — {} (group: {}{})\n```sql\n{}\n```\n\n",
+                nq.name,
+                nq.display,
+                nq.group,
+                if nq.needs_retained {
+                    ", needs_retained=true"
+                } else {
+                    ""
+                },
+                nq.oql
+            ));
+        }
+        out.push_str(&format!(
+            "\n---\nJSON format:\n{}",
+            serde_json::to_string_pretty(&grouped)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        ));
+        Ok(CallToolResult::success(vec![ContentBlock::text(out)]))
     }
 }
 
@@ -485,20 +690,29 @@ impl ServerHandler for HprofMcpServer {
         )
         .with_server_info(Implementation::from_build_env())
         .with_instructions(
-            "Java heap dump analyzer for investigating memory leaks and high heap usage.\n\n\
-             WORKFLOW:\n\
-             1. get_session_info — check if a dump is already loaded\n\
-             2. load_dump({path}) — load a .hprof file (fast from cache after first run)\n\
-             3. get_summary — top leak suspects + top classes\n\
-             4. get_histogram — class-level breakdown with instance/retained counts\n\
-             5. query({oql}) — drill in with OQL (call get_oql_docs first if unfamiliar)\n\
-             6. browse_dominators — navigate the dominator tree (omit object_index to start at root)\n\
-             7. inspect_object({object_index}) — details on a specific object\n\n\
-             KEY FACTS:\n\
-             - object_index values come from @objectId in query results or from browse_dominators\n\
-             - query rows are plain JSON (numbers, strings, nulls); objects appear as 'ClassName@index'\n\
-             - First load_dump call may take 5-15 min for large dumps; subsequent calls use cache (~1s)\n\
-             - load_dump blocks; wait for it to complete before calling other tools"
+            "Java heap dump analyzer. Use these tools to investigate memory leaks and high heap usage in JVM applications.\n\n\
+             IMPORTANT RULES:\n\
+             - Send ONE tool call at a time and wait for the response before sending the next.\n\
+             - load_dump BLOCKS for 5–15 min on first load (subsequent loads ~1 s from cache). Wait for it.\n\
+             - object_index values are dense integers — get them from @objectId in query results or 'index' in browse_dominators.\n\n\
+             RECOMMENDED WORKFLOW:\n\
+             1. get_session_info()  — check if a dump is already loaded (skip load_dump if loaded=true)\n\
+             2. load_dump({path})   — load the .hprof file; wait for completion\n\
+             3. get_summary()       — read top suspects + suggested OQL queries\n\
+             4. get_histogram({limit:20})  — class breakdown by retained size\n\
+             5. query({oql:\"SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <SuspectClass> ORDER BY ret DESC LIMIT 10\"})\n\
+             6. browse_dominators({object_index: <idx>})  — see what the suspect retains\n\
+             7. inspect_object({object_index: <idx>})    — class and size for a specific object\n\
+             8. get_oql_docs({topic:\"examples\"})        — more query patterns for deeper investigation\n\n\
+             SHORTCUT: All 20 view names are usable directly in query() — e.g. query({oql:\"leak-suspects\"}).\n\
+               Call list_views() to see all names + groups. View names are also listed in load_dump response.\n\n\
+             QUERY TIPS:\n\
+             - Always SELECT @objectId to get indices for follow-up calls\n\
+             - Objects in results appear as 'ClassName@index' — the number after '@' is the object_index\n\
+             - Use INSTANCEOF to match a class and all its subclasses\n\
+             - GROUP BY classof(x) to aggregate by class\n\
+             - @retainedHeapSize = everything kept alive by this object (most useful for leak detection)\n\
+             - @usedHeapSize = shallow size (just the object itself)"
                 .to_string(),
         )
     }
@@ -666,6 +880,86 @@ fn query_value_to_json(v: &crate::query::model::QueryValue) -> serde_json::Value
         QueryValue::ObjRef { index, class, .. } => {
             serde_json::Value::String(format!("{class}@{index}"))
         }
+    }
+}
+
+/// Resolve a view name or "/run name" shortcut to its OQL.
+/// Returns `(oql, Some(view_name))` if it matched a named query,
+/// or `(original, None)` if it looks like raw OQL.
+fn resolve_view_or_oql(input: &str) -> (&str, Option<&str>) {
+    let trimmed = input.trim();
+    // Strip "/run " prefix if present
+    let candidate = if let Some(rest) = trimmed.strip_prefix("/run ") {
+        rest.trim()
+    } else {
+        trimmed
+    };
+    // Try exact name match first
+    if let Some(nq) = NAMED_QUERIES.iter().find(|nq| nq.name == candidate) {
+        return (nq.oql, Some(nq.name));
+    }
+    // Case-insensitive match
+    let lower = candidate.to_lowercase();
+    if let Some(nq) = NAMED_QUERIES
+        .iter()
+        .find(|nq| nq.name.to_lowercase() == lower)
+    {
+        return (nq.oql, Some(nq.name));
+    }
+    // Looks like raw OQL
+    (trimmed, None)
+}
+
+/// Build a compact table of all named views for embedding in responses.
+fn views_reference_table() -> String {
+    let mut out = String::from("\n\n## Available Views (use directly in query())\n\n");
+    let mut cur_group = "";
+    for nq in NAMED_QUERIES {
+        if nq.group != cur_group {
+            if !cur_group.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format!("**{}**\n", nq.group));
+            cur_group = nq.group;
+        }
+        let marker = if nq.needs_retained { " ★" } else { "" };
+        out.push_str(&format!("  `{}`{} — {}\n", nq.name, marker, nq.display));
+    }
+    out.push_str("\n★ = uses @retainedHeapSize (always available after load_dump)\n");
+    out.push_str("Usage: query({\"oql\": \"<view-name>\"})  — no SQL needed\n");
+    out
+}
+
+/// Build a usage hint for query results that contain object indices.
+/// Returns Some(hint) when rows have numeric values that look like object indices.
+fn build_query_hint(result: &serde_json::Value) -> Option<String> {
+    let columns = result.get("columns")?.as_array()?;
+    let rows = result.get("rows")?.as_array()?;
+    if rows.is_empty() {
+        return None;
+    }
+    // Check if any column name looks like an index (objectId, idx, index, etc.)
+    let index_col_pos = columns.iter().position(|c| {
+        let name = c.as_str().unwrap_or("").to_lowercase();
+        name == "idx" || name == "objectid" || name == "index" || name == "object_index"
+    });
+    if let Some(pos) = index_col_pos {
+        // Extract first index value as an example.
+        let example_idx = rows
+            .first()
+            .and_then(|r| r.as_array())
+            .and_then(|r| r.get(pos))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        Some(format!(
+            "Column '{}' contains object indices. Use them with: \
+             browse_dominators({{\"object_index\":{}}}) or inspect_object({{\"object_index\":{}}})",
+            columns[pos].as_str().unwrap_or("idx"),
+            example_idx,
+            example_idx
+        ))
+    } else {
+        None
     }
 }
 

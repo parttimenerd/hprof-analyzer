@@ -29,24 +29,108 @@
       <li><span class="feat-icon">💬</span> SQL-like OQL query shell with tab-completion</li>
       <li><span class="feat-icon">🔒</span> Fully private — no upload, no server, no telemetry</li>
     </ul>
-    <div id="landing-cli-box">
-      <p class="cli-box-title">For dumps above 3 GB — install the CLI</p>
-      <div class="cli-box-options">
-        <div class="cli-option">
-          <code>cargo install hprof-analyzer</code>
-          <span class="cli-option-desc">any platform</span>
-        </div>
-        <div class="cli-option">
-          <code>brew tap parttimenerd/hprof-analyzer &amp;&amp; brew trust parttimenerd/hprof-analyzer &amp;&amp; brew install hprof-analyzer</code>
-          <span class="cli-option-desc">macOS / Linux</span>
-        </div>
+
+    <!-- Compact install strip -->
+    <div id="landing-install-strip">
+      <span class="install-strip-label">CLI &amp; AI setup:</span>
+      <code class="install-strip-code">brew install parttimenerd/hprof-analyzer/hprof-analyzer</code>
+      <span class="install-strip-or">or</span>
+      <code class="install-strip-code">cargo install hprof-analyzer</code>
+      <button id="btn-setup-guide" class="setup-guide-btn" title="Full setup guide — Homebrew, Cargo, Claude Code, Cline MCP">Setup guide ↗</button>
+    </div>
+  </div>
+
+  <!-- Setup guide modal -->
+  <div id="setup-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="setup-modal-title">
+    <div id="setup-modal-inner">
+      <div id="setup-modal-header">
+        <h2 id="setup-modal-title">Setup Guide</h2>
+        <button id="btn-close-setup" title="Close">✕</button>
       </div>
-      <p class="cli-box-features">
-        CLI extras: <strong>cached interactive analysis</strong> (<code>heap query</code>, <code>heap browse</code>, <code>heap inspect</code>)
-        · <strong>MCP server</strong> for Claude &amp; Cline (<code>hprof-analyzer mcp</code>
-        or <code>claude mcp add hprof -- hprof-analyzer mcp</code>)
-        · <a href="https://github.com/parttimenerd/hprof-analyzer#readme" target="_blank" rel="noopener">full docs ↗</a>
-      </p>
+      <div id="setup-modal-body">
+
+        <section class="setup-section">
+          <h3>Install the CLI</h3>
+          <div class="setup-tabs">
+            <button class="setup-tab active" data-tab="brew">macOS / Linux (Homebrew)</button>
+            <button class="setup-tab" data-tab="cargo">Any platform (Cargo)</button>
+          </div>
+          <div class="setup-tab-panel" data-panel="brew">
+            <div class="setup-code-block">
+              <code>brew tap parttimenerd/hprof-analyzer</code>
+              <code>brew trust parttimenerd/hprof-analyzer</code>
+              <code>brew install hprof-analyzer</code>
+            </div>
+            <p class="setup-note">Updates: <code>brew upgrade hprof-analyzer</code></p>
+          </div>
+          <div class="setup-tab-panel" data-panel="cargo" style="display:none">
+            <div class="setup-code-block">
+              <code>cargo install hprof-analyzer</code>
+            </div>
+            <p class="setup-note">Requires Rust toolchain. Updates: <code>cargo install hprof-analyzer --force</code></p>
+          </div>
+        </section>
+
+        <section class="setup-section">
+          <h3>Claude Code (MCP server)</h3>
+          <p class="setup-desc">Add hprof-analyzer as an MCP tool so Claude can load and analyze heap dumps directly.</p>
+          <div class="setup-code-block">
+            <code>claude mcp add hprof -- hprof-analyzer mcp</code>
+          </div>
+          <p class="setup-note">Then tell Claude: <em>"Analyze the heap dump at /path/to/dump.hprof"</em></p>
+          <p class="setup-note">Claude will call <code>get_session_info</code>, <code>load_dump</code>, <code>get_summary</code>, and guide you through the investigation with OQL queries.</p>
+        </section>
+
+        <section class="setup-section">
+          <h3>Cline / VS Code (MCP server)</h3>
+          <p class="setup-desc">Add to <code>.vscode/mcp.json</code> in your project, or to the global Cline MCP settings:</p>
+          <div class="setup-code-block setup-code-json">
+<pre>{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+          </div>
+          <p class="setup-note">For a single dump session, pre-load with: <code>"args": ["mcp", "--dump", "/path/to/dump.hprof"]</code></p>
+        </section>
+
+        <section class="setup-section">
+          <h3>Claude Desktop</h3>
+          <p class="setup-desc">Add to <code>~/.config/claude/claude_desktop_config.json</code>:</p>
+          <div class="setup-code-block setup-code-json">
+<pre>{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+          </div>
+        </section>
+
+        <section class="setup-section">
+          <h3>CLI usage (no AI)</h3>
+          <div class="setup-code-block">
+            <code>hprof-analyzer heap summary dump.hprof</code>
+            <code>hprof-analyzer heap histogram dump.hprof --limit 20</code>
+            <code>hprof-analyzer heap query dump.hprof --oql "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"</code>
+            <code>hprof-analyzer heap views   # list 20 built-in named queries</code>
+            <code>hprof-analyzer heap browse dump.hprof   # dominator tree from root</code>
+          </div>
+          <p class="setup-note">First run caches analysis (~1–15 min); subsequent runs load in ~1 s.</p>
+        </section>
+
+        <section class="setup-section">
+          <h3>Web browser (this page)</h3>
+          <p class="setup-desc">Drop any <code>.hprof</code>, <code>.hprof.gz</code>, or <code>.hprof.zip</code> file — up to 3 GB, analyzed entirely in-browser via WebAssembly. No upload, no server required.</p>
+          <p class="setup-note">For dumps above 3 GB, use the CLI or run <code>hprof-analyzer server dump.hprof</code> and connect this page to it.</p>
+        </section>
+
+      </div>
     </div>
   </div>
 
@@ -91,9 +175,7 @@
     <span class="sep">·</span>
     <a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     <span class="sep">·</span>
-    <span>CLI: <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener"><code>cargo install hprof-analyzer</code></a></span>
-    <span class="sep">·</span>
-    <a href="https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration" target="_blank" rel="noopener">MCP for Claude &amp; Cline</a>
+    <a href="#" id="footer-setup-link">Setup &amp; AI integration</a>
     <span class="sep">·</span>
     <button id="btn-theme-toggle" title="Cycle theme: auto / light / dark" class="footer-theme-btn">◐ Theme: Auto</button>
   </div>

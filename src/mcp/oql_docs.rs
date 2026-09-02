@@ -328,98 +328,162 @@ Then: `heap inspect --index <idx>` or `heap browse --index <idx>`
 
 const WORKFLOW: &str = r#"# LLM Workflow Guide
 
-This guide describes the recommended sequence of tools for LLMs analyzing heap dumps.
+Recommended tool call sequence for analyzing heap dumps. Send ONE tool call at a time and
+wait for the response before sending the next.
 
-## Quick start
+## Session start
 
 ```
-1. get_session_info     — check if a dump is already loaded (returns path + stats if yes)
-2. get_oql_docs         — learn the query language (this file; no dump needed)
-3. load_dump            — load a heap dump file (fast if previously cached)
-4. get_summary          — orient: top suspects + top classes
-5. get_histogram        — class-level overview with instance/retained counts
-6. query                — drill in with OQL queries
-7. browse_dominators    — navigate the dominator tree from root or a suspect
-8. inspect_object       — detailed view of a specific object
+Step 1: get_session_info({})
+  → If loaded=true: skip to step 3
+  → If loaded=false: go to step 2
+
+Shortcut at any time: list_views({})
+  → Shows all 20 built-in named queries. No dump needed.
+    Use names DIRECTLY: query({"oql": "leak-suspects"}) — no copy-paste of SQL needed.
+
+Step 2: load_dump({"path": "/absolute/path/to/dump.hprof"})
+  IMPORTANT: this blocks for 5–15 min on first load; ~1 s on repeat (cached). Wait for it.
+
+Step 3: get_summary({})
+  → Returns top suspects + top classes + suggested OQL queries for each suspect.
+    Read the "Suggested OQL Queries" section — it has ready-to-run queries.
+
+Step 4: get_histogram({"limit": 20})
+  → Confirms which classes dominate. Pick the top class and run step 5.
+
+Step 5a: query({"oql": "leak-suspects"})   ← VIEW NAME SHORTCUT (no SQL needed)
+  → Objects retaining >10 MB. Best starting point.
+    All 20 view names are listed in the load_dump response. More: list_views({})
+
+Step 5b: query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
+  → Replace <ClassName> with the top suspect from step 3 or 4.
+    The idx column gives object_index values for steps 6 and 7.
+
+Step 6: browse_dominators({"object_index": <idx_from_step5>})
+  → Tree of what this object retains. Children sorted by retained_bytes desc.
+    Follow the largest child to find the root cause.
+    Each node has an "index" field for drilling deeper.
+
+Step 7: inspect_object({"object_index": <index_from_step6>})
+  → Class name + shallow_bytes + retained_bytes for a specific object.
 ```
 
 ## Tool reference
 
 ### get_session_info({})
-Returns the currently loaded dump path + basic stats, or `{loaded: false}` if nothing is loaded.
-Call this first to check state before calling load_dump.
-
-### get_oql_docs({ topic? })
-Returns OQL documentation. No dump needed — call this first.
-- `topic`: `"syntax"`, `"attributes"`, `"examples"`, `"workflow"`, or `"all"` (default)
+Returns the currently loaded dump path + basic stats, or `{loaded: false}`.
+Always call first. If `loaded=true`, skip `load_dump`.
 
 ### load_dump({ path, with_graph? })
-Loads a heap dump. First call takes 5–15 min; subsequent calls load in ~1 s (cached).
-- `path`: absolute path to the `.hprof` file (also accepts `.hprof.gz`, `.hprof.zip`)
-- `with_graph`: set `true` to enable OQL `@inbounds`/`@outbounds` reference traversal. Adds 1–3 min + 200–600 MB cache. Not needed for most analyses.
+Loads a heap dump. **Blocks until complete** — wait for the response.
+- First load: 5–15 min (writes disk cache)
+- Repeat load of same file: ~1 s
+- `path`: absolute path (accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tgz`)
+- `with_graph`: set `true` only if you need `@inbounds`/`@outbounds` OQL traversal (rare)
 
 ### get_summary({})
-Returns a Markdown summary: top 5 leak suspects + top 5 classes by retained size.
-Good first step after loading. No parameters.
-
-### get_report({ section? })
-Returns a section of the full analysis report as JSON.
-- `section`: `"leaks"`, `"top"`, `"threads"`, `"overview"`, or `"all"` (default)
+Markdown summary: top 5 suspects + top 5 classes by retained size + suggested OQL queries.
+**Read the suggested queries** — they are ready to copy into `query()`.
 
 ### get_histogram({ limit? })
-Returns a class histogram: `[{class, instances, retained_bytes}]`.
-- `limit`: number of classes to return (default 50)
+Class histogram sorted by retained size: `[{class, instances, retained_bytes}]`.
+Good for confirming which class dominates before writing OQL.
+- `limit`: default 50; use 20 for a quick scan
+
+### get_report({ section? })
+Full report section as JSON. Use specific sections — `"all"` is large.
+- `"leaks"` — ranked suspects with root paths and holder chains (start here for leak investigation)
+- `"top"` — biggest classes + objects with 2-level holder breakdown
+- `"threads"` — per-thread retained size and stack traces
+- `"overview"` — heap totals
 
 ### query({ oql })
-Runs an OQL query. Returns `{columns: [...], rows: [[...]], truncated: bool, row_count: N}`.
-- Rows contain plain JSON values: numbers, strings, nulls
-- Object references appear as `"ClassName@index"` — extract the index for inspect_object / browse_dominators
-- Use `@objectId` to get object indices
-- Use `@retainedHeapSize` to find large retained objects
-- Rows are capped to 10,000; `truncated: true` means there are more
+Runs an OQL query. Returns `{columns, rows, truncated, row_count}`.
+
+**Essential rules:**
+- Always `SELECT @objectId AS idx` to get object indices for follow-up calls
+- Objects in results appear as `"ClassName@123"` — the number after `@` is the object_index
+- `@retainedHeapSize` = everything kept alive only by this object (key metric for leaks)
+- `@usedHeapSize` = shallow size (just the object itself, not its children)
+- Rows capped to 10,000; `truncated: true` means there are more
+
+**Copy-paste starter queries:**
+
+```sql
+-- Top 10 instances of a class by retained size (replace the class name)
+SELECT @objectId AS idx, @retainedHeapSize AS ret
+FROM com.example.SuspectClass ORDER BY ret DESC LIMIT 10
+```
+
+```sql
+-- All classes by total retained (find the dominant class)
+SELECT classof(x) AS class, COUNT(*) AS n, SUM(@retainedHeapSize) AS ret
+FROM INSTANCEOF java.lang.Object x
+GROUP BY classof(x) ORDER BY ret DESC LIMIT 20
+```
+
+```sql
+-- Duplicate strings (find string deduplication opportunities)
+SELECT toString(s) AS value, COUNT(*) AS count
+FROM java.lang.String s
+GROUP BY toString(s) ORDER BY count DESC LIMIT 20
+```
+
+```sql
+-- Large collections (potential unbounded caches)
+SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret
+FROM INSTANCEOF java.util.AbstractCollection x
+WHERE @retainedHeapSize > 1000000 ORDER BY ret DESC LIMIT 20
+```
 
 ### browse_dominators({ object_index?, depth?, width? })
 Navigates the dominator tree.
-- `object_index`: omit to start at the GC root (recommended starting point)
-- `depth`: levels to expand (default 3, max 8)
-- `width`: children per node (default 10, max 50)
-- Returns a tree of `{class, index, retained_bytes, children: [...]}`
-- Use `index` values with `inspect_object` or nested `browse_dominators` calls
+- Omit `object_index` to start at GC root (recommended)
+- Each node: `{index, class, retained_bytes, shallow_bytes, children: [...]}`
+- Children sorted by `retained_bytes` desc — the largest child is the next thing to investigate
+- `index` values → use with `browse_dominators` (drill deeper) or `inspect_object` (details)
+- `depth`: default 3 (levels); increase to 5-6 for a deeper view
+- `width`: default 10 (children per node); increase for wide trees
 
 ### inspect_object({ object_index })
-Returns details for one object: class, shallow size, retained size.
-- `object_index`: from `@objectId` column in a query or from `browse_dominators`
-- Use OQL with `@inbounds`/`@outbounds` to follow references; `inspect_object` shows sizes and class only.
+Details for one object: class, shallow_bytes, retained_bytes.
+- `object_index`: from `@objectId` in a query or `index` in browse_dominators output
+- After inspect, use `browse_dominators({object_index: <same>})` to see what it retains
 
-## Typical investigation workflow
+## Complete worked example: "Find the memory leak"
 
-### "Find the memory leak"
 ```
-1. get_summary()          → see top suspects
-2. get_histogram(50)      → confirm which class dominates
-3. query("SELECT @objectId, @retainedHeapSize FROM com.example.Suspect ORDER BY @retainedHeapSize DESC LIMIT 5")
-4. browse_dominators(index=<from step 3>)  → see what's holding it
-5. inspect_object(index=<from step 4>)    → field-level detail
-```
+1. get_session_info({})
+   → {loaded: false}
 
-### "Understand memory composition"
-```
-1. get_histogram(20)
-2. query("SELECT classof(x) AS class, SUM(@retainedHeapSize) AS ret FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY ret DESC LIMIT 10")
-3. browse_dominators()    → top retained from root
-```
+2. load_dump({"path": "/tmp/app.hprof"})
+   → Loaded. Suspects: com.example.CacheManager
 
-### "String waste"
-```
-1. query("SELECT toString(s) AS v, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) ORDER BY n DESC LIMIT 20")
-2. query("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.lang.String")
+3. get_summary({})
+   → #1 suspect: CacheManager (850 MB retained)
+     Suggested query: SELECT @objectId AS idx, @retainedHeapSize AS ret FROM com.example.CacheManager ORDER BY ret DESC LIMIT 10
+
+4. query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM com.example.CacheManager ORDER BY ret DESC LIMIT 10"})
+   → rows: [[12345, 850000000], ...]
+   (object_index 12345 retains 850 MB)
+
+5. browse_dominators({"object_index": 12345})
+   → {index:12345, class:"CacheManager", retained_bytes:850000000,
+      children: [{index:67890, class:"java.util.HashMap", retained_bytes:849000000, children:[...]}]}
+
+6. browse_dominators({"object_index": 67890, "depth": 5})
+   → Drill into the HashMap — see what entries it holds
+
+7. inspect_object({"object_index": 67890})
+   → {class:"java.util.HashMap", shallow_bytes:48, retained_bytes:849000000}
 ```
 
 ## Tips
 
-- Object indices (`@objectId`) are dense integers stable within one run but not across runs.
-- `@objectAddress` is the raw heap address — useful for cross-referencing with other tools.
-- After `load_dump`, the dump stays loaded in memory for the entire server session.
-- Reload a different dump by calling `load_dump` again with the new path.
-- Cache files are stored next to the dump as `<name>.hprof-cache/`. Delete them to force re-analysis.
+- `@objectId` indices are dense integers, stable within one session but NOT across sessions/reloads.
+- `@objectAddress` is the raw heap address — for cross-referencing with other JVM tools.
+- Cache files live next to the dump as `<dump>.hprof-cache/`. Safe to delete to force re-analysis.
+- To analyze a different dump: call `load_dump` again with the new path (replaces current session).
+- `get_oql_docs({"topic":"examples"})` has 20 more ready-to-run query patterns.
 "#;

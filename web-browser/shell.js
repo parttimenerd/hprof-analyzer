@@ -102,6 +102,52 @@ const LAST_FILE_KEY = 'hprof-analyzer.last-file';
   }
 })();
 
+// ── Setup modal wiring ────────────────────────────────────────────────────────
+function _openSetupModal() {
+  const modal = document.getElementById('setup-modal');
+  if (modal) modal.style.display = 'flex';
+}
+function _closeSetupModal() {
+  const modal = document.getElementById('setup-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+(function initSetupModal() {
+  const open = () => _openSetupModal();
+  const close = () => _closeSetupModal();
+
+  // Wire buttons once DOM is ready
+  function wire() {
+    const btnOpen = document.getElementById('btn-setup-guide');
+    const btnClose = document.getElementById('btn-close-setup');
+    const footerLink = document.getElementById('footer-setup-link');
+    const modal = document.getElementById('setup-modal');
+    if (btnOpen) btnOpen.addEventListener('click', open);
+    if (btnClose) btnClose.addEventListener('click', close);
+    if (footerLink) footerLink.addEventListener('click', e => { e.preventDefault(); open(); });
+    if (modal) modal.addEventListener('click', e => { if (e.target === modal) close(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+    // Tab switching inside setup modal
+    document.querySelectorAll('.setup-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const panel = tab.dataset.tab;
+        tab.closest('.setup-tabs').querySelectorAll('.setup-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        tab.closest('section').querySelectorAll('.setup-tab-panel').forEach(p => {
+          p.style.display = p.dataset.panel === panel ? '' : 'none';
+        });
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
+})();
+
 // Display settings (persisted to localStorage)
 const defaultSettings = { rowLimit: 200, bytesRaw: false, nullStr: 'null', color: true };
 let settings = Object.assign({}, defaultSettings,

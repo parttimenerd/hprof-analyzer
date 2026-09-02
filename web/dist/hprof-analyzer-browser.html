@@ -952,10 +952,170 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
 .dashboard-card-btn:hover { background: var(--bg3); color: var(--fg); }
 .dashboard-viz { padding: 10px; min-height: 180px; overflow: hidden; }
 
+
+/* ── Install strip (replaces old cli-box) ────────────────────────────────── */
+#landing-install-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: .8rem;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+}
+.install-strip-label { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.install-strip-code {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: .76rem;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.install-strip-or { color: var(--muted); font-size: .74rem; }
+.setup-guide-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: .78rem;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.setup-guide-btn:hover { background: var(--bg3); }
+
+/* ── Setup modal ─────────────────────────────────────────────────────────── */
+#setup-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+#setup-modal-inner {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 40px rgba(0,0,0,.18);
+  overflow: hidden;
+}
+#setup-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#setup-modal-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--fg);
+}
+#btn-close-setup {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: .9rem;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1.6;
+}
+#btn-close-setup:hover { background: var(--bg2); color: var(--fg); }
+#setup-modal-body {
+  overflow-y: auto;
+  padding: 0 20px 20px;
+  flex: 1;
+}
+.setup-section {
+  padding: 16px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.setup-section:last-child { border-bottom: none; }
+.setup-section h3 { margin: 0 0 8px; font-size: .95rem; color: var(--fg); }
+.setup-desc { margin: 0 0 8px; font-size: .82rem; color: var(--muted); }
+.setup-note { margin: 6px 0 0; font-size: .78rem; color: var(--muted); }
+.setup-note em { color: var(--fg); font-style: italic; }
+.setup-note code {
+  background: var(--bg3);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: .74rem;
+  color: var(--fg);
+}
+.setup-code-block {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.setup-code-block code {
+  font-size: .78rem;
+  color: var(--fg);
+  word-break: break-all;
+  display: block;
+}
+.setup-code-block pre {
+  margin: 0;
+  font-size: .78rem;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+}
+.setup-code-json { font-family: monospace; }
+
+/* Setup tabs */
+.setup-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.setup-tab {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: .78rem;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.setup-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.setup-tab:hover:not(.active) { background: var(--bg3); color: var(--fg); }
+
+/* Keep old cli-box classes in case anything references them */
+.cli-box-features { font-size: .78rem; color: var(--muted); margin: 0; line-height: 1.5; }
+.cli-box-features code { background: var(--bg3); border-radius: 3px; padding: 1px 5px; font-size: .75rem; color: var(--fg); }
+.cli-box-features a { color: var(--accent); text-decoration: none; }
+.cli-box-features a:hover { opacity: 0.8; }
 </style>
 </head>
 <body>
 
+<!-- ── Upload screen ─────────────────────────────────────────────────────── -->
 <!-- ── Upload screen ─────────────────────────────────────────────────────── -->
 <div id="upload-screen">
   <div id="landing-hero">
@@ -974,15 +1134,122 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
       <li><span class="feat-icon">💬</span> SQL-like OQL query shell with tab-completion</li>
       <li><span class="feat-icon">🔒</span> Fully private — no upload, no server, no telemetry</li>
     </ul>
+
+    <!-- Compact install strip -->
+    <div id="landing-install-strip">
+      <span class="install-strip-label">CLI &amp; AI setup:</span>
+      <code class="install-strip-code">brew install parttimenerd/hprof-analyzer/hprof-analyzer</code>
+      <span class="install-strip-or">or</span>
+      <code class="install-strip-code">cargo install hprof-analyzer</code>
+      <button id="btn-setup-guide" class="setup-guide-btn" title="Full setup guide — Homebrew, Cargo, Claude Code, Cline MCP">Setup guide ↗</button>
+    </div>
+  </div>
+
+  <!-- Setup guide modal -->
+  <div id="setup-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="setup-modal-title">
+    <div id="setup-modal-inner">
+      <div id="setup-modal-header">
+        <h2 id="setup-modal-title">Setup Guide</h2>
+        <button id="btn-close-setup" title="Close">✕</button>
+      </div>
+      <div id="setup-modal-body">
+
+        <section class="setup-section">
+          <h3>Install the CLI</h3>
+          <div class="setup-tabs">
+            <button class="setup-tab active" data-tab="brew">macOS / Linux (Homebrew)</button>
+            <button class="setup-tab" data-tab="cargo">Any platform (Cargo)</button>
+          </div>
+          <div class="setup-tab-panel" data-panel="brew">
+            <div class="setup-code-block">
+              <code>brew tap parttimenerd/hprof-analyzer</code>
+              <code>brew trust parttimenerd/hprof-analyzer</code>
+              <code>brew install hprof-analyzer</code>
+            </div>
+            <p class="setup-note">Updates: <code>brew upgrade hprof-analyzer</code></p>
+          </div>
+          <div class="setup-tab-panel" data-panel="cargo" style="display:none">
+            <div class="setup-code-block">
+              <code>cargo install hprof-analyzer</code>
+            </div>
+            <p class="setup-note">Requires Rust toolchain. Updates: <code>cargo install hprof-analyzer --force</code></p>
+          </div>
+        </section>
+
+        <section class="setup-section">
+          <h3>Claude Code (MCP server)</h3>
+          <p class="setup-desc">Add hprof-analyzer as an MCP tool so Claude can load and analyze heap dumps directly.</p>
+          <div class="setup-code-block">
+            <code>claude mcp add hprof -- hprof-analyzer mcp</code>
+          </div>
+          <p class="setup-note">Then tell Claude: <em>"Analyze the heap dump at /path/to/dump.hprof"</em></p>
+          <p class="setup-note">Claude will call <code>get_session_info</code>, <code>load_dump</code>, <code>get_summary</code>, and guide you through the investigation with OQL queries.</p>
+        </section>
+
+        <section class="setup-section">
+          <h3>Cline / VS Code (MCP server)</h3>
+          <p class="setup-desc">Add to <code>.vscode/mcp.json</code> in your project, or to the global Cline MCP settings:</p>
+          <div class="setup-code-block setup-code-json">
+<pre>{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+          </div>
+          <p class="setup-note">For a single dump session, pre-load with: <code>"args": ["mcp", "--dump", "/path/to/dump.hprof"]</code></p>
+        </section>
+
+        <section class="setup-section">
+          <h3>Claude Desktop</h3>
+          <p class="setup-desc">Add to <code>~/.config/claude/claude_desktop_config.json</code>:</p>
+          <div class="setup-code-block setup-code-json">
+<pre>{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+          </div>
+        </section>
+
+        <section class="setup-section">
+          <h3>CLI usage (no AI)</h3>
+          <div class="setup-code-block">
+            <code>hprof-analyzer heap summary dump.hprof</code>
+            <code>hprof-analyzer heap histogram dump.hprof --limit 20</code>
+            <code>hprof-analyzer heap query dump.hprof --oql "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"</code>
+            <code>hprof-analyzer heap views   # list 20 built-in named queries</code>
+            <code>hprof-analyzer heap browse dump.hprof   # dominator tree from root</code>
+          </div>
+          <p class="setup-note">First run caches analysis (~1–15 min); subsequent runs load in ~1 s.</p>
+        </section>
+
+        <section class="setup-section">
+          <h3>Web browser (this page)</h3>
+          <p class="setup-desc">Drop any <code>.hprof</code>, <code>.hprof.gz</code>, or <code>.hprof.zip</code> file — up to 3 GB, analyzed entirely in-browser via WebAssembly. No upload, no server required.</p>
+          <p class="setup-note">For dumps above 3 GB, use the CLI or run <code>hprof-analyzer server dump.hprof</code> and connect this page to it.</p>
+        </section>
+
+      </div>
+    </div>
   </div>
 
   <div id="drop-zone">
-    <input type="file" id="file-input" accept=".hprof">
+    <input type="file" id="file-input" accept=".hprof,.hprof.gz,.hprof.zip,.gz,.zip">
     <label for="file-input">
       <div id="drop-zone-icon">📂</div>
       <div id="drop-zone-text">Drop a <strong>.hprof</strong> file here, or click to select</div>
-      <div id="drop-zone-hint">Supports up to <strong>3 GB</strong> · gzip-compressed dumps accepted</div>
+      <div id="drop-zone-hint">gzip and zip archives accepted · for files above 3 GB consider using the <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener">CLI version</a> that supports the same features</div>
     </label>
+  </div>
+  <div id="last-file-section" style="display:none">
+    <p class="sample-label">— or re-open last file —</p>
+    <div id="last-file-item"></div>
   </div>
 
   <div id="mode-buttons" style="display:none">
@@ -990,11 +1257,6 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
       <span class="mode-icon">📊</span>
       <span class="mode-title">Analysis</span>
       <span class="mode-desc">Histogram, leak suspects, dominator tree, GC roots, and retained sizes</span>
-    </button>
-    <button id="btn-fast-analysis" style="opacity:0.85">
-      <span class="mode-icon">⚡</span>
-      <span class="mode-title">Fast Analysis</span>
-      <span class="mode-desc">Histogram and OQL — skips dominator tree and retained sizes. Use for large dumps that run out of memory.</span>
     </button>
     <button id="btn-full-analysis">
       <span class="mode-icon">🔬</span>
@@ -1018,7 +1280,7 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
     <span class="sep">·</span>
     <a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     <span class="sep">·</span>
-    <span>CLI: <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener"><code>cargo install hprof-analyzer</code></a></span>
+    <a href="#" id="footer-setup-link">Setup &amp; AI integration</a>
     <span class="sep">·</span>
     <button id="btn-theme-toggle" title="Cycle theme: auto / light / dark" class="footer-theme-btn">◐ Theme: Auto</button>
   </div>
@@ -2290,6 +2552,50 @@ if (document.readyState === 'loading') {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+// ── Setup modal wiring ────────────────────────────────────────────────────────
+function _openSetupModal() {
+  const modal = document.getElementById('setup-modal');
+  if (modal) modal.style.display = 'flex';
+}
+function _closeSetupModal() {
+  const modal = document.getElementById('setup-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+(function initSetupModal() {
+  const open = () => _openSetupModal();
+  const close = () => _closeSetupModal();
+
+  function wire() {
+    const btnOpen = document.getElementById('btn-setup-guide');
+    const btnClose = document.getElementById('btn-close-setup');
+    const footerLink = document.getElementById('footer-setup-link');
+    const modal = document.getElementById('setup-modal');
+    if (btnOpen) btnOpen.addEventListener('click', open);
+    if (btnClose) btnClose.addEventListener('click', close);
+    if (footerLink) footerLink.addEventListener('click', e => { e.preventDefault(); open(); });
+    if (modal) modal.addEventListener('click', e => { if (e.target === modal) close(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+    document.querySelectorAll('.setup-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const panel = tab.dataset.tab;
+        tab.closest('.setup-tabs').querySelectorAll('.setup-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        tab.closest('section').querySelectorAll('.setup-tab-panel').forEach(p => {
+          p.style.display = p.dataset.panel === panel ? '' : 'none';
+        });
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
+})();
 const PROMPT = 'oql> ';
 const HISTORY_KEY = 'hprof-analyzer.oql-history';
 const SETTINGS_KEY = 'hprof-analyzer.settings';

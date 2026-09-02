@@ -500,6 +500,12 @@ enum HeapCmd {
         #[arg(long, value_name = "TOPIC")]
         topic: Option<String>,
     },
+    /// List the 20 built-in named query views (ready-to-run OQL, no dump needed).
+    Views {
+        /// Emit JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Pre-populate the disk cache without printing any output.
     Load {
         /// Path to the .hprof dump.
@@ -1258,6 +1264,41 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
         }
         HeapCmd::Docs { topic } => {
             println!("{}", oql_docs::get_oql_docs(topic.as_deref()));
+        }
+        HeapCmd::Views { json } => {
+            if json {
+                let rows: Vec<serde_json::Value> = named_queries::NAMED_QUERIES
+                    .iter()
+                    .map(|nq| {
+                        serde_json::json!({
+                            "name": nq.name,
+                            "display": nq.display,
+                            "group": nq.group,
+                            "needs_retained": nq.needs_retained,
+                            "oql": nq.oql,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&rows).unwrap());
+            } else {
+                let mut current_group = "";
+                for nq in named_queries::NAMED_QUERIES {
+                    if nq.group != current_group {
+                        if !current_group.is_empty() {
+                            println!();
+                        }
+                        println!("── {} ────────────────────────", nq.group);
+                        current_group = nq.group;
+                    }
+                    let marker = if nq.needs_retained {
+                        " [needs retained]"
+                    } else {
+                        ""
+                    };
+                    println!("  {}{}", nq.display, marker);
+                    println!("    hprof-analyzer heap query <dump> --oql \"{}\"", nq.oql);
+                }
+            }
         }
         HeapCmd::Load { dump, with_graph } => {
             let mode = if with_graph {
