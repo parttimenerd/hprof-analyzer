@@ -80,7 +80,7 @@ pub struct QueryParams {
     ///   "classes-per-loader"      — class count per loader
     ///   "top-retained-by-class"   — top 30 classes by RETAINED size (*)
     ///   "largest-retained-objects"— 20 objects with most retained bytes (*)
-    ///   "leak-suspects"           — objects retaining > 10 MB (*)
+    ///   "leak-suspects"           — objects retaining > 10 MB (large heaps; for small heaps use get_report({section:"leaks"}) instead)
     ///   "retained-threads"        — threads by retained size (*)
     ///   "retained-summary"        — shallow vs retained by class (*)
     ///   "object-count-total"      — total object count
@@ -184,34 +184,64 @@ impl HprofMcpServer {
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let suspect_names: Vec<&str> = result
+        let suspects_text: String = if result.report.leaks.suspects.is_empty() {
+            "  (none detected)\n".to_string()
+        } else {
+            result
+                .report
+                .leaks
+                .suspects
+                .iter()
+                .take(5)
+                .enumerate()
+                .map(|(i, s)| {
+                    format!(
+                        "  {}. {} — retained {} MB\n",
+                        i + 1,
+                        s.pretty_class,
+                        s.retained / 1_000_000
+                    )
+                })
+                .collect()
+        };
+
+        let top_classes_text: String = result
             .report
-            .leaks
-            .suspects
+            .top
+            .biggest_classes
             .iter()
-            .take(3)
-            .map(|s| s.pretty_class.as_str())
+            .take(5)
+            .enumerate()
+            .map(|(i, row)| {
+                format!(
+                    "  {}. {} — {} instances, {} MB retained\n",
+                    i + 1,
+                    row.pretty_class,
+                    row.instances,
+                    row.retained / 1_000_000
+                )
+            })
             .collect();
 
         let summary = format!(
             "Loaded: {path}\n\
-             Total heap: {heap} MB  |  Objects: {objs}  |  Leak suspects: {suspects}\n\
-             Top suspects: {top}\n\n\
-             NEXT STEPS (one at a time, wait for each response):\n\
-             1. get_summary()               — top suspects with suggested OQL\n\
-             2. query({{\"oql\":\"leak-suspects\"}})       — objects retaining >10 MB RIGHT NOW\n\
-             3. query({{\"oql\":\"top-retained-by-class\"}}) — which class retains most memory\n\
-             4. query({{\"oql\":\"<view-name-or-OQL>\"}})  — any view below or custom OQL\
+             Total heap: {heap} MB  |  Objects: {objs}\n\n\
+             ## Leak Suspects ({n_suspects} detected — from dominator-tree analysis)\n\
+             {suspects}\n\
+             ## Top Classes by Retained Size\n\
+             {classes}\n\
+             NEXT STEPS — To answer \"find the leak\" or \"why OOM\":\n\
+             1. get_summary()                           — full suspect list + suggested OQL\n\
+             2. get_report({{\"section\":\"leaks\"}})           — root paths, holder chains, stack traces\n\
+             3. query({{\"oql\":\"top-retained-by-class\"}})    — which class retains most memory\n\
+             4. query({{\"oql\":\"<view-name>\"}})              — any view below (no SQL needed)\
              {views}",
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = result.report.overview.total_objects,
-            suspects = result.report.leaks.suspects.len(),
-            top = if suspect_names.is_empty() {
-                "none".to_string()
-            } else {
-                suspect_names.join(", ")
-            },
+            n_suspects = result.report.leaks.suspects.len(),
+            suspects = suspects_text,
+            classes = top_classes_text,
             views = views_reference_table(),
         );
         *session_ref.lock().await = Some(result);
@@ -275,10 +305,13 @@ impl HprofMcpServer {
 
     /// Return a section of the full analysis report as JSON.
     #[tool(description = "Return a report section as JSON. \
-                          Sections: \"leaks\" (suspects with root paths), \"top\" (biggest classes/objects), \
+                          BEST TOOL FOR 'find the leak' or 'why OOM' — use get_report({section:\"leaks\"}) first. \
+                          Sections: \"leaks\" (suspects with root paths + holder chains — always reliable), \
+                          \"top\" (biggest classes/objects + what's holding them), \
                           \"threads\" (per-thread retained + stacks), \"overview\" (totals), \"all\" (everything, large). \
-                          Use \"leaks\" first to see ranked suspects with their holder chains. \
-                          Use \"top\" to see class-level holder breakdowns showing what's keeping objects alive.")]
+                          Unlike the leak-suspects OQL view (which has a >10 MB threshold), this works for all heap sizes. \
+                          In leaks JSON: single suspects have 'root_path' + 'holders'; group suspects have 'merged_paths'. \
+                          Both tell you the GC root path — the chain of references keeping the object alive.")]
     async fn get_report(
         &self,
         Parameters(p): Parameters<GetReportParams>,
@@ -690,22 +723,30 @@ impl ServerHandler for HprofMcpServer {
         )
         .with_server_info(Implementation::from_build_env())
         .with_instructions(
-            "Java heap dump analyzer. Use these tools to investigate memory leaks and high heap usage in JVM applications.\n\n\
+            "Java heap dump analyzer. Use these tools to investigate OutOfMemoryErrors and memory leaks in JVM applications.\n\n\
              IMPORTANT RULES:\n\
              - Send ONE tool call at a time and wait for the response before sending the next.\n\
              - load_dump BLOCKS for 5–15 min on first load (subsequent loads ~1 s from cache). Wait for it.\n\
              - object_index values are dense integers — get them from @objectId in query results or 'index' in browse_dominators.\n\n\
-             RECOMMENDED WORKFLOW:\n\
+             ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
+             1. load_dump({path})            — load the file; the response already shows top suspects + top classes\n\
+             2. get_summary()                — more detail on suspects; includes ready-to-run OQL queries\n\
+             3. get_report({\"section\":\"leaks\"}) — root paths, holder chains, stack traces for each suspect\n\
+             4. query({\"oql\":\"top-retained-by-class\"}) — confirm which class dominates memory\n\
+             5. browse_dominators({})        — dominator tree from GC root; follow largest child\n\n\
+             GENERAL WORKFLOW:\n\
              1. get_session_info()  — check if a dump is already loaded (skip load_dump if loaded=true)\n\
-             2. load_dump({path})   — load the .hprof file; wait for completion\n\
+             2. load_dump({path})   — load the .hprof file; response includes immediate suspects\n\
              3. get_summary()       — read top suspects + suggested OQL queries\n\
              4. get_histogram({limit:20})  — class breakdown by retained size\n\
-             5. query({oql:\"SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <SuspectClass> ORDER BY ret DESC LIMIT 10\"})\n\
+             5. query({oql:\"top-retained-by-class\"}) or any view name — drill into top classes\n\
              6. browse_dominators({object_index: <idx>})  — see what the suspect retains\n\
              7. inspect_object({object_index: <idx>})    — class and size for a specific object\n\
              8. get_oql_docs({topic:\"examples\"})        — more query patterns for deeper investigation\n\n\
              SHORTCUT: All 20 view names are usable directly in query() — e.g. query({oql:\"leak-suspects\"}).\n\
                Call list_views() to see all names + groups. View names are also listed in load_dump response.\n\n\
+             NOTE on leak-suspects view: uses a >10 MB threshold — returns empty for small/medium heaps.\n\
+             Always use get_report({section:\"leaks\"}) for reliable suspect detection regardless of heap size.\n\n\
              QUERY TIPS:\n\
              - Always SELECT @objectId to get indices for follow-up calls\n\
              - Objects in results appear as 'ClassName@index' — the number after '@' is the object_index\n\
@@ -927,6 +968,9 @@ fn views_reference_table() -> String {
     }
     out.push_str("\n★ = uses @retainedHeapSize (always available after load_dump)\n");
     out.push_str("Usage: query({\"oql\": \"<view-name>\"})  — no SQL needed\n");
+    out.push_str(
+        "For reliable leak detection (all heap sizes): get_report({\"section\":\"leaks\"})\n",
+    );
     out
 }
 

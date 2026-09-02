@@ -331,7 +331,33 @@ const WORKFLOW: &str = r#"# LLM Workflow Guide
 Recommended tool call sequence for analyzing heap dumps. Send ONE tool call at a time and
 wait for the response before sending the next.
 
-## Session start
+## Answering "find the leak" or "why is there an OOM"
+
+```
+Step 1: load_dump({"path": "/absolute/path/to/dump.hprof"})
+  → Response immediately shows: top suspects + top classes by retained size
+  → WAIT for this to complete (5–15 min first time, ~1 s cached)
+
+Step 2: get_report({"section": "leaks"})
+  → Root paths, holder chains, stack traces for EVERY suspect
+  → This is the most reliable leak detection — uses dominator-tree analysis
+
+Step 3: get_report({"section": "top"})
+  → Biggest classes by retained size + what holds them (2-level breakdown)
+  → Confirms which class is retaining the most memory
+
+Step 4 (if you want to drill into a specific class):
+  query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
+  → The idx values can be passed to browse_dominators or inspect_object
+
+Step 5: browse_dominators({"object_index": <idx>})
+  → Shows what this object keeps alive; follow largest child to root cause
+```
+
+NOTE: The "leak-suspects" view (query({oql:"leak-suspects"})) uses a >10 MB threshold —
+returns empty for small/medium heaps. Always use get_report({section:"leaks"}) instead.
+
+## General workflow
 
 ```
 Step 1: get_session_info({})
@@ -340,10 +366,11 @@ Step 1: get_session_info({})
 
 Shortcut at any time: list_views({})
   → Shows all 20 built-in named queries. No dump needed.
-    Use names DIRECTLY: query({"oql": "leak-suspects"}) — no copy-paste of SQL needed.
+    Use names DIRECTLY: query({"oql": "top-retained-by-class"}) — no copy-paste of SQL needed.
 
 Step 2: load_dump({"path": "/absolute/path/to/dump.hprof"})
   IMPORTANT: this blocks for 5–15 min on first load; ~1 s on repeat (cached). Wait for it.
+  The response already shows top suspects and top classes — read it before calling get_summary.
 
 Step 3: get_summary({})
   → Returns top suspects + top classes + suggested OQL queries for each suspect.
@@ -352,11 +379,11 @@ Step 3: get_summary({})
 Step 4: get_histogram({"limit": 20})
   → Confirms which classes dominate. Pick the top class and run step 5.
 
-Step 5a: query({"oql": "leak-suspects"})   ← VIEW NAME SHORTCUT (no SQL needed)
-  → Objects retaining >10 MB. Best starting point.
-    All 20 view names are listed in the load_dump response. More: list_views({})
+Step 5: query({"oql": "top-retained-by-class"})  ← VIEW NAME (no SQL needed)
+  → Top classes by retained size. All 20 view names: list_views({})
 
-Step 5b: query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
+  Or custom OQL:
+  query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
   → Replace <ClassName> with the top suspect from step 3 or 4.
     The idx column gives object_index values for steps 6 and 7.
 
@@ -392,11 +419,26 @@ Good for confirming which class dominates before writing OQL.
 - `limit`: default 50; use 20 for a quick scan
 
 ### get_report({ section? })
-Full report section as JSON. Use specific sections — `"all"` is large.
-- `"leaks"` — ranked suspects with root paths and holder chains (start here for leak investigation)
+Full report section as JSON. **Best tool for leak investigation** — use before query().
+- `"leaks"` — ranked suspects with root paths, holder chains, stack traces ← START HERE for OOM/leak
 - `"top"` — biggest classes + objects with 2-level holder breakdown
 - `"threads"` — per-thread retained size and stack traces
 - `"overview"` — heap totals
+
+**leaks JSON structure** (each suspect):
+```json
+{
+  "pretty_class": "com.example.MyClass",
+  "retained": 123456789,         // bytes retained by all instances
+  "is_single": true,             // true=one object, false=class group
+  "root_path": [...],            // single suspect: path from GC root
+  "holders": [...],              // single suspect: what classes hold this
+  "merged_paths": [...],         // group suspect: top N root paths
+  "root_type_label": "Thread"    // what kind of GC root holds it
+}
+```
+Look at `retained` (highest = biggest leak), `pretty_class`, and `root_path`/`merged_paths`
+to understand what's holding the leaking objects alive.
 
 ### query({ oql })
 Runs an OQL query. Returns `{columns, rows, truncated, row_count}`.
