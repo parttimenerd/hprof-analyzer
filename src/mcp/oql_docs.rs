@@ -36,10 +36,15 @@ SELECT <columns> FROM <class> [alias] [WHERE <cond>]
 | Pattern | Matches |
 |---------|---------|
 | `java.lang.String` | Exact class name |
-| `java.lang.String*` | Glob (prefix match) |
+| `java.lang.String*` | Glob (prefix match — does NOT match inner classes like `String$Entry`) |
 | `INSTANCEOF java.lang.Object` | Class + all subclasses (Java instanceof) |
 | `byte[]`, `int[]`, `char[]` | Primitive arrays |
 | `java.lang.Object[]` | Object arrays |
+
+**⚠️ Inner classes** use `$` separator: `java.util.HashMap$Node`, `java.util.zip.ZipFile$Source`.
+Glob `HashMap*` does NOT match `HashMap$Node` — inner classes must be named exactly or with `INSTANCEOF`.
+
+**⚠️ Reserved alias conflict**: Do not use `retained` or `RETAINED` as a column alias — it conflicts with the `AS RETAINED SET` keyword. Use `retained_bytes`, `ret`, or `ret_b` instead.
 
 ## WHERE clause
 
