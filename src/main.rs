@@ -1311,7 +1311,24 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
         }
         HeapCmd::CacheList { path } => {
             let search_path = path.as_deref().unwrap_or(".");
-            list_caches(search_path);
+            let p = std::path::Path::new(search_path);
+            if p.is_file() {
+                // Specific dump file — show its cache
+                let cache = hprof_analyzer::cache::CacheDir::for_dump(p)?;
+                let cache_path = &cache.path;
+                if cache_path.exists() {
+                    let size = dir_size_recursive(cache_path);
+                    println!(
+                        "{}: {:.1} MB",
+                        cache_path.display(),
+                        size as f64 / 1_000_000.0
+                    );
+                } else {
+                    println!("No cache for: {search_path}");
+                }
+            } else {
+                list_caches(search_path);
+            }
         }
         HeapCmd::CacheClear { dump } => {
             let cache = hprof_analyzer::cache::CacheDir::for_dump(std::path::Path::new(&dump))?;
