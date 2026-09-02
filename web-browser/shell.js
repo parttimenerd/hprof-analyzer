@@ -102,6 +102,97 @@ const LAST_FILE_KEY = 'hprof-analyzer.last-file';
   }
 })();
 
+// ── Shell syntax highlighter (for setup-code-block) ─────────────────────────
+// Returns an HTML string with span-wrapped tokens. Safe for innerHTML.
+// Handles: command names, subcommands, --flags, "strings", # comments, /paths.
+const _SHELL_CMDS = new Set(['brew','cargo','hprof-analyzer','claude','rustup','curl','sudo','mv','python3']);
+function _shellHighlight(line) {
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const span = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+  let result = '';
+  let i = 0;
+  let wordIdx = 0; // 0=command, 1=first-arg (subcommand), 2+=rest
+
+  while (i < line.length) {
+    // # comment — rest of line
+    if (line[i] === '#') {
+      result += span('sh-cmt', line.slice(i));
+      break;
+    }
+    // quoted string
+    if (line[i] === '"' || line[i] === "'") {
+      const q = line[i]; let j = i + 1;
+      while (j < line.length && line[j] !== q) { if (line[j] === '\\') j++; j++; }
+      result += span('sh-str', line.slice(i, j + 1));
+      i = j + 1; continue;
+    }
+    // whitespace — pass through, reset subcommand tracking only between top-level words
+    if (line[i] === ' ' || line[i] === '\t') {
+      result += esc(line[i++]); continue;
+    }
+    // --flag or -f
+    if (line[i] === '-' && (line[i+1] === '-' || /[a-zA-Z]/.test(line[i+1] || ''))) {
+      let j = i;
+      while (j < line.length && line[j] !== ' ' && line[j] !== '\t') j++;
+      result += span('sh-flag', line.slice(i, j));
+      i = j; continue;
+    }
+    // /path
+    if (line[i] === '/') {
+      let j = i;
+      while (j < line.length && line[j] !== ' ' && line[j] !== '\t') j++;
+      result += span('sh-path', line.slice(i, j));
+      i = j; continue;
+    }
+    // word
+    if (/\S/.test(line[i])) {
+      let j = i;
+      while (j < line.length && line[j] !== ' ' && line[j] !== '\t' && line[j] !== '#') j++;
+      const word = line.slice(i, j);
+      if (wordIdx === 0 && _SHELL_CMDS.has(word)) {
+        result += span('sh-cmd', word);
+      } else if (wordIdx === 1 && /^[a-z][a-z-]*$/.test(word) && !word.startsWith('-')) {
+        result += span('sh-sub', word);
+      } else {
+        result += esc(word);
+      }
+      wordIdx++;
+      i = j; continue;
+    }
+    result += esc(line[i++]);
+  }
+  return result;
+}
+
+// Apply shell highlighting to all .setup-code-block code elements.
+// Apply JSON highlighting to all .setup-code-json pre elements.
+function _jsonHighlight(text) {
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return text.replace(
+    /("(?:[^"\\]|\\.)*")\s*(:)|("(?:[^"\\]|\\.)*")|(\btrue\b|\bfalse\b|\bnull\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (_, key, colon, str, kw, num) => {
+      if (key && colon) return `<span class="json-key">${esc(key)}</span>${esc(colon)}`;
+      if (str)          return `<span class="json-str">${esc(str)}</span>`;
+      if (kw)           return `<span class="json-kw">${esc(kw)}</span>`;
+      if (num)          return `<span class="json-num">${esc(num)}</span>`;
+      return esc(_);
+    }
+  );
+}
+
+function _applySetupHighlighting() {
+  document.querySelectorAll('.setup-code-block code').forEach(el => {
+    if (el.dataset.highlighted) return;
+    el.dataset.highlighted = '1';
+    el.innerHTML = _shellHighlight(el.textContent);
+  });
+  document.querySelectorAll('.setup-code-json pre').forEach(el => {
+    if (el.dataset.highlighted) return;
+    el.dataset.highlighted = '1';
+    el.innerHTML = _jsonHighlight(el.textContent);
+  });
+}
+
 // ── Setup modal wiring ────────────────────────────────────────────────────────
 function _openSetupModal() {
   const modal = document.getElementById('setup-modal');
@@ -137,6 +228,44 @@ function _closeSetupModal() {
         tab.closest('section').querySelectorAll('.setup-tab-panel').forEach(p => {
           p.style.display = p.dataset.panel === panel ? '' : 'none';
         });
+      });
+    });
+
+    // Apply syntax highlighting to shell code blocks
+    _applySetupHighlighting();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
+})();
+
+// ── Install panel wiring ──────────────────────────────────────────────────────
+(function initInstallPanel() {
+  function wire() {
+    const toggle = document.getElementById('btn-install-toggle');
+    const panel  = document.getElementById('install-panel');
+    if (!toggle || !panel) return;
+
+    toggle.addEventListener('click', () => {
+      const open = panel.style.display !== 'none';
+      panel.style.display = open ? 'none' : '';
+      toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+      if (!open) _applySetupHighlighting();
+    });
+
+    // Install CLI tab switching
+    document.querySelectorAll('.install-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const panel = tab.dataset.itab;
+        tab.closest('.install-tab-group').querySelectorAll('.install-tab')
+           .forEach(t => t.classList.toggle('active', t === tab));
+        document.querySelectorAll('.install-tab-panel').forEach(p => {
+          p.style.display = p.dataset.ipanel === panel ? '' : 'none';
+        });
+        _applySetupHighlighting();
       });
     });
   }
@@ -418,23 +547,24 @@ const SAMPLE_DUMPS = [
     }
   });
 
-  // Probe whether sample fixtures are accessible; show list only if they are
+  // Always show sample section; probe availability to decide if items are clickable
   const sampleList = document.getElementById('sample-list');
-  fetch(SAMPLE_DUMPS[0].path, { method: 'HEAD' })
-    .then(r => {
-      if (!r.ok) return;
-      sampleSection.style.display = '';
-      SAMPLE_DUMPS.forEach(s => {
-        const item = document.createElement('div');
-        item.className = 'sample-item';
-        item.innerHTML =
-          `<span class="sample-name">${s.name}</span>` +
-          `<span class="sample-size">~${s.sizeMb} MB</span>`;
+  sampleSection.style.display = '';
+  SAMPLE_DUMPS.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sample-item sample-item-pending';
+    item.innerHTML =
+      `<span class="sample-name">${s.name}</span>` +
+      `<span class="sample-size">~${s.sizeMb} MB</span>`;
+    sampleList.appendChild(item);
+    fetch(s.path, { method: 'HEAD' })
+      .then(r => {
+        if (!r.ok) throw new Error('not found');
+        item.classList.remove('sample-item-pending');
         item.addEventListener('click', () => loadSampleDump(s));
-        sampleList.appendChild(item);
-      });
-    })
-    .catch(() => {});  // silently hide sample section if not accessible
+      })
+      .catch(() => { item.classList.add('sample-item-offline'); item.title = 'Not available in this build'; });
+  });
 
   // Show "last file" quick-reload prompt if a previous file was remembered
   const lastFileName = (() => { try { return localStorage.getItem(LAST_FILE_KEY); } catch { return null; } })();
@@ -1885,17 +2015,26 @@ async function pollAnalysisStatus() {
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 // OQL syntax highlighter — returns an HTML string safe for innerHTML.
 function _oqlHighlight(oql) {
-  const KW = /\b(SELECT|FROM|WHERE|AS|INSTANCEOF|AND|OR|NOT|NULL|TRUE|FALSE|UNION|LIMIT|ORDER\s+BY|GROUP\s+BY|ASC|DESC|DISTINCT)\b/gi;
-  const AT = /@[a-zA-Z_][a-zA-Z0-9_]*/g;
-  const FN = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=\()/g;
-  const STR = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
-  const NUM = /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g;
-  const OP  = /[().,\[\]]/g;
+  const _KW_SET = new Set([
+    'SELECT','FROM','WHERE','AS','INSTANCEOF','AND','OR','NOT','NULL','TRUE','FALSE',
+    'UNION','LIMIT','OFFSET','ORDER','GROUP','ASC','DESC','DISTINCT','ALL',
+    'HAVING','BETWEEN','IN','IS','EXISTS',
+    'CASE','WHEN','THEN','ELSE','END',
+    'EXCEPT','INTERSECT','BY',
+    'COUNT','SUM','MIN','MAX','AVG','PERCENTILE','MEDIAN','STDDEV',
+  ]);
 
   // Tokenise by scanning left-to-right
   const tokens = [];
   let i = 0;
   while (i < oql.length) {
+    // line comment: -- to end of line
+    if (oql[i] === '-' && oql[i+1] === '-') {
+      let j = i + 2;
+      while (j < oql.length && oql[j] !== '\n') j++;
+      tokens.push({ cls: 'oql-comment', text: oql.slice(i, j) });
+      i = j; continue;
+    }
     // warn block [...]
     if (oql[i] === '[') {
       const end = oql.indexOf(']', i);
@@ -1926,7 +2065,7 @@ function _oqlHighlight(oql) {
       // skip whitespace to check for (
       let k = j;
       while (k < oql.length && oql[k] === ' ') k++;
-      const isKw = /^(SELECT|FROM|WHERE|AS|INSTANCEOF|AND|OR|NOT|NULL|TRUE|FALSE|UNION|LIMIT|ORDER|GROUP|ASC|DESC|DISTINCT|BY)$/i.test(word);
+      const isKw = _KW_SET.has(word.toUpperCase());
       const isFn = oql[k] === '(' && !isKw;
       tokens.push({ cls: isKw ? 'oql-kw' : isFn ? 'oql-fn' : 'oql-id', text: word });
       i = j; continue;
@@ -2327,13 +2466,24 @@ function startTerminal() {
   // OQL keyword syntax highlighting for the input line.
   // Returns the line with ANSI color codes applied; raw line.length is unchanged
   // so cursor positioning arithmetic remains correct.
-  const OQL_KEYWORDS = /\b(SELECT|FROM|WHERE|ORDER\s+BY|GROUP\s+BY|LIMIT|OFFSET|AS|INSTANCEOF|UNION\s+ALL|UNION|DISTINCT|ALL|AND|OR|NOT|IN|IS|NULL|TRUE|FALSE|COUNT|SUM|MIN|MAX|AVG|PERCENTILE|MEDIAN|STDDEV)\b/gi;
+  const _OQL_KW = new Set([
+    'SELECT','FROM','WHERE','ORDER','BY','GROUP','LIMIT','OFFSET','AS','INSTANCEOF',
+    'UNION','DISTINCT','ALL','AND','OR','NOT','IN','IS','NULL','TRUE','FALSE',
+    'HAVING','BETWEEN','EXISTS','CASE','WHEN','THEN','ELSE','END','EXCEPT','INTERSECT',
+    'COUNT','SUM','MIN','MAX','AVG','PERCENTILE','MEDIAN','STDDEV',
+  ]);
   function highlightOql(s) {
     if (!s || s.startsWith('/') || s.startsWith('!')) return s;
-    // Keywords: bright cyan; class names after FROM: yellow; strings: green; numbers: magenta
+    // Keywords: bright cyan; @attr: yellow; strings: green; numbers: magenta; comments: dim
     let result = '';
     let i = 0;
     while (i < s.length) {
+      // Line comment: -- to end of string
+      if (s[i] === '-' && s[i+1] === '-') {
+        result += '\x1b[2m' + s.slice(i) + '\x1b[0m';
+        i = s.length;
+        continue;
+      }
       // String literal
       if (s[i] === '"' || s[i] === "'") {
         const q = s[i];
@@ -2367,7 +2517,7 @@ function startTerminal() {
         let j = i;
         while (j < s.length && /[\w$.]/.test(s[j])) j++;
         const word = s.slice(i, j);
-        if (/^(SELECT|FROM|WHERE|ORDER|BY|GROUP|LIMIT|OFFSET|AS|INSTANCEOF|UNION|DISTINCT|ALL|AND|OR|NOT|IN|IS|NULL|TRUE|FALSE|COUNT|SUM|MIN|MAX|AVG|PERCENTILE|MEDIAN|STDDEV)$/i.test(word)) {
+        if (_OQL_KW.has(word.toUpperCase())) {
           result += '\x1b[36;1m' + word + '\x1b[0m';
         } else {
           result += word;
@@ -4999,7 +5149,7 @@ function startTerminal() {
     term.writeln('  \x1b[33mQuick examples\x1b[0m  \x1b[2m(type /examples for more)\x1b[0m');
     const ex = (q) => term.writeln('  \x1b[36m' + q + '\x1b[0m');
     ex('SELECT * FROM java.lang.String LIMIT 10');
-    ex('SELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15');
+    ex('SELECT classof(s) AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15');
     ex('SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC LIMIT 5');
     ex('SELECT toString(s) AS val, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 5 ORDER BY n DESC LIMIT 20');
     term.writeln('');
@@ -5019,17 +5169,17 @@ function startTerminal() {
       { desc: 'Objects matching a class-name regex',
         oql: 'SELECT @displayName, @usedHeapSize FROM "java\\.util\\..*" LIMIT 20' },
       { desc: 'Strings longer than 100 chars',
-        oql: 'SELECT toString(s) AS value, s.count AS len FROM java.lang.String s WHERE s.count > 100 ORDER BY len DESC LIMIT 20' },
+        oql: 'SELECT toString(s) AS value, @usedHeapSize AS bytes FROM java.lang.String s ORDER BY bytes DESC LIMIT 20' },
       { desc: 'Distinct class names (DISTINCT)',
         oql: 'SELECT DISTINCT @displayName FROM java.lang.Thread' },
       { desc: 'Retained heap for threads (needs full analysis)',
-        oql: 'SELECT @displayName AS thread, @retainedHeapSize AS retained FROM java.lang.Thread ORDER BY retained DESC' },
+        oql: 'SELECT @displayName AS thread, @retainedHeapSize AS ret_bytes FROM java.lang.Thread ORDER BY ret_bytes DESC' },
       { desc: 'BETWEEN predicate (moderate-sized objects)',
-        oql: 'SELECT @displayName, @usedHeapSize AS bytes FROM INSTANCEOF java.lang.Object WHERE bytes BETWEEN 500 AND 5000 LIMIT 20' },
+        oql: 'SELECT @displayName, @usedHeapSize AS bytes FROM INSTANCEOF java.lang.Object WHERE @usedHeapSize BETWEEN 500 AND 5000 LIMIT 20' },
     ]},
     { cat: 'groupby', title: 'GROUP BY / HAVING / aggregates', examples: [
       { desc: 'Instance count per class (top 15)',
-        oql: 'SELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
+        oql: 'SELECT classof(s) AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
       { desc: 'Classes with >100 instances',
         oql: 'SELECT @displayName AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName HAVING n > 100 ORDER BY n DESC LIMIT 20' },
       { desc: 'Duplicate String values (top by count)',
@@ -5059,11 +5209,11 @@ function startTerminal() {
     ]},
     { cat: 'viz', title: 'Visualization directives (-- @viz)', examples: [
       { desc: 'Histogram of class instance counts',
-        oql: '-- @viz histogram\nSELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
+        oql: '-- @viz histogram\nSELECT classof(s) AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
       { desc: 'Treemap of heap by class (shallow size)',
         oql: '-- @viz treemap cap=20\nSELECT @displayName AS cls, SUM(@usedHeapSize) AS bytes FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY bytes DESC LIMIT 20' },
       { desc: 'Treemap of retained heap by class (needs full analysis)',
-        oql: '-- @viz treemap\nSELECT @displayName AS cls, @retainedHeapSize AS retained FROM INSTANCEOF java.lang.Object ORDER BY retained DESC LIMIT 30' },
+        oql: '-- @viz treemap\nSELECT @displayName AS cls, @retainedHeapSize AS ret_bytes FROM INSTANCEOF java.lang.Object ORDER BY ret_bytes DESC LIMIT 30' },
       { desc: 'Named chart block',
         oql: '-- @viz histogram name="String duplicates" title="Top duplicate String values"\nSELECT toString(s) AS value, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 1 ORDER BY n DESC LIMIT 20' },
     ]},
@@ -5071,9 +5221,9 @@ function startTerminal() {
       { desc: 'Object address and hex address',
         oql: 'SELECT @objectId AS id, toHex(@objectAddress) AS addr, @displayName FROM java.lang.Thread' },
       { desc: 'Field path traversal',
-        oql: 'SELECT s.value AS chars, s.count AS len FROM java.lang.String s WHERE s.count > 50 LIMIT 10' },
+        oql: 'SELECT s.value AS chars, @usedHeapSize AS bytes FROM java.lang.String s ORDER BY bytes DESC LIMIT 10' },
       { desc: 'classof() — class object attributes',
-        oql: 'SELECT classof(s).@name AS cls, classof(s).@usedHeapSize AS cls_size FROM java.lang.Thread s' },
+        oql: 'SELECT classof(s) AS cls, @usedHeapSize AS obj_bytes FROM java.lang.Thread s' },
       { desc: 'Array element access (first element)',
         oql: 'SELECT @objectId, value[0] AS first FROM byte[] LIMIT 10' },
       { desc: 'Array slice',

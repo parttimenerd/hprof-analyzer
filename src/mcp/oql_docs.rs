@@ -51,7 +51,7 @@ Glob `HashMap*` does NOT match `HashMap$Node` — inner classes must be named ex
 ```sql
 WHERE @usedHeapSize > 1024
 WHERE toString(s) = "hello"
-WHERE x.size() > 0 AND x.capacity() < 100
+WHERE x.size() > 0 AND x.size() < 100
 WHERE classof(x) IN (SELECT @objectAddress FROM java.lang.Class WHERE ...)
 ```
 
@@ -105,15 +105,15 @@ The `AS RETAINED SET` clause goes after the SELECT expression:
 SELECT x AS RETAINED SET FROM java.lang.Thread x
 ```
 
-## dominators()
+## dominators(x)
 
-Returns the virtual root dominator tree entry point for browsing:
+Returns the immediate dominator set of an object in SELECT position:
 
 ```sql
-SELECT @objectAddress, @retainedHeapSize FROM dominators()
+SELECT @objectId AS idx, dominators(s) FROM java.lang.String s LIMIT 10
 ```
 
-Useful as a starting point to find the top retained objects.
+Useful to find which object dominates each string (i.e. what keeps it alive).
 "#;
 
 // ── Attributes ────────────────────────────────────────────────────────────────
@@ -130,8 +130,8 @@ const ATTRIBUTES: &str = r#"# OQL Attributes and Functions
 | `@retainedHeapSize` | integer | Retained size in bytes (requires full pipeline) |
 | `@displayName` | string | `ClassName@hexAddr` label |
 | `@length` | integer | Array element count (arrays only; null for non-arrays) |
-| `@inbounds` | objects | Incoming references (requires `--with-graph`) |
-| `@outbounds` | objects | Outgoing references (requires `--with-graph`) |
+| `@inbounds` | objects | Incoming references (OQL queries build edges on demand; `with_graph=true` on load_dump enables them in inspect_object) |
+| `@outbounds` | objects | Outgoing references (same as @inbounds) |
 
 **Index types summary:**
 - `@objectId` from OQL: **0-based** → use directly with `browse_dominators({object_index: N})`
@@ -177,10 +177,12 @@ Access Java field values with dot notation:
 - `s.value` — the `char[]` backing array of a String
 - `m.table` — the entry array of a HashMap
 - `e.key`, `e.value` — fields of a Map.Entry
-- `x.size()` — calls size() method (read-only reflection on live heap data)
+- `x.size()` — reads the `size` field from common collection types (ArrayList, HashMap, etc.)
 
 Field access is available for instance/static fields declared in the class.
-Method calls (`size()`, `length()`) are supported for common collection APIs.
+Method dispatch is limited to a fixed set: `size()` on known collection types (ArrayList, HashMap, HashSet, etc.),
+`intValue()`/`longValue()` on boxed primitives, `length()` on arrays, `getName()`/`getObjectId()` etc. on any object,
+and `equals()`. Arbitrary method calls not in this list return `NULL`.
 
 ## Class matching modifiers
 
@@ -213,8 +215,8 @@ FROM INSTANCEOF java.lang.Object x ORDER BY ret_bytes DESC LIMIT 10
 ## String analysis
 
 ```sql
--- Duplicate string values (memory waste)
-SELECT toString(s) AS value, COUNT(*) AS count, SUM(@usedHeapSize) AS bytes
+-- Duplicate string values (memory waste) — count only (SUM alongside toString is not supported)
+SELECT toString(s) AS value, COUNT(*) AS count
 FROM java.lang.String s
 GROUP BY toString(s) ORDER BY count DESC LIMIT 20
 ```
@@ -309,7 +311,7 @@ FROM INSTANCEOF java.lang.ClassLoader x
 GROUP BY classof(x) ORDER BY class_count DESC
 ```
 
-## Reference graph (requires --with-graph)
+## Reference graph (@inbounds / @outbounds)
 
 ```sql
 -- Objects that hold a reference to a specific address
@@ -435,7 +437,7 @@ Loads a heap dump. **Blocks until complete** — wait for the response.
 - First load: 5–15 min (writes disk cache)
 - Repeat load of same file: ~1 s
 - `path`: absolute path (accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tgz`)
-- `with_graph`: set `true` only if you need `@inbounds`/`@outbounds` OQL traversal (rare)
+- `with_graph`: set `true` only if you need the `inspect_object` inbound-refs list. OQL `@inbounds`/`@outbounds` traversal works in queries without it (edges are built on demand during the query scan).
 
 ### get_summary({})
 Markdown summary: top 5 suspects + top 5 classes by retained size + suggested OQL queries.
@@ -468,7 +470,7 @@ Full report section as JSON. **Best tool for leak investigation** — use before
 - `"alloc_sites"` — allocation sites (only present when dump has allocation tracking)
 - `"thread_locals"` — ThreadLocal leak analysis (full-analysis only, may be empty list)
 - `"framework"` — detected framework signatures + recommendations (full-analysis only)
-- `"field_stats"` — field-level size statistics (requires --with-graph, may be null)
+- `"field_stats"` — field-level size statistics (CLI --field-stats flag only; always null in MCP)
 - `"all"` — everything merged (large, use targeted sections for efficiency)
 
 **triage JSON structure** (array of signals):

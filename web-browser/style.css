@@ -488,6 +488,96 @@ body {
 .sample-item:hover { border-color: var(--sample-hover-border); background: var(--sample-hover-bg); }
 .sample-item .sample-name { font-weight: 600; color: var(--sample-name); }
 .sample-item .sample-size { color: var(--sample-size); font-size: .75rem; }
+.sample-item.sample-item-offline { opacity: .4; cursor: default; pointer-events: none; }
+.sample-item.sample-item-pending { opacity: .6; cursor: default; }
+
+/* ── Install locally section ─────────────────────────────────────────────────── */
+#install-section {
+  width: 100%;
+  max-width: 700px;
+  margin: 0 auto;
+  text-align: center;
+}
+.install-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: .85rem;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: color .15s, background .15s;
+}
+.install-toggle-btn:hover { color: var(--fg); background: var(--bg2); }
+.install-toggle-btn[aria-expanded="true"] { color: var(--fg); }
+#install-panel {
+  text-align: left;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.install-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.install-tab-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.install-tab-group-label {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.install-tab {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 10px;
+  font-size: .76rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.install-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.install-tab:hover:not(.active) { background: var(--bg3); color: var(--fg); }
+.install-ai-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.install-ai-cards {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.install-ai-card {
+  flex: 1;
+  min-width: 200px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.install-ai-card-title {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.install-cli-usage { display: flex; flex-direction: column; gap: 4px; }
 
 /* ── Connect screen ─────────────────────────────────────────────────────────── */
 #connect-screen {
@@ -733,14 +823,61 @@ button:hover { background: var(--accent-hover); }
   flex: 1;
 }
 /* OQL syntax highlight colours (dark bg) */
-.oql-kw   { color: #c792ea; font-weight: 600; } /* SELECT FROM WHERE AS */
-.oql-fn   { color: #82aaff; }                    /* function calls */
-.oql-at   { color: #ffcb6b; }                    /* @attr */
-.oql-str  { color: #c3e88d; }                    /* "string" */
-.oql-num  { color: #f78c6c; }                    /* numbers */
-.oql-op   { color: #89ddff; }                    /* operators . , ( ) */
-.oql-id   { color: #cdd6f4; }                    /* identifiers */
-.oql-warn { color: #f07070; font-style: italic; } /* [warning text] */
+.oql-kw      { color: #c792ea; font-weight: 600; } /* SELECT FROM WHERE AS */
+.oql-fn      { color: #82aaff; }                   /* function calls */
+.oql-at      { color: #ffcb6b; }                   /* @attr */
+.oql-str     { color: #c3e88d; }                   /* "string" */
+.oql-num     { color: #f78c6c; }                   /* numbers */
+.oql-op      { color: #89ddff; }                   /* operators . , ( ) */
+.oql-id      { color: #cdd6f4; }                   /* identifiers */
+.oql-warn    { color: #f07070; font-style: italic; } /* [warning text] */
+.oql-comment { color: #636d83; font-style: italic; } /* -- comments / @viz directives */
+
+/* Shell syntax highlight (light bg by default, inverts in dark mode) */
+.sh-cmd  { color: #1d4ed8; font-weight: 600; }  /* brew cargo hprof-analyzer claude */
+.sh-sub  { color: #0e7490; }                     /* subcommand (first word after command) */
+.sh-flag { color: #7c3aed; }                     /* --flag */
+.sh-str  { color: #16a34a; }                     /* "quoted" or 'quoted' */
+.sh-cmt  { color: #9ca3af; font-style: italic; } /* # comment */
+.sh-path { color: #b45309; }                     /* /path/to/file */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    .sh-cmd  { color: #93c5fd; }
+    .sh-sub  { color: #67e8f9; }
+    .sh-flag { color: #c4b5fd; }
+    .sh-str  { color: #86efac; }
+    .sh-cmt  { color: #6b7280; }
+    .sh-path { color: #fcd34d; }
+  }
+}
+:root[data-theme="dark"] {
+  .sh-cmd  { color: #93c5fd; }
+  .sh-sub  { color: #67e8f9; }
+  .sh-flag { color: #c4b5fd; }
+  .sh-str  { color: #86efac; }
+  .sh-cmt  { color: #6b7280; }
+  .sh-path { color: #fcd34d; }
+}
+
+/* JSON syntax highlight */
+.json-key { color: #1d4ed8; }
+.json-str { color: #16a34a; }
+.json-kw  { color: #7c3aed; }
+.json-num { color: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    .json-key { color: #93c5fd; }
+    .json-str { color: #86efac; }
+    .json-kw  { color: #c4b5fd; }
+    .json-num { color: #fcd34d; }
+  }
+}
+:root[data-theme="dark"] {
+  .json-key { color: #93c5fd; }
+  .json-str { color: #86efac; }
+  .json-kw  { color: #c4b5fd; }
+  .json-num { color: #fcd34d; }
+}
 
 .sidebar-search-wrap {
   padding: 0 4px 8px;

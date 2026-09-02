@@ -87,23 +87,6 @@ engine work the same way in the browser and in the CLI. Useful shell commands:
 
 Tab-completion and named-query browsing work fully offline via WASM.
 
-## Browser mode
-
-Load `web/dist/hprof-analyzer-browser.html` in Chrome or Firefox — no install needed.
-Drag and drop a `.hprof` file to analyze it entirely in-browser via WebAssembly.
-
-**Analysis modes:**
-- **Full Analysis** — complete report with dominator tree, leak suspects, top consumers, and interactive Heap Inspector
-- **Fast Analysis** — skips retained-heap computation; histogram and OQL work but Leak Suspects are unavailable. Use for dumps > 2 GB.
-
-**Interactive features (WASM only):**
-- **Heap Inspector** — click any class or instance to open a panel with fields, GC root path, and peer navigation
-- **Field Scan** — top instances of any class ranked by retained heap
-- **Object Graph Explorer** — force-directed graph with edge labels and neighbor dimming
-- **OQL REPL** — run queries against the loaded dump
-
-**Memory limits:** up to ~3 GB HPROF files in Chrome (4 GB WASM address space). After full analysis, large arrays are deflate-compressed (~75% reduction) to fit within memory limits.
-
 ## Quick start
 
 Grab a prebuilt binary and analyze a dump in two commands. No Rust, no Node, no
@@ -269,7 +252,7 @@ hprof-analyzer update
 
 ```sh
 brew tap parttimenerd/hprof-analyzer
-brew trust parttimenerd/hprof-analyzer   # required once for third-party taps
+brew trust parttimenerd/hprof-analyzer   # required once for third-party taps (Homebrew 6+)
 brew install hprof-analyzer
 ```
 
@@ -301,6 +284,39 @@ cargo build --release
 Node.js/npm is only needed if you modify the web sources under `web/src/`.
 
 ## Usage
+
+### Command quick reference
+
+After install, here are the most important commands:
+
+```sh
+# Generate a self-contained HTML report
+hprof-analyzer heap.hprof report.html
+
+# Print a quick summary of leak suspects and top classes
+hprof-analyzer heap summary heap.hprof
+
+# Run an OQL query (fast, no full report needed)
+hprof-analyzer heap query heap.hprof --oql "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY COUNT(*) DESC LIMIT 20"
+
+# Start the MCP server for AI assistant integration
+hprof-analyzer mcp
+
+# Start the HTTP API server (OQL + report endpoints)
+hprof-analyzer server heap.hprof   # → http://127.0.0.1:7070
+
+# Browse the dominator tree interactively
+hprof-analyzer heap browse heap.hprof
+
+# Update to the latest nightly build
+hprof-analyzer update nightly
+
+# OQL language reference (no dump needed)
+hprof-analyzer heap docs --topic examples
+```
+
+The `heap` subcommand group caches results after the first run (~1 s on all
+subsequent calls). All other subcommands stream the dump on demand.
 
 ```
 hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
@@ -587,7 +603,16 @@ cache alongside the dump; all subsequent calls load in ~1 s.
 claude mcp add hprof -- hprof-analyzer mcp
 ```
 
-**Cline** — add to VS Code settings (`.vscode/mcp.json` or Cline's MCP settings):
+**Cline (VS Code)** — open the Cline panel, click **MCP Servers → Add Server**, then paste:
+```json
+{
+  "hprof": {
+    "command": "hprof-analyzer",
+    "args": ["mcp"]
+  }
+}
+```
+Alternatively, add it directly to `.vscode/mcp.json` (workspace-scoped) or to Cline's global MCP settings file at `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (on Linux/macOS) / `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (on Windows):
 ```json
 {
   "mcpServers": {

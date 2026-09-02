@@ -582,14 +582,15 @@ button:hover { background: var(--accent-hover); }
   flex: 1;
 }
 /* OQL syntax highlight colours (dark bg) */
-.oql-kw   { color: #c792ea; font-weight: 600; } /* SELECT FROM WHERE AS */
-.oql-fn   { color: #82aaff; }                    /* function calls */
-.oql-at   { color: #ffcb6b; }                    /* @attr */
-.oql-str  { color: #c3e88d; }                    /* "string" */
-.oql-num  { color: #f78c6c; }                    /* numbers */
-.oql-op   { color: #89ddff; }                    /* operators . , ( ) */
-.oql-id   { color: #cdd6f4; }                    /* identifiers */
-.oql-warn { color: #f07070; font-style: italic; } /* [warning text] */
+.oql-kw      { color: #c792ea; font-weight: 600; } /* SELECT FROM WHERE AS */
+.oql-fn      { color: #82aaff; }                   /* function calls */
+.oql-at      { color: #ffcb6b; }                   /* @attr */
+.oql-str     { color: #c3e88d; }                   /* "string" */
+.oql-num     { color: #f78c6c; }                   /* numbers */
+.oql-op      { color: #89ddff; }                   /* operators . , ( ) */
+.oql-id      { color: #cdd6f4; }                   /* identifiers */
+.oql-warn    { color: #f07070; font-style: italic; } /* [warning text] */
+.oql-comment { color: #636d83; font-style: italic; } /* -- comments / @viz directives */
 
 .sidebar-search-wrap {
   padding: 0 4px 8px;
@@ -4018,17 +4019,26 @@ async function pollAnalysisStatus() {
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 // OQL syntax highlighter — returns an HTML string safe for innerHTML.
 function _oqlHighlight(oql) {
-  const KW = /\b(SELECT|FROM|WHERE|AS|INSTANCEOF|AND|OR|NOT|NULL|TRUE|FALSE|UNION|LIMIT|ORDER\s+BY|GROUP\s+BY|ASC|DESC|DISTINCT)\b/gi;
-  const AT = /@[a-zA-Z_][a-zA-Z0-9_]*/g;
-  const FN = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=\()/g;
-  const STR = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
-  const NUM = /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g;
-  const OP  = /[().,\[\]]/g;
+  const _KW_SET = new Set([
+    'SELECT','FROM','WHERE','AS','INSTANCEOF','AND','OR','NOT','NULL','TRUE','FALSE',
+    'UNION','LIMIT','OFFSET','ORDER','GROUP','ASC','DESC','DISTINCT','ALL',
+    'HAVING','BETWEEN','IN','IS','EXISTS',
+    'CASE','WHEN','THEN','ELSE','END',
+    'EXCEPT','INTERSECT','BY',
+    'COUNT','SUM','MIN','MAX','AVG','PERCENTILE','MEDIAN','STDDEV',
+  ]);
 
   // Tokenise by scanning left-to-right
   const tokens = [];
   let i = 0;
   while (i < oql.length) {
+    // line comment: -- to end of line
+    if (oql[i] === '-' && oql[i+1] === '-') {
+      let j = i + 2;
+      while (j < oql.length && oql[j] !== '\n') j++;
+      tokens.push({ cls: 'oql-comment', text: oql.slice(i, j) });
+      i = j; continue;
+    }
     // warn block [...]
     if (oql[i] === '[') {
       const end = oql.indexOf(']', i);
@@ -4059,7 +4069,7 @@ function _oqlHighlight(oql) {
       // skip whitespace to check for (
       let k = j;
       while (k < oql.length && oql[k] === ' ') k++;
-      const isKw = /^(SELECT|FROM|WHERE|AS|INSTANCEOF|AND|OR|NOT|NULL|TRUE|FALSE|UNION|LIMIT|ORDER|GROUP|ASC|DESC|DISTINCT|BY)$/i.test(word);
+      const isKw = _KW_SET.has(word.toUpperCase());
       const isFn = oql[k] === '(' && !isKw;
       tokens.push({ cls: isKw ? 'oql-kw' : isFn ? 'oql-fn' : 'oql-id', text: word });
       i = j; continue;
@@ -4460,13 +4470,24 @@ function startTerminal() {
   // OQL keyword syntax highlighting for the input line.
   // Returns the line with ANSI color codes applied; raw line.length is unchanged
   // so cursor positioning arithmetic remains correct.
-  const OQL_KEYWORDS = /\b(SELECT|FROM|WHERE|ORDER\s+BY|GROUP\s+BY|LIMIT|OFFSET|AS|INSTANCEOF|UNION\s+ALL|UNION|DISTINCT|ALL|AND|OR|NOT|IN|IS|NULL|TRUE|FALSE|COUNT|SUM|MIN|MAX|AVG|PERCENTILE|MEDIAN|STDDEV)\b/gi;
+  const _OQL_KW = new Set([
+    'SELECT','FROM','WHERE','ORDER','BY','GROUP','LIMIT','OFFSET','AS','INSTANCEOF',
+    'UNION','DISTINCT','ALL','AND','OR','NOT','IN','IS','NULL','TRUE','FALSE',
+    'HAVING','BETWEEN','EXISTS','CASE','WHEN','THEN','ELSE','END','EXCEPT','INTERSECT',
+    'COUNT','SUM','MIN','MAX','AVG','PERCENTILE','MEDIAN','STDDEV',
+  ]);
   function highlightOql(s) {
     if (!s || s.startsWith('/') || s.startsWith('!')) return s;
-    // Keywords: bright cyan; class names after FROM: yellow; strings: green; numbers: magenta
+    // Keywords: bright cyan; @attr: yellow; strings: green; numbers: magenta; comments: dim
     let result = '';
     let i = 0;
     while (i < s.length) {
+      // Line comment: -- to end of string
+      if (s[i] === '-' && s[i+1] === '-') {
+        result += '\x1b[2m' + s.slice(i) + '\x1b[0m';
+        i = s.length;
+        continue;
+      }
       // String literal
       if (s[i] === '"' || s[i] === "'") {
         const q = s[i];
@@ -4500,7 +4521,7 @@ function startTerminal() {
         let j = i;
         while (j < s.length && /[\w$.]/.test(s[j])) j++;
         const word = s.slice(i, j);
-        if (/^(SELECT|FROM|WHERE|ORDER|BY|GROUP|LIMIT|OFFSET|AS|INSTANCEOF|UNION|DISTINCT|ALL|AND|OR|NOT|IN|IS|NULL|TRUE|FALSE|COUNT|SUM|MIN|MAX|AVG|PERCENTILE|MEDIAN|STDDEV)$/i.test(word)) {
+        if (_OQL_KW.has(word.toUpperCase())) {
           result += '\x1b[36;1m' + word + '\x1b[0m';
         } else {
           result += word;
@@ -7132,7 +7153,7 @@ function startTerminal() {
     term.writeln('  \x1b[33mQuick examples\x1b[0m  \x1b[2m(type /examples for more)\x1b[0m');
     const ex = (q) => term.writeln('  \x1b[36m' + q + '\x1b[0m');
     ex('SELECT * FROM java.lang.String LIMIT 10');
-    ex('SELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15');
+    ex('SELECT classof(s) AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15');
     ex('SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC LIMIT 5');
     ex('SELECT toString(s) AS val, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 5 ORDER BY n DESC LIMIT 20');
     term.writeln('');
@@ -7156,13 +7177,13 @@ function startTerminal() {
       { desc: 'Distinct class names (DISTINCT)',
         oql: 'SELECT DISTINCT @displayName FROM java.lang.Thread' },
       { desc: 'Retained heap for threads (needs full analysis)',
-        oql: 'SELECT @displayName AS thread, @retainedHeapSize AS retained FROM java.lang.Thread ORDER BY retained DESC' },
+        oql: 'SELECT @displayName AS thread, @retainedHeapSize AS ret_bytes FROM java.lang.Thread ORDER BY ret_bytes DESC' },
       { desc: 'BETWEEN predicate (moderate-sized objects)',
         oql: 'SELECT @displayName, @usedHeapSize AS bytes FROM INSTANCEOF java.lang.Object WHERE bytes BETWEEN 500 AND 5000 LIMIT 20' },
     ]},
     { cat: 'groupby', title: 'GROUP BY / HAVING / aggregates', examples: [
       { desc: 'Instance count per class (top 15)',
-        oql: 'SELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
+        oql: 'SELECT classof(s) AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
       { desc: 'Classes with >100 instances',
         oql: 'SELECT @displayName AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName HAVING n > 100 ORDER BY n DESC LIMIT 20' },
       { desc: 'Duplicate String values (top by count)',
@@ -7192,11 +7213,11 @@ function startTerminal() {
     ]},
     { cat: 'viz', title: 'Visualization directives (-- @viz)', examples: [
       { desc: 'Histogram of class instance counts',
-        oql: '-- @viz histogram\nSELECT classof(s).@name AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
+        oql: '-- @viz histogram\nSELECT classof(s) AS cls, COUNT(*) AS n FROM INSTANCEOF java.lang.Object s GROUP BY classof(s) ORDER BY n DESC LIMIT 15' },
       { desc: 'Treemap of heap by class (shallow size)',
         oql: '-- @viz treemap cap=20\nSELECT @displayName AS cls, SUM(@usedHeapSize) AS bytes FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY bytes DESC LIMIT 20' },
       { desc: 'Treemap of retained heap by class (needs full analysis)',
-        oql: '-- @viz treemap\nSELECT @displayName AS cls, @retainedHeapSize AS retained FROM INSTANCEOF java.lang.Object ORDER BY retained DESC LIMIT 30' },
+        oql: '-- @viz treemap\nSELECT @displayName AS cls, @retainedHeapSize AS ret_bytes FROM INSTANCEOF java.lang.Object ORDER BY ret_bytes DESC LIMIT 30' },
       { desc: 'Named chart block',
         oql: '-- @viz histogram name="String duplicates" title="Top duplicate String values"\nSELECT toString(s) AS value, COUNT(*) AS n FROM java.lang.String s GROUP BY toString(s) HAVING n > 1 ORDER BY n DESC LIMIT 20' },
     ]},
@@ -7206,7 +7227,7 @@ function startTerminal() {
       { desc: 'Field path traversal',
         oql: 'SELECT s.value AS chars, s.count AS len FROM java.lang.String s WHERE s.count > 50 LIMIT 10' },
       { desc: 'classof() — class object attributes',
-        oql: 'SELECT classof(s).@name AS cls, classof(s).@usedHeapSize AS cls_size FROM java.lang.Thread s' },
+        oql: 'SELECT classof(s) AS cls, @usedHeapSize AS obj_bytes FROM java.lang.Thread s' },
       { desc: 'Array element access (first element)',
         oql: 'SELECT @objectId, value[0] AS first FROM byte[] LIMIT 10' },
       { desc: 'Array slice',

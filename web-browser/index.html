@@ -29,22 +29,13 @@
       <li><span class="feat-icon">💬</span> SQL-like OQL query shell with tab-completion</li>
       <li><span class="feat-icon">🔒</span> Fully private — no upload, no server, no telemetry</li>
     </ul>
-
-    <!-- Compact install strip -->
-    <div id="landing-install-strip">
-      <span class="install-strip-label">CLI &amp; AI setup:</span>
-      <code class="install-strip-code">brew install parttimenerd/hprof-analyzer/hprof-analyzer</code>
-      <span class="install-strip-or">or</span>
-      <code class="install-strip-code">cargo install hprof-analyzer</code>
-      <button id="btn-setup-guide" class="setup-guide-btn" title="Full setup guide — Homebrew, Cargo, Claude Code, Cline MCP">Setup guide ↗</button>
-    </div>
   </div>
 
   <!-- Setup guide modal -->
   <div id="setup-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="setup-modal-title">
     <div id="setup-modal-inner">
       <div id="setup-modal-header">
-        <h2 id="setup-modal-title">Setup Guide</h2>
+        <h2 id="setup-modal-title">Setup &amp; Usage</h2>
         <button id="btn-close-setup" title="Close">✕</button>
       </div>
       <div id="setup-modal-body">
@@ -72,6 +63,21 @@
         </section>
 
         <section class="setup-section">
+          <h3>CLI usage</h3>
+          <div class="setup-code-block">
+            <code>hprof-analyzer heap.hprof report.html   # full HTML report</code>
+            <code>hprof-analyzer heap summary dump.hprof   # top suspects + top classes</code>
+            <code>hprof-analyzer heap histogram dump.hprof --limit 20</code>
+            <code>hprof-analyzer heap query dump.hprof --oql "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY COUNT(*) DESC LIMIT 20"</code>
+            <code>hprof-analyzer heap docs --topic examples   # OQL language reference</code>
+            <code>hprof-analyzer heap browse dump.hprof   # dominator tree from root</code>
+            <code>hprof-analyzer mat caches dump.hprof   # list Eclipse MAT cache files</code>
+            <code>hprof-analyzer update nightly   # update to latest build</code>
+          </div>
+          <p class="setup-note">First run caches analysis (~1–15 min); subsequent runs load in ~1 s.</p>
+        </section>
+
+        <section class="setup-section">
           <h3>Claude Code (MCP server)</h3>
           <p class="setup-desc">Add hprof-analyzer as an MCP tool so Claude can load and analyze heap dumps directly.</p>
           <div class="setup-code-block">
@@ -83,7 +89,7 @@
 
         <section class="setup-section">
           <h3>Cline / VS Code (MCP server)</h3>
-          <p class="setup-desc">Add to <code>.vscode/mcp.json</code> in your project, or to the global Cline MCP settings:</p>
+          <p class="setup-desc">In the Cline panel click <strong>MCP Servers → Add Server</strong>, or add directly to Cline's global MCP settings at <code>~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json</code> (Linux/macOS) or <code>%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json</code> (Windows):</p>
           <div class="setup-code-block setup-code-json">
 <pre>{
   "mcpServers": {
@@ -99,7 +105,7 @@
 
         <section class="setup-section">
           <h3>Claude Desktop</h3>
-          <p class="setup-desc">Add to <code>~/.config/claude/claude_desktop_config.json</code>:</p>
+          <p class="setup-desc">Add to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) or <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows):</p>
           <div class="setup-code-block setup-code-json">
 <pre>{
   "mcpServers": {
@@ -110,18 +116,6 @@
   }
 }</pre>
           </div>
-        </section>
-
-        <section class="setup-section">
-          <h3>CLI usage (no AI)</h3>
-          <div class="setup-code-block">
-            <code>hprof-analyzer heap summary dump.hprof</code>
-            <code>hprof-analyzer heap histogram dump.hprof --limit 20</code>
-            <code>hprof-analyzer heap query dump.hprof --oql "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"</code>
-            <code>hprof-analyzer heap views   # list 20 built-in named queries</code>
-            <code>hprof-analyzer heap browse dump.hprof   # dominator tree from root</code>
-          </div>
-          <p class="setup-note">First run caches analysis (~1–15 min); subsequent runs load in ~1 s.</p>
         </section>
 
         <section class="setup-section">
@@ -168,14 +162,113 @@
     <p class="sample-label">— or try a sample dump —</p>
     <div id="sample-list"></div>
   </div>
+  <!-- sample section shown by JS once WASM is ready -->
   <p id="wasm-load-status" style="display:none"></p>
+
+  <div id="install-section">
+    <button id="btn-install-toggle" class="install-toggle-btn" aria-expanded="false">
+      — or install it locally (and with coding agents) —
+    </button>
+    <div id="install-panel" style="display:none">
+
+      <div class="install-tabs-row">
+        <div class="install-tab-group" id="install-cli-tabs">
+          <span class="install-tab-group-label">Install CLI:</span>
+          <button class="install-tab active" data-itab="brew">Homebrew</button>
+          <button class="install-tab" data-itab="cargo">Cargo</button>
+          <button class="install-tab" data-itab="binary">Binary</button>
+        </div>
+      </div>
+
+      <div class="install-tab-panel" data-ipanel="brew">
+        <div class="setup-code-block">
+          <code>brew tap parttimenerd/hprof-analyzer</code>
+          <code>brew trust parttimenerd/hprof-analyzer</code>
+          <code>brew install hprof-analyzer</code>
+        </div>
+        <p class="setup-note">Update: <code>brew upgrade hprof-analyzer</code></p>
+      </div>
+      <div class="install-tab-panel" data-ipanel="cargo" style="display:none">
+        <div class="setup-code-block">
+          <code>cargo install hprof-analyzer</code>
+        </div>
+        <p class="setup-note">Requires Rust 1.85+. Update: <code>cargo install hprof-analyzer --force</code></p>
+      </div>
+      <div class="install-tab-panel" data-ipanel="binary" style="display:none">
+        <div class="setup-code-block">
+          <code>curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-apple-darwin.tar.gz | tar xz</code>
+          <code>sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/</code>
+        </div>
+        <p class="setup-note">Replace <code>aarch64-apple-darwin</code> with your platform — see <a href="https://github.com/parttimenerd/hprof-analyzer/releases/tag/nightly" target="_blank" rel="noopener">all releases</a>. Update: <code>hprof-analyzer update nightly</code></p>
+      </div>
+
+      <div class="install-ai-row">
+        <span class="install-tab-group-label">AI integration:</span>
+        <div class="install-ai-cards">
+
+          <div class="install-ai-card">
+            <div class="install-ai-card-title">Claude Code</div>
+            <div class="setup-code-block">
+              <code>claude mcp add hprof -- hprof-analyzer mcp</code>
+            </div>
+            <p class="setup-note">Then tell Claude: <em>"Analyze /path/to/dump.hprof"</em></p>
+          </div>
+
+          <div class="install-ai-card">
+            <div class="install-ai-card-title">Cline (VS Code)</div>
+            <p class="setup-note">Click <strong>MCP Servers → Add Server</strong> in the Cline panel, or add to <code>cline_mcp_settings.json</code>:</p>
+            <div class="setup-code-block setup-code-json">
+<pre>{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+            </div>
+          </div>
+
+          <div class="install-ai-card">
+            <div class="install-ai-card-title">Claude Desktop</div>
+            <p class="setup-note">Add to <code>claude_desktop_config.json</code> (macOS: <code>~/Library/Application Support/Claude/</code>):</p>
+            <div class="setup-code-block setup-code-json">
+<pre>{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="install-cli-usage">
+        <span class="install-tab-group-label">Key commands:</span>
+        <div class="setup-code-block">
+          <code>hprof-analyzer heap.hprof report.html   # full HTML report</code>
+          <code>hprof-analyzer heap summary dump.hprof   # top suspects + top classes</code>
+          <code>hprof-analyzer heap query dump.hprof --oql "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY COUNT(*) DESC LIMIT 20"</code>
+          <code>hprof-analyzer heap browse dump.hprof   # dominator tree browser</code>
+          <code>hprof-analyzer heap docs --topic examples   # OQL reference</code>
+          <code>hprof-analyzer mat caches dump.hprof   # list Eclipse MAT cache files</code>
+        </div>
+        <p class="setup-note">First run caches analysis (~1–15 min). All subsequent runs load in ~1 s.</p>
+      </div>
+
+    </div>
+  </div>
 
   <div id="landing-footer">
     <a href="https://github.com/parttimenerd/hprof-analyzer" target="_blank" rel="noopener">GitHub</a>
     <span class="sep">·</span>
     <a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     <span class="sep">·</span>
-    <a href="#" id="footer-setup-link">Setup &amp; AI integration</a>
+    <a href="#" id="footer-setup-link">Setup &amp; Usage</a>
     <span class="sep">·</span>
     <button id="btn-theme-toggle" title="Cycle theme: auto / light / dark" class="footer-theme-btn">◐ Theme: Auto</button>
   </div>

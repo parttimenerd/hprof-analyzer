@@ -325,7 +325,7 @@ impl HprofMcpServer {
                           \n  \"alloc_sites\"     — allocation sites (only present when dump has allocation tracking)\
                           \n  \"thread_locals\"   — ThreadLocal leak rows (full-analysis only, may be empty)\
                           \n  \"framework\"       — detected framework signatures + recommendations (full-analysis only)\
-                          \n  \"field_stats\"     — field-level size statistics (full-analysis with --with-graph only)\
+                          \n  \"field_stats\"     — field-level size statistics (only populated when the CLI --field-stats flag was used; always null in MCP)\
                           \n  \"all\"             — everything above merged (large, use targeted sections for LLM workflows)\
                           \n\nIn leaks JSON: each suspect has root_path (single), merged_paths (group), \
                           dominated (objects at accumulation point), and dominator_tree. \

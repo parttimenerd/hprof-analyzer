@@ -6,7 +6,74 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
-- **MCP server** (`hprof-analyzer mcp`). Exposes 9 tools over the Model Context
+- **Setup & Usage modal in the browser UI.** Clicking "Setup & Usage" in the
+  footer opens a modal with install instructions (Homebrew, Cargo, prebuilt
+  binary), CLI quick reference, and MCP setup for Claude Code, Cline, and
+  Claude Desktop. All code blocks are syntax-highlighted (shell and JSON).
+
+- **Collapsible install panel on the browser landing page.** "— or install it
+  locally (and with coding agents) —" expands to show CLI install tabs and AI
+  integration cards inline, without leaving the page.
+
+- **OQL syntax highlighting in the browser shell.** Both the sidebar query
+  preview (HTML spans) and the xterm.js terminal input (ANSI codes) now
+  highlight keywords, strings, numbers, identifiers, and `--` comments.
+
+- **Shell and JSON syntax highlighting in setup guide code blocks.** Shell
+  commands are tokenised into command/subcommand/flag/string/path/comment
+  classes; JSON config blocks highlight keys, string values, keywords, and
+  numbers. Both follow the page's light/dark theme.
+
+- **Sample dump cards always visible on the landing page.** Sample dumps
+  (mnemonics, scala-doku, philosophers, gauss-mix) are shown at all times;
+  cards are grayed out when the server does not serve the files (e.g. local
+  `file://` open) and become clickable once probed as available.
+
+- **`mat caches` in CLI usage guides.** The setup modal, install panel,
+  and README quick reference now include `hprof-analyzer mat caches dump.hprof`
+  as a key command.
+
+### Fixed
+
+- **MCP: OQL alias `AS RETAINED` conflicted with reserved keyword.** All
+  generated queries (examples, `get_summary`) now use `AS ret` / `AS ret_bytes`
+  instead of `AS retained` / `AS RETAINED`.
+
+- **MCP: `browse_dominators` / `query` responses had a trailing `/* HINT */`
+  comment** that broke `json.loads()` for every model calling the tool. The
+  hint is now in a `_hint` JSON field.
+
+- **MCP: `get_report` now exposes all 17 report sections** with documentation
+  updated to match actual JSON field names.
+
+- **MCP: named queries use `@objectId AS idx`** instead of `@objectAddress`,
+  so results plug directly into `browse_dominators` / `inspect_object` without
+  address conversion.
+
+- **CLI: `heap cache-list` now accepts a `.hprof` file path** (previously
+  failed when passed a file rather than a directory).
+
+- **MCP: leak detection fixed for small/medium heaps.** `load_dump` now embeds
+  the top-5 suspect list in its response; `NEXT STEPS` now point to
+  `get_report({section:"leaks"})` as the first action rather than the OQL
+  `leak-suspects` view, which has a >10 MB threshold and returns 0 rows on
+  small/medium heaps.
+
+### Changed
+
+- **OQL footguns documented:** glob patterns do not match inner classes
+  (`ZipFile*` misses `ZipFile$Source` — use exact name or `INSTANCEOF`);
+  `retained` / `RETAINED` column alias conflicts with `AS RETAINED SET`;
+  `@objectId` is 0-based while `obj_index_1based` from `get_report` is 1-based.
+
+- **MCP `get_report` description** updated: calls it "BEST TOOL for finding the
+  leak / why OOM", explains single vs. group suspect JSON structures, and
+  clarifies that the `leak-suspects` OQL view has a >10 MB threshold.
+
+- **README "Browser mode" section removed.** Content was stale and duplicated
+  the "Try it in the browser" section above it.
+
+
   Protocol so Claude Code, Cline, Claude Desktop, and any other MCP-compatible
   AI assistant can load and analyze heap dumps interactively. Tools: `get_session_info`,
   `get_oql_docs`, `load_dump`, `get_summary`, `get_histogram`, `get_report`, `query`,

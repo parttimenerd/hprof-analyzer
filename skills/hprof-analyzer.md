@@ -88,10 +88,7 @@ SELECT [DISTINCT] [OBJECTS] <select-list>
 |----------|-------------|
 | `classof(x)` | Class name string |
 | `toString(x)` | String value (String objects only; null otherwise) |
-| `dominators(x)` | Objects directly dominated by x (after analysis) |
-| `dominatorof(x)` | Dominator of x (after analysis) |
-| `path(a, b)` | Forward-reachability walk from a to b |
-| `COUNT(*)`, `SUM`, `MIN`, `MAX`, `AVG` | Aggregates |
+| `COUNT(*)`, `SUM`, `MIN`, `MAX` | Aggregates |
 | `MEDIAN(e)`, `PERCENTILE(e, n)` | Statistical aggregates |
 
 ### Five common query patterns
@@ -107,27 +104,26 @@ LIMIT 20
 
 **2. Top retained-size holders (requires analysis):**
 ```sql
-SELECT @displayName, @retainedHeapSize AS retained
+SELECT @displayName, @retainedHeapSize AS ret_bytes
 FROM INSTANCEOF java.lang.Object
-ORDER BY retained DESC
+ORDER BY ret_bytes DESC
 LIMIT 20
 ```
 
 **3. Thread names and their retained heap:**
 ```sql
-SELECT @displayName, @retainedHeapSize AS retained
+SELECT @displayName, @retainedHeapSize AS ret_bytes
 FROM java.lang.Thread
-ORDER BY retained DESC
+ORDER BY ret_bytes DESC
 ```
 
-**4. Duplicate string values (top 10 by wasted bytes):**
+**4. Duplicate string values (top 10 by count — SUM alongside toString is not supported):**
 ```sql
-SELECT toString(s) AS value, COUNT(*) AS n,
-       SUM(@usedHeapSize) AS wasted_bytes
+SELECT toString(s) AS value, COUNT(*) AS n
 FROM java.lang.String s
 GROUP BY toString(s)
 HAVING COUNT(*) > 1
-ORDER BY wasted_bytes DESC
+ORDER BY n DESC
 LIMIT 10
 ```
 

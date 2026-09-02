@@ -150,17 +150,17 @@ It can be used in `SELECT` and `GROUP BY` expressions.
 -- Bucket objects by size class
 SELECT
   CASE
-    WHEN @usedHeapSize > 10000 THEN 'large'
-    WHEN @usedHeapSize > 1000  THEN 'medium'
-    ELSE 'small'
+    WHEN @usedHeapSize > 10000 THEN "large"
+    WHEN @usedHeapSize > 1000  THEN "medium"
+    ELSE "small"
   END AS size_class,
   COUNT(*) AS n
 FROM INSTANCEOF java.lang.Object
 GROUP BY
   CASE
-    WHEN @usedHeapSize > 10000 THEN 'large'
-    WHEN @usedHeapSize > 1000  THEN 'medium'
-    ELSE 'small'
+    WHEN @usedHeapSize > 10000 THEN "large"
+    WHEN @usedHeapSize > 1000  THEN "medium"
+    ELSE "small"
   END
 ORDER BY n DESC
 ```
@@ -175,7 +175,7 @@ ORDER BY n DESC
 
 ```sql
 -- Replace null with a default
-SELECT COALESCE(toString(s), '<null>') AS val FROM java.lang.String s
+SELECT COALESCE(toString(s), "<null>") AS val FROM java.lang.String s
 
 -- Filter to objects of moderate size
 SELECT COUNT(*) FROM java.lang.Object
@@ -212,9 +212,9 @@ INTERSECT
 SELECT @displayName FROM "com\.example\.pool\..*"
 
 -- Strings only in the large set, not the small set
-SELECT toString(s) FROM java.lang.String s WHERE s.count > 100
+SELECT toString(s) FROM java.lang.String s WHERE @usedHeapSize > 100
 EXCEPT
-SELECT toString(s) FROM java.lang.String s WHERE s.count > 1000
+SELECT toString(s) FROM java.lang.String s WHERE @usedHeapSize > 1000
 ```
 
 ---

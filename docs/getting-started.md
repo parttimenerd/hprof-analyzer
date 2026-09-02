@@ -2,14 +2,12 @@
 
 ## Installation
 
-Build from source (requires Rust ≥ 1.80 and Node.js ≥ 18):
+Build from source (requires Rust ≥ 1.85):
 
 ```bash
-git clone https://github.com/your-org/hprof-analyzer
+git clone https://github.com/parttimenerd/hprof-analyzer
 cd hprof-analyzer
-npm --prefix web ci
-node web/esbuild.config.mjs
-cargo build --release -p hprof-analyzer
+cargo build --release
 ```
 
 The binary is at `target/release/hprof-analyzer`. Copy it anywhere on your `$PATH`.
