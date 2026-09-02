@@ -246,28 +246,8 @@ function _closeSetupModal() {
 (function initInstallPanel() {
   function wire() {
     const toggle = document.getElementById('btn-install-toggle');
-    const panel  = document.getElementById('install-panel');
-    if (!toggle || !panel) return;
-
-    toggle.addEventListener('click', () => {
-      const open = panel.style.display !== 'none';
-      panel.style.display = open ? 'none' : '';
-      toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
-      if (!open) _applySetupHighlighting();
-    });
-
-    // Install CLI tab switching
-    document.querySelectorAll('.install-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const panel = tab.dataset.itab;
-        tab.closest('.install-tab-group').querySelectorAll('.install-tab')
-           .forEach(t => t.classList.toggle('active', t === tab));
-        document.querySelectorAll('.install-tab-panel').forEach(p => {
-          p.style.display = p.dataset.ipanel === panel ? '' : 'none';
-        });
-        _applySetupHighlighting();
-      });
-    });
+    if (!toggle) return;
+    toggle.addEventListener('click', _openSetupModal);
   }
 
   if (document.readyState === 'loading') {
