@@ -576,19 +576,18 @@ results or from `heap browse` output.
 ## MCP server — AI integration
 
 `hprof-analyzer` ships a built-in **Model Context Protocol (MCP) server** that
-lets Claude, Cline, and other MCP-compatible AI assistants query a heap dump
-interactively without a separate server process.
+lets Claude, Cline, and other MCP-compatible AI assistants analyze heap dumps
+interactively. The first `load_dump` call runs the full analysis and writes a
+cache alongside the dump; all subsequent calls load in ~1 s.
 
-### Quick setup
+### Setup
 
-**Claude Code:**
-
+**Claude Code** (one command):
 ```sh
 claude mcp add hprof -- hprof-analyzer mcp
 ```
 
-**Claude Desktop** — add to `~/.claude/mcp.json`:
-
+**Cline** — add to VS Code settings (`.vscode/mcp.json` or Cline's MCP settings):
 ```json
 {
   "mcpServers": {
@@ -600,9 +599,19 @@ claude mcp add hprof -- hprof-analyzer mcp
 }
 ```
 
-**With a specific dump pre-loaded** (recommended for single-dump sessions; avoids
-the race between `load_dump` and other tool calls):
+**Claude Desktop** — add to `~/.claude.json` (or via Claude Desktop → Settings → MCP):
+```json
+{
+  "mcpServers": {
+    "hprof": {
+      "command": "hprof-analyzer",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
+**With a dump pre-loaded** (skips the `load_dump` step; useful for single-dump sessions):
 ```sh
 claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 ```
@@ -611,33 +620,33 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 
 | Tool | Description |
 |------|-------------|
-| `get_session_info` | Check if a dump is loaded and see basic stats |
-| `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file |
-| `get_summary` | Top 5 leak suspects + top 5 classes by retained size |
-| `get_report` | Full or section report as JSON |
-| `get_histogram` | Class histogram with instance + retained counts |
-| `query` | Run an OQL query; returns plain JSON rows |
-| `browse_dominators` | Navigate the dominator tree (omit `object_index` to start at root) |
-| `inspect_object` | Details on a specific object (class, sizes, fields in graph mode) |
-| `get_oql_docs` | Full OQL language reference and workflow guide |
+| `get_session_info` | Check if a dump is loaded and see basic stats. Call this first. |
+| `get_oql_docs` | OQL language reference + workflow guide. No dump needed. |
+| `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file. Fast after first run. |
+| `get_summary` | Top 5 leak suspects + top 5 classes by retained size. |
+| `get_histogram` | Class histogram with instance + retained counts. |
+| `get_report` | Full report or a section (`leaks`, `top`, `threads`, `overview`) as JSON. |
+| `query` | Run an OQL query; returns `{columns, rows, row_count, truncated}`. |
+| `browse_dominators` | Navigate dominator tree. Omit `object_index` to start at the GC root. |
+| `inspect_object` | Class, shallow/retained sizes for a specific object. |
 
-### Typical AI workflow
+### Typical investigation
 
 ```
-1. get_session_info     — check if a dump is already loaded
-2. load_dump({path})    — load the dump (fast from cache after first run)
-3. get_summary          — top leak suspects + top classes
-4. get_histogram        — class-level breakdown
-5. query({oql})         — drill in with OQL queries
-6. browse_dominators    — navigate the dominator tree from root or a suspect
-7. inspect_object       — detailed view of a specific object
+1. get_session_info          — check if a dump is already loaded
+2. get_oql_docs({topic:"workflow"})  — learn what tools are available
+3. load_dump({path})         — load the dump (fast from cache after first run)
+4. get_summary               — top leak suspects + top classes
+5. get_histogram             — class-level breakdown
+6. query({oql:"..."})        — drill in with OQL
+7. browse_dominators         — navigate the dominator tree from root or a suspect
+8. inspect_object            — details on a specific object
 ```
 
-Call `get_oql_docs` for a complete OQL reference and worked examples.
+**Tip:** call `get_oql_docs({topic:"examples"})` for 20 worked queries covering
+common patterns: string waste, leak detection, dominator walk, thread locals, etc.
 
-**Cache:** The first `load_dump` call may take 5–15 min for large dumps and
-writes a cache alongside the dump (`<name>.hprof-cache/`). Subsequent calls
-load in ~1 s. Delete the cache directory to force re-analysis.
+**Cache:** writes to `<dump>.hprof-cache/` alongside the dump. Delete to force re-analysis.
 
 ## Use with AI agents
 

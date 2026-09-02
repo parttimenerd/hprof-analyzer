@@ -387,19 +387,58 @@ impl HprofMcpServer {
             .map(|s| s.as_str())
             .unwrap_or("<unknown>");
 
-        let note = if sess.mode == CacheMode::Graph {
-            "Full field values available (Graph mode loaded)."
+        // In Graph mode, read inbound CSR to list up to 20 objects that reference this one.
+        let inbound_refs: Option<Vec<serde_json::Value>> = if sess.mode == CacheMode::Graph {
+            match sess.cache.read_inbound_csr() {
+                Ok(Some((inb_off, inb_tgt))) if !inb_off.is_empty() && idx + 1 < inb_off.len() => {
+                    let start = inb_off[idx] as usize;
+                    let end = inb_off[idx + 1] as usize;
+                    let refs: Vec<serde_json::Value> = inb_tgt[start..end]
+                        .iter()
+                        .take(20)
+                        .map(|&src| {
+                            let src = src as usize;
+                            let src_cidx = class_idx[src];
+                            let src_class = sess
+                                .class_names
+                                .get(src_cidx as usize)
+                                .map(|s| s.as_str())
+                                .unwrap_or("<unknown>");
+                            serde_json::json!({
+                                "object_index": src,
+                                "class": src_class,
+                                "retained_bytes": retained[src],
+                            })
+                        })
+                        .collect();
+                    let truncated = (end - start) > 20;
+                    Some(if truncated {
+                        let mut v = refs;
+                        v.push(
+                            serde_json::json!({"note": format!("... {} more", end - start - 20)}),
+                        );
+                        v
+                    } else {
+                        refs
+                    })
+                }
+                _ => None,
+            }
         } else {
-            "Load with with_graph=true for field values and inbound references."
+            None
         };
 
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "object_index": idx,
             "class": class_name,
             "shallow_bytes": shallow[idx],
             "retained_bytes": retained[idx],
-            "note": note,
         });
+
+        if let Some(refs) = inbound_refs {
+            result["inbound_refs"] = serde_json::json!(refs);
+        }
+
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))

@@ -356,7 +356,7 @@ Returns OQL documentation. No dump needed — call this first.
 ### load_dump({ path, with_graph? })
 Loads a heap dump. First call takes 5–15 min; subsequent calls load in ~1 s (cached).
 - `path`: absolute path to the `.hprof` file (also accepts `.hprof.gz`, `.hprof.zip`)
-- `with_graph`: set `true` only if you need field-value traversal (`@inbounds`/`@outbounds`) or full `inspect_object` — adds 1–3 min + 200–600 MB cache
+- `with_graph`: set `true` to enable OQL `@inbounds`/`@outbounds` reference traversal. Adds 1–3 min + 200–600 MB cache. Not needed for most analyses.
 
 ### get_summary({})
 Returns a Markdown summary: top 5 leak suspects + top 5 classes by retained size.
@@ -387,11 +387,9 @@ Navigates the dominator tree.
 - Use `index` values with `inspect_object` or nested `browse_dominators` calls
 
 ### inspect_object({ object_index })
-Returns details for one object: class, shallow size, retained size, and (with
-`--with-graph`) field values and inbound references.
+Returns details for one object: class, shallow size, retained size.
 - `object_index`: from `@objectId` column in a query or from `browse_dominators`
-- In Full mode (default), returns class/sizes + a note about missing graph data
-- In Graph mode (`--with-graph`), returns full field values + inbound refs
+- Use OQL with `@inbounds`/`@outbounds` to follow references; `inspect_object` shows sizes and class only.
 
 ## Typical investigation workflow
 

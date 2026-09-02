@@ -6,6 +6,46 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **MCP server** (`hprof-analyzer mcp`). Exposes 9 tools over the Model Context
+  Protocol so Claude Code, Cline, Claude Desktop, and any other MCP-compatible
+  AI assistant can load and analyze heap dumps interactively. Tools: `get_session_info`,
+  `get_oql_docs`, `load_dump`, `get_summary`, `get_histogram`, `get_report`, `query`,
+  `browse_dominators`, `inspect_object`. The server is stateful — `load_dump` must be
+  called first, after which all other tools use the same session. Optionally pre-load
+  a dump with `hprof-analyzer mcp --dump heap.hprof`.
+
+- **`heap` subcommand group.** Every MCP tool is also a CLI command for scripting
+  and LLM-driven workflows:
+  ```
+  hprof-analyzer heap summary <dump>
+  hprof-analyzer heap histogram <dump> [--limit N] [--json]
+  hprof-analyzer heap report <dump> [--section leaks|top|threads|overview|all] [--json]
+  hprof-analyzer heap query <dump> --oql "..." [--json]
+  hprof-analyzer heap browse <dump> [--index N] [--depth D] [--width W] [--json]
+  hprof-analyzer heap inspect <dump> --index N [--json]
+  hprof-analyzer heap docs [--topic syntax|attributes|examples|workflow|all]
+  hprof-analyzer heap load <dump> [--with-graph]
+  hprof-analyzer heap cache-list [<dump>]
+  hprof-analyzer heap cache-clear <dump>
+  ```
+  Output is human-readable text by default; `--json` for machine-parseable output.
+
+- **Disk cache.** The first analysis of a dump writes a cache to
+  `<dump>.hprof-cache/<hash>/` (5–15 min, 70–400 MB). Every subsequent call for
+  the same dump loads in ~1 s. Cache is content-addressed (first 64 bytes + file
+  size + mtime) and busts automatically on dump changes. Add `--with-graph` on the
+  first load to cache the reference graph for OQL `@inbounds`/`@outbounds` traversal
+  (adds 200–600 MB).
+
+- **Homebrew tap.** Install via:
+  ```sh
+  brew tap parttimenerd/hprof-analyzer
+  brew trust parttimenerd/hprof-analyzer
+  brew install hprof-analyzer
+  ```
+  A rolling nightly formula tracks every push to `main`; a stable versioned formula
+  is published on each tagged release.
+
 - **Holder breakdown in HTML report.** The Biggest Classes section now shows
   a collapsible "Held by (immediate dominators)" widget. For each top class,
   it lists the immediate-dominator classes (with instance count and retained
@@ -23,6 +63,12 @@ All notable changes to hprof-analyzer are documented here.
 
 - Holder breakdown is omitted from the plain Markdown renderer (it is
   present in the JSON model and HTML report only).
+
+### Fixed
+
+- `inspect_object` no longer panics when called with `with_graph=true` if
+  the inbound CSR was not cached (the graph cache stores forward edges only;
+  a bounds-check now guards the inbound lookup).
 
 ## [0.2.0] — 2026-08-10
 
