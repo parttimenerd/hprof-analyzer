@@ -656,6 +656,19 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 | `browse_dominators` | Navigate dominator tree. Omit `object_index` to start at the GC root. |
 | `inspect_object` | Class, shallow/retained sizes for a specific object. |
 
+### Claude Code skill (recommended)
+
+Install the bundled skill so Claude automatically uses the MCP for any heap-dump
+question without you having to ask:
+
+```sh
+cp skills/hprof-analyzer.md ~/.claude/skills/hprof-analyzer/SKILL.md
+```
+
+With the skill in place, Claude will call `get_session_info` → `load_dump` →
+`get_report` automatically instead of suggesting external tools like `jmap` or
+Eclipse MAT.
+
 ### Typical investigation
 
 ```
@@ -677,23 +690,36 @@ common patterns: string waste, leak detection, dominator walk, thread locals, et
 
 ## Use with AI agents
 
-`hprof-analyzer` works well as a tool for LLM agents. Start the server on your
-dump, then point an agent at it:
+Two **Claude Code skills** are included for AI-assisted heap triage. Pick the
+one that matches your setup:
+
+| Skill | File | Requires |
+|-------|------|----------|
+| MCP (recommended) | [`skills/hprof-analyzer.md`](skills/hprof-analyzer.md) | MCP registered (`claude mcp add`) |
+| CLI | [`skills/hprof-analyzer-cli.md`](skills/hprof-analyzer-cli.md) | Binary on `PATH`, no MCP needed |
+
+Both skills teach Claude OQL syntax, the standard investigation workflow, and
+how to summarize findings rather than dumping raw output. The MCP skill returns
+structured JSON directly into context; the CLI skill uses the cached `heap`
+subcommand group.
+
+### Installing a skill
+
+Copy the skill file into `~/.claude/skills/<name>/SKILL.md`:
 
 ```sh
-hprof-analyzer server heap.hprof   # starts on http://127.0.0.1:7070
+# MCP skill
+cp skills/hprof-analyzer.md ~/.claude/skills/hprof-analyzer/SKILL.md
+
+# CLI skill
+cp skills/hprof-analyzer-cli.md ~/.claude/skills/hprof-analyzer-cli/SKILL.md
 ```
 
-A ready-made **Claude Code skill** is included at
-[`skills/hprof-analyzer.md`](skills/hprof-analyzer.md). Load it in Claude Code:
+Claude Code picks up the skill automatically — no restart needed. Invoke it
+with `/hprof-analyzer` (or `/hprof-analyzer-cli`) in the chat, or Claude will
+trigger it automatically when you mention a `.hprof` file or ask about heap memory.
 
-```
-@skills/hprof-analyzer.md
-"Connect to http://127.0.0.1:7070 and identify the top memory consumers"
-```
-
-The skill teaches Claude the server API, OQL syntax, and common heap-triage
-workflows. The OQL guide at
+The OQL guide at
 [parttimenerd.github.io/hprof-analyzer/oql/](https://parttimenerd.github.io/hprof-analyzer/oql/)
 covers grammar, examples, and the full attribute reference.
 
