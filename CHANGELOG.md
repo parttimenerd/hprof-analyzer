@@ -2,7 +2,7 @@
 
 All notable changes to hprof-analyzer are documented here.
 
-## [Unreleased]
+## [0.2.1] — 2026-09-03
 
 ### Added
 

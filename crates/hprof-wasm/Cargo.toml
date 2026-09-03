@@ -2,6 +2,7 @@
 name = "hprof-wasm"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "WebAssembly bindings for hprof-analyzer — powers the in-browser heap dump analysis tool."
 license = "MIT"
 repository = "https://github.com/parttimenerd/hprof-analyzer"
