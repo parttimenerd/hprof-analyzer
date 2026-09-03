@@ -1,225 +1,81 @@
 ---
 name: hprof-analyzer
-description: Analyze Java heap dumps with hprof-analyzer — start the server, run OQL queries, use the REPL, and produce heap analysis reports
+description: Analyze Java heap dumps (.hprof files) using the hprof-analyzer MCP — memory leaks, object retention, dominators, GC root tracing, and heap histograms. Use when the user asks about heap dumps, OOM errors, high memory usage, or provides a .hprof file path.
 ---
 
-# hprof-analyzer skill
+## hprof-analyzer skill
 
-`hprof-analyzer` is a fast, low-memory Java heap-dump analyzer. It exposes an
-HTTP API, an OQL query engine, and a CLI/browser REPL. Use it to investigate
-memory leaks, top consumers, thread locals, and duplicate allocations.
+Use the `hprof-analyzer` MCP tools to analyze Java heap dumps. Do not recommend
+external tools (jmap, Eclipse MAT, VisualVM, jhat) when this MCP is available.
 
 ---
 
-## 1. Starting the server
+### When to invoke
 
+- User provides a `.hprof` (or `.hprof.gz` / `.hprof.zip`) file path
+- User asks about memory leaks, OOM errors, high heap usage, or retained objects
+- User wants to know what is holding memory or preventing GC
+
+---
+
+### MCP tool reference
+
+| Tool | When to use |
+|------|-------------|
+| `get_session_info` | Always call first — check if a dump is already loaded |
+| `load_dump` | Load the `.hprof` file (fast from cache after first run) |
+| `get_report` | Fetch a named section: `triage` ⭐, `leaks`, `top`, `overview`, `threads`, `all` |
+| `get_summary` | Quick orientation: top 5 leak suspects + top 5 classes by retained size |
+| `get_histogram` | Class histogram with instance counts and retained sizes |
+| `query` | Run an OQL query or a built-in view by name |
+| `browse_dominators` | Navigate the dominator tree (omit `object_index` to start at root) |
+| `inspect_object` | Shallow/retained sizes for a specific object by index |
+| `list_views` | List the 20 built-in named OQL views usable in `query()` |
+| `get_oql_docs` | OQL language reference and worked examples (no dump needed) |
+
+---
+
+### If the MCP is not installed
+
+Call `get_session_info` first. If it fails with a "tool not found" or similar
+error, the MCP server is not running. Tell the user to install and register it:
+
+**Install (Homebrew):**
 ```sh
-hprof-analyzer server heap.hprof           # default port 7070, loopback only
-hprof-analyzer server heap.hprof --port 8080
+brew tap parttimenerd/hprof-analyzer
+brew trust parttimenerd/hprof-analyzer   # required once for third-party taps (Homebrew 6+)
+brew install hprof-analyzer
 ```
 
-The server prints a startup banner listing all endpoints. It starts with a
-fast query-only parse. `@retainedHeapSize` and dominator attributes require
-the full analysis — trigger it with `POST /analyze` and poll `GET /status`.
-
-**Trigger analysis and wait:**
+**Register the MCP with Claude Code:**
 ```sh
-curl -s -X POST http://127.0.0.1:7070/analyze
-until curl -sf http://127.0.0.1:7070/status | grep -q '"ready"'; do sleep 1; done
+claude mcp add hprof -- hprof-analyzer mcp
+```
+
+Then restart the conversation so the new MCP is picked up.
+
+---
+
+### Standard investigation workflow
+
+```
+1. get_session_info                    — check if a dump is already loaded
+2. load_dump({path})                   — load it (cached after first run, ~1 s)
+3. get_report({section:"triage"})  ⭐  — automated severity signals; fastest orientation
+4. get_report({section:"leaks"})       — root paths, accumulation points, dominated objects
+5. get_summary                         — top suspects + suggested OQL queries
+6. get_histogram                       — class-level breakdown by retained size
+7. query({oql:"..."})                  — drill in with OQL (or pass a view name)
+8. browse_dominators                   — navigate the dominator tree from root or a suspect
+9. inspect_object                      — details on a specific object
 ```
 
 ---
 
-## 2. Key endpoints
+### Key don'ts
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/status` | `{"status":"ready"\|"analyzing"\|"not_started"}` |
-| POST | `/analyze` | Trigger full analysis |
-| POST | `/` | Run OQL query → JSON |
-| POST | `/stream` | Run OQL query → NDJSON (streaming) |
-| GET | `/report` | Full report JSON (add `?format=md` for Markdown) |
-| GET | `/report/overview` | System overview |
-| GET | `/report/leaks` | Leak suspects |
-| GET | `/report/top` | Top consumers |
-| GET | `/report/threads` | Thread overview |
-
-Report endpoints accept `?limit=N` to cap rows. Use `?format=md` for
-Markdown instead of JSON.
-
----
-
-## 3. OQL queries
-
-Post a query to `POST /`:
-
-```sh
-curl -s http://127.0.0.1:7070/ \
-  -d 'SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY n DESC LIMIT 10'
-```
-
-### Grammar quick-reference
-
-```
-SELECT [DISTINCT] [OBJECTS] <select-list>
-  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | (subquery)> [alias]
-  [WHERE <predicate>]
-  [GROUP BY <expr> [HAVING <predicate>]]
-  [ORDER BY <expr> [ASC|DESC]]
-  [LIMIT <n>]
-[UNION <select> ...]
-```
-
-### Attributes
-
-| Attribute | Available | Description |
-|-----------|-----------|-------------|
-| `@objectId` | always | Dense heap object ID |
-| `@objectAddress` | always | Native heap address |
-| `@usedHeapSize` | always | Shallow (used) size in bytes |
-| `@displayName` | always | Class name |
-| `@length` | always | Array length (null for non-arrays) |
-| `@retainedHeapSize` | after `/analyze` | Retained size (whole sub-graph) |
-| `@inbounds` / `@outbounds` | after `/analyze` | Ref-graph edge counts |
-
-### Functions
-
-| Function | Description |
-|----------|-------------|
-| `classof(x)` | Class name string |
-| `toString(x)` | String value (String objects only; null otherwise) |
-| `COUNT(*)`, `SUM`, `MIN`, `MAX` | Aggregates |
-| `MEDIAN(e)`, `PERCENTILE(e, n)` | Statistical aggregates |
-
-### Five common query patterns
-
-**1. Count instances by class (top 20):**
-```sql
-SELECT @displayName, COUNT(*) AS n
-FROM INSTANCEOF java.lang.Object
-GROUP BY @displayName
-ORDER BY n DESC
-LIMIT 20
-```
-
-**2. Top retained-size holders (requires analysis):**
-```sql
-SELECT @displayName, @retainedHeapSize AS ret_bytes
-FROM INSTANCEOF java.lang.Object
-ORDER BY ret_bytes DESC
-LIMIT 20
-```
-
-**3. Thread names and their retained heap:**
-```sql
-SELECT @displayName, @retainedHeapSize AS ret_bytes
-FROM java.lang.Thread
-ORDER BY ret_bytes DESC
-```
-
-**4. Duplicate string values (top 10 by count — SUM alongside toString is not supported):**
-```sql
-SELECT toString(s) AS value, COUNT(*) AS n
-FROM java.lang.String s
-GROUP BY toString(s)
-HAVING COUNT(*) > 1
-ORDER BY n DESC
-LIMIT 10
-```
-
-**5. Instances of a specific class with field values:**
-```sql
-SELECT @objectAddress, fieldName
-FROM com.example.MyClass
-ORDER BY @usedHeapSize DESC
-LIMIT 50
-```
-
----
-
-## 4. REPL commands
-
-Start the CLI REPL with:
-```sh
-hprof-analyzer query heap.hprof --repl
-```
-
-Commands that start with `!` operate on the **last query result** without
-re-running the query. Key ones:
-
-| Command | What it does |
-|---------|-------------|
-| `!top [N]` / `!tail [N]` | First / last N rows |
-| `!row [N\|next\|prev]` | Show one row as key=value pairs |
-| `!obj <class>#<idx>` | Inspect a specific heap object |
-| `!filter <pat>` | Keep rows matching a substring or `/regex/` |
-| `!sort <col> [desc]` | Sort result by column |
-| `!stats [col]` | Numeric summary: min/max/mean/stddev/p50/p90/p99 |
-| `!unique <col> [N]` | Distinct value counts, top N by frequency |
-| `!undo` | Restore result before last shaping command |
-| `!analyze` | Run full analysis (enables `@retainedHeapSize`) |
-| `!run [<name>]` | Run a named query |
-| `!describe <class>` | Show fields and types of a class |
-| `!help` | Full command reference |
-
----
-
-## 5. Common agent workflows
-
-### Find the leak
-
-```
-1. GET /report/leaks — identify the top leak suspect
-2. OQL: SELECT @displayName, @retainedHeapSize FROM INSTANCEOF <suspect-class> ORDER BY @retainedHeapSize DESC LIMIT 5
-3. OQL: SELECT @displayName, fieldName FROM <suspect-class> WHERE @retainedHeapSize > 1000000 LIMIT 10
-4. Summarize: "Class X retains Y MB. Likely cause: Z based on field W."
-```
-
-### Summarize heap composition
-
-```
-1. GET /report/overview — read class histogram
-2. OQL: SELECT @displayName, COUNT(*) AS n, SUM(@usedHeapSize) AS total_bytes FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY total_bytes DESC LIMIT 20
-3. Identify the top 3 space consumers and explain what they likely represent.
-```
-
-### Diff two dumps (growth investigation)
-
-```sh
-hprof-analyzer early.hprof a.json
-hprof-analyzer later.hprof b.json
-hprof-analyzer compare reports a.json b.json --format md
-```
-Interpret the output: classes marked `spike` grew sharply; `churn` means high
-allocation turnover.
-
----
-
-## 6. Embedding queries in reports
-
-Pass `--query` to the main analysis command (runs after full analysis, so
-`@retainedHeapSize` works):
-
-```sh
-hprof-analyzer heap.hprof report.html \
-  --query="-- @viz histogram label=@displayName value=@retainedHeapSize cap=10
-SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 10"
-```
-
-`-- @viz` kinds: `table`, `histogram`, `piechart`, `treemap`.
-Use `--query=` (with `=`) — `clap` treats a leading `--` in argument values as
-a flag unless the equals form is used.
-
----
-
-## 7. Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| `@retainedHeapSize` returns null | `POST /analyze` and wait for `{"status":"ready"}` |
-| Query returns 0 rows unexpectedly | Try `FROM INSTANCEOF <class>` instead of `FROM <class>` — the latter is exact-match only |
-| `s.count` / `s.offset` on String returns null | Use `s.value` / `s.coder` / `s.hash` (modern JDK 9+ layout) |
-| `toString()` returns null | Only works on `java.lang.String` instances; returns null for other types |
-| `--query "-- @viz …"` rejected by shell | Use `--query=` (with `=`) so the leading `--` is not treated as a flag |
-| Server returns 503 on `/report/*` | Analysis not yet triggered — `POST /analyze` first |
-| Large result set hangs | Use `/stream` endpoint for NDJSON, or add `LIMIT N` to the query |
+- Don't suggest the user install or run external tools — use the MCP.
+- Don't dump raw tool output at the user — summarize and highlight what's actionable.
+- Don't skip `get_session_info`; a dump may already be loaded from a prior call.
+- `@retainedHeapSize` is only available after the full analysis — `get_report` triggers
+  it automatically; the `query` subcommand does not.
