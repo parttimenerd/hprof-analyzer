@@ -87,7 +87,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust nightly + rust-src (for wasm64)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install Rust toolchain (stable, default)
         uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Node
@@ -120,8 +125,17 @@ jobs:
       - name: Build browser REPL
         run: bash scripts/build-browser.sh
 
+      - name: Build browser REPL (wasm64 experimental)
+        run: bash scripts/build-browser-wasm64.sh
+
       - name: Install browser REPL as homepage
         run: cp dist/hprof-analyzer-browser.html docs/index.html
+
+      - name: Install wasm64 assets
+        run: |
+          mkdir -p docs/wasm64
+          cp dist/wasm64/hprof_wasm.js        docs/wasm64/hprof_wasm.js
+          cp dist/wasm64/hprof_wasm_bg.wasm   docs/wasm64/hprof_wasm_bg.wasm
 
       - name: Copy sample hprof fixtures
         run: |

@@ -91,7 +91,6 @@ const LAST_URL_KEY = 'hprof-analyzer.last-url';
 const BOOKMARKS_KEY = 'hprof-analyzer.bookmarks';
 const STORED_QUERIES_KEY = 'hprof-analyzer.stored-queries';
 const STARRED_KEY = 'hprof-analyzer.starred';
-const LAST_FILE_KEY = 'hprof-analyzer.last-file';
 
 // Restore last-used server URL into the input on page load
 (function restoreLastUrl() {
@@ -474,8 +473,6 @@ const SAMPLE_DUMPS = [
     document.getElementById('drop-zone-text').innerHTML =
       `<strong>${escHtml(file.name)}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
     modeButtons.style.display = 'flex';
-    // Remember file name for the "last file" quick-reload prompt
-    try { localStorage.setItem(LAST_FILE_KEY, file.name); } catch (_) {}
   }
 
   fileInput.addEventListener('change', () => {
@@ -546,20 +543,6 @@ const SAMPLE_DUMPS = [
       .catch(() => { item.classList.add('sample-item-offline'); item.title = 'Not available in this build'; });
   });
 
-  // Show "last file" quick-reload prompt if a previous file was remembered
-  const lastFileName = (() => { try { return localStorage.getItem(LAST_FILE_KEY); } catch { return null; } })();
-  if (lastFileName) {
-    const lastFileSection = document.getElementById('last-file-section');
-    const lastFileItem    = document.getElementById('last-file-item');
-    if (lastFileSection && lastFileItem) {
-      lastFileSection.style.display = '';
-      const item = document.createElement('div');
-      item.className = 'sample-item';
-      item.innerHTML = `<span class="sample-name">${escHtml(lastFileName)}</span><span class="sample-size">click to select again</span>`;
-      item.addEventListener('click', () => fileInput.click());
-      lastFileItem.appendChild(item);
-    }
-  }
 })();
 
 // ── WASM session loading ───────────────────────────────────────────────────────
