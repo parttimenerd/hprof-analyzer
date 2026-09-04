@@ -389,6 +389,26 @@ enum Cmd {
         #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
         dump: Option<String>,
     },
+    /// Redact a heap dump: zero all primitive field values and array contents
+    /// while preserving the object graph (IDs, class names, reference fields).
+    ///
+    /// The output is a valid HPROF file that MAT, jhat, and hprof-analyzer can
+    /// open. A custom marker record (tag 0xDE) is prepended so hprof-analyzer
+    /// displays a "Redacted dump" banner and skips analyses that would be
+    /// meaningless on zeroed data.
+    ///
+    /// Output format is inferred from the extension:
+    ///   .hprof         raw binary
+    ///   .hprof.gz      gzip-compressed
+    ///   .hprof.zip     zip archive (single entry "dump.hprof")
+    Redact {
+        /// Input dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+        /// Output path (.hprof, .hprof.gz, or .hprof.zip).
+        #[arg(value_hint = ValueHint::FilePath)]
+        output: String,
+    },
 }
 
 /// `mat` subcommands.
@@ -688,6 +708,41 @@ fn fail(msg: impl std::fmt::Display) -> ! {
     process::exit(1);
 }
 
+fn run_redact(input: &str, output: &str) -> io::Result<()> {
+    use hprof_analyzer::source::HprofSource;
+    use std::fs::File;
+
+    let source = HprofSource::from(input);
+    let lower = output.to_ascii_lowercase();
+
+    let progress = |phase: &str, fraction: f64| {
+        if fraction == 0.0 {
+            eprintln!("{phase}…");
+        } else if fraction == 1.0 {
+            eprintln!("{phase} done");
+        }
+    };
+
+    if lower.ends_with(".hprof.gz") {
+        let file = File::create(output)?;
+        let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
+        hprof_analyzer::redact::redact(&source, gz, progress)
+    } else if lower.ends_with(".hprof.zip") {
+        let file = File::create(output)?;
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("dump.hprof", opts)
+            .map_err(io::Error::other)?;
+        hprof_analyzer::redact::redact(&source, &mut zip, progress)?;
+        zip.finish().map_err(io::Error::other)?;
+        Ok(())
+    } else {
+        let file = File::create(output)?;
+        hprof_analyzer::redact::redact(&source, file, progress)
+    }
+}
+
 /// Parse args and dispatch to the selected subcommand.
 fn main() {
     // Restore default SIGPIPE handling so `… | head` (or any reader that closes
@@ -968,6 +1023,12 @@ fn main() {
             let preload = dump.map(std::path::PathBuf::from);
             if let Err(e) = hprof_analyzer::mcp::run_mcp_server(preload) {
                 fail(e);
+            }
+        }
+        Some(Cmd::Redact { input, output }) => {
+            if let Err(e) = run_redact(&input, &output) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
         }
     }
@@ -1637,7 +1698,7 @@ fn analyze_to_report_inner(
     }
     let p1 = pass1::Pass1::run(source, false)?;
     let truncated_input = p1.truncated_input;
-    t_pipe!("pass1 done");
+    let redacted = p1.redacted;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -1830,6 +1891,7 @@ fn analyze_to_report_inner(
         opts,
         alloc_sites,
         precomputed_field_stats,
+        redacted,
     );
     // dc_off and dc_tgt were moved into build_model and freed early inside it.
     report.truncated_input = truncated_input;
@@ -2810,6 +2872,7 @@ fn run(
         Err(e) => return Err(e),
     };
     let truncated_input = p1.truncated_input;
+    let redacted = p1.redacted;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -4054,6 +4117,7 @@ fn run(
         &opts,
         alloc_sites,
         precomputed_field_stats_main,
+        redacted,
     );
     crate::trace::probe("report: after build_model");
     t_dark!("build_model done");

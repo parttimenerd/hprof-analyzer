@@ -185,6 +185,10 @@
         "$ref": "#/$defs/QueryResult"
       }
     },
+    "redacted_input": {
+      "description": "True when the dump was produced by `hprof-analyzer redact` (primitive values zeroed).",
+      "type": "boolean"
+    },
     "references": {
       "description": "Soft/weak/phantom reference statistics. Always-on; additive, defaults to\nempty for round-trip with older JSON.",
       "$ref": "#/$defs/ReferencesAnalysis",

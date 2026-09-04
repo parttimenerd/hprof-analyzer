@@ -524,6 +524,12 @@ const SAMPLE_DUMPS = [
     }
   });
 
+  document.getElementById('btn-redact').addEventListener('click', () => {
+    if (wasmReady && selectedFile) {
+      runRedact(selectedFile);
+    }
+  });
+
   // Always show sample section; probe availability to decide if items are clickable
   const sampleList = document.getElementById('sample-list');
   sampleSection.style.display = '';
@@ -546,6 +552,55 @@ const SAMPLE_DUMPS = [
 })();
 
 // ── WASM session loading ───────────────────────────────────────────────────────
+
+// Redact the selected file in-memory via WASM and trigger a browser download.
+async function runRedact(file) {
+  const statusEl = document.getElementById('wasm-load-status');
+  statusEl.textContent = 'Reading file…';
+  statusEl.style.display = '';
+
+  let bytes;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch (e) {
+    statusEl.textContent = `Error reading file: ${e.message}`;
+    return;
+  }
+
+  statusEl.textContent = 'Redacting (pass 1)…';
+  let result;
+  try {
+    result = await new Promise((resolve, reject) => {
+      try {
+        const out = activeHprof.redact_with_progress(bytes, file.name, (phase, frac) => {
+          statusEl.textContent = `Redacting (${phase} ${Math.round(frac * 100)}%)…`;
+        });
+        resolve(out);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  } catch (e) {
+    statusEl.textContent = `Redaction failed: ${e}`;
+    return;
+  }
+
+  // Derive output filename: strip extensions, add -redacted.hprof
+  const baseName = file.name.replace(/\.(hprof(\.gz|\.zip)?|tar\.gz|tgz)$/i, '') || file.name;
+  const outName = `${baseName}-redacted.hprof`;
+
+  const blob = new Blob([result], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = outName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  statusEl.textContent = `Redacted file downloaded as ${outName}`;
+}
 
 // Fetch a sample fixture by URL and open a mode-selection popup
 async function loadSampleDump(sample) {

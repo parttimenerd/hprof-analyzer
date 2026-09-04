@@ -2937,6 +2937,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             generated: String::new(),
             truncated_input: false,
+            redacted_input: false,
             overview: SystemOverview::default(),
             leaks: LeakSuspects::default(),
             top: TopConsumers::default(),

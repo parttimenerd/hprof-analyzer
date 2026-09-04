@@ -3,7 +3,7 @@
 //! `u1`/`u2`/`u4`/`u8`/`id` primitives the parser consumes, buffering in large
 //! chunks so a multi-gigabyte scan stays sequential and allocation-light.
 
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use std::{
     fs::File,
     io::{self, BufReader, Cursor, Read},
@@ -50,7 +50,7 @@ pub struct HprofReader {
 /// A warning is printed to stderr on the first such error so the user knows the
 /// report may be partial.
 pub(crate) struct LenientGzDecoder<R: Read> {
-    inner: GzDecoder<R>,
+    inner: MultiGzDecoder<R>,
     warned: bool,
     truncated: Arc<AtomicBool>,
 }
@@ -58,7 +58,7 @@ pub(crate) struct LenientGzDecoder<R: Read> {
 impl<R: Read> LenientGzDecoder<R> {
     pub(crate) fn new(r: R, truncated: Arc<AtomicBool>) -> Self {
         Self {
-            inner: GzDecoder::new(r),
+            inner: MultiGzDecoder::new(r),
             warned: false,
             truncated,
         }
@@ -482,7 +482,7 @@ impl HprofReader {
     }
 
     /// Fill `dst` completely from the internal buffer + underlying stream.
-    fn read_into(&mut self, dst: &mut [u8]) -> io::Result<()> {
+    pub(crate) fn read_into(&mut self, dst: &mut [u8]) -> io::Result<()> {
         let mut written = 0usize;
         // First, drain whatever is already buffered.
         while written < dst.len() {

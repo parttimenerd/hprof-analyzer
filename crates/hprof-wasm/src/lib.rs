@@ -1457,6 +1457,34 @@ impl HprofSession {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Redact
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[wasm_bindgen]
+impl HprofSession {
+    /// Redact a heap dump in memory: zeroes all primitive field values and
+    /// array contents, returns the redacted raw `.hprof` bytes.
+    ///
+    /// `cb(phase: string, fraction: number)` is called for progress updates.
+    pub fn redact_with_progress(
+        data: Vec<u8>,
+        name: &str,
+        cb: js_sys::Function,
+    ) -> Result<Vec<u8>, JsValue> {
+        let source = hprof_analyzer::HprofSource::Bytes {
+            data: std::sync::Arc::new(data),
+            name: name.to_string(),
+        };
+        let mut out: Vec<u8> = Vec::new();
+        hprof_analyzer::redact::redact(&source, &mut out, |phase, frac| {
+            call_progress(&cb, phase, frac as f32);
+        })
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(out)
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Free functions
 // ──────────────────────────────────────────────────────────────────────────────
 

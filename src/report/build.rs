@@ -538,6 +538,7 @@ pub fn build_model(
     opts: &crate::AnalyzeOptions,
     alloc_sites: Option<AllocSites>,
     precomputed_field_stats: Option<FieldStats>,
+    redacted: bool,
 ) -> Report {
     let generated = now_iso8601();
     // Per-step wall markers to attribute build_model's ~157s (the biggest touchable
@@ -715,6 +716,7 @@ pub fn build_model(
         schema_version: SCHEMA_VERSION,
         generated,
         truncated_input: false,
+        redacted_input: redacted,
         overview,
         leaks,
         top,
@@ -750,6 +752,25 @@ pub fn build_model(
     report.waste_summary = build_waste_summary(&report);
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);
+    if redacted {
+        report.triage.insert(
+            0,
+            crate::report::model::TriageSignal {
+                id: "redacted-dump".to_string(),
+                severity: crate::report::model::TriageSeverity::Info,
+                title: "Redacted dump".to_string(),
+                detail: "Primitive field values and array contents are zeroed. \
+                         Structural analyses (histogram, dominator tree, leak suspects, \
+                         GC roots) are accurate. \
+                         Duplicate-string and collections analyses are skipped."
+                    .to_string(),
+                anchor: None,
+                anchor_label: None,
+                bytes: None,
+                nav_class: None,
+            },
+        );
+    }
     t_bm!("waste_summary+triage+done");
     // Invariant: the "% Heap" denominator is one number. `leaks.total_shallow`
     // and `overview.total_shallow` are computed by separate passes but must agree,

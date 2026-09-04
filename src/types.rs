@@ -18,6 +18,10 @@ pub mod tags {
     pub const HEAP_DUMP: u8 = 0x0c;
     pub const HEAP_DUMP_SEGMENT: u8 = 0x1c;
     pub const HEAP_DUMP_END: u8 = 0x2c;
+    /// Custom marker record injected by `hprof-analyzer redact`. Tag 0xDE is
+    /// unused in the HPROF spec; tools that don't know it skip it via the
+    /// standard length-prefixed skip path.
+    pub const REDACTED_MARKER: u8 = 0xDE;
 }
 
 /// Heap sub-record tags

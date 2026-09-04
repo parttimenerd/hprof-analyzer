@@ -141,6 +141,8 @@ pub struct Pass1 {
     /// True if the input gzip stream was truncated (detected by `LenientGzDecoder`).
     #[allow(dead_code)]
     pub truncated_input: bool,
+    /// True if the dump was produced by `hprof-analyzer redact` (tag 0xDE marker present).
+    pub redacted: bool,
 }
 
 impl Pass1 {
@@ -195,6 +197,7 @@ impl Pass1 {
         let mut load_class_records = 0u64;
         let mut unload_class_records = 0u64;
         let mut plain_truncated = false;
+        let mut plain_redacted = false;
         let mut stack_frame_records = 0u64;
         let mut stack_trace_records = 0u64;
         let mut heap_dump_segments = 0u64;
@@ -308,6 +311,10 @@ impl Pass1 {
                     unload_class_records += 1;
                     r.skip(length)
                 }
+                tags::REDACTED_MARKER => {
+                    plain_redacted = true;
+                    r.skip(length)
+                }
                 _ => r.skip(length),
             })();
             match result {
@@ -327,6 +334,7 @@ impl Pass1 {
         crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
         // Capture truncation flag before dropping the reader.
         let truncated_input = r.is_truncated() || plain_truncated;
+        let redacted = plain_redacted;
         // Free the reader buffer and no-longer-needed intern map before the
         // sort to trim the working set as much as possible before allocating order.
         drop(r);
@@ -464,6 +472,7 @@ impl Pass1 {
             gc_root_tag_counts,
             hprof_offsets: tmp_hprof_offsets,
             truncated_input,
+            redacted,
         })
     }
 }

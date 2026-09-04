@@ -1660,6 +1660,9 @@ pub struct Report {
     /// The report covers only the records that were decompressed before truncation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated_input: bool,
+    /// True when the dump was produced by `hprof-analyzer redact` (primitive values zeroed).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted_input: bool,
     pub overview: SystemOverview,
     pub leaks: LeakSuspects,
     pub top: TopConsumers,

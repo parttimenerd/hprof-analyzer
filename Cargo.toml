@@ -34,6 +34,11 @@ exclude = [
 name = "hprof-analyzer"
 path = "src/main.rs"
 
+[[bin]]
+name = "hprof-redact"
+path = "src/bin/hprof-redact.rs"
+required-features = ["native"]
+
 [lib]
 name = "hprof_analyzer"
 path = "src/lib.rs"

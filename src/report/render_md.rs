@@ -271,6 +271,13 @@ pub fn render_markdown(r: &Report) -> String {
              Re-copy the dump to get a complete analysis.\n\n",
         );
     }
+    if r.redacted_input {
+        out.push_str(
+            "> **Redacted dump** — primitive field values and array contents are zeroed. \
+             Structural analyses (histogram, dominator tree, leak suspects, GC roots) \
+             are accurate. Duplicate-string and collections analyses are skipped.\n\n",
+        );
+    }
     render_toc(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);

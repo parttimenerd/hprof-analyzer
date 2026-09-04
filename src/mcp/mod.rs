@@ -43,14 +43,28 @@ pub struct LoadDumpParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetReportParams {
-    /// Which section to return. Core: "leaks", "top", "threads", "overview".
-    /// Analysis: "triage" (⭐ severity signals), "waste" (reclaimable bytes),
-    /// "indicators" (anon class/DirectByteBuffer counts), "retainers" (stack frames by retained),
-    /// "arrays" (length distribution), "collections" (fill ratios/load factors),
-    /// "references" (Soft/Weak/Phantom counts), "dominators" (big-drop table),
-    /// "components" (per-classloader retained), "alloc_sites", "thread_locals", "framework",
-    /// "field_stats". Default "all" (everything, large — prefer targeted sections).
+    /// Which section to return.
+    ///
+    /// FOCUSED VIEWS (prefer these for simple questions — small, targeted output):
+    ///   "top-objects"  — top 20 biggest individual objects by retained size (use limit to adjust)
+    ///   "top-classes"  — top 20 biggest classes by retained size with holder breakdown (use limit to adjust)
+    ///
+    /// CORE SECTIONS:
+    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree
+    ///   "top"      — LARGE: full biggest-objects + biggest-classes lists; prefer "top-objects" or "top-classes"
+    ///   "threads"  — per-thread retained sizes + stack traces
+    ///   "overview" — heap totals, object count, identifier size
+    ///
+    /// ANALYSIS SECTIONS:
+    ///   "triage", "waste", "indicators", "retainers", "arrays", "collections",
+    ///   "references", "dominators", "components", "alloc_sites", "thread_locals",
+    ///   "framework", "field_stats"
+    ///
+    /// Default "all" (everything — very large, avoid in LLM workflows).
     pub section: Option<String>,
+    /// Max rows to return for "top-objects" and "top-classes" (default 20, max 100).
+    /// Ignored for other sections.
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -112,6 +126,16 @@ pub struct InspectObjectParams {
     pub object_index: u64,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RedactParams {
+    /// Absolute path to the input .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
+    pub input: String,
+    /// Absolute path for the redacted output file.
+    /// Extension controls compression: .hprof (raw), .hprof.gz (gzip), .hprof.zip (zip).
+    /// Recommended: same name with "-redacted" suffix, e.g. "/tmp/dump-redacted.hprof".
+    pub output: String,
+}
+
 // ── Dominator tree node ───────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -164,9 +188,11 @@ impl HprofMcpServer {
     }
 
     /// Load a heap dump file. First run takes 5–15 min; subsequent calls load in ~1 s from cache.
-    #[tool(description = "Load a .hprof dump file and cache analysis results. \
+    #[tool(
+        description = "hprof-analyzer: Load a Java heap dump (.hprof file) and cache analysis results. \
                        IMPORTANT: wait for this to complete before calling any other tool — it may take 5–15 min on first load, ~1 s on repeat loads. \
-                       After loading, call get_summary to orient, then get_histogram for class breakdown, then query for drill-down.")]
+                       After loading, call get_summary to orient, then get_histogram for class breakdown, then query for drill-down."
+    )]
     async fn load_dump(
         &self,
         Parameters(p): Parameters<LoadDumpParams>,
@@ -224,9 +250,18 @@ impl HprofMcpServer {
             })
             .collect();
 
+        let redacted_note = if result.report.redacted_input {
+            "\n⚠ REDACTED DUMP — primitive values and array contents are zeroed. \
+             Structural analyses (histogram, dominator tree, suspects, GC roots) are accurate. \
+             Duplicate-string and collection analyses are skipped.\n"
+        } else {
+            ""
+        };
+
         let summary = format!(
             "Loaded: {path}\n\
-             Total heap: {heap} MB  |  Objects: {objs}\n\n\
+             Total heap: {heap} MB  |  Objects: {objs}\
+             {redacted_note}\n\
              ## Leak Suspects ({n_suspects} detected — from dominator-tree analysis)\n\
              {suspects}\n\
              ## Top Classes by Retained Size\n\
@@ -240,6 +275,7 @@ impl HprofMcpServer {
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = result.report.overview.total_objects,
+            redacted_note = redacted_note,
             n_suspects = result.report.leaks.suspects.len(),
             suspects = suspects_text,
             classes = top_classes_text,
@@ -305,31 +341,28 @@ impl HprofMcpServer {
     }
 
     /// Return a section of the full analysis report as JSON.
-    #[tool(description = "Return a report section as JSON. \
-                          BEST TOOL FOR 'find the leak' or 'why OOM' — use get_report({section:\"leaks\"}) first. \
-                          \n\nCORE SECTIONS (always available):\
-                          \n  \"leaks\"      — suspects with root_path (single), merged_paths (group), dominated objects + dominator_tree (always reliable, all heap sizes)\
-                          \n  \"top\"        — biggest classes/objects + what's holding them (holder chains)\
-                          \n  \"threads\"    — per-thread retained sizes + stack traces\
-                          \n  \"overview\"   — heap totals, object count, identifier size\
-                          \n\nANALYSIS SECTIONS (granular, targeted):\
-                          \n  \"triage\"          — ⭐ automated severity signals (critical/warning/info), best quick entry point after leaks\
-                          \n  \"waste\"           — reclaimable memory: duplicate strings, empty collections, boxed primitives\
-                          \n  \"indicators\"      — leak indicator counts: anon classes, ThreadLocal null keys, DirectByteBuffer total\
-                          \n  \"retainers\"       — top stack frames/fields by retained size (who is keeping things alive)\
-                          \n  \"arrays\"          — array length distribution by power-of-two buckets\
-                          \n  \"collections\"     — collection fill ratios, map load factors, kind stats, constant arrays\
-                          \n  \"references\"      — Soft/Weak/Phantom reference counts + referent class breakdown\
-                          \n  \"dominators\"      — big-drop objects (retain >> largest child), immediate-dominator class pairs\
-                          \n  \"components\"      — retained heap per class loader with top classes per component\
-                          \n  \"alloc_sites\"     — allocation sites (only present when dump has allocation tracking)\
-                          \n  \"thread_locals\"   — ThreadLocal leak rows (full-analysis only, may be empty)\
-                          \n  \"framework\"       — detected framework signatures + recommendations (full-analysis only)\
-                          \n  \"field_stats\"     — field-level size statistics (only populated when the CLI --field-stats flag was used; always null in MCP)\
-                          \n  \"all\"             — everything above merged (large, use targeted sections for LLM workflows)\
-                          \n\nIn leaks JSON: each suspect has root_path (single), merged_paths (group), \
-                          dominated (objects at accumulation point), and dominator_tree. \
-                          WARNING: obj_index_1based in root_path, dominator_tree, dominated, and accumulation_obj_1based is 1-BASED — subtract 1 for browse_dominators/inspect_object. \
+    #[tool(description = "Return a report section. \
+                          \n\nFOR SIMPLE QUESTIONS — use these focused sections (small output, fast):\
+                          \n  \"top-objects\"  — top N biggest individual objects by retained size (add limit:N, default 20)\
+                          \n  \"top-classes\"  — top N classes by retained size with holder breakdown (add limit:N, default 20)\
+                          \n  \"overview\"     — heap totals, object count, identifier size\
+                          \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); best first call after load_dump\
+                          \n\nFOR LEAK INVESTIGATION:\
+                          \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree (BEST for 'find the leak')\
+                          \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
+                          \n  \"dominators\"   — big-drop objects (retain >> largest child)\
+                          \n\nOTHER SECTIONS:\
+                          \n  \"threads\"      — per-thread retained sizes + stack traces\
+                          \n  \"waste\"        — reclaimable memory: duplicate strings, empty collections\
+                          \n  \"indicators\"   — anon classes, ThreadLocal null keys, DirectByteBuffer total\
+                          \n  \"arrays\"       — array length distribution\
+                          \n  \"collections\"  — fill ratios, map load factors\
+                          \n  \"references\"   — Soft/Weak/Phantom reference counts\
+                          \n  \"components\"   — retained heap per class loader\
+                          \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\"\
+                          \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
+                          \n  \"all\"          — everything merged (very large — avoid in LLM workflows)\
+                          \n\nIn leaks JSON: obj_index_1based is 1-BASED — subtract 1 for browse_dominators/inspect_object. \
                           browse_dominators 'index' and query @objectId are 0-based (use directly).")]
     async fn get_report(
         &self,
@@ -340,7 +373,16 @@ impl HprofMcpServer {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
         let r = &sess.report;
+        let limit = p.limit.unwrap_or(20).min(100);
         let json = match p.section.as_deref().unwrap_or("all") {
+            "top-objects" => {
+                let rows: Vec<_> = r.top.biggest_objects.iter().take(limit).collect();
+                serde_json::to_string_pretty(&rows)
+            }
+            "top-classes" => {
+                let rows: Vec<_> = r.top.biggest_classes.iter().take(limit).collect();
+                serde_json::to_string_pretty(&rows)
+            }
             "leaks" => serde_json::to_string_pretty(&r.leaks),
             "top" => serde_json::to_string_pretty(&r.top),
             "threads" => serde_json::to_string_pretty(&r.threads),
@@ -665,12 +707,11 @@ impl HprofMcpServer {
 
     /// Return information about the currently loaded dump (path, heap size, object count).
     /// Call this to check if a dump is already loaded before calling load_dump.
-    #[tool(
-        description = "ALWAYS call this first to check if a dump is already loaded. \
+    #[tool(description = "hprof-analyzer: Java heap dump analysis tool. \
+                       ALWAYS call this first to check if a dump is already loaded. \
                        Returns {loaded:true, path, total_heap_bytes, total_objects, leak_suspects} if loaded, \
                        or {loaded:false} if not. \
-                       If loaded=true, skip load_dump and call get_summary directly."
-    )]
+                       If loaded=true, skip load_dump and call get_summary directly.")]
     async fn get_session_info(&self) -> Result<CallToolResult, McpError> {
         let guard = self.session.lock().await;
         let result = match guard.as_ref() {
@@ -681,13 +722,19 @@ impl HprofMcpServer {
             }),
             Some(sess) => {
                 let r = &sess.report;
+                // Check if the on-disk file has changed since we loaded it.
+                // dump_hash bakes mtime+size into the cache directory name, so we
+                // compare the current hash against the path we loaded from.
+                let stale = crate::cache::CacheDir::for_dump(&sess.dump_path)
+                    .map(|current| current.path != sess.cache.path)
+                    .unwrap_or(false);
                 let top_suspect = r
                     .leaks
                     .suspects
                     .first()
                     .map(|s| s.pretty_class.as_str())
                     .unwrap_or("none");
-                serde_json::json!({
+                let mut v = serde_json::json!({
                     "loaded": true,
                     "path": sess.dump_path.display().to_string(),
                     "total_heap_bytes": r.overview.total_shallow,
@@ -695,13 +742,95 @@ impl HprofMcpServer {
                     "leak_suspects": r.leaks.suspects.len(),
                     "top_suspect": top_suspect,
                     "graph_loaded": sess.mode == CacheMode::Graph,
+                    "redacted_input": r.redacted_input,
                     "_next": "get_summary() — human-readable overview with suspects and suggested OQL queries"
-                })
+                });
+                if stale {
+                    v["stale"] = serde_json::json!(true);
+                    v["stale_message"] = serde_json::json!(
+                        "The dump file on disk has changed since it was loaded. \
+                         Call load_dump again to reload the updated file."
+                    );
+                    v["_next"] = serde_json::json!(format!(
+                        "load_dump({{\"path\": \"{}\"}})",
+                        sess.dump_path.display()
+                    ));
+                }
+                v
             }
         };
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Redact a heap dump: zero all primitive field values and array contents.
+    #[tool(
+        description = "Redact a Java heap dump (.hprof) so it is safe to share. \
+                       Zeroes all primitive field values (int, long, byte, char, float, double, boolean, short) \
+                       and all primitive array element data (byte[], char[], int[], etc.). \
+                       Preserves the complete object graph: class names, field names, object IDs, \
+                       reference links, and thread stacks are unchanged. \
+                       The redacted file is fully readable by hprof-analyzer, Eclipse MAT, and jhat — \
+                       structural analyses (histogram, dominator tree, leak suspects, GC roots) remain accurate. \
+                       Duplicate-string and collection fill-ratio analyses are skipped on redacted dumps (data is zeroed). \
+                       Output extension controls compression: .hprof (raw), .hprof.gz (gzip), .hprof.zip (zip). \
+                       Recommended output name: add '-redacted' before the extension, e.g. '/tmp/dump-redacted.hprof'."
+    )]
+    async fn redact(
+        &self,
+        Parameters(p): Parameters<RedactParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = p.input.clone();
+        let output = p.output.clone();
+        tokio::task::spawn_blocking(move || {
+            use crate::source::HprofSource;
+            use std::{fs::File, io};
+
+            let source = HprofSource::from(input.as_str());
+            let lower = output.to_ascii_lowercase();
+            let progress = |_phase: &str, _fraction: f64| {};
+
+            if lower.ends_with(".hprof.gz") {
+                let file = File::create(&output)?;
+                let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
+                crate::redact::redact(&source, gz, progress)
+            } else if lower.ends_with(".hprof.zip") {
+                let file = File::create(&output)?;
+                let mut zip = zip::ZipWriter::new(file);
+                let opts = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated);
+                zip.start_file("dump.hprof", opts)
+                    .map_err(io::Error::other)?;
+                crate::redact::redact(&source, &mut zip, progress)?;
+                zip.finish().map_err(io::Error::other)?;
+                Ok(())
+            } else {
+                let file = File::create(&output)?;
+                crate::redact::redact(&source, file, progress)
+            }
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let msg = format!(
+            "Redacted dump written to: {output}\n\n\
+             What was zeroed:\n\
+             - All primitive field values (int, long, byte, char, float, double, boolean, short)\n\
+             - All primitive array element data (byte[], char[], int[], long[], etc.)\n\
+             - Static primitive field values and constant pool primitive values\n\n\
+             What was preserved:\n\
+             - Class names, field names, method names\n\
+             - Object graph structure (all reference links)\n\
+             - Object IDs, class hierarchy, dominator tree\n\
+             - Thread stacks and GC roots\n\n\
+             The redacted file is safe to share. Load it with load_dump to verify the object graph \
+             or run hprof-analyzer heap summary on it directly.\n\
+             Note: duplicate-string and collection fill-ratio analyses will be skipped (data is zeroed).",
+            output = p.output
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
     }
 
     /// List the 20 built-in named query views, grouped by category.
@@ -764,21 +893,37 @@ impl ServerHandler for HprofMcpServer {
                 .enable_tools()
                 .build(),
         )
-        .with_server_info(Implementation::from_build_env())
+        .with_server_info(
+            Implementation::new("hprof-analyzer", env!("CARGO_PKG_VERSION"))
+                .with_description(
+                    "Java heap dump analyzer. Use this server whenever the user mentions a .hprof file, \
+                     a Java OutOfMemoryError, a memory leak in a JVM application, heap histogram, \
+                     dominator tree, GC roots, or Eclipse MAT analysis. \
+                     Supports loading .hprof/.hprof.gz/.hprof.zip dumps, OQL queries, dominator-tree \
+                     navigation, leak suspect detection, and heap dump redaction."
+                )
+        )
         .with_instructions(
-            "Java heap dump analyzer. Use these tools to investigate OutOfMemoryErrors and memory leaks in JVM applications.\n\n\
+            "USE THIS SERVER for any Java heap dump analysis task. Trigger keywords: \
+             .hprof file, OutOfMemoryError, OOM, Java memory leak, heap dump, jmap, \
+             Eclipse MAT, heap histogram, dominator tree, GC roots, retained heap, \
+             object retention, JVM memory analysis.\n\n\
              IMPORTANT RULES:\n\
              - Send ONE tool call at a time and wait for the response before sending the next.\n\
              - load_dump BLOCKS for 5–15 min on first load (subsequent loads ~1 s from cache). Wait for it.\n\
              - object_index values: @objectId from query and 'index' from browse_dominators are 0-based (use directly).\n\
              - obj_index_1based in get_report (dominator_tree + root_path) is 1-BASED — subtract 1 for browse_dominators/inspect_object!\n\n\
              ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
-             1. load_dump({path})               — load the file; response shows top suspects + classes\n\
-             2. get_report({\"section\":\"triage\"}) — ⭐ severity-tagged signals (critical/warning/info); fastest diagnosis\n\
-             3. get_report({\"section\":\"leaks\"})  — root paths, holder chains, dominated objects + dominator_tree per suspect\n\
-             4. browse_dominators({object_index: suspect.accumulation_obj_1based - 1}) — drill into accumulation point\n\
-               (accumulation_obj_1based is 1-based; also dominator_tree.obj_index_1based is the same value)\n\
-             5. query({oql:\"top-retained-by-class\"}) — confirm which class dominates memory\n\n\
+             1. load_dump({path})                        — load the file\n\
+             2. get_report({\"section\":\"triage\"})         — ⭐ severity-tagged signals; fastest diagnosis\n\
+             3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree\n\
+             4. browse_dominators({object_index: ...})   — drill into accumulation point\n\
+             5. get_report({\"section\":\"top-classes\"})     — which classes dominate memory\n\n\
+             ANSWERING SIMPLE QUESTIONS ('biggest objects', 'top classes', etc.):\n\
+             - get_report({\"section\":\"top-objects\"})      — top 20 biggest objects by retained size\n\
+             - get_report({\"section\":\"top-classes\"})      — top 20 classes by retained size\n\
+             - get_report({\"section\":\"top-objects\", \"limit\":5}) — adjust count with limit\n\
+             DO NOT use get_report({\"section\":\"top\"}) or get_report({\"section\":\"all\"}) for simple questions — they return megabytes of data.\n\n\
              DEEP ANALYSIS WORKFLOW:\n\
              1. get_session_info()                    — check if a dump is already loaded\n\
              2. load_dump({path})                     — load .hprof; response includes immediate suspects\n\
@@ -791,6 +936,11 @@ impl ServerHandler for HprofMcpServer {
              9. get_report({\"section\":\"references\"})  — Soft/Weak/Phantom reference breakdown\n\
              10. query({oql:\"...\"})                   — custom OQL for any remaining questions\n\
              11. browse_dominators({}) / inspect_object — follow object references\n\n\
+             PRIVACY / SHARING WORKFLOW:\n\
+             1. redact({input: \"/path/to/dump.hprof\", output: \"/tmp/dump-redacted.hprof\"})\n\
+                — zero all primitive values and array data (keeps object graph + class names)\n\
+             2. Share the -redacted.hprof file; load it with load_dump to verify\n\
+             3. Note: duplicate-string and collection fill-ratio analyses are skipped on redacted dumps\n\n\
              ALL get_report SECTIONS: leaks, top, threads, overview, triage, waste, indicators,\n\
                retainers, arrays, collections, references, dominators, components, alloc_sites,\n\
                thread_locals, framework, field_stats, all\n\n\

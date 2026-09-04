@@ -33,6 +33,15 @@ pub enum HprofSource {
 }
 
 impl HprofSource {
+    /// Construct an in-memory source from raw bytes and a display name.
+    #[allow(dead_code)]
+    pub fn from_bytes(data: Vec<u8>, name: impl Into<String>) -> Self {
+        HprofSource::Bytes {
+            data: Arc::new(data),
+            name: name.into(),
+        }
+    }
+
     /// Open a new sequential reader positioned at the start of the stream.
     /// Gzip is auto-detected for both variants.
     pub fn open(&self) -> io::Result<HprofReader> {

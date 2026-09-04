@@ -21,6 +21,7 @@ mod pass2;
 mod progress;
 pub mod query;
 mod reader;
+pub mod redact;
 pub mod source;
 pub use source::HprofSource;
 pub mod report;
@@ -295,6 +296,7 @@ fn analyze_to_report_inner(
     }
     let p1 = pass1::Pass1::run(source, false)?;
     let truncated_input = p1.truncated_input;
+    let redacted = p1.redacted;
     progress("pass1", 1.0);
     t_pipe!("pass1 done");
 
@@ -475,6 +477,7 @@ fn analyze_to_report_inner(
         opts,
         alloc_sites,
         precomputed_field_stats,
+        redacted,
     );
     report.truncated_input = truncated_input;
     t_pipe!("build_model done");
@@ -638,6 +641,7 @@ fn analyze_to_report_inner_with_cache(
     use cache::{ArraysForCache, GraphForCache};
     use std::io;
     let truncated_input = p1.truncated_input;
+    let redacted = p1.redacted;
     progress("pass1", 1.0);
 
     if p1.class_ids.len() > u32::MAX as usize {
@@ -834,6 +838,7 @@ fn analyze_to_report_inner_with_cache(
         opts,
         alloc_sites,
         precomputed_field_stats,
+        redacted,
     );
     report.truncated_input = truncated_input;
 
