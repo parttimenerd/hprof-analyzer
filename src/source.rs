@@ -112,8 +112,7 @@ impl From<&str> for HprofSource {
 #[cfg(feature = "native")]
 fn open_zip_bytes(buf: ArcBuf) -> io::Result<HprofReader> {
     use std::io::Read;
-    let mut archive = zip::ZipArchive::new(Cursor::new(buf))
-        .map_err(io::Error::other)?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(buf)).map_err(io::Error::other)?;
     let idx = (0..archive.len())
         .find(|&i| {
             archive

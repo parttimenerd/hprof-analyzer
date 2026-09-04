@@ -1730,12 +1730,20 @@ mod tests {
             .1;
 
         // HEAP_DUMP_INFO sub-record must be present verbatim (5 bytes: tag + heap_id + name_id)
-        assert_eq!(heap_body[0], heap::HEAP_DUMP_INFO, "HEAP_DUMP_INFO tag preserved");
+        assert_eq!(
+            heap_body[0],
+            heap::HEAP_DUMP_INFO,
+            "HEAP_DUMP_INFO tag preserved"
+        );
 
         // Find the INSTANCE_DUMP after CLASS_DUMP and HEAP_DUMP_INFO.
         // HEAP_DUMP_INFO = 1+4+4=9 bytes, CLASS_DUMP with 1 field = 1+7*4+4+2+2+2+5=48 bytes
         let inst_start = 9 + 48;
-        assert_eq!(heap_body[inst_start], heap::INSTANCE_DUMP, "INSTANCE_DUMP tag present");
+        assert_eq!(
+            heap_body[inst_start],
+            heap::INSTANCE_DUMP,
+            "INSTANCE_DUMP tag present"
+        );
         // field data starts at inst_start + 1(tag) + 4(obj_id) + 4(serial) + 4(class_id) + 4(data_len)
         let field_start = inst_start + 17;
         let got = u32::from_be_bytes(heap_body[field_start..field_start + 4].try_into().unwrap());
@@ -1776,8 +1784,7 @@ mod tests {
         let field_start = 17;
         let got: &[u8] = &heap_body[field_start..field_start + field_data.len()];
         assert_eq!(
-            got,
-            &[0u8; 8],
+            got, &[0u8; 8],
             "unknown-class instance body must be fully zeroed"
         );
     }
@@ -1808,7 +1815,10 @@ mod tests {
         let inst_start = 48;
         let field_start = inst_start + 17;
         let got: &[u8] = &heap_body[field_start..field_start + 8];
-        assert_eq!(got, &[0u8; 8], "all 8 bytes (4 known + 4 tail) must be zeroed");
+        assert_eq!(
+            got, &[0u8; 8],
+            "all 8 bytes (4 known + 4 tail) must be zeroed"
+        );
     }
 
     #[test]
@@ -1835,7 +1845,11 @@ mod tests {
             .iter()
             .filter(|(t, _)| *t == tags::HEAP_DUMP)
             .collect();
-        assert_eq!(heap_bodies.len(), 2, "both heap dump segments must be present");
+        assert_eq!(
+            heap_bodies.len(),
+            2,
+            "both heap dump segments must be present"
+        );
         // Second segment: CLASS_DUMP with 0 fields (43 bytes) + PRIM_ARRAY_DUMP.
         let seg2 = &heap_bodies[1].1;
         let arr_pos = seg2
@@ -1845,7 +1859,10 @@ mod tests {
         // elem data starts at arr_pos + tag(1) + id(4) + serial(4) + count(4) + type(1) = +14
         let elem_start = arr_pos + 14;
         let got: &[u8] = &seg2[elem_start..elem_start + 4];
-        assert_eq!(got, &[0u8; 4], "byte array in second segment must be zeroed");
+        assert_eq!(
+            got, &[0u8; 4],
+            "byte array in second segment must be zeroed"
+        );
     }
 
     #[test]
@@ -1893,7 +1910,10 @@ mod tests {
             .expect("INSTANCE_DUMP missing");
         let field_start = inst_pos + 17; // tag+obj_id+serial+class_id+data_len
         let got = &heap_body[field_start..field_start + 16];
-        assert_eq!(got, &[0u8; 16], "all 16 bytes of multi-level instance must be zeroed");
+        assert_eq!(
+            got, &[0u8; 16],
+            "all 16 bytes of multi-level instance must be zeroed"
+        );
     }
 
     #[test]
@@ -1985,7 +2005,11 @@ mod tests {
         // CLASS_DUMP header = tag(1)+9×u4(36) = 37 bytes, then cp_count(2) = 39 bytes total before cp entries.
         // cp entry: cp_index(2) + cp_type(1) + value(4 for Int) — cp_index at 39, cp_type at 41, value at 42.
         let cp_val_start = 42;
-        let got = u32::from_be_bytes(heap_body[cp_val_start..cp_val_start + 4].try_into().unwrap());
+        let got = u32::from_be_bytes(
+            heap_body[cp_val_start..cp_val_start + 4]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(got, 0, "constant pool int value must be zeroed");
         // cp_index (bytes 39..41) must be preserved (99 = 0x0063)
         let got_idx = u16::from_be_bytes(heap_body[39..41].try_into().unwrap());
@@ -2055,7 +2079,10 @@ mod tests {
         // PRIM_ARRAY header: tag(1)+id(4)+serial(4)+count(4)+type(1) = 14 bytes
         let elem_start = 14;
         let got: &[u8] = &heap_body[elem_start..elem_start + count * 4];
-        assert!(got.iter().all(|&b| b == 0), "all 1024 int elements must be zeroed");
+        assert!(
+            got.iter().all(|&b| b == 0),
+            "all 1024 int elements must be zeroed"
+        );
     }
 
     #[test]
@@ -2072,7 +2099,10 @@ mod tests {
             .expect("string record missing");
         // body = id(4) + utf8 bytes
         let got_str = std::str::from_utf8(&string_rec.1[4..]).unwrap();
-        assert_eq!(got_str, sentinel, "string content must be byte-for-byte preserved");
+        assert_eq!(
+            got_str, sentinel,
+            "string content must be byte-for-byte preserved"
+        );
     }
 
     #[test]
@@ -2088,7 +2118,11 @@ mod tests {
             .iter()
             .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
             .collect();
-        assert_eq!(string_bodies.len(), strings.len(), "all string records must be present");
+        assert_eq!(
+            string_bodies.len(),
+            strings.len(),
+            "all string records must be present"
+        );
         for (i, s) in strings.iter().enumerate() {
             let got = std::str::from_utf8(&string_bodies[i].1[4..]).unwrap();
             assert_eq!(got, *s, "string {i} must be preserved verbatim");
@@ -2172,7 +2206,10 @@ mod tests {
             .iter()
             .find(|(t, _)| *t == tags::REDACTED_MARKER)
             .expect("redaction marker missing");
-        assert_eq!(marker.1, b"HPROF-REDACT\x01\x00", "marker body must match spec");
+        assert_eq!(
+            marker.1, b"HPROF-REDACT\x01\x00",
+            "marker body must match spec"
+        );
     }
 
     #[test]
@@ -2202,18 +2239,31 @@ mod tests {
         // Use the public analyze_to_report_with_progress to exercise the full pipeline.
         let opts = crate::AnalyzeOptions::default();
         let result = crate::analyze_to_report_with_progress(&source, &opts, &mut |_, _| {});
-        assert!(result.is_ok(), "full analysis of redacted dump must not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "full analysis of redacted dump must not error: {:?}",
+            result.err()
+        );
         let (report, _) = result.unwrap();
-        assert!(report.redacted_input, "report must have redacted_input=true");
+        assert!(
+            report.redacted_input,
+            "report must have redacted_input=true"
+        );
         // Structural counts must survive zeroing.
-        assert!(report.overview.total_objects > 0, "object count must be non-zero");
-        assert!(report.overview.total_shallow > 0, "shallow size must be non-zero");
+        assert!(
+            report.overview.total_objects > 0,
+            "object count must be non-zero"
+        );
+        assert!(
+            report.overview.total_shallow > 0,
+            "shallow size must be non-zero"
+        );
         // Triage must contain the redacted-dump signal.
-        let has_redacted_signal = report
-            .triage
-            .iter()
-            .any(|s| s.id == "redacted-dump");
-        assert!(has_redacted_signal, "triage must contain redacted-dump signal");
+        let has_redacted_signal = report.triage.iter().any(|s| s.id == "redacted-dump");
+        assert!(
+            has_redacted_signal,
+            "triage must contain redacted-dump signal"
+        );
     }
 
     #[test]
@@ -2227,7 +2277,11 @@ mod tests {
         let source = HprofSource::from_bytes(redacted, "r.hprof");
         let opts = crate::AnalyzeOptions::default();
         let result = crate::analyze_to_report_with_progress(&source, &opts, &mut |_, _| {});
-        assert!(result.is_ok(), "full analysis of redacted dump4 must not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "full analysis of redacted dump4 must not error: {:?}",
+            result.err()
+        );
         let (report, _) = result.unwrap();
         assert!(report.redacted_input);
         assert!(report.overview.total_objects > 0);
@@ -2308,8 +2362,14 @@ mod tests {
         }
         let gz_source = HprofSource::from_bytes(gz_buf, "out.hprof.gz");
         let p1 = crate::pass1::Pass1::run(&gz_source, false).expect("pass1 on gz output failed");
-        assert!(p1.redacted, "gz-compressed redacted output must be detected as redacted");
-        assert!(p1.instance_count > 0, "must have instances after gz round-trip");
+        assert!(
+            p1.redacted,
+            "gz-compressed redacted output must be detected as redacted"
+        );
+        assert!(
+            p1.instance_count > 0,
+            "must have instances after gz round-trip"
+        );
     }
 
     #[test]
@@ -2331,7 +2391,10 @@ mod tests {
         }
         let zip_source = HprofSource::from_bytes(zip_buf, "out.hprof.zip");
         let p1 = crate::pass1::Pass1::run(&zip_source, false).expect("pass1 on zip output failed");
-        assert!(p1.redacted, "zip-compressed redacted output must be detected as redacted");
+        assert!(
+            p1.redacted,
+            "zip-compressed redacted output must be detected as redacted"
+        );
         assert!(p1.instance_count > 0);
     }
 
@@ -2366,7 +2429,10 @@ mod tests {
                 orig_p1.class_dump_count, red_p1.class_dump_count,
                 "{name}: class dump count must match"
             );
-            assert!(red_p1.redacted, "{name}: redacted dump must be detected as redacted");
+            assert!(
+                red_p1.redacted,
+                "{name}: redacted dump must be detected as redacted"
+            );
         }
     }
 }
