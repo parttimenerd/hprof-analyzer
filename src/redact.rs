@@ -2398,6 +2398,552 @@ mod tests {
         assert!(p1.instance_count > 0);
     }
 
+    // ── Test: all primitive types zeroed individually ─────────────────────────
+
+    #[test]
+    fn prim_array_boolean_elements_zeroed() {
+        let elem_data = vec![1u8, 0, 1, 1, 0, 1]; // 6 booleans
+        let sub = prim_array_dump(20, 4 /* Boolean */, &elem_data);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let data_offset = 1 + 4 + 4 + 4 + 1;
+        assert_eq!(&heap_body[data_offset..data_offset + 6], &[0u8; 6]);
+    }
+
+    #[test]
+    fn prim_array_short_elements_zeroed() {
+        let elem_data: Vec<u8> = vec![0xFF; 6]; // 3 shorts
+        let sub = prim_array_dump(21, 9 /* Short */, &elem_data);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let data_offset = 1 + 4 + 4 + 4 + 1;
+        assert_eq!(&heap_body[data_offset..data_offset + 6], &[0u8; 6]);
+    }
+
+    #[test]
+    fn prim_array_float_elements_zeroed() {
+        let elem_data: Vec<u8> = vec![0x3F; 8]; // 2 floats
+        let sub = prim_array_dump(22, 6 /* Float */, &elem_data);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let data_offset = 1 + 4 + 4 + 4 + 1;
+        assert_eq!(&heap_body[data_offset..data_offset + 8], &[0u8; 8]);
+    }
+
+    #[test]
+    fn prim_array_double_elements_zeroed() {
+        let elem_data: Vec<u8> = vec![0xBF; 16]; // 2 doubles
+        let sub = prim_array_dump(23, 7 /* Double */, &elem_data);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let data_offset = 1 + 4 + 4 + 4 + 1;
+        assert_eq!(&heap_body[data_offset..data_offset + 16], &[0u8; 16]);
+    }
+
+    // ── Test: every primitive field type zeroed in instance dump ─────────────
+
+    #[test]
+    fn instance_all_primitive_types_zeroed() {
+        // Class with one field of each primitive type: Boolean(4), Char(5), Float(6),
+        // Double(7), Byte(8), Short(9), Int(10), Long(11)
+        let field_specs: &[(u8, u32)] = &[
+            (4, 1),
+            (5, 2),
+            (6, 3),
+            (7, 4),
+            (8, 5),
+            (9, 6),
+            (10, 7),
+            (11, 8),
+        ];
+        // Sizes: 1 + 2 + 4 + 8 + 1 + 2 + 4 + 8 = 30 bytes
+        let field_data = vec![0xFFu8; 30];
+        let class_id = 80u32;
+        let obj_id = 81u32;
+        let sub_class = class_dump(class_id, 0, field_specs);
+        let sub_inst = instance_dump(obj_id, class_id, &field_data);
+        let mut subs = sub_class;
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let inst_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::INSTANCE_DUMP)
+            .expect("no INSTANCE_DUMP");
+        let fp = inst_pos + 17;
+        assert_eq!(
+            &heap_body[fp..fp + 30],
+            &[0u8; 30],
+            "all 30 bytes of all-primitive instance must be zeroed"
+        );
+    }
+
+    // ── Test: root sub-records are copied verbatim ────────────────────────────
+
+    #[test]
+    fn root_records_are_preserved_verbatim() {
+        // ROOT_JNI_GLOBAL: id(4) + ref_id(4) = 8 bytes
+        let mut sub = vec![heap::ROOT_JNI_GLOBAL];
+        sub.extend_from_slice(&u4(0xABCD1234)); // object id
+        sub.extend_from_slice(&u4(0x99887766)); // jni global ref id
+        // ROOT_THREAD_OBJ: id(4) + thread_serial(4) + stack_serial(4) = 12 bytes
+        sub.push(heap::ROOT_THREAD_OBJ);
+        sub.extend_from_slice(&u4(0xDEAD));
+        sub.extend_from_slice(&u4(1));
+        sub.extend_from_slice(&u4(2));
+        // ROOT_STICKY_CLASS: id(4)
+        sub.push(heap::ROOT_STICKY_CLASS);
+        sub.extend_from_slice(&u4(0x1234));
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+
+        // ROOT_JNI_GLOBAL: tag at 0, object id at 1..5, ref at 5..9
+        assert_eq!(heap_body[0], heap::ROOT_JNI_GLOBAL);
+        assert_eq!(
+            u32::from_be_bytes(heap_body[1..5].try_into().unwrap()),
+            0xABCD1234u32
+        );
+        assert_eq!(
+            u32::from_be_bytes(heap_body[5..9].try_into().unwrap()),
+            0x99887766u32
+        );
+        // ROOT_THREAD_OBJ at offset 9
+        assert_eq!(heap_body[9], heap::ROOT_THREAD_OBJ);
+        // ROOT_STICKY_CLASS at offset 9+13=22
+        assert_eq!(heap_body[22], heap::ROOT_STICKY_CLASS);
+    }
+
+    #[test]
+    fn root_jni_local_preserved() {
+        // ROOT_JNI_LOCAL: id(4) + thread_serial(4) + frame_num(4) = 12 bytes
+        let mut sub = vec![heap::ROOT_JNI_LOCAL];
+        sub.extend_from_slice(&u4(0xCAFE));
+        sub.extend_from_slice(&u4(5));
+        sub.extend_from_slice(&u4(3));
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        assert_eq!(heap_body[0], heap::ROOT_JNI_LOCAL);
+        assert_eq!(
+            u32::from_be_bytes(heap_body[1..5].try_into().unwrap()),
+            0xCAFEu32
+        );
+    }
+
+    #[test]
+    fn root_native_stack_preserved() {
+        // ROOT_NATIVE_STACK: id(4) + thread_serial(4) = 8 bytes
+        let mut sub = vec![heap::ROOT_NATIVE_STACK];
+        sub.extend_from_slice(&u4(0xBEEF));
+        sub.extend_from_slice(&u4(7));
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        assert_eq!(heap_body[0], heap::ROOT_NATIVE_STACK);
+        assert_eq!(
+            u32::from_be_bytes(heap_body[1..5].try_into().unwrap()),
+            0xBEEFu32
+        );
+    }
+
+    // ── Test: PRIM_ARRAY_NODATA_DUMP preserved verbatim ──────────────────────
+
+    #[test]
+    fn prim_array_nodata_dump_preserved() {
+        // PRIM_ARRAY_NODATA_DUMP: id(4) + stack_serial(4) + count(4) + type(1) = 13 bytes
+        let mut sub = vec![heap::PRIM_ARRAY_NODATA_DUMP];
+        sub.extend_from_slice(&u4(0x4444)); // array id
+        sub.extend_from_slice(&u4(0)); // stack serial
+        sub.extend_from_slice(&u4(100)); // element count
+        sub.push(10u8); // type = Int
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        assert_eq!(
+            heap_body[0],
+            heap::PRIM_ARRAY_NODATA_DUMP,
+            "PRIM_ARRAY_NODATA_DUMP tag preserved"
+        );
+        assert_eq!(
+            u32::from_be_bytes(heap_body[1..5].try_into().unwrap()),
+            0x4444u32,
+            "array id preserved"
+        );
+        assert_eq!(
+            u32::from_be_bytes(heap_body[9..13].try_into().unwrap()),
+            100u32,
+            "count preserved"
+        );
+        assert_eq!(heap_body[13], 10u8, "type preserved");
+    }
+
+    // ── Test: class cross-segment — class in seg1, instance in seg2 ──────────
+
+    #[test]
+    fn instance_class_defined_in_prior_segment() {
+        // Class defined in HEAP_DUMP_SEGMENT 1, instance in HEAP_DUMP_SEGMENT 2.
+        // The int field must still be zeroed (pass1 sees all segments).
+        let class_id = 501u32;
+        let obj_id = 502u32;
+        let seg1 = class_dump(class_id, 0, &[(10, 1)]); // Int field
+        let seg2 = instance_dump(obj_id, class_id, &[0xFFu8; 4]);
+
+        let mut dump = header();
+        dump.extend(record(tags::HEAP_DUMP_SEGMENT, &seg1));
+        dump.extend(record(tags::HEAP_DUMP_SEGMENT, &seg2));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let segs: Vec<_> = records
+            .iter()
+            .filter(|(t, _)| *t == tags::HEAP_DUMP_SEGMENT)
+            .collect();
+        assert_eq!(segs.len(), 2, "both segments must be present");
+
+        // seg2 is a bare INSTANCE_DUMP: tag(1)+id(4)+serial(4)+class_id(4)+data_len(4) = 17 bytes header
+        let seg2_body = &segs[1].1;
+        assert_eq!(seg2_body[0], heap::INSTANCE_DUMP);
+        let got = u32::from_be_bytes(seg2_body[17..21].try_into().unwrap());
+        assert_eq!(
+            got, 0u32,
+            "int field in cross-segment instance must be zeroed"
+        );
+    }
+
+    // ── Test: instance data_len smaller than field layout ────────────────────
+
+    #[test]
+    fn instance_data_shorter_than_declared_fields_no_panic() {
+        // Class declares 3 int fields (12 bytes) but instance data_len = 4 (only 1 int).
+        // Must not panic; available bytes must be zeroed; no over-read.
+        let class_id = 600u32;
+        let obj_id = 601u32;
+        let sub_class = class_dump(class_id, 0, &[(10, 1), (10, 2), (10, 3)]); // 3 Ints
+        let sub_inst = instance_dump(obj_id, class_id, &[0xFFu8; 4]); // only 4 bytes — 1 int worth
+        let mut subs = sub_class;
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let inst_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::INSTANCE_DUMP)
+            .unwrap();
+        // data_len field (4 bytes at inst+13) must be 4
+        let dl = u32::from_be_bytes(heap_body[inst_pos + 13..inst_pos + 17].try_into().unwrap());
+        assert_eq!(dl, 4, "data_len must be preserved");
+        // The 4 data bytes must be zeroed
+        assert_eq!(&heap_body[inst_pos + 17..inst_pos + 21], &[0u8; 4]);
+    }
+
+    // ── Test: multiple HEAP_DUMP_INFO sub-records in one segment ─────────────
+
+    #[test]
+    fn multiple_heap_dump_info_in_one_segment() {
+        let mut sub = heap_dump_info(1, 10);
+        sub.extend(heap_dump_info(2, 20));
+        sub.extend(prim_array_dump(999, 8, &[0xFFu8; 4]));
+        sub.extend(heap_dump_info(3, 30));
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        // All three HEAP_DUMP_INFO sub-records must be present (tags at offsets 0, 9, ...)
+        assert_eq!(heap_body[0], heap::HEAP_DUMP_INFO);
+        assert_eq!(heap_body[9], heap::HEAP_DUMP_INFO);
+        // PRIM_ARRAY_DUMP must appear after
+        let arr_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::PRIM_ARRAY_DUMP)
+            .expect("prim array missing");
+        let elem_start = arr_pos + 14;
+        assert_eq!(
+            &heap_body[elem_start..elem_start + 4],
+            &[0u8; 4],
+            "array elems zeroed"
+        );
+        // Third HEAP_DUMP_INFO must follow array
+        assert_eq!(
+            heap_body[arr_pos + 1 + 4 + 4 + 4 + 1 + 4],
+            heap::HEAP_DUMP_INFO
+        );
+    }
+
+    // ── Test: class dump with all static field types — none leak ─────────────
+
+    #[test]
+    fn class_dump_all_primitive_static_types_zeroed() {
+        let class_id = 700u32;
+        let mut v = vec![heap::CLASS_DUMP];
+        v.extend_from_slice(&u4(class_id));
+        v.extend_from_slice(&u4(0)); // stack
+        v.extend_from_slice(&u4(0)); // super
+        for _ in 0..5 {
+            v.extend_from_slice(&u4(0));
+        } // loader+signers+domain+res1+res2
+        v.extend_from_slice(&u4(0)); // instance_size
+        v.extend_from_slice(&u2(0)); // cp_count
+        // Static fields: Boolean(4,1B), Byte(8,1B), Short(9,2B), Char(5,2B), Int(10,4B),
+        //                Long(11,8B), Float(6,4B), Double(7,8B)
+        let statics: &[(u8, &[u8])] = &[
+            (4, &[0xFF]),
+            (8, &[0xFF]),
+            (9, &[0xFF, 0xFF]),
+            (5, &[0xFF, 0xFF]),
+            (10, &[0xFF, 0xFF, 0xFF, 0xFF]),
+            (11, &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            (6, &[0xFF, 0xFF, 0xFF, 0xFF]),
+            (7, &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+        ];
+        v.extend_from_slice(&u2(statics.len() as u16));
+        let mut val_offsets: Vec<(usize, usize)> = Vec::new(); // (offset, size) of each value in heap_body
+        for (type_code, val) in statics {
+            v.extend_from_slice(&u4(42)); // name_id
+            v.push(*type_code);
+            let val_offset_in_v = v.len();
+            v.extend_from_slice(val);
+            val_offsets.push((val_offset_in_v + 1 /* sub_tag byte */, val.len()));
+        }
+        v.extend_from_slice(&u2(0)); // instance field count
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&v));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+
+        // For each static value, verify all bytes are zero in the output
+        // Recompute offsets: heap_body[0] = CLASS_DUMP tag, then bytes follow
+        // Walk the output CLASS_DUMP manually to find each value
+        // header = tag(1)+class_id(4)+stack(4)+super(4)+5ids(20)+inst_size(4)+cp_count(2) = 39
+        // static_count(2) = 41, then entries:
+        let mut pos = 41;
+        let sc = u16::from_be_bytes(heap_body[39..41].try_into().unwrap()) as usize;
+        assert_eq!(sc, statics.len());
+        for (i, (type_code, val)) in statics.iter().enumerate() {
+            pos += 4; // name_id
+            pos += 1; // type_code
+            let sz = val.len();
+            let got = &heap_body[pos..pos + sz];
+            assert!(
+                got.iter().all(|&b| b == 0),
+                "static field {i} type {type_code} must be zeroed, got {got:?}"
+            );
+            pos += sz;
+        }
+    }
+
+    // ── Test: class_id preserved in instance header after redaction ───────────
+
+    #[test]
+    fn instance_class_id_in_header_preserved() {
+        let class_id = 800u32;
+        let obj_id = 801u32;
+        let sub_class = class_dump(class_id, 0, &[(10, 1)]);
+        let sub_inst = instance_dump(obj_id, class_id, &[0xFF, 0xFF, 0xFF, 0xFF]);
+        let mut subs = sub_class;
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        // CLASS_DUMP with 1 field = 48 bytes
+        let inst_start = 48;
+        // class_id in header: tag(1)+obj_id(4)+serial(4) = 9 bytes in, then 4 bytes
+        let cid = u32::from_be_bytes(
+            heap_body[inst_start + 9..inst_start + 13]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(
+            cid, class_id,
+            "class_id in instance header must be preserved"
+        );
+    }
+
+    // ── Test: super-chain with object ref field in grandparent ───────────────
+
+    #[test]
+    fn super_chain_mixed_fields_preserve_refs() {
+        // GrandParent: Object ref
+        // Parent: Int
+        // Child: Object ref + Long
+        // Layout: ref(4) + int(4) + ref(4) + long(8) = 20 bytes
+        let gp_id = 900u32;
+        let par_id = 901u32;
+        let child_id = 902u32;
+        let obj_id = 903u32;
+        let ref_gp = 0x1111u32;
+        let ref_child = 0x2222u32;
+
+        let sub_gp = class_dump(gp_id, 0, &[(2, 1)]); // Object
+        let sub_par = class_dump(par_id, gp_id, &[(10, 2)]); // Int
+        let sub_child = class_dump(child_id, par_id, &[(2, 3), (11, 4)]); // Object + Long
+
+        let mut field_data = Vec::new();
+        field_data.extend_from_slice(&ref_gp.to_be_bytes()); // GP Object ref
+        field_data.extend_from_slice(&0xDEADBEEFu32.to_be_bytes()); // Par Int
+        field_data.extend_from_slice(&ref_child.to_be_bytes()); // Child Object ref
+        field_data.extend_from_slice(&0xCAFEBABECAFEBABEu64.to_be_bytes()); // Child Long
+
+        let sub_inst = instance_dump(obj_id, child_id, &field_data);
+        let mut subs = sub_gp;
+        subs.extend(sub_par);
+        subs.extend(sub_child);
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let inst_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::INSTANCE_DUMP)
+            .expect("no INSTANCE_DUMP");
+        let fp = inst_pos + 17;
+
+        let got_ref_gp = u32::from_be_bytes(heap_body[fp..fp + 4].try_into().unwrap());
+        let got_int = u32::from_be_bytes(heap_body[fp + 4..fp + 8].try_into().unwrap());
+        let got_ref_child = u32::from_be_bytes(heap_body[fp + 8..fp + 12].try_into().unwrap());
+        let got_long = u64::from_be_bytes(heap_body[fp + 12..fp + 20].try_into().unwrap());
+
+        assert_eq!(got_ref_gp, ref_gp, "GP object ref must be preserved");
+        assert_eq!(
+            got_ref_child, ref_child,
+            "Child object ref must be preserved"
+        );
+        assert_eq!(got_int, 0, "Par int field must be zeroed");
+        assert_eq!(got_long, 0, "Child long field must be zeroed");
+    }
+
+    // ── Test: progress callback is invoked ────────────────────────────────────
+
+    #[test]
+    fn progress_callback_invoked_with_phase_names() {
+        let mut dump = header();
+        dump.extend(string_record(1, "x"));
+        let source = HprofSource::from_bytes(dump, "test.hprof");
+        let phases_seen = std::sync::Mutex::new(Vec::<String>::new());
+        redact(&source, std::io::sink(), |phase, _frac| {
+            phases_seen.lock().unwrap().push(phase.to_string());
+        })
+        .unwrap();
+        let phases = phases_seen.into_inner().unwrap();
+        assert!(
+            phases.contains(&"pass1".to_string()),
+            "pass1 phase must be reported"
+        );
+        assert!(
+            phases.contains(&"pass2".to_string()),
+            "pass2 phase must be reported"
+        );
+    }
+
+    // ── Test: output byte count is deterministic ──────────────────────────────
+
+    #[test]
+    fn output_size_is_deterministic() {
+        let fields: &[(u8, u32)] = &[(10, 1), (2, 2)];
+        let class_sub = class_dump(50, 0, fields);
+        let inst_sub = instance_dump(100, 50, &[0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x02, 0x03, 0x04]);
+        let arr_sub = prim_array_dump(200, 8, &[0xAA; 8]);
+        let mut sub = class_sub;
+        sub.extend(inst_sub);
+        sub.extend(arr_sub);
+        let mut dump = header();
+        dump.extend(string_record(1, "test"));
+        dump.extend(heap_dump_record(&sub));
+        let r1 = do_redact(&dump);
+        let r2 = do_redact(&dump);
+        assert_eq!(r1.len(), r2.len(), "output size must be deterministic");
+        assert_eq!(r1, r2, "output bytes must be deterministic");
+    }
+
     #[test]
     fn redact_preserves_object_count_across_all_fixtures() {
         // For every fixture file present, verify that object count is preserved after redaction.
