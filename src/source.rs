@@ -49,6 +49,11 @@ impl HprofSource {
             HprofSource::Path(p) => HprofReader::open(p),
             HprofSource::Bytes { data, .. } => {
                 let buf = ArcBuf(Arc::clone(data));
+                // ZIP magic: PK\x03\x04
+                #[cfg(feature = "native")]
+                if buf.0.len() >= 4 && buf.0[0] == 0x50 && buf.0[1] == 0x4b {
+                    return open_zip_bytes(buf);
+                }
                 if buf.0.len() >= 2 && buf.0[0] == 0x1f && buf.0[1] == 0x8b {
                     let truncated = Arc::new(AtomicBool::new(false));
                     HprofReader::from_reader_with_flag(
@@ -100,6 +105,28 @@ impl From<&str> for HprofSource {
     fn from(p: &str) -> Self {
         HprofSource::Path(p.to_string())
     }
+}
+
+/// Decompress the first `.hprof` entry from an in-memory ZIP archive.
+/// `ZipArchive` requires `Read + Seek`; `Cursor<ArcBuf>` satisfies both.
+#[cfg(feature = "native")]
+fn open_zip_bytes(buf: ArcBuf) -> io::Result<HprofReader> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(Cursor::new(buf))
+        .map_err(io::Error::other)?;
+    let idx = (0..archive.len())
+        .find(|&i| {
+            archive
+                .by_index(i)
+                .map(|f| f.name().to_ascii_lowercase().ends_with(".hprof"))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no .hprof entry in zip"))?;
+    let mut entry = archive.by_index(idx).map_err(io::Error::other)?;
+    let cap = (entry.size() as usize).min(2 * 1024 * 1024 * 1024);
+    let mut hprof_bytes = Vec::with_capacity(cap);
+    entry.read_to_end(&mut hprof_bytes)?;
+    HprofReader::from_reader(Cursor::new(hprof_bytes))
 }
 
 impl From<String> for HprofSource {

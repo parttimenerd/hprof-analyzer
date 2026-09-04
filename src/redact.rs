@@ -205,8 +205,15 @@ fn scan_heap_segment_for_classes(
                 r.skip(ids + 4 + 4 + 1)?;
                 ids + 9
             }
+            heap::HEAP_DUMP_INFO => {
+                // u4 heap_id + id heap_name_string_id — no user data, skip.
+                r.skip(4 + ids)?;
+                4 + ids
+            }
             _ => {
-                // Unknown sub-tag — can't determine size, stop scanning this segment
+                // Unknown sub-tag — can't determine size; skip remaining segment bytes
+                // so the outer pass1 loop stays in sync with the top-level record stream.
+                r.skip(remaining)?;
                 break;
             }
         };
@@ -428,8 +435,15 @@ fn write_redacted_heap_segment<W: Write>(
                 copy_exact(r, w, ids + 9)?;
                 ids + 9
             }
+            heap::HEAP_DUMP_INFO => {
+                // u4 heap_id + id heap_name_string_id — no user data, copy verbatim.
+                copy_exact(r, w, 4 + ids)?;
+                4 + ids
+            }
             _ => {
-                // Unknown sub-tag: can't determine body size — stop.
+                // Unknown sub-tag: can't determine body size — copy remaining
+                // segment bytes verbatim so the outer stream stays in sync.
+                copy_exact(r, w, remaining)?;
                 break;
             }
         };
@@ -461,6 +475,9 @@ fn redact_instance_dump<W: Write>(
     if let Some(fields) = class_fields.get(&class_id) {
         let mut written = 0u64;
         for &ft in fields {
+            if written >= data_len {
+                break; // truncated or mismatched layout — stop early, don't over-read
+            }
             match ft {
                 HprofType::Object => {
                     copy_exact(r, w, ids)?;
@@ -469,20 +486,21 @@ fn redact_instance_dump<W: Write>(
                 prim => {
                     let sz = prim.byte_size() as u64;
                     r.skip(sz)?;
-                    w.write_all(&vec![0u8; sz as usize])?;
+                    write_zeroes(w, sz)?;
                     written += sz;
                 }
             }
         }
-        // If layout doesn't match (corrupt dump or unknown fields), copy remainder verbatim.
+        // If fewer bytes consumed than declared (unknown subclass fields, truncated layout),
+        // zero the remainder — never leak the tail bytes.
         if written < data_len {
-            copy_exact(r, w, data_len - written)?;
-        } else if written > data_len {
-            // Overread — shouldn't happen with valid dumps; skip excess from wire.
+            r.skip(data_len - written)?;
+            write_zeroes(w, data_len - written)?;
         }
     } else {
-        // Unknown class — copy body verbatim to stay parseable.
-        copy_exact(r, w, data_len)?;
+        // Unknown class — zero all bytes conservatively so no primitive values leak.
+        r.skip(data_len)?;
+        write_zeroes(w, data_len)?;
     }
 
     Ok(header_size + data_len)
@@ -633,6 +651,7 @@ mod tests {
     use super::*;
     use crate::source::HprofSource;
     use crate::types::{heap, tags};
+    use std::io::Write;
 
     // ── HPROF byte builder helpers ────────────────────────────────────────────
 
@@ -1677,5 +1696,677 @@ mod tests {
             orig_p1.class_dump_count, red_p1.class_dump_count,
             "class dump count must be identical after redaction"
         );
+    }
+
+    // ── Robustness tests ──────────────────────────────────────────────────────
+
+    // Build a HEAP_DUMP_INFO sub-record (u4 heap_id + id name_string_id).
+    fn heap_dump_info(heap_id: u32, name_id: u32) -> Vec<u8> {
+        let mut v = vec![heap::HEAP_DUMP_INFO];
+        v.extend_from_slice(&u4(heap_id));
+        v.extend_from_slice(&u4(name_id));
+        v
+    }
+
+    #[test]
+    fn heap_dump_info_in_segment_does_not_stop_redaction() {
+        // Put a HEAP_DUMP_INFO before an instance — the instance must still be redacted.
+        let class_id = 500u32;
+        let obj_id = 501u32;
+        let field_data = 0xDEADBEEFu32.to_be_bytes(); // sentinel prim value
+
+        let mut sub = heap_dump_info(1, 999);
+        sub.extend_from_slice(&class_dump(class_id, 0, &[(10, 1)])); // type 10 = Int
+        sub.extend_from_slice(&instance_dump(obj_id, class_id, &field_data));
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .expect("heap dump record missing")
+            .1;
+
+        // HEAP_DUMP_INFO sub-record must be present verbatim (5 bytes: tag + heap_id + name_id)
+        assert_eq!(heap_body[0], heap::HEAP_DUMP_INFO, "HEAP_DUMP_INFO tag preserved");
+
+        // Find the INSTANCE_DUMP after CLASS_DUMP and HEAP_DUMP_INFO.
+        // HEAP_DUMP_INFO = 1+4+4=9 bytes, CLASS_DUMP with 1 field = 1+7*4+4+2+2+2+5=48 bytes
+        let inst_start = 9 + 48;
+        assert_eq!(heap_body[inst_start], heap::INSTANCE_DUMP, "INSTANCE_DUMP tag present");
+        // field data starts at inst_start + 1(tag) + 4(obj_id) + 4(serial) + 4(class_id) + 4(data_len)
+        let field_start = inst_start + 17;
+        let got = u32::from_be_bytes(heap_body[field_start..field_start + 4].try_into().unwrap());
+        assert_eq!(got, 0u32, "int field after HEAP_DUMP_INFO must be zeroed");
+    }
+
+    #[test]
+    fn heap_dump_info_at_end_of_segment_no_panic() {
+        // HEAP_DUMP_INFO as the very last sub-record — no following records to lose.
+        let mut sub = heap_dump_info(7, 42);
+        sub.extend_from_slice(&class_dump(100, 0, &[]));
+        sub.extend_from_slice(&instance_dump(101, 100, &[]));
+        sub.extend_from_slice(&heap_dump_info(8, 43));
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        do_redact(&dump); // must not panic
+    }
+
+    #[test]
+    fn unknown_class_instance_body_zeroed() {
+        // Instance whose class_id has no CLASS_DUMP in the file — body must be zeroed.
+        let missing_class_id = 9999u32;
+        let obj_id = 1u32;
+        let field_data = [0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44];
+        let sub = instance_dump(obj_id, missing_class_id, &field_data);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .expect("heap dump record missing")
+            .1;
+
+        // tag(1) + obj_id(4) + serial(4) + class_id(4) + data_len(4) = 17 bytes header
+        let field_start = 17;
+        let got: &[u8] = &heap_body[field_start..field_start + field_data.len()];
+        assert_eq!(
+            got,
+            &[0u8; 8],
+            "unknown-class instance body must be fully zeroed"
+        );
+    }
+
+    #[test]
+    fn instance_with_truncated_layout_zeroes_remainder() {
+        // Class declares 1 int field (4 bytes), but instance data_len = 8 bytes.
+        // The extra 4 bytes must be zeroed (not leaked verbatim).
+        let class_id = 200u32;
+        let obj_id = 201u32;
+        let field_data = [0xFF, 0xFF, 0xFF, 0xFF, 0xAB, 0xCD, 0xEF, 0x01];
+        let sub_class = class_dump(class_id, 0, &[(10, 1)]); // 1 Int field
+        let sub_inst = instance_dump(obj_id, class_id, &field_data); // 8 bytes — 4 more than declared
+        let mut all_sub = sub_class;
+        all_sub.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&all_sub));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .expect("heap dump record missing")
+            .1;
+
+        // CLASS_DUMP with 1 field = 48 bytes; INSTANCE_DUMP header = 17 bytes
+        let inst_start = 48;
+        let field_start = inst_start + 17;
+        let got: &[u8] = &heap_body[field_start..field_start + 8];
+        assert_eq!(got, &[0u8; 8], "all 8 bytes (4 known + 4 tail) must be zeroed");
+    }
+
+    #[test]
+    fn records_after_unknown_sub_tag_skipped_gracefully() {
+        // An unknown sub-tag causes the segment loop to break.
+        // After that, the next top-level record must still be processed correctly.
+        let mut sub1 = vec![0xEE]; // unknown sub-tag — causes break
+        sub1.extend_from_slice(&[0, 0, 0, 0]); // doesn't matter, loop broke already
+        let class_id = 300u32;
+        let arr_id = 301u32;
+        let arr_data = [1u8, 2, 3, 4];
+        let sub2_class = class_dump(class_id, 0, &[]);
+        let sub2_arr = prim_array_dump(arr_id, 8, &arr_data); // type 8 = Byte
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub1)); // segment with unknown sub-tag
+        let mut sub2 = sub2_class;
+        sub2.extend(sub2_arr);
+        dump.extend(heap_dump_record(&sub2)); // second segment — must be fully processed
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_bodies: Vec<_> = records
+            .iter()
+            .filter(|(t, _)| *t == tags::HEAP_DUMP)
+            .collect();
+        assert_eq!(heap_bodies.len(), 2, "both heap dump segments must be present");
+        // Second segment: CLASS_DUMP with 0 fields (43 bytes) + PRIM_ARRAY_DUMP.
+        let seg2 = &heap_bodies[1].1;
+        let arr_pos = seg2
+            .iter()
+            .position(|&b| b == heap::PRIM_ARRAY_DUMP)
+            .expect("PRIM_ARRAY_DUMP must be in second segment");
+        // elem data starts at arr_pos + tag(1) + id(4) + serial(4) + count(4) + type(1) = +14
+        let elem_start = arr_pos + 14;
+        let got: &[u8] = &seg2[elem_start..elem_start + 4];
+        assert_eq!(got, &[0u8; 4], "byte array in second segment must be zeroed");
+    }
+
+    #[test]
+    fn multilevel_inheritance_all_primitive_fields_zeroed() {
+        // GrandParent: int field (4 bytes)
+        // Parent: long field (8 bytes)
+        // Child: int field (4 bytes)
+        // Instance of Child should have 4+8+4=16 bytes zeroed.
+        let gp_id = 10u32;
+        let par_id = 11u32;
+        let child_id = 12u32;
+        let obj_id = 13u32;
+
+        let sub_gp = class_dump(gp_id, 0, &[(10, 1)]); // Int
+        let sub_par = class_dump(par_id, gp_id, &[(11, 2)]); // Long
+        let sub_child = class_dump(child_id, par_id, &[(10, 3)]); // Int
+
+        // field_data: 4 bytes GP int + 8 bytes Par long + 4 bytes Child int = 16 bytes
+        let field_data = [
+            0xAA, 0xBB, 0xCC, 0xDD, // GP int
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // Par long
+            0xFE, 0xDC, 0xBA, 0x98, // Child int
+        ];
+        let sub_inst = instance_dump(obj_id, child_id, &field_data);
+
+        let mut subs = sub_gp;
+        subs.extend(sub_par);
+        subs.extend(sub_child);
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+
+        // Find INSTANCE_DUMP by tag scan
+        let inst_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::INSTANCE_DUMP)
+            .expect("INSTANCE_DUMP missing");
+        let field_start = inst_pos + 17; // tag+obj_id+serial+class_id+data_len
+        let got = &heap_body[field_start..field_start + 16];
+        assert_eq!(got, &[0u8; 16], "all 16 bytes of multi-level instance must be zeroed");
+    }
+
+    #[test]
+    fn mixed_object_refs_and_primitives_in_same_class() {
+        // Class with: Object ref (4B), Int (4B), Object ref (4B), Long (8B)
+        // Object refs must be preserved; Int and Long must be zeroed.
+        let class_id = 20u32;
+        let obj_id = 21u32;
+        let ref1 = 0xAAAAAAAAu32;
+        let ref2 = 0xBBBBBBBBu32;
+        let int_val = 0xDEADBEEFu32;
+        let long_val = 0xCAFEBABEDEADu64;
+
+        // Fields: Object(2), Int(10), Object(2), Long(11)
+        let sub_class = class_dump(class_id, 0, &[(2, 1), (10, 2), (2, 3), (11, 4)]);
+
+        let mut field_data = Vec::new();
+        field_data.extend_from_slice(&ref1.to_be_bytes());
+        field_data.extend_from_slice(&int_val.to_be_bytes());
+        field_data.extend_from_slice(&ref2.to_be_bytes());
+        field_data.extend_from_slice(&0u32.to_be_bytes()); // pad long to 8 bytes
+        field_data.extend_from_slice(&(long_val as u32).to_be_bytes());
+
+        let sub_inst = instance_dump(obj_id, class_id, &field_data);
+        let mut subs = sub_class;
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let inst_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::INSTANCE_DUMP)
+            .expect("INSTANCE_DUMP missing");
+        let fp = inst_pos + 17;
+
+        let got_ref1 = u32::from_be_bytes(heap_body[fp..fp + 4].try_into().unwrap());
+        let got_int = u32::from_be_bytes(heap_body[fp + 4..fp + 8].try_into().unwrap());
+        let got_ref2 = u32::from_be_bytes(heap_body[fp + 8..fp + 12].try_into().unwrap());
+        let got_long_hi = u32::from_be_bytes(heap_body[fp + 12..fp + 16].try_into().unwrap());
+        let got_long_lo = u32::from_be_bytes(heap_body[fp + 16..fp + 20].try_into().unwrap());
+
+        assert_eq!(got_ref1, ref1, "first object ref must be preserved");
+        assert_eq!(got_ref2, ref2, "second object ref must be preserved");
+        assert_eq!(got_int, 0, "int field must be zeroed");
+        assert_eq!(got_long_hi, 0, "long high word must be zeroed");
+        assert_eq!(got_long_lo, 0, "long low word must be zeroed");
+    }
+
+    #[test]
+    fn class_dump_constant_pool_values_zeroed() {
+        // CLASS_DUMP with 1 constant pool entry (type=Int, value=0xCAFEBABE).
+        // The cp value must be zeroed, cp index preserved.
+        let class_id = 30u32;
+
+        let mut v = vec![heap::CLASS_DUMP];
+        v.extend_from_slice(&u4(class_id));
+        v.extend_from_slice(&u4(0)); // stack
+        v.extend_from_slice(&u4(0)); // super
+        v.extend_from_slice(&u4(0)); // loader
+        v.extend_from_slice(&u4(0)); // signers
+        v.extend_from_slice(&u4(0)); // domain
+        v.extend_from_slice(&u4(0)); // res1
+        v.extend_from_slice(&u4(0)); // res2
+        v.extend_from_slice(&u4(0)); // instance_size
+        v.extend_from_slice(&u2(1)); // cp_count = 1
+        v.extend_from_slice(&u2(99)); // cp_index = 99
+        v.push(10); // type = Int
+        v.extend_from_slice(&0xCAFEBABEu32.to_be_bytes()); // value
+        v.extend_from_slice(&u2(0)); // static_count = 0
+        v.extend_from_slice(&u2(0)); // instance_field_count = 0
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&v));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+
+        // CLASS_DUMP header = tag(1)+9×u4(36) = 37 bytes, then cp_count(2) = 39 bytes total before cp entries.
+        // cp entry: cp_index(2) + cp_type(1) + value(4 for Int) — cp_index at 39, cp_type at 41, value at 42.
+        let cp_val_start = 42;
+        let got = u32::from_be_bytes(heap_body[cp_val_start..cp_val_start + 4].try_into().unwrap());
+        assert_eq!(got, 0, "constant pool int value must be zeroed");
+        // cp_index (bytes 39..41) must be preserved (99 = 0x0063)
+        let got_idx = u16::from_be_bytes(heap_body[39..41].try_into().unwrap());
+        assert_eq!(got_idx, 99, "constant pool index must be preserved");
+    }
+
+    #[test]
+    fn class_dump_object_ref_in_static_preserved() {
+        // CLASS_DUMP static field of type Object — value (an ID) must NOT be zeroed.
+        let class_id = 40u32;
+        let ref_val = 0xDEADu32;
+
+        let mut v = vec![heap::CLASS_DUMP];
+        v.extend_from_slice(&u4(class_id));
+        v.extend_from_slice(&u4(0)); // stack
+        v.extend_from_slice(&u4(0)); // super
+        v.extend_from_slice(&u4(0)); // loader
+        v.extend_from_slice(&u4(0)); // signers
+        v.extend_from_slice(&u4(0)); // domain
+        v.extend_from_slice(&u4(0)); // res1
+        v.extend_from_slice(&u4(0)); // res2
+        v.extend_from_slice(&u4(0)); // instance_size
+        v.extend_from_slice(&u2(0)); // cp_count = 0
+        v.extend_from_slice(&u2(1)); // static_count = 1
+        v.extend_from_slice(&u4(55)); // static name_id
+        v.push(2); // type = Object
+        v.extend_from_slice(&u4(ref_val)); // object ref value
+        v.extend_from_slice(&u2(0)); // instance_field_count = 0
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&v));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+
+        // header(37) + cp_count(2) + static_count(2) + name_id(4) + type(1) = 46, value starts at 46
+        let val_start = 46;
+        let got = u32::from_be_bytes(heap_body[val_start..val_start + 4].try_into().unwrap());
+        assert_eq!(got, ref_val, "object ref in static field must be preserved");
+    }
+
+    #[test]
+    fn large_prim_array_fully_zeroed() {
+        // Array of 1024 ints — all elements must be zeroed.
+        let arr_id = 50u32;
+        let count = 1024usize;
+        let mut elem_data = vec![0u8; count * 4];
+        // Fill with non-zero pattern
+        for (i, chunk) in elem_data.chunks_mut(4).enumerate() {
+            let val = (i as u32).wrapping_mul(0x1234567) | 0xDEAD0000;
+            chunk.copy_from_slice(&val.to_be_bytes());
+        }
+        let sub = prim_array_dump(arr_id, 10, &elem_data); // type 10 = Int
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        // PRIM_ARRAY header: tag(1)+id(4)+serial(4)+count(4)+type(1) = 14 bytes
+        let elem_start = 14;
+        let got: &[u8] = &heap_body[elem_start..elem_start + count * 4];
+        assert!(got.iter().all(|&b| b == 0), "all 1024 int elements must be zeroed");
+    }
+
+    #[test]
+    fn string_record_with_utf8_content_preserved_verbatim() {
+        // STRING record with a sentinel value — must be byte-for-byte preserved.
+        let sentinel = "Hello, World! \u{1F4BE}";
+        let mut dump = header();
+        dump.extend(string_record(42, sentinel));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let string_rec = records
+            .iter()
+            .find(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .expect("string record missing");
+        // body = id(4) + utf8 bytes
+        let got_str = std::str::from_utf8(&string_rec.1[4..]).unwrap();
+        assert_eq!(got_str, sentinel, "string content must be byte-for-byte preserved");
+    }
+
+    #[test]
+    fn multiple_string_records_all_preserved() {
+        let strings = ["alpha", "beta", "gamma\0delta", ""];
+        let mut dump = header();
+        for (i, s) in strings.iter().enumerate() {
+            dump.extend(string_record(i as u32 + 1, s));
+        }
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let string_bodies: Vec<_> = records
+            .iter()
+            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .collect();
+        assert_eq!(string_bodies.len(), strings.len(), "all string records must be present");
+        for (i, s) in strings.iter().enumerate() {
+            let got = std::str::from_utf8(&string_bodies[i].1[4..]).unwrap();
+            assert_eq!(got, *s, "string {i} must be preserved verbatim");
+        }
+    }
+
+    #[test]
+    fn empty_prim_array_no_panic() {
+        let sub = prim_array_dump(99, 10, &[]); // 0 Int elements
+        let mut dump = header();
+        dump.extend(heap_dump_record(&sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        assert_eq!(heap_body[0], heap::PRIM_ARRAY_DUMP);
+        // count field at bytes 9..13 should be 0
+        let count = u32::from_be_bytes(heap_body[9..13].try_into().unwrap());
+        assert_eq!(count, 0, "empty array count must be 0");
+    }
+
+    #[test]
+    fn zero_length_instance_no_panic() {
+        let class_id = 60u32;
+        let obj_id = 61u32;
+        let sub_class = class_dump(class_id, 0, &[]); // no fields
+        let sub_inst = instance_dump(obj_id, class_id, &[]); // 0-byte body
+        let mut subs = sub_class;
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+        do_redact(&dump); // must not panic
+    }
+
+    #[test]
+    fn instance_with_only_object_refs_not_zeroed() {
+        // Instance with 2 Object ref fields — nothing to zero, body must be preserved.
+        let class_id = 70u32;
+        let obj_id = 71u32;
+        let ref1 = 0xAAAAu32;
+        let ref2 = 0xBBBBu32;
+
+        let sub_class = class_dump(class_id, 0, &[(2, 1), (2, 2)]); // 2 Object refs
+        let mut field_data = Vec::new();
+        field_data.extend_from_slice(&ref1.to_be_bytes());
+        field_data.extend_from_slice(&ref2.to_be_bytes());
+        let sub_inst = instance_dump(obj_id, class_id, &field_data);
+        let mut subs = sub_class;
+        subs.extend(sub_inst);
+        let mut dump = header();
+        dump.extend(heap_dump_record(&subs));
+
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let heap_body = &records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP)
+            .unwrap()
+            .1;
+        let inst_pos = heap_body
+            .iter()
+            .position(|&b| b == heap::INSTANCE_DUMP)
+            .expect("INSTANCE_DUMP missing");
+        let fp = inst_pos + 17;
+        let got_r1 = u32::from_be_bytes(heap_body[fp..fp + 4].try_into().unwrap());
+        let got_r2 = u32::from_be_bytes(heap_body[fp + 4..fp + 8].try_into().unwrap());
+        assert_eq!(got_r1, ref1, "object ref 1 must be preserved");
+        assert_eq!(got_r2, ref2, "object ref 2 must be preserved");
+    }
+
+    #[test]
+    fn redact_marker_body_is_correct() {
+        // Verify the redaction marker body bytes are exactly "HPROF-REDACT\x01\x00".
+        let dump = header(); // empty — just the header
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let marker = records
+            .iter()
+            .find(|(t, _)| *t == tags::REDACTED_MARKER)
+            .expect("redaction marker missing");
+        assert_eq!(marker.1, b"HPROF-REDACT\x01\x00", "marker body must match spec");
+    }
+
+    #[test]
+    fn fixture_dump1_report_shows_redacted_flag() {
+        let name = "dump_1_mnemonics.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        let redacted = redact_fixture(name);
+        let source = HprofSource::from_bytes(redacted, "r.hprof");
+        let p1 = crate::pass1::Pass1::run(&source, false).expect("pass1 failed");
+        assert!(p1.redacted, "pass1 must detect the redaction marker");
+    }
+
+    #[test]
+    fn fixture_dump1_full_report_does_not_panic() {
+        // Run the full report pipeline on a redacted fixture. Zero data must not
+        // cause panics, division by zero, or assertion failures anywhere in build_model.
+        let name = "dump_1_mnemonics.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        let redacted = redact_fixture(name);
+        let source = HprofSource::from_bytes(redacted, "r.hprof");
+        // Use the public analyze_to_report_with_progress to exercise the full pipeline.
+        let opts = crate::AnalyzeOptions::default();
+        let result = crate::analyze_to_report_with_progress(&source, &opts, &mut |_, _| {});
+        assert!(result.is_ok(), "full analysis of redacted dump must not error: {:?}", result.err());
+        let (report, _) = result.unwrap();
+        assert!(report.redacted_input, "report must have redacted_input=true");
+        // Structural counts must survive zeroing.
+        assert!(report.overview.total_objects > 0, "object count must be non-zero");
+        assert!(report.overview.total_shallow > 0, "shallow size must be non-zero");
+        // Triage must contain the redacted-dump signal.
+        let has_redacted_signal = report
+            .triage
+            .iter()
+            .any(|s| s.id == "redacted-dump");
+        assert!(has_redacted_signal, "triage must contain redacted-dump signal");
+    }
+
+    #[test]
+    fn fixture_dump4_full_report_does_not_panic() {
+        let name = "dump_4_philosophers.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        let redacted = redact_fixture(name);
+        let source = HprofSource::from_bytes(redacted, "r.hprof");
+        let opts = crate::AnalyzeOptions::default();
+        let result = crate::analyze_to_report_with_progress(&source, &opts, &mut |_, _| {});
+        assert!(result.is_ok(), "full analysis of redacted dump4 must not error: {:?}", result.err());
+        let (report, _) = result.unwrap();
+        assert!(report.redacted_input);
+        assert!(report.overview.total_objects > 0);
+    }
+
+    #[test]
+    fn redact_gz_input_produces_same_output_as_raw() {
+        // Redacting a .hprof.gz source must produce the same bytes as redacting raw.
+        let name = "dump_1_mnemonics.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        // Redact raw
+        let raw_redacted = redact_fixture(name);
+
+        // Compress fixture to gzip, then redact compressed source
+        let raw_bytes = std::fs::read(&path).unwrap();
+        let mut gz_bytes = Vec::new();
+        {
+            let mut enc = flate2::write::GzEncoder::new(&mut gz_bytes, flate2::Compression::fast());
+            enc.write_all(&raw_bytes).unwrap();
+            enc.finish().unwrap();
+        }
+        let gz_source = HprofSource::from_bytes(gz_bytes, "test.hprof.gz");
+        let mut gz_redacted = Vec::new();
+        redact(&gz_source, &mut gz_redacted, |_, _| {}).expect("redact gz failed");
+
+        assert_eq!(
+            raw_redacted, gz_redacted,
+            "redacting gz vs raw must produce identical output"
+        );
+    }
+
+    #[test]
+    fn redact_zip_input_produces_same_output_as_raw() {
+        let name = "dump_1_mnemonics.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        let raw_redacted = redact_fixture(name);
+
+        // Compress fixture to zip
+        let raw_bytes = std::fs::read(&path).unwrap();
+        let mut zip_bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_bytes));
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("dump.hprof", opts).unwrap();
+            zip.write_all(&raw_bytes).unwrap();
+            zip.finish().unwrap();
+        }
+        let zip_source = HprofSource::from_bytes(zip_bytes, "test.hprof.zip");
+        let mut zip_redacted = Vec::new();
+        redact(&zip_source, &mut zip_redacted, |_, _| {}).expect("redact zip failed");
+
+        assert_eq!(
+            raw_redacted, zip_redacted,
+            "redacting zip vs raw must produce identical output"
+        );
+    }
+
+    #[test]
+    fn redact_output_as_gz_is_parseable() {
+        // Redact → write to gzip → decompress → parse with pass1 → must succeed.
+        let name = "dump_1_mnemonics.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        let source = HprofSource::from(path.to_str().unwrap());
+        let mut gz_buf = Vec::new();
+        {
+            let gz = flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
+            redact(&source, gz, |_, _| {}).expect("redact to gz failed");
+        }
+        let gz_source = HprofSource::from_bytes(gz_buf, "out.hprof.gz");
+        let p1 = crate::pass1::Pass1::run(&gz_source, false).expect("pass1 on gz output failed");
+        assert!(p1.redacted, "gz-compressed redacted output must be detected as redacted");
+        assert!(p1.instance_count > 0, "must have instances after gz round-trip");
+    }
+
+    #[test]
+    fn redact_output_as_zip_is_parseable() {
+        let name = "dump_1_mnemonics.hprof";
+        let path = fixture_path(name);
+        if !path.exists() {
+            return;
+        }
+        let source = HprofSource::from(path.to_str().unwrap());
+        let mut zip_buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("dump.hprof", opts).unwrap();
+            redact(&source, &mut zip, |_, _| {}).expect("redact to zip failed");
+            zip.finish().unwrap();
+        }
+        let zip_source = HprofSource::from_bytes(zip_buf, "out.hprof.zip");
+        let p1 = crate::pass1::Pass1::run(&zip_source, false).expect("pass1 on zip output failed");
+        assert!(p1.redacted, "zip-compressed redacted output must be detected as redacted");
+        assert!(p1.instance_count > 0);
+    }
+
+    #[test]
+    fn redact_preserves_object_count_across_all_fixtures() {
+        // For every fixture file present, verify that object count is preserved after redaction.
+        let fixture_names = [
+            "dump_1_mnemonics.hprof",
+            "dump_2_scala-doku.hprof",
+            "dump_3_par-mnemonics.hprof",
+            "dump_4_philosophers.hprof",
+        ];
+        for name in &fixture_names {
+            let path = fixture_path(name);
+            if !path.exists() {
+                continue;
+            }
+            let orig_source = HprofSource::from(path.to_str().unwrap());
+            let orig_p1 = crate::pass1::Pass1::run(&orig_source, false)
+                .unwrap_or_else(|_| panic!("{name}: orig pass1 failed"));
+
+            let redacted = redact_fixture(name);
+            let red_source = HprofSource::from_bytes(redacted, "r.hprof");
+            let red_p1 = crate::pass1::Pass1::run(&red_source, false)
+                .unwrap_or_else(|_| panic!("{name}: redacted pass1 failed"));
+
+            assert_eq!(
+                orig_p1.instance_count, red_p1.instance_count,
+                "{name}: instance count must match"
+            );
+            assert_eq!(
+                orig_p1.class_dump_count, red_p1.class_dump_count,
+                "{name}: class dump count must match"
+            );
+            assert!(red_p1.redacted, "{name}: redacted dump must be detected as redacted");
+        }
     }
 }

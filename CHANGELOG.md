@@ -2,6 +2,50 @@
 
 All notable changes to hprof-analyzer are documented here.
 
+## [0.2.2] — 2026-09-04
+
+### Added
+
+- **`redact` subcommand and `hprof-redact` standalone binary.** Zeroes all
+  primitive field values and array element data (char[], byte[], int fields,
+  etc.) while preserving the complete object graph (class/field names, object
+  IDs, reference links). Output is readable by hprof-analyzer, Eclipse MAT,
+  and jhat. Accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tgz` input; output
+  format is inferred from extension.
+
+- **Redaction marker record (tag `0xDE`).** Redacted dumps carry a
+  `REDACTED\x01` top-level record so hprof-analyzer can detect them and show
+  a "Redacted dump" info banner in reports. Old tools skip the record cleanly.
+
+- **`redacted_input: true` in JSON reports.** When a redacted dump is loaded,
+  the report JSON includes `redacted_input: true` (mirrors `truncated_input`).
+  Duplicate-string and collections analyses are skipped (they return
+  meaningless all-zero results on zeroed data).
+
+- **In-memory ZIP support for `HprofSource::Bytes`.** WASM and test code can
+  now pass `.hprof.zip` bytes directly; the ZIP is decompressed in-memory
+  without a temporary file.
+
+### Fixed
+
+- **Redactor handles `HEAP_DUMP_INFO` sub-records (tag `0xFE`).** The
+  sub-record was previously unhandled, causing the heap-segment loop to
+  desynchronize and corrupt or truncate output for dumps containing multiple
+  heap segments with info records (Android, some HotSpot dumps).
+
+- **Unknown sub-tag drains remaining segment bytes.** Previously an unknown
+  sub-tag caused a silent early exit from the segment loop, leaving the
+  outer stream desynchronized. Now remaining bytes in the segment are consumed
+  before breaking, so subsequent top-level records parse correctly.
+
+- **Conservative zeroing for unknown-class instances.** Instance blobs whose
+  class is not in the field-type map (e.g. class was in a skipped segment) are
+  now zeroed entirely rather than copied verbatim, preventing data leakage.
+
+- **Redactor no longer over-reads instance blobs.** Added a `written >=
+  data_len` guard that stops field processing if accumulated field sizes
+  exceed the reported blob size; tail bytes are zeroed rather than copied.
+
 ## [0.2.1] — 2026-09-03
 
 ### Added
