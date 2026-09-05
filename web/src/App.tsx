@@ -11884,6 +11884,9 @@ function StartHereCallout() {
 
 export default function App({ report }: { report: Report }) {
   const [expandAllTables, setExpandAllTables] = React.useState(false);
+  const [showShortcuts, setShowShortcuts] = React.useState(false);
+  const showShortcutsRef = React.useRef(false);
+  React.useEffect(() => { showShortcutsRef.current = showShortcuts; }, [showShortcuts]);
   const hasDomData = (report.dominator_analysis?.immediate_dominators?.pairs?.length ?? 0) > 0;
   const objGraphNodes = report.obj_graph_flat?.nodes ?? null;
 
@@ -11984,7 +11987,14 @@ export default function App({ report }: { report: Report }) {
       }
 
       if (e.key === "Escape") {
+        if (showShortcutsRef.current) { setShowShortcuts(false); gKeyTime.current = 0; return; }
         (document.activeElement as HTMLElement | null)?.blur();
+        gKeyTime.current = 0;
+        return;
+      }
+
+      if (e.key === "?") {
+        setShowShortcuts(v => !v);
         gKeyTime.current = 0;
         return;
       }
@@ -12012,6 +12022,44 @@ export default function App({ report }: { report: Report }) {
     <TableExpansionCtx.Provider value={expandAllTables}>
     <div className="app">
       <a href="#memory-triage" className="skip-link">Skip to content</a>
+      {/* WASM embedded mode: topbar with navigation back to browser UI */}
+      {!!(window as any).__hprofGoBack && (
+        <div className="wasm-nav-bar">
+          <button className="wasm-nav-btn" onClick={() => (window as any).__hprofGoBack?.()}>↩ New file</button>
+          <span className="wasm-nav-sep">|</span>
+          <button className="wasm-nav-btn wasm-nav-btn-accent" onClick={() => (window as any).__hprofGoShell?.()}>⌨ OQL Shell</button>
+          <span className="wasm-nav-title">{report.overview?.source_name ?? ""}</span>
+        </div>
+      )}
+      {/* Shortcuts modal */}
+      {showShortcuts && (
+        <div className="shortcuts-backdrop" onClick={() => setShowShortcuts(false)}>
+          <div className="shortcuts-modal" onClick={e => e.stopPropagation()}>
+            <div className="shortcuts-header">
+              <span className="shortcuts-title">Keyboard Shortcuts</span>
+              <button className="shortcuts-close" onClick={() => setShowShortcuts(false)}>✕</button>
+            </div>
+            <table className="shortcuts-table">
+              <tbody>
+                <tr><td><kbd>/</kbd></td><td>Focus nearest filter input</td></tr>
+                <tr><td><kbd>Esc</kbd></td><td>Blur focused input / close this modal</td></tr>
+                <tr><td><kbd>?</kbd></td><td>Open / close this shortcuts modal</td></tr>
+                <tr className="shortcuts-group-row"><td colSpan={2}>Navigation</td></tr>
+                <tr><td><kbd>g</kbd> <kbd>h</kbd></td><td>Jump to System Overview</td></tr>
+                <tr><td><kbd>g</kbd> <kbd>l</kbd></td><td>Jump to Leak Suspects</td></tr>
+                <tr><td><kbd>g</kbd> <kbd>t</kbd></td><td>Jump to Top Consumers</td></tr>
+                <tr><td><kbd>g</kbd> <kbd>d</kbd></td><td>Jump to Dominator Analysis</td></tr>
+                <tr><td><kbd>g</kbd> <kbd>r</kbd></td><td>Jump to Type Reference Graph</td></tr>
+                <tr><td><kbd>g</kbd> <kbd>o</kbd></td><td>Jump to Object Graph Explorer</td></tr>
+                <tr className="shortcuts-group-row"><td colSpan={2}>Object Explorer</td></tr>
+                <tr><td><kbd>Alt</kbd>+<kbd>←</kbd></td><td>Back</td></tr>
+                <tr><td><kbd>Alt</kbd>+<kbd>→</kbd></td><td>Forward</td></tr>
+                <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Prev / next peer instance</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       <ReportHeader report={report} />
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
@@ -12023,9 +12071,9 @@ export default function App({ report }: { report: Report }) {
             <kbd>Ctrl+S</kbd> Save offline
           </span>
         )}
-        <span className="save-hint" title="g then h/l/t/d/r/o — jump to section; / — focus filter; Alt+←/→ — back/forward in Explorer">
-          <kbd>g</kbd> shortcuts
-        </span>
+        <button className="theme-toggle" title="Keyboard shortcuts (?)" onClick={() => setShowShortcuts(v => !v)}>
+          <kbd style={{ background: "none", border: "none", padding: 0, font: "inherit" }}>?</kbd> Shortcuts
+        </button>
         <ThemeToggle />
       </div>
       <Nav report={report} />

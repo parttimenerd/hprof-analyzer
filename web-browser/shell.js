@@ -1685,6 +1685,9 @@ function updateReportTopbar() {
 
 function showReport(report, fileName) {
   prevScreen = wasmSession ? 'shell-screen' : (serverUrl ? 'shell-screen' : null);
+  // Expose nav callbacks so the embedded React report can show its own topbar.
+  window.__hprofGoBack = () => document.getElementById('btn-new-file').click();
+  window.__hprofGoShell = () => document.getElementById('btn-to-shell').click();
   renderWasmReport(report, fileName);
   showScreen('report-screen');
   updateReportTopbar();
@@ -1694,6 +1697,8 @@ document.getElementById('btn-new-file').addEventListener('click', () => {
   if (wasmSession) { wasmSession.free(); wasmSession = null; }
   serverUrl = null; hasRetained = false; classNames = [];
   prevScreen = null;
+  window.__hprofGoBack = undefined;
+  window.__hprofGoShell = undefined;
   showScreen('upload-screen');
 });
 
