@@ -147,6 +147,9 @@ jobs:
       - name: Build OQL guide
         run: bash scripts/build-oql-guide.sh
 
+      - name: Build find-leaks page and shared WASM assets
+        run: bash scripts/build-find-leaks.sh
+
       - uses: actions/configure-pages@v5
         with:
           enablement: true

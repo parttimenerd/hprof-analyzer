@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Heap Dump Secret Finder — hprof-analyzer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d24;
+  --border: #2d3140;
+  --fg: #e2e4e9;
+  --muted: #8b90a0;
+  --accent: #f59e0b;
+  --accent-soft: rgba(245,158,11,0.12);
+  --red: #ef4444;
+  --red-soft: rgba(239,68,68,0.12);
+  --green: #22c55e;
+  --green-soft: rgba(34,197,94,0.1);
+  --radius: 10px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+header {
+  width: 100%;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--surface);
+}
+header a { color: var(--muted); text-decoration: none; font-size: 0.85rem; }
+header a:hover { color: var(--fg); }
+.header-logo { font-size: 1.25rem; font-weight: 700; color: var(--fg); }
+.header-logo span { color: var(--accent); }
+.header-sep { color: var(--border); margin: 0 0.25rem; }
+
+main {
+  width: 100%;
+  max-width: 800px;
+  padding: 3rem 1.5rem 4rem;
+  flex: 1;
+}
+
+.hero {
+  text-align: center;
+  margin-bottom: 2.5rem;
+}
+.hero h1 {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.02em;
+}
+.hero h1 .icon { margin-right: 0.4rem; }
+.hero p {
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+/* ── Privacy badge ── */
+.privacy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--green-soft);
+  border: 1px solid rgba(34,197,94,0.25);
+  color: var(--green);
+  border-radius: 99px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+}
+
+/* ── Drop zone ── */
+#drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 3rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background: var(--surface);
+  margin-bottom: 1.5rem;
+}
+#drop-zone:hover, #drop-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+#drop-zone input[type=file] { display: none; }
+.drop-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+.drop-label { font-size: 1rem; color: var(--fg); margin-bottom: 0.35rem; }
+.drop-hint { font-size: 0.85rem; color: var(--muted); }
+.drop-hint b { color: var(--fg); }
+#drop-zone.has-file { border-color: var(--accent); border-style: solid; }
+.selected-name {
+  display: none;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+#drop-zone.has-file .selected-name { display: block; }
+#drop-zone.has-file .drop-hint { display: none; }
+
+/* ── Scan button ── */
+#btn-scan {
+  display: block;
+  width: 100%;
+  padding: 0.85rem;
+  background: var(--accent);
+  color: #0f1117;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  margin-bottom: 2rem;
+}
+#btn-scan:disabled { opacity: 0.35; cursor: not-allowed; }
+#btn-scan:not(:disabled):hover { opacity: 0.9; }
+
+/* ── Progress ── */
+#progress-section { display: none; margin-bottom: 2rem; }
+.progress-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+.progress-bar-track {
+  height: 6px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 99px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+.pattern-log {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.pattern-log .log-line { padding: 0.15rem 0; }
+.pattern-log .log-line.ok { color: var(--green); }
+.pattern-log .log-line.hit { color: var(--accent); }
+
+/* ── Results ── */
+#results-section { display: none; }
+.results-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.results-header h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+.badge-found {
+  background: var(--red-soft);
+  color: var(--red);
+  border-radius: 99px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.badge-clean {
+  background: var(--green-soft);
+  color: var(--green);
+  border-radius: 99px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.findings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.75rem;
+}
+.finding-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--red);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+}
+.finding-category {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--red);
+  margin-bottom: 0.3rem;
+}
+.finding-value {
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 0.9rem;
+  color: var(--fg);
+  word-break: break-all;
+  margin-bottom: 0.25rem;
+}
+.finding-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.finding-count {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.clean-card {
+  background: var(--green-soft);
+  border: 1px solid rgba(34,197,94,0.2);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--green);
+  font-weight: 600;
+  margin-bottom: 1.75rem;
+}
+
+/* ── Call-to-action box ── */
+.cta-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-bottom: 1.5rem;
+}
+.cta-box strong { color: var(--fg); }
+.cta-box .cta-question {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.link-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.btn-secondary {
+  padding: 0.55rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s;
+  display: inline-block;
+}
+.btn-secondary:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+/* ── Scan again ── */
+#btn-reset {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+#btn-reset:hover { border-color: var(--fg); color: var(--fg); }
+
+/* ── Error ── */
+#error-box {
+  display: none;
+  background: var(--red-soft);
+  border: 1px solid rgba(239,68,68,0.3);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  color: var(--red);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Sections toggle ── */
+#upload-section { }
+#upload-section.hidden,
+#progress-section.hidden,
+#results-section.hidden,
+#error-box.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <span class="header-logo">hprof-<span>analyzer</span></span>
+  <span class="header-sep">/</span>
+  <a href="../">heap dump browser</a>
+  <span class="header-sep">/</span>
+  <span style="font-size:0.85rem;color:var(--fg)">secret finder</span>
+</header>
+
+<main>
+  <div class="hero">
+    <h1><span class="icon">🔍</span>Heap Dump Secret Finder</h1>
+    <p>Drop your Java heap dump and discover what sensitive data is sitting in your JVM's memory — passwords, API keys, tokens, and more.</p>
+    <div class="privacy-badge">
+      🔒 Runs entirely in your browser — your dump never leaves your machine
+    </div>
+  </div>
+
+  <div id="error-box" role="alert"></div>
+
+  <div id="upload-section">
+    <div id="drop-zone" tabindex="0" role="button" aria-label="Drop heap dump file or click to browse">
+      <input type="file" id="file-input" accept=".hprof,.gz,.zip">
+      <div class="drop-icon">📂</div>
+      <div class="drop-label">Drop your heap dump here</div>
+      <div class="drop-hint">Supports <b>.hprof</b>, <b>.hprof.gz</b>, <b>.hprof.zip</b></div>
+      <div class="selected-name" id="selected-name"></div>
+    </div>
+    <button id="btn-scan" disabled>Scan for secrets</button>
+  </div>
+
+  <div id="progress-section">
+    <div class="progress-label" id="progress-label">Loading dump…</div>
+    <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-fill"></div></div>
+    <div class="pattern-log" id="pattern-log"></div>
+  </div>
+
+  <div id="results-section">
+    <div class="results-header">
+      <h2 id="results-title">Results</h2>
+      <span id="results-badge"></span>
+    </div>
+    <div class="findings-list" id="findings-list"></div>
+    <div class="cta-box" id="cta-box" style="display:none">
+      <div class="cta-question">💡 Why does this matter?</div>
+      When you upload a heap dump to a free online analysis tool, <strong>all of the above goes to their servers</strong>. Database passwords, API keys, session tokens — everything your JVM had in memory at the time of the dump.
+      <br><br>
+      This scan ran entirely in your browser. <strong>Nothing was transmitted.</strong> The same analysis on a third-party server hands them your secrets.
+      <div class="link-row">
+        <a class="btn-secondary" href="../">Full heap analysis (also in-browser)</a>
+        <button class="btn-secondary" id="btn-reset">Scan another dump</button>
+      </div>
+    </div>
+    <div class="cta-box" id="clean-cta-box" style="display:none">
+      <div class="cta-question">✅ No obvious secrets found</div>
+      This scan checked for common patterns (API keys, JDBC URLs with passwords, bearer tokens, credit card numbers). It's possible secrets are present in a different format, or this dump is clean.
+      <div class="link-row">
+        <a class="btn-secondary" href="../">Full heap analysis (in-browser)</a>
+        <button class="btn-secondary" id="btn-reset2">Scan another dump</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+// ── WASM loading ────────────────────────────────────────────────────────────
+// Loads hprof_wasm.js + hprof_wasm_bg.wasm from ../wasm/ (relative to this page).
+// These are deployed by the CI build step.
+const WASM_BASE = new URL('../wasm/', location.href).href;
+
+let HprofSession = null;
+let wasmReady = false;
+
+async function initWasm() {
+  const glueResp = await fetch(WASM_BASE + 'hprof_wasm.js');
+  if (!glueResp.ok) throw new Error(`WASM glue not found (${glueResp.status})`);
+  const glueText = await glueResp.text();
+  const glueBlob = new Blob([glueText], { type: 'application/javascript' });
+  const glueUrl = URL.createObjectURL(glueBlob);
+  let mod;
+  try {
+    mod = await import(glueUrl);
+  } finally {
+    URL.revokeObjectURL(glueUrl);
+  }
+  const { default: initFn, HprofSession: HS } = mod;
+  await initFn({ module_or_path: WASM_BASE + 'hprof_wasm_bg.wasm' });
+  HprofSession = HS;
+  wasmReady = true;
+}
+
+// ── Secret detection patterns ───────────────────────────────────────────────
+// Each OQL query returns rows where toString(v) matches the pattern.
+// We limit to 50 results per pattern to keep it snappy.
+const PATTERNS = [
+  {
+    category: 'JDBC URL with credentials',
+    icon: '🗄️',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "jdbc:.*[;?&]password=[^;?& ]+"`,
+    limit: 50,
+  },
+  {
+    category: 'JDBC URL with credentials',
+    icon: '🗄️',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "jdbc:.*[;?&]passwd=[^;?& ]+"`,
+    limit: 50,
+  },
+  {
+    category: 'OpenAI / Anthropic API key',
+    icon: '🤖',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "sk-[A-Za-z0-9_-]{20,}"`,
+    limit: 50,
+  },
+  {
+    category: 'HuggingFace token',
+    icon: '🤖',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "hf_[A-Za-z0-9]{16,}"`,
+    limit: 50,
+  },
+  {
+    category: 'AWS access key',
+    icon: '☁️',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "AKIA[0-9A-Z]{16}"`,
+    limit: 50,
+  },
+  {
+    category: 'Bearer token',
+    icon: '🔑',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "Bearer [A-Za-z0-9._~+/-]{20,}"`,
+    limit: 50,
+  },
+  {
+    category: 'Credit card number',
+    icon: '💳',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}"`,
+    limit: 50,
+  },
+  {
+    category: 'Private key / certificate header',
+    icon: '🔐',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "-----BEGIN [A-Z ]+ KEY-----"`,
+    limit: 20,
+  },
+  {
+    category: 'Password property value',
+    icon: '🔒',
+    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "[Pp]assword[= :]+[^ ]{6,}"`,
+    limit: 50,
+  },
+];
+
+// ── Masking ─────────────────────────────────────────────────────────────────
+function maskValue(s) {
+  if (s.length <= 8) return '•'.repeat(s.length);
+  // Keep first 6 and last 4, mask middle
+  const keep_start = Math.min(6, Math.floor(s.length * 0.25));
+  const keep_end = Math.min(4, Math.floor(s.length * 0.15));
+  const middle = s.length - keep_start - keep_end;
+  if (middle <= 0) return s.slice(0, keep_start) + '•'.repeat(4);
+  return s.slice(0, keep_start) + '•'.repeat(Math.min(middle, 12)) + s.slice(s.length - keep_end);
+}
+
+// ── UI helpers ───────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function setProgress(label, pct) {
+  $('progress-label').textContent = label;
+  $('progress-fill').style.width = pct + '%';
+}
+
+function logLine(text, cls = '') {
+  const log = $('pattern-log');
+  const line = document.createElement('div');
+  line.className = 'log-line' + (cls ? ' ' + cls : '');
+  line.textContent = text;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function showSection(id) {
+  for (const s of ['upload-section', 'progress-section', 'results-section']) {
+    $(s).style.display = s === id ? '' : 'none';
+  }
+}
+
+function showError(msg) {
+  const box = $('error-box');
+  box.textContent = '⚠ ' + msg;
+  box.style.display = 'block';
+  showSection('upload-section');
+}
+
+// ── Drop zone wiring ─────────────────────────────────────────────────────────
+let selectedFile = null;
+
+const dropZone = $('drop-zone');
+const fileInput = $('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) setFile(fileInput.files[0]);
+});
+
+function setFile(f) {
+  selectedFile = f;
+  $('selected-name').textContent = '📄 ' + f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
+  dropZone.classList.add('has-file');
+  $('btn-scan').disabled = false;
+  $('error-box').style.display = 'none';
+}
+
+// ── Reset ────────────────────────────────────────────────────────────────────
+function reset() {
+  selectedFile = null;
+  fileInput.value = '';
+  dropZone.classList.remove('has-file');
+  $('selected-name').textContent = '';
+  $('btn-scan').disabled = true;
+  $('error-box').style.display = 'none';
+  $('pattern-log').innerHTML = '';
+  $('findings-list').innerHTML = '';
+  showSection('upload-section');
+}
+$('btn-reset').addEventListener('click', reset);
+$('btn-reset2').addEventListener('click', reset);
+
+// ── Main scan flow ───────────────────────────────────────────────────────────
+$('btn-scan').addEventListener('click', runScan);
+
+async function runScan() {
+  if (!selectedFile) return;
+  $('error-box').style.display = 'none';
+  showSection('progress-section');
+  $('pattern-log').innerHTML = '';
+  setProgress('Reading file…', 2);
+
+  let bytes;
+  try {
+    bytes = new Uint8Array(await selectedFile.arrayBuffer());
+  } catch (e) {
+    showError('Could not read file: ' + e.message);
+    return;
+  }
+
+  if (!wasmReady) {
+    setProgress('Loading analysis engine…', 5);
+    try {
+      await initWasm();
+    } catch (e) {
+      showError('Failed to load analysis engine: ' + e.message + '. Make sure you are serving this page from a web server (not file://).');
+      return;
+    }
+  }
+
+  setProgress('Parsing heap dump…', 8);
+  logLine('Loading heap dump…');
+
+  let session;
+  try {
+    session = await HprofSession.load_with_progress(bytes, selectedFile.name, (phase, frac) => {
+      const pct = 8 + Math.round(frac * 30);
+      setProgress(phase, pct);
+    });
+  } catch (e) {
+    showError('Failed to parse heap dump: ' + e);
+    return;
+  }
+
+  logLine('Heap loaded. Scanning for secrets…', 'ok');
+  setProgress('Scanning for secrets…', 40);
+
+  const findings = [];
+  const total = PATTERNS.length;
+
+  for (let i = 0; i < total; i++) {
+    const p = PATTERNS[i];
+    const pct = 40 + Math.round(((i + 0.5) / total) * 55);
+    setProgress(`Checking: ${p.category}…`, pct);
+    logLine(`  checking ${p.category}…`);
+
+    let rows = [];
+    try {
+      const oqlWithLimit = p.oql + ` LIMIT ${p.limit}`;
+      const resultJson = session.query(oqlWithLimit);
+      const result = JSON.parse(resultJson);
+      rows = result.rows || [];
+    } catch (e) {
+      logLine(`    ⚠ query error: ${e.message}`, '');
+      continue;
+    }
+
+    if (rows.length > 0) {
+      // Deduplicate values
+      const seen = new Set();
+      for (const row of rows) {
+        const val = Array.isArray(row) ? row[0] : (row[Object.keys(row)[0]] ?? null);
+        if (val != null && !seen.has(val)) {
+          seen.add(val);
+          findings.push({ category: p.category, icon: p.icon, value: String(val) });
+        }
+      }
+      logLine(`  ⚠ found ${seen.size} match(es)`, 'hit');
+    } else {
+      logLine(`  ✓ none found`, 'ok');
+    }
+  }
+
+  session.free();
+  setProgress('Done', 100);
+
+  renderResults(findings);
+}
+
+// ── Demo mode (called from mock-upload page with ?demo=1) ───────────────────
+async function runDemo() {
+  showSection('progress-section');
+  $('pattern-log').innerHTML = '';
+  setProgress('Loading sample dump…', 2);
+
+  // Fetch the pre-built fixture
+  const fixtureUrl = new URL('../samples/spring-petclinic-h2-ai.hprof.gz', location.href).href;
+  let bytes;
+  try {
+    const resp = await fetch(fixtureUrl);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    bytes = new Uint8Array(await resp.arrayBuffer());
+  } catch (e) {
+    showError(`Could not load sample fixture (${e.message}). Drop your own .hprof file to scan it.`);
+    return;
+  }
+
+  if (!wasmReady) {
+    setProgress('Loading analysis engine…', 5);
+    try {
+      await initWasm();
+    } catch (e) {
+      showError('Failed to load analysis engine: ' + e.message);
+      return;
+    }
+  }
+
+  setProgress('Parsing heap dump…', 8);
+  logLine('Loading Spring PetClinic + H2 + Spring AI sample dump…');
+
+  let session;
+  try {
+    session = await HprofSession.load_with_progress(bytes, 'spring-petclinic-h2-ai.hprof.gz', (phase, frac) => {
+      setProgress(phase, 8 + Math.round(frac * 30));
+    });
+  } catch (e) {
+    showError('Failed to parse sample dump: ' + e);
+    return;
+  }
+
+  logLine('Sample heap loaded. Scanning for secrets…', 'ok');
+
+  const findings = [];
+  const total = PATTERNS.length;
+
+  for (let i = 0; i < total; i++) {
+    const p = PATTERNS[i];
+    setProgress(`Checking: ${p.category}…`, 40 + Math.round(((i + 0.5) / total) * 55));
+    logLine(`  checking ${p.category}…`);
+    let rows = [];
+    try {
+      const resultJson = session.query(p.oql + ` LIMIT ${p.limit}`);
+      rows = (JSON.parse(resultJson).rows || []);
+    } catch { continue; }
+    if (rows.length > 0) {
+      const seen = new Set();
+      for (const row of rows) {
+        const val = Array.isArray(row) ? row[0] : (row[Object.keys(row)[0]] ?? null);
+        if (val != null && !seen.has(val)) { seen.add(val); findings.push({ category: p.category, icon: p.icon, value: String(val) }); }
+      }
+      logLine(`  ⚠ found ${seen.size} match(es)`, 'hit');
+    } else {
+      logLine(`  ✓ none found`, 'ok');
+    }
+  }
+
+  session.free();
+  setProgress('Done', 100);
+  renderResults(findings);
+}
+
+// ── Render results ───────────────────────────────────────────────────────────
+function renderResults(findings) {
+  const list = $('findings-list');
+  list.innerHTML = '';
+
+  showSection('results-section');
+
+  if (findings.length === 0) {
+    $('results-title').textContent = 'No secrets found';
+    $('results-badge').className = 'badge-clean';
+    $('results-badge').textContent = 'clean';
+    $('cta-box').style.display = 'none';
+    $('clean-cta-box').style.display = 'block';
+    return;
+  }
+
+  $('results-title').textContent = `Found ${findings.length} secret${findings.length > 1 ? 's' : ''}`;
+  $('results-badge').className = 'badge-found';
+  $('results-badge').textContent = findings.length + ' found';
+  $('cta-box').style.display = 'block';
+  $('clean-cta-box').style.display = 'none';
+
+  for (const f of findings) {
+    const card = document.createElement('div');
+    card.className = 'finding-card';
+    card.innerHTML = `
+      <div class="finding-category">${f.icon} ${f.category}</div>
+      <div class="finding-value">${maskValue(f.value)}</div>
+      <div class="finding-meta">Found in java.lang.String (heap memory)</div>
+    `;
+    list.appendChild(card);
+  }
+}
+
+// ── Auto-run demo if ?demo=1 ─────────────────────────────────────────────────
+if (new URLSearchParams(location.search).get('demo') === '1') {
+  // Hide upload section, go straight to demo scan
+  showSection('progress-section');
+  runDemo();
+}
+
+// Pre-load WASM in background for snappier UX
+initWasm().catch(() => {});
+</script>
+</body>
+</html>

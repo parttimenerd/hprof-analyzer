@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HeapGuru — Free Java Heap Analysis</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --navy: #0d1b2a;
+  --navy2: #162032;
+  --navy3: #1e2d40;
+  --border: #2a3f57;
+  --fg: #e8edf3;
+  --muted: #7a90a8;
+  --accent: #00c8a0;
+  --accent2: #00a882;
+  --orange: #f97316;
+  --radius: 10px;
+}
+
+body {
+  background: var(--navy);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Nav ── */
+nav {
+  background: var(--navy2);
+  border-bottom: 1px solid var(--border);
+  padding: 0 2rem;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.nav-brand .brand-icon {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+.nav-brand .brand-name { color: var(--fg); }
+.nav-brand .brand-name span { color: var(--accent); }
+.nav-links {
+  display: flex;
+  gap: 1.5rem;
+  list-style: none;
+}
+.nav-links a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+.nav-links a:hover { color: var(--fg); }
+.nav-cta {
+  padding: 0.4rem 1rem;
+  background: var(--accent);
+  color: var(--navy);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+  pointer-events: none;
+  cursor: default;
+}
+
+/* ── Hero ── */
+.hero-band {
+  background: linear-gradient(180deg, var(--navy2) 0%, var(--navy) 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 3.5rem 2rem 3rem;
+  text-align: center;
+}
+.hero-band h1 {
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  margin-bottom: 0.75rem;
+  line-height: 1.2;
+}
+.hero-band h1 em {
+  font-style: normal;
+  background: linear-gradient(90deg, var(--accent), #4ade80);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-band p {
+  color: var(--muted);
+  font-size: 1.05rem;
+  max-width: 520px;
+  margin: 0 auto 1.5rem;
+  line-height: 1.6;
+}
+.hero-pills {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.pill {
+  background: var(--navy3);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.pill .pi { margin-right: 0.3rem; }
+
+/* ── Main layout ── */
+main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+.upload-card {
+  background: var(--navy2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 560px;
+  padding: 2rem;
+}
+.upload-card h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+.upload-card .subtitle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 1.5rem;
+}
+
+/* ── Drop zone ── */
+#drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 1.25rem;
+  position: relative;
+}
+#drop-zone input[type=file] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer;
+}
+#drop-zone:hover, #drop-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(0,200,160,0.05);
+}
+.drop-cloud {
+  font-size: 2.75rem;
+  margin-bottom: 0.6rem;
+  line-height: 1;
+}
+.drop-main { font-size: 1rem; font-weight: 600; margin-bottom: 0.3rem; }
+.drop-hint { font-size: 0.82rem; color: var(--muted); }
+.drop-hint b { color: var(--fg); }
+.selected-name {
+  display: none;
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+#drop-zone.has-file .selected-name { display: block; }
+#drop-zone.has-file { border-color: var(--accent); border-style: solid; }
+
+/* ── Options row ── */
+.options-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.option-toggle {
+  background: var(--navy3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  cursor: default;
+}
+.option-toggle .dot {
+  width: 14px; height: 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.option-toggle .dot.off { background: var(--border); }
+
+/* ── Submit ── */
+#btn-analyze {
+  display: block;
+  width: 100%;
+  padding: 0.9rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: var(--navy);
+  border: none;
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  letter-spacing: 0.01em;
+}
+#btn-analyze:hover { opacity: 0.92; }
+
+/* ── Progress overlay ── */
+#progress-overlay {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+#progress-overlay.active { display: flex; }
+
+.spinner {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+  margin-bottom: 1.25rem;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.progress-stage {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  min-height: 1.4rem;
+}
+.progress-sub {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 1.25rem;
+}
+.fake-bar-track {
+  width: 100%;
+  max-width: 320px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.fake-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #4ade80);
+  border-radius: 99px;
+  transition: width 0.6s ease;
+  width: 0%;
+}
+
+/* ── Trust row ── */
+.trust-row {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 1.5rem 2rem;
+  border-top: 1px solid var(--border);
+  margin-top: 1.5rem;
+}
+.trust-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* ── Footer ── */
+footer {
+  background: var(--navy2);
+  border-top: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+footer a { color: var(--accent); text-decoration: none; }
+.demo-banner {
+  display: inline-block;
+  background: rgba(249,115,22,0.12);
+  border: 1px solid rgba(249,115,22,0.3);
+  color: var(--orange);
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-brand">
+    <div class="brand-icon">🔍</div>
+    <div class="brand-name">Heap<span>Guru</span></div>
+  </div>
+  <ul class="nav-links">
+    <li><a href="#">Pricing</a></li>
+    <li><a href="#">Docs</a></li>
+    <li><a href="#">Blog</a></li>
+  </ul>
+  <a href="#" class="nav-cta">Sign up free</a>
+</nav>
+
+<div class="hero-band">
+  <h1>Instant <em>heap dump analysis</em><br>— completely free</h1>
+  <p>Upload your <code>.hprof</code> file and get a full leak report in seconds. No installation. No signup. Trusted by thousands of Java developers.</p>
+  <div class="hero-pills">
+    <div class="pill"><span class="pi">⚡</span>Results in &lt;60s</div>
+    <div class="pill"><span class="pi">🔐</span>Enterprise-grade security</div>
+    <div class="pill"><span class="pi">📊</span>Leak suspects &amp; dominator tree</div>
+    <div class="pill"><span class="pi">🌍</span>Used by 40,000+ developers</div>
+  </div>
+</div>
+
+<main>
+  <div class="upload-card">
+
+    <!-- Upload form -->
+    <div id="form-section">
+      <h2>Upload your heap dump</h2>
+      <p class="subtitle">Max 2 GB · Supports .hprof, .hprof.gz, .hprof.zip</p>
+
+      <div id="drop-zone" role="button" aria-label="Drop heap dump or click to browse">
+        <input type="file" id="file-input" accept=".hprof,.gz,.zip">
+        <div class="drop-cloud">☁️</div>
+        <div class="drop-main">Drop your heap dump here</div>
+        <div class="drop-hint">or <b>click to browse</b> · .hprof / .hprof.gz / .hprof.zip</div>
+        <div class="selected-name" id="selected-name"></div>
+      </div>
+
+      <div class="options-row">
+        <div class="option-toggle"><div class="dot"></div>Leak detection</div>
+        <div class="option-toggle"><div class="dot"></div>Dominator tree</div>
+        <div class="option-toggle"><div class="dot"></div>Class histogram</div>
+        <div class="option-toggle"><div class="dot off"></div>Deep inspection <span style="font-size:0.7rem;margin-left:auto;color:#f97316">PRO</span></div>
+      </div>
+
+      <button id="btn-analyze">Analyze now →</button>
+    </div>
+
+    <!-- Progress (replaces form) -->
+    <div id="progress-overlay">
+      <div class="spinner"></div>
+      <div class="progress-stage" id="stage-label">Uploading…</div>
+      <div class="progress-sub" id="stage-sub">Transferring your heap dump to our analysis servers</div>
+      <div class="fake-bar-track"><div class="fake-bar-fill" id="fake-fill"></div></div>
+    </div>
+
+    <div class="trust-row">
+      <div class="trust-item">🔒 256-bit TLS</div>
+      <div class="trust-item">🗑️ Auto-deleted after 24h</div>
+      <div class="trust-item">✅ SOC 2 compliant</div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="demo-banner">⚠ Demo page — no files are uploaded or transmitted to any server</div><br>
+  This is a fictional parody service created for security awareness education.<br>
+  It demonstrates what a free heap analysis tool <em>could</em> extract from your dump.<br>
+  The actual analysis runs entirely in your browser via WebAssembly. · <a href="../find-leaks/">View source analysis tool</a>
+</footer>
+
+<script>
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const btnAnalyze = document.getElementById('btn-analyze');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+function setFile(f) {
+  document.getElementById('selected-name').textContent = '📄 ' + f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
+  dropZone.classList.add('has-file');
+}
+
+btnAnalyze.addEventListener('click', startFakeAnalysis);
+
+const STAGES = [
+  { label: 'Uploading…',            sub: 'Transferring your heap dump to our analysis servers',  pct: 22, ms: 900 },
+  { label: 'Upload complete',       sub: 'Verifying file integrity',                              pct: 35, ms: 500 },
+  { label: 'Parsing heap dump…',    sub: 'Reading object graph and class hierarchy',              pct: 55, ms: 900 },
+  { label: 'Detecting leaks…',      sub: 'Running retention analysis and dominator algorithm',   pct: 75, ms: 900 },
+  { label: 'Building report…',      sub: 'Generating leak suspects and histogram',               pct: 92, ms: 700 },
+  { label: 'Finalizing…',           sub: 'Almost ready',                                          pct: 100, ms: 400 },
+];
+
+function startFakeAnalysis() {
+  document.getElementById('form-section').style.display = 'none';
+  const overlay = document.getElementById('progress-overlay');
+  overlay.classList.add('active');
+
+  let i = 0;
+  function step() {
+    if (i >= STAGES.length) {
+      // Redirect to find-leaks in demo mode
+      window.location.href = '../find-leaks/?demo=1';
+      return;
+    }
+    const s = STAGES[i++];
+    document.getElementById('stage-label').textContent = s.label;
+    document.getElementById('stage-sub').textContent = s.sub;
+    document.getElementById('fake-fill').style.width = s.pct + '%';
+    setTimeout(step, s.ms);
+  }
+  step();
+}
+</script>
+</body>
+</html>
