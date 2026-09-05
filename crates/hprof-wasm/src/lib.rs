@@ -1462,6 +1462,53 @@ impl HprofSession {
 
 #[wasm_bindgen]
 impl HprofSession {
+    /// Scan for sensitive data in heap strings using built-in patterns.
+    ///
+    /// Builds the string-values map once (single file scan), then applies all
+    /// patterns in-memory — much faster than one `query()` call per pattern.
+    ///
+    /// Returns JSON:
+    /// ```json
+    /// {"ok":true,"findings":[{"category":"...","value":"..."},...]}
+    /// ```
+    /// or `{"ok":false,"error":{"message":"..."}}` on failure.
+    pub fn find_secrets(&mut self) -> String {
+        if self.cache.is_none() {
+            match hprof_analyzer::query::run::ReplCache::build(&self.source, true) {
+                Ok(c) => self.cache = Some(c),
+                Err(e) => {
+                    return serde_json::json!({
+                        "ok": false,
+                        "error": { "message": e.to_string() }
+                    })
+                    .to_string();
+                }
+            }
+        }
+        let cache = self.cache.as_ref().unwrap();
+
+        let string_values = match cache.build_string_values() {
+            Ok(sv) => sv,
+            Err(e) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": { "message": e.to_string() }
+                })
+                .to_string();
+            }
+        };
+
+        let patterns = hprof_analyzer::secrets::SecretPatterns::new();
+        let findings = patterns.scan(&string_values);
+
+        let findings_json: Vec<serde_json::Value> = findings
+            .into_iter()
+            .map(|f| serde_json::json!({ "category": f.category, "value": f.value }))
+            .collect();
+
+        serde_json::json!({ "ok": true, "findings": findings_json }).to_string()
+    }
+
     /// Redact a heap dump in memory: zeroes all primitive field values and
     /// array contents, returns the redacted raw `.hprof` bytes.
     ///

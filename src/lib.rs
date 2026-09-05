@@ -22,6 +22,7 @@ mod progress;
 pub mod query;
 mod reader;
 pub mod redact;
+pub mod secrets;
 pub mod source;
 pub use source::HprofSource;
 pub mod report;

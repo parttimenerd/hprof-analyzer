@@ -410,65 +410,26 @@ async function initWasm() {
   wasmReady = true;
 }
 
-// ── Secret detection patterns ───────────────────────────────────────────────
-// Each OQL query returns rows where toString(v) matches the pattern.
-// We limit to 50 results per pattern to keep it snappy.
-const PATTERNS = [
-  {
-    category: 'JDBC URL with credentials',
-    icon: '🗄️',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "jdbc:.*[;?&]password=[^;?& ]+"`,
-    limit: 50,
-  },
-  {
-    category: 'JDBC URL with credentials',
-    icon: '🗄️',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "jdbc:.*[;?&]passwd=[^;?& ]+"`,
-    limit: 50,
-  },
-  {
-    category: 'OpenAI / Anthropic API key',
-    icon: '🤖',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "sk-[A-Za-z0-9_-]{20,}"`,
-    limit: 50,
-  },
-  {
-    category: 'HuggingFace token',
-    icon: '🤖',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "hf_[A-Za-z0-9]{16,}"`,
-    limit: 50,
-  },
-  {
-    category: 'AWS access key',
-    icon: '☁️',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "AKIA[0-9A-Z]{16}"`,
-    limit: 50,
-  },
-  {
-    category: 'Bearer token',
-    icon: '🔑',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "Bearer [A-Za-z0-9._~+/-]{20,}"`,
-    limit: 50,
-  },
-  {
-    category: 'Credit card number',
-    icon: '💳',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}"`,
-    limit: 50,
-  },
-  {
-    category: 'Private key / certificate header',
-    icon: '🔐',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "-----BEGIN [A-Z ]+ KEY-----"`,
-    limit: 20,
-  },
-  {
-    category: 'Password property value',
-    icon: '🔒',
-    oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches "[Pp]assword[= :]+[^ ]{6,}"`,
-    limit: 50,
-  },
-];
+// ── Category icons ───────────────────────────────────────────────────────────
+// Patterns are defined in src/secrets.rs (PATTERN_SPECS) and run server-side
+// via session.find_secrets(). This map just adds display icons.
+const CATEGORY_ICONS = {
+  'JDBC URL with credentials':   '🗄️',
+  'OpenAI / Anthropic API key':  '🤖',
+  'HuggingFace token':           '🤖',
+  'AWS access key':              '☁️',
+  'Bearer token':                '🔑',
+  'Credit card number':          '💳',
+  'Private key / certificate':   '🔐',
+  'Password property value':     '🔒',
+  'Secret property value':       '🔒',
+  'Token property value':        '🔑',
+  'API key property value':      '🔑',
+  'GitHub token':                '🐙',
+  'Google API key':              '🔍',
+  'Slack token':                 '💬',
+  'High-entropy hex secret':     '🧮',
+};
 
 // ── Masking ─────────────────────────────────────────────────────────────────
 function maskValue(s) {
@@ -601,40 +562,17 @@ async function runScan() {
   logLine('Heap loaded. Scanning for secrets…', 'ok');
   setProgress('Scanning for secrets…', 40);
 
-  const findings = [];
-  const total = PATTERNS.length;
-
-  for (let i = 0; i < total; i++) {
-    const p = PATTERNS[i];
-    const pct = 40 + Math.round(((i + 0.5) / total) * 55);
-    setProgress(`Checking: ${p.category}…`, pct);
-    logLine(`  checking ${p.category}…`);
-
-    let rows = [];
-    try {
-      const oqlWithLimit = p.oql + ` LIMIT ${p.limit}`;
-      const resultJson = session.query(oqlWithLimit);
-      const result = JSON.parse(resultJson);
-      rows = result.rows || [];
-    } catch (e) {
-      logLine(`    ⚠ query error: ${e.message}`, '');
-      continue;
-    }
-
-    if (rows.length > 0) {
-      // Deduplicate values
-      const seen = new Set();
-      for (const row of rows) {
-        const val = Array.isArray(row) ? row[0] : (row[Object.keys(row)[0]] ?? null);
-        if (val != null && !seen.has(val)) {
-          seen.add(val);
-          findings.push({ category: p.category, icon: p.icon, value: String(val) });
-        }
-      }
-      logLine(`  ⚠ found ${seen.size} match(es)`, 'hit');
-    } else {
-      logLine(`  ✓ none found`, 'ok');
-    }
+  let findings = [];
+  try {
+    const resultJson = session.find_secrets();
+    const result = JSON.parse(resultJson);
+    if (!result.ok) throw new Error(result.error?.message || 'unknown error');
+    findings = result.findings || [];
+    logLine(`  scan complete — ${findings.length} finding(s)`, findings.length > 0 ? 'hit' : 'ok');
+  } catch (e) {
+    showError('Scan failed: ' + e.message);
+    session.free();
+    return;
   }
 
   session.free();
@@ -686,28 +624,17 @@ async function runDemo() {
 
   logLine('Sample heap loaded. Scanning for secrets…', 'ok');
 
-  const findings = [];
-  const total = PATTERNS.length;
-
-  for (let i = 0; i < total; i++) {
-    const p = PATTERNS[i];
-    setProgress(`Checking: ${p.category}…`, 40 + Math.round(((i + 0.5) / total) * 55));
-    logLine(`  checking ${p.category}…`);
-    let rows = [];
-    try {
-      const resultJson = session.query(p.oql + ` LIMIT ${p.limit}`);
-      rows = (JSON.parse(resultJson).rows || []);
-    } catch { continue; }
-    if (rows.length > 0) {
-      const seen = new Set();
-      for (const row of rows) {
-        const val = Array.isArray(row) ? row[0] : (row[Object.keys(row)[0]] ?? null);
-        if (val != null && !seen.has(val)) { seen.add(val); findings.push({ category: p.category, icon: p.icon, value: String(val) }); }
-      }
-      logLine(`  ⚠ found ${seen.size} match(es)`, 'hit');
-    } else {
-      logLine(`  ✓ none found`, 'ok');
-    }
+  let findings = [];
+  try {
+    const resultJson = session.find_secrets();
+    const result = JSON.parse(resultJson);
+    if (!result.ok) throw new Error(result.error?.message || 'unknown error');
+    findings = result.findings || [];
+    logLine(`  scan complete — ${findings.length} finding(s)`, findings.length > 0 ? 'hit' : 'ok');
+  } catch (e) {
+    showError('Scan failed: ' + e.message);
+    session.free();
+    return;
   }
 
   session.free();
@@ -741,7 +668,7 @@ function renderResults(findings) {
     const card = document.createElement('div');
     card.className = 'finding-card';
     card.innerHTML = `
-      <div class="finding-category">${f.icon} ${f.category}</div>
+      <div class="finding-category">${CATEGORY_ICONS[f.category] ?? '⚠️'} ${f.category}</div>
       <div class="finding-value">${maskValue(f.value)}</div>
       <div class="finding-meta">Found in java.lang.String (heap memory)</div>
     `;

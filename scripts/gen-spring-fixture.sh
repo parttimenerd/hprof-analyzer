@@ -2,122 +2,147 @@
 # scripts/gen-spring-fixture.sh
 #
 # Generates docs/samples/spring-petclinic-h2-ai.hprof.gz — a Spring PetClinic
-# heap dump that contains detectable secrets (AI API key, JDBC URL with password).
-# This is a manual one-time step. The result is committed to git.
+# heap dump that contains detectable secrets:
+#   - JDBC URL with embedded password (petclinic123)
+#   - Fake OpenAI-style API key (sk-demo-...)
+#
+# How the secrets land on the heap:
+#   Spring loads application.properties into its Environment, which keeps all
+#   property values as java.lang.String objects. No Spring AI code is needed —
+#   the key just needs to be a property value that Spring reads on startup.
 #
 # Prerequisites:
-#   - Java 17+  (java, javac on PATH)
-#   - Maven 3.8+  (mvn on PATH)
-#   - git clone of spring-petclinic with Spring AI support (see below)
+#   - Java 17+  (java on PATH)
+#   - Maven 3.8+  (mvn on PATH, or ./mvnw in the cloned repo)
+#   - curl, jmap
 #
 # Usage:
 #   bash scripts/gen-spring-fixture.sh
-#
-# The generated fixture is ~5-10 MB gzipped (Spring PetClinic idle heap is
-# typically 80-150 MB raw).
 
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
+PROJ_ROOT="$(git rev-parse --show-toplevel)"
+cd "$PROJ_ROOT"
 
-FIXTURE_NAME=spring-petclinic-h2-ai.hprof.gz
-FIXTURE_OUT=docs/samples/$FIXTURE_NAME
+FIXTURE_OUT="$PROJ_ROOT/docs/samples/spring-petclinic-h2-ai.hprof.gz"
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
 
-echo "=== Spring PetClinic + H2 + Spring AI fixture generator ==="
+echo "=== Spring PetClinic + H2 fixture generator ==="
+echo "Output: $FIXTURE_OUT"
 echo ""
 
-# ── Step 1: Clone / build Spring PetClinic ───────────────────────────────────
+# ── Step 1: Clone Spring PetClinic ───────────────────────────────────────────
 PETCLINIC_DIR=$TMP_DIR/spring-petclinic
-
 echo "1. Cloning Spring PetClinic..."
 git clone --depth=1 https://github.com/spring-projects/spring-petclinic "$PETCLINIC_DIR"
+echo "   Cloned."
 
-# ── Step 2: Inject Spring AI + configure demo secrets ───────────────────────
-# We inject the secrets directly into application.properties so they land in
-# the Spring Environment (which keeps String values on the heap).
-echo "2. Injecting Spring AI config with demo secrets..."
-
+# ── Step 2: Inject demo secrets via application.properties ──────────────────
+# These land in the Spring Environment as java.lang.String values on the heap.
+# We override the existing H2 datasource URL to embed a password, and add a
+# fake API key property that looks like a real OpenAI token.
+echo "2. Injecting demo secrets into application.properties..."
 cat >> "$PETCLINIC_DIR/src/main/resources/application.properties" <<'EOF'
 
-# Demo secrets for heap dump fixture generation
-# (These are fake credentials for educational demonstration only)
-spring.datasource.url=jdbc:h2:mem:petclinic;password=petclinic123
+# ── Demo secrets for heap dump fixture (educational purposes only) ────────────
+# Override datasource URL to embed password — Spring keeps this as a String
+spring.datasource.url=jdbc:h2:mem:petclinic;DB_CLOSE_DELAY=-1;password=petclinic123
 spring.datasource.username=sa
 spring.datasource.password=petclinic123
 
-# Spring AI (points at local Ollama — no real request will succeed)
-spring.ai.openai.api-key=sk-demo-thisisasecret12345678901234
-spring.ai.openai.base-url=http://localhost:11434/v1
+# Fake AI API key — stored in Spring Environment as a plain String property
+demo.ai.api-key=sk-demo-thisisasecret12345678901234
+demo.ai.base-url=http://localhost:11434/v1
+demo.ai.model=gpt-4o
 EOF
 
-# ── Step 3: Add Spring AI dependency ────────────────────────────────────────
-echo "3. Adding Spring AI dependency to pom.xml..."
-# Insert Spring AI BOM + openai starter into pom.xml using sed
-SPRING_AI_VERSION=1.0.0
-sed -i.bak "s|</dependencyManagement>|  <dependency>\n      <groupId>org.springframework.ai</groupId>\n      <artifactId>spring-ai-bom</artifactId>\n      <version>$SPRING_AI_VERSION</version>\n      <type>pom</type>\n      <scope>import</scope>\n    </dependency>\n  </dependencyManagement>|" \
-  "$PETCLINIC_DIR/pom.xml" || true
-
-sed -i.bak "s|</dependencies>|  <dependency>\n      <groupId>org.springframework.ai</groupId>\n      <artifactId>spring-ai-openai-spring-boot-starter</artifactId>\n    </dependency>\n  </dependencies>|" \
-  "$PETCLINIC_DIR/pom.xml" || true
-
-# If sed injection fails, we can still get the secrets from application.properties
-# without Spring AI — that's fine for the demo.
-
-# ── Step 4: Build ────────────────────────────────────────────────────────────
-echo "4. Building Spring PetClinic (this may take a few minutes)..."
+# ── Step 3: Build ────────────────────────────────────────────────────────────
+echo "3. Building Spring PetClinic (skipping tests)..."
 cd "$PETCLINIC_DIR"
-./mvnw -q package -DskipTests 2>&1 | tail -20
+./mvnw -q package -DskipTests 2>&1 | grep -E 'ERROR|error|WARN|BUILD' || true
+echo "   Build done."
 
-# ── Step 5: Start and capture dump ───────────────────────────────────────────
-echo "5. Starting application..."
+# ── Step 4: Start the app ────────────────────────────────────────────────────
+echo "4. Starting Spring PetClinic on port 18080..."
 RAW_HPROF=$TMP_DIR/dump.hprof
+APP_LOG=$TMP_DIR/app.log
 
-# Start in background with demo profile
 java \
   -Xmx256m \
-  -XX:+HeapDumpOnOutOfMemoryError \
   -jar target/spring-petclinic-*.jar \
   --server.port=18080 \
-  &> $TMP_DIR/app.log &
+  --management.endpoints.web.exposure.include=health \
+  >>"$APP_LOG" 2>&1 &
 APP_PID=$!
+echo "   PID: $APP_PID"
 
-echo "   Waiting for app to start (PID $APP_PID)..."
-for i in $(seq 1 60); do
+# Wait up to 90s for startup
+echo "   Waiting for startup..."
+for i in $(seq 1 90); do
   if curl -sf http://localhost:18080/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then
-    echo "   App is up after ${i}s"
+    echo "   App is up (${i}s)"
     break
+  fi
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    echo "ERROR: App process died. Log:"
+    tail -30 "$APP_LOG"
+    exit 1
   fi
   sleep 1
 done
 
-# Capture heap dump
-echo "6. Capturing heap dump via jmap..."
-jmap -dump:format=b,file="$RAW_HPROF" "$APP_PID"
+if ! curl -sf http://localhost:18080/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then
+  echo "ERROR: App did not start within 90s. Log tail:"
+  tail -30 "$APP_LOG"
+  kill "$APP_PID" 2>/dev/null || true
+  exit 1
+fi
 
-# Stop app
+# ── Step 5: Capture heap dump ────────────────────────────────────────────────
+echo "5. Capturing heap dump (jmap)..."
+jmap -dump:format=b,file="$RAW_HPROF" "$APP_PID"
+echo "   Heap dump captured."
+
 kill "$APP_PID" 2>/dev/null || true
 
 # ── Step 6: Compress and install ─────────────────────────────────────────────
-echo "7. Compressing heap dump..."
-cd "$(git rev-parse --show-toplevel)"
+echo "6. Compressing..."
+cd "$PROJ_ROOT"
 mkdir -p docs/samples
 gzip -9 -c "$RAW_HPROF" > "$FIXTURE_OUT"
 
-RAW_MB=$(( $(stat -f%z "$RAW_HPROF" 2>/dev/null || stat -c%s "$RAW_HPROF") / 1024 / 1024 ))
-GZ_KB=$(( $(stat -f%z "$FIXTURE_OUT" 2>/dev/null || stat -c%s "$FIXTURE_OUT") / 1024 ))
+RAW_MB=$(( $(wc -c < "$RAW_HPROF") / 1024 / 1024 ))
+GZ_KB=$(( $(wc -c < "$FIXTURE_OUT") / 1024 ))
 echo ""
 echo "=== Done ==="
 echo "Raw size:  ${RAW_MB} MB"
 echo "Gzip size: ${GZ_KB} KB"
 echo "Output:    $FIXTURE_OUT"
 echo ""
-echo "Verify with:"
-echo "  hprof-analyzer heap query $FIXTURE_OUT \\"
-echo "    --oql 'SELECT toString(v) FROM java.lang.String v WHERE toString(v) matches \"sk-demo.*\"'"
-echo ""
-echo "Expected results:"
-echo "  sk-demo-thisisasecret12345678901234"
-echo "  jdbc:h2:mem:petclinic;password=petclinic123"
 
-# Cleanup
-rm -rf "$TMP_DIR"
+# ── Step 7: Verify secrets are detectable ────────────────────────────────────
+echo "7. Verifying secrets are present in dump..."
+BIN=$(which hprof-analyzer 2>/dev/null || echo "./target/release/hprof-analyzer")
+
+if command -v hprof-analyzer &>/dev/null; then
+  echo ""
+  echo "Checking for API key pattern (sk-demo-...):"
+  hprof-analyzer heap query "$FIXTURE_OUT" \
+    --oql 'SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "sk-demo-.*" LIMIT 5' \
+    2>/dev/null || echo "  (query failed — check manually)"
+
+  echo ""
+  echo "Checking for JDBC URL with password:"
+  hprof-analyzer heap query "$FIXTURE_OUT" \
+    --oql 'SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "jdbc:h2:.*password=.*" LIMIT 5' \
+    2>/dev/null || echo "  (query failed — check manually)"
+else
+  echo "  hprof-analyzer not on PATH — skipping verification queries."
+  echo "  Run manually:"
+  echo "    hprof-analyzer heap query $FIXTURE_OUT \\"
+  echo "      --oql 'SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE \"sk-demo-.*\" LIMIT 5'"
+fi
+
+echo ""
+echo "Commit with:"
+echo "  git add $FIXTURE_OUT && git commit -m 'samples: add Spring PetClinic + H2 heap dump fixture'"

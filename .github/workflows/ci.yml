@@ -122,6 +122,9 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
+      - name: Install wasm-bindgen-cli (for wasm64 build)
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
       - name: Build browser REPL
         run: bash scripts/build-browser.sh
 
