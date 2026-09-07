@@ -1,0 +1,131 @@
+tag: experimental
+tagline: Fast heap dump analyser (Rust + Java CLI). Reproduces Eclipse MAT's System Overview, Leak
+  Suspects, Top Consumers, and Threads views with a fraction of the memory overhead. Handles dumps
+  larger than 10 GiB that MAT cannot open. Also ships an OQL query engine, an HTTP server for
+  programmatic access, a redact subcommand to zero sensitive data before sharing, and an in-browser
+  WASM UI for dumps up to 3 GiB.
+tagline_short: Fast Rust-based heap dump analyser — handles >10 GiB dumps, OQL shell, browser UI.
+cargo_crate: hprof-analyzer
+github_pages: https://parttimenerd.github.io/hprof-analyzer/
+when_to_use:
+- You need to analyse a heap dump without Eclipse MAT's memory overhead
+- You have a very large heap dump (>10 GiB) that MAT cannot handle
+- You want a quick in-browser analyser for smaller dumps (WASM, memory-limited by browser)
+- You want Leak Suspects, Top Consumers, and thread views without a GUI IDE
+- You need scriptable, CI-friendly heap analysis (JSON output, diff two dumps)
+when_not_to_use:
+- You need full interactive MAT-style object graph exploration (use Eclipse MAT)
+- You need Windows support (native binary is currently Linux/macOS only)
+links:
+- label: Web analyser ↗
+  url: https://parttimenerd.github.io/hprof-analyzer/
+- label: Sample report ↗
+  url: https://parttimenerd.github.io/hprof-analyzer/reports/
+install:
+- label: Homebrew
+  lang: bash
+  code: |
+    brew tap parttimenerd/hprof-analyzer
+    brew trust parttimenerd/hprof-analyzer  # required once for third-party taps
+    brew install hprof-analyzer
+- label: macOS (arm64)
+  lang: bash
+  code: |
+    curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-apple-darwin.tar.gz | tar xz
+    sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
+- label: Linux (x86_64)
+  lang: bash
+  code: |
+    curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | tar xz
+    sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
+- label: cargo
+  lang: bash
+  code: |
+    cargo install hprof-analyzer
+usage:
+- label: Basic Usage
+  lang: bash
+  code: |
+    hprof-analyzer heap.hprof report.html
+how_to:
+- title: Analyse a heap dump and open the report
+  body: |
+    ```bash
+    hprof-analyzer heap.hprof report.html
+    ```
+    Opens a self-contained HTML file with System Overview, Leak Suspects,
+    Top Consumers, and Threads — no server, no external assets.
+
+    Compressed dumps are read transparently:
+    ```bash
+    hprof-analyzer heap.hprof.gz report.html
+    hprof-analyzer heap.hprof.zip report.html
+    ```
+    **Tip:** use `-XX:+HeapDumpGzip` to write compressed dumps directly — typically 5–10× smaller.
+
+    Update to the latest nightly build at any time:
+    ```bash
+    hprof-analyzer update nightly
+    ```
+
+- title: Analyse in the browser without installing anything
+  body: |
+    Visit **[parttimenerd.github.io/hprof-analyzer](https://parttimenerd.github.io/hprof-analyzer/)**
+    and drag-and-drop your `.hprof` file. Runs entirely via WebAssembly — no data leaves your machine.
+    Performance depends on available browser memory; it may work fine above 3 GiB or struggle below
+    it depending on your machine. For large or slow dumps use the native binary instead.
+
+- title: Run OQL queries — CLI REPL or browser
+  body: |
+    Interactive REPL in the terminal with tab-completion:
+    ```bash
+    hprof-analyzer query heap.hprof --repl
+    ```
+    Or start a local server and use the browser OQL shell:
+    ```bash
+    hprof-analyzer server heap.hprof
+    # → open http://127.0.0.1:7070
+    ```
+    ```
+    /help oql        — full OQL language reference
+    /examples        — guided tour of OQL examples by category
+    ```
+    The OQL dialect is modelled on Eclipse MAT's — most MAT queries work unchanged.
+
+- title: Use with Claude or Cline via MCP
+  body: |
+    hprof-analyzer ships a built-in MCP server so Claude, Cline, and other
+    MCP-compatible AI assistants can analyse heap dumps directly.
+
+    **Claude Code:**
+    ```bash
+    claude mcp add hprof -- hprof-analyzer mcp
+    ```
+    **Cline (VS Code)** — add to `.vscode/mcp.json`:
+    ```json
+    { "mcpServers": { "hprof": { "command": "hprof-analyzer", "args": ["mcp"] } } }
+    ```
+    Homebrew prints full MCP setup instructions after install.
+
+- title: Redact a dump before sharing
+  body: |
+    Heap dumps contain sensitive data — string values, field values, serialized objects.
+    The `redact` subcommand zeroes all primitive values and array contents while preserving
+    class/field/method names, producing a dump safe to attach to a bug report or share with colleagues:
+    ```bash
+    hprof-analyzer redact heap.hprof redacted.hprof
+    ```
+    hprof-analyzer detects redacted dumps automatically and shows a "Redacted dump" banner
+    in the report, skipping analyses that would be meaningless on zeroed data.
+
+- title: Generate Eclipse MAT cache files (speed up first MAT open)
+  body: |
+    For large dumps MAT's first parse can peak at ~55 GiB RSS. hprof-analyzer generates
+    the same cache files with much lower memory usage:
+    ```bash
+    hprof-analyzer mat caches heap.hprof /path/to/heap-dir/
+    ```
+    Open `heap.hprof` in MAT as usual — it detects the cache and skips the expensive first parse.
+
+note: Native binary requires Linux or macOS. The in-browser WASM version is memory-limited by the
+  browser — it may work for larger dumps or struggle for smaller ones depending on your machine.
