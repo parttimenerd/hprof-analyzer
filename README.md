@@ -693,7 +693,16 @@ A ready-made **Claude Code skill** is included at
 ```
 
 The skill teaches Claude the server API, OQL syntax, and common heap-triage
-workflows. The OQL guide at
+workflows. For environments where starting a server is not practical, a
+CLI-only skill is also available at
+[`skills/hprof-analyzer-cli.md`](skills/hprof-analyzer-cli.md) — it uses the
+cached `heap` subcommand group and requires only the binary on `PATH`:
+
+```sh
+cp skills/hprof-analyzer-cli.md ~/.claude/skills/hprof-analyzer-cli/SKILL.md
+```
+
+The OQL guide at
 [parttimenerd.github.io/hprof-analyzer/oql/](https://parttimenerd.github.io/hprof-analyzer/oql/)
 covers grammar, examples, and the full attribute reference.
 
