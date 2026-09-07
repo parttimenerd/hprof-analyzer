@@ -68,6 +68,41 @@ how_to:
     hprof-analyzer update nightly
     ```
 
+- title: Find what is consuming the most memory
+  body: |
+    The `top-consumers` view ranks object types by retained heap — the amount of memory
+    that would be freed if all instances of that class were collected:
+    ```bash
+    hprof-analyzer heap.hprof report.html
+    # Open report.html → "Top Consumers" tab
+    ```
+    For a fast command-line answer without opening the browser:
+    ```bash
+    hprof-analyzer top-consumers heap.hprof
+    # Show top 20 instead of default 10
+    hprof-analyzer top-consumers --limit 20 heap.hprof
+    ```
+    Look for classes with high *retained* bytes — those are the real memory holders,
+    not just large arrays that are themselves held by something else.
+
+- title: Find the likely cause of an OutOfMemoryError
+  body: |
+    The `leak-suspects` view groups objects into accumulation points — classes where
+    many instances exist that share a common path from a GC root:
+    ```bash
+    hprof-analyzer heap.hprof report.html
+    # Open report.html → "Leak Suspects" tab
+    ```
+    Each suspect shows the accumulator class, instance count, total retained bytes,
+    and the shortest path from a GC root to a representative instance.
+    For a text summary:
+    ```bash
+    hprof-analyzer leak-suspects heap.hprof
+    ```
+    If the suspect is a framework collection (e.g. a `HashMap` inside a cache),
+    check which application class holds a reference to it — that is where to look
+    for a missing eviction policy or unbounded growth.
+
 - title: Analyse in the browser without installing anything
   body: |
     Visit **[parttimenerd.github.io/hprof-analyzer](https://parttimenerd.github.io/hprof-analyzer/)**
