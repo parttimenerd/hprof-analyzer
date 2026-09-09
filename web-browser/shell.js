@@ -567,12 +567,66 @@ async function runRedact(file) {
     return;
   }
 
-  statusEl.textContent = 'Redacting (pass 1)…';
+  // Ask user which mode to use via a small inline prompt overlay.
+  const mode = await new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;' +
+      'justify-content:center;z-index:9999;font-family:inherit';
+    overlay.innerHTML = `
+      <div style="background:#1a1a2e;border:1px solid #444;border-radius:10px;padding:28px 32px;
+                  max-width:420px;width:90%;color:#e8e8f0;box-shadow:0 8px 32px rgba(0,0,0,.6)">
+        <h3 style="margin:0 0 8px;font-size:1.1rem">Choose redaction depth</h3>
+        <p style="margin:0 0 20px;font-size:.85rem;color:#aaa;line-height:1.5">
+          Both modes zero all primitive array elements
+          (<code>byte[]</code>, <code>int[]</code>, <code>long[]</code>, …).
+        </p>
+        <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:14px;cursor:pointer">
+          <input type="radio" name="redact-mode" value="lean" checked style="margin-top:3px">
+          <span>
+            <strong>Lean</strong> <span style="color:#aaa;font-size:.82rem">(default, faster)</span><br>
+            <span style="font-size:.82rem;color:#bbb">Single pass. Arrays zeroed. Instance scalar fields left intact.</span>
+          </span>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:22px;cursor:pointer">
+          <input type="radio" name="redact-mode" value="complete" style="margin-top:3px">
+          <span>
+            <strong>Complete</strong> <span style="color:#aaa;font-size:.82rem">(two-pass)</span><br>
+            <span style="font-size:.82rem;color:#bbb">Also zeros int/long/… scalar fields on objects and static fields.</span>
+          </span>
+        </label>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button id="redact-cancel"
+            style="padding:7px 18px;background:#333;color:#ccc;border:1px solid #555;
+                   border-radius:6px;cursor:pointer;font-size:.9rem">Cancel</button>
+          <button id="redact-ok"
+            style="padding:7px 18px;background:#5a8dee;color:#fff;border:none;
+                   border-radius:6px;cursor:pointer;font-size:.9rem">Redact</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#redact-ok').onclick = () => {
+      const sel = overlay.querySelector('input[name="redact-mode"]:checked');
+      document.body.removeChild(overlay);
+      resolve(sel ? sel.value : 'lean');
+    };
+    overlay.querySelector('#redact-cancel').onclick = () => {
+      document.body.removeChild(overlay);
+      resolve(null);
+    };
+  });
+
+  if (!mode) {
+    statusEl.style.display = 'none';
+    return;
+  }
+
+  statusEl.textContent = mode === 'complete' ? 'Redacting (pass 1)…' : 'Redacting…';
   let result;
   try {
     result = await new Promise((resolve, reject) => {
       try {
-        const out = activeHprof.redact_with_progress(bytes, file.name, (phase, frac) => {
+        const out = activeHprof.redact_with_progress(bytes, file.name, mode, (phase, frac) => {
           statusEl.textContent = `Redacting (${phase} ${Math.round(frac * 100)}%)…`;
         });
         resolve(out);
