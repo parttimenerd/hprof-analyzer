@@ -20,17 +20,33 @@ use crate::types::{
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
+/// Selects how aggressively primitive values are zeroed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactMode {
+    /// Single-pass: zeros all primitive array element data only.
+    /// INSTANCE_DUMP and CLASS_DUMP bodies are copied verbatim.
+    Lean,
+    /// Two-pass: zeros all primitive values everywhere. (default)
+    Complete,
+}
+
 /// Redact `source` and write the result to `writer`.
 ///
 /// `progress(phase, fraction)` is called periodically; `fraction` is in [0,1].
 pub fn redact<W: Write>(
     source: &HprofSource,
     mut writer: W,
+    mode: RedactMode,
     progress: impl Fn(&str, f64),
 ) -> io::Result<()> {
-    progress("pass1", 0.0);
-    let class_fields = build_class_fields(source)?;
-    progress("pass1", 1.0);
+    let class_fields = if mode == RedactMode::Complete {
+        progress("pass1", 0.0);
+        let cf = build_class_fields(source)?;
+        progress("pass1", 1.0);
+        cf
+    } else {
+        HashMap::new()
+    };
 
     progress("pass2", 0.0);
     let r = source.open()?;
@@ -43,6 +59,7 @@ pub fn redact<W: Write>(
         id_size,
         &format,
         timestamp_ms,
+        mode,
         &class_fields,
         &progress,
     )?;
@@ -294,6 +311,7 @@ fn write_redacted<W: Write>(
     id_size: u8,
     format: &str,
     timestamp_ms: u64,
+    mode: RedactMode,
     class_fields: &ClassFields,
     progress: &impl Fn(&str, f64),
 ) -> io::Result<()> {
@@ -323,7 +341,7 @@ fn write_redacted<W: Write>(
         let result = match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 write_record_header(w, tag, length)?;
-                write_redacted_heap_segment(&mut r, w, id_size, length, class_fields)
+                write_redacted_heap_segment(&mut r, w, id_size, length, mode, class_fields)
             }
             // Skip any existing redaction marker — we already wrote one at the
             // top, so re-redacting an already-redacted dump produces exactly one.
@@ -359,15 +377,7 @@ fn write_record_header<W: Write>(w: &mut W, tag: u8, length: u64) -> io::Result<
 }
 
 fn copy_bytes<W: Write>(r: &mut HprofReader, w: &mut W, n: u64) -> io::Result<()> {
-    let mut remaining = n as usize;
-    let mut buf = vec![0u8; 65536.min(remaining + 1)];
-    while remaining > 0 {
-        let chunk = remaining.min(buf.len());
-        r.read_into(&mut buf[..chunk])?;
-        w.write_all(&buf[..chunk])?;
-        remaining -= chunk;
-    }
-    Ok(())
+    copy_exact(r, w, n)
 }
 
 fn write_redacted_heap_segment<W: Write>(
@@ -375,6 +385,7 @@ fn write_redacted_heap_segment<W: Write>(
     w: &mut W,
     id_size: u8,
     length: u64,
+    mode: RedactMode,
     class_fields: &ClassFields,
 ) -> io::Result<()> {
     let ids = id_size as u64;
@@ -389,8 +400,21 @@ fn write_redacted_heap_segment<W: Write>(
         remaining -= 1;
 
         let consumed = match sub_tag {
+            heap::INSTANCE_DUMP if mode == RedactMode::Lean => {
+                // Copy header + body verbatim — no class lookup needed.
+                copy_exact(r, w, ids)?; // obj_id
+                copy_exact(r, w, 4)?; // stack_trace_serial
+                copy_exact(r, w, ids)?; // class_id
+                let mut buf = [0u8; 4];
+                r.read_into(&mut buf)?;
+                w.write_all(&buf)?;
+                let data_len = u32::from_be_bytes(buf) as u64;
+                copy_exact(r, w, data_len)?;
+                ids + 4 + ids + 4 + data_len
+            }
             heap::INSTANCE_DUMP => redact_instance_dump(r, w, id_size, class_fields)?,
             heap::PRIM_ARRAY_DUMP => redact_prim_array_dump(r, w, id_size)?,
+            heap::CLASS_DUMP if mode == RedactMode::Lean => copy_class_dump(r, w, id_size)?,
             heap::CLASS_DUMP => redact_class_dump(r, w, id_size)?,
             heap::OBJ_ARRAY_DUMP => {
                 // Preserved — only object IDs, no user data.
@@ -475,7 +499,11 @@ fn redact_instance_dump<W: Write>(
     if let Some(fields) = class_fields.get(&class_id) {
         let mut written = 0u64;
         for &ft in fields {
-            if written >= data_len {
+            let sz = match ft {
+                HprofType::Object => ids,
+                prim => prim.byte_size() as u64,
+            };
+            if written + sz > data_len {
                 break; // truncated or mismatched layout — stop early, don't over-read
             }
             match ft {
@@ -527,6 +555,52 @@ fn redact_prim_array_dump<W: Write>(
     write_zeroes(w, data_len)?;
 
     Ok(ids + 4 + 4 + 1 + data_len)
+}
+
+/// CLASS_DUMP verbatim copy (lean mode): parse structure for sizing, copy all bytes as-is.
+fn copy_class_dump<W: Write>(r: &mut HprofReader, w: &mut W, id_size: u8) -> io::Result<u64> {
+    let ids = id_size as u64;
+    let mut consumed = 0u64;
+
+    copy_exact(r, w, ids * 7 + 8)?;
+    consumed += ids * 7 + 8;
+
+    let cp_count = r.u2()?;
+    w.write_all(&cp_count.to_be_bytes())?;
+    consumed += 2;
+    for _ in 0..cp_count {
+        copy_exact(r, w, 2)?;
+        consumed += 2;
+        let cp_type = r.u1()?;
+        w.write_all(&[cp_type])?;
+        consumed += 1;
+        let vs = value_size(cp_type, id_size);
+        copy_exact(r, w, vs)?;
+        consumed += vs;
+    }
+
+    let static_count = r.u2()?;
+    w.write_all(&static_count.to_be_bytes())?;
+    consumed += 2;
+    for _ in 0..static_count {
+        copy_exact(r, w, ids)?;
+        consumed += ids;
+        let field_type = r.u1()?;
+        w.write_all(&[field_type])?;
+        consumed += 1;
+        let vs = value_size(field_type, id_size);
+        copy_exact(r, w, vs)?;
+        consumed += vs;
+    }
+
+    let field_count = r.u2()?;
+    w.write_all(&field_count.to_be_bytes())?;
+    consumed += 2;
+    let field_desc_size = ids + 1;
+    copy_exact(r, w, field_count as u64 * field_desc_size)?;
+    consumed += field_count as u64 * field_desc_size;
+
+    Ok(consumed)
 }
 
 /// CLASS_DUMP: copy class metadata and field descriptors verbatim;
@@ -771,11 +845,18 @@ mod tests {
         record(tags::HEAP_DUMP, sub_records)
     }
 
-    // Run redact on raw bytes, return redacted bytes.
+    // Run redact on raw bytes in Complete mode (default), return redacted bytes.
     fn do_redact(input: &[u8]) -> Vec<u8> {
         let source = HprofSource::from_bytes(input.to_vec(), "test.hprof");
         let mut out = Vec::new();
-        redact(&source, &mut out, |_, _| {}).expect("redact failed");
+        redact(&source, &mut out, RedactMode::Complete, |_, _| {}).expect("redact failed");
+        out
+    }
+
+    fn do_redact_lean(input: &[u8]) -> Vec<u8> {
+        let source = HprofSource::from_bytes(input.to_vec(), "test.hprof");
+        let mut out = Vec::new();
+        redact(&source, &mut out, RedactMode::Lean, |_, _| {}).expect("redact lean failed");
         out
     }
 
@@ -1367,7 +1448,7 @@ mod tests {
         ] {
             let truncated = dump[..trunc_at].to_vec();
             let source = HprofSource::from_bytes(truncated, "truncated.hprof");
-            let result = redact(&source, std::io::sink(), |_, _| {});
+            let result = redact(&source, std::io::sink(), RedactMode::Complete, |_, _| {});
             assert!(
                 result.is_ok(),
                 "truncated input at {trunc_at} must not error"
@@ -1464,7 +1545,7 @@ mod tests {
         }
         let source = HprofSource::from(path.to_str().unwrap());
         let mut out = Vec::new();
-        redact(&source, &mut out, |_, _| {}).expect("redact fixture failed");
+        redact(&source, &mut out, RedactMode::Complete, |_, _| {}).expect("redact fixture failed");
         out
     }
 
@@ -1502,7 +1583,7 @@ mod tests {
         }
         let source2 = HprofSource::from_bytes(r1.clone(), "r1.hprof");
         let mut r2 = Vec::new();
-        redact(&source2, &mut r2, |_, _| {}).expect("re-redact failed");
+        redact(&source2, &mut r2, RedactMode::Complete, |_, _| {}).expect("re-redact failed");
         assert_eq!(r1, r2, "re-redacting fixture must be idempotent");
     }
 
@@ -1514,7 +1595,7 @@ mod tests {
         }
         let source2 = HprofSource::from_bytes(r1, "r1.hprof");
         let mut r2 = Vec::new();
-        redact(&source2, &mut r2, |_, _| {}).expect("re-redact failed");
+        redact(&source2, &mut r2, RedactMode::Complete, |_, _| {}).expect("re-redact failed");
         let (_, records) = parse_records(&r2);
         assert_eq!(
             count_tag(&records, tags::REDACTED_MARKER),
@@ -2308,7 +2389,13 @@ mod tests {
         }
         let gz_source = HprofSource::from_bytes(gz_bytes, "test.hprof.gz");
         let mut gz_redacted = Vec::new();
-        redact(&gz_source, &mut gz_redacted, |_, _| {}).expect("redact gz failed");
+        redact(
+            &gz_source,
+            &mut gz_redacted,
+            RedactMode::Complete,
+            |_, _| {},
+        )
+        .expect("redact gz failed");
 
         assert_eq!(
             raw_redacted, gz_redacted,
@@ -2338,7 +2425,13 @@ mod tests {
         }
         let zip_source = HprofSource::from_bytes(zip_bytes, "test.hprof.zip");
         let mut zip_redacted = Vec::new();
-        redact(&zip_source, &mut zip_redacted, |_, _| {}).expect("redact zip failed");
+        redact(
+            &zip_source,
+            &mut zip_redacted,
+            RedactMode::Complete,
+            |_, _| {},
+        )
+        .expect("redact zip failed");
 
         assert_eq!(
             raw_redacted, zip_redacted,
@@ -2358,7 +2451,7 @@ mod tests {
         let mut gz_buf = Vec::new();
         {
             let gz = flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
-            redact(&source, gz, |_, _| {}).expect("redact to gz failed");
+            redact(&source, gz, RedactMode::Complete, |_, _| {}).expect("redact to gz failed");
         }
         let gz_source = HprofSource::from_bytes(gz_buf, "out.hprof.gz");
         let p1 = crate::pass1::Pass1::run(&gz_source, false).expect("pass1 on gz output failed");
@@ -2386,7 +2479,8 @@ mod tests {
             let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             zip.start_file("dump.hprof", opts).unwrap();
-            redact(&source, &mut zip, |_, _| {}).expect("redact to zip failed");
+            redact(&source, &mut zip, RedactMode::Complete, |_, _| {})
+                .expect("redact to zip failed");
             zip.finish().unwrap();
         }
         let zip_source = HprofSource::from_bytes(zip_buf, "out.hprof.zip");
@@ -2909,9 +3003,14 @@ mod tests {
         dump.extend(string_record(1, "x"));
         let source = HprofSource::from_bytes(dump, "test.hprof");
         let phases_seen = std::sync::Mutex::new(Vec::<String>::new());
-        redact(&source, std::io::sink(), |phase, _frac| {
-            phases_seen.lock().unwrap().push(phase.to_string());
-        })
+        redact(
+            &source,
+            std::io::sink(),
+            RedactMode::Complete,
+            |phase, _frac| {
+                phases_seen.lock().unwrap().push(phase.to_string());
+            },
+        )
         .unwrap();
         let phases = phases_seen.into_inner().unwrap();
         assert!(
@@ -2978,6 +3077,209 @@ mod tests {
             assert!(
                 red_p1.redacted,
                 "{name}: redacted dump must be detected as redacted"
+            );
+        }
+    }
+
+    // ── Lean mode tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn lean_mode_zeros_prim_arrays_leaves_instances_unchanged() {
+        // Build a dump with:
+        //   - one CLASS_DUMP for class 0x10 with one int field (name_id=1)
+        //   - one INSTANCE_DUMP for obj 0x20 with int value 0xDEADBEEF
+        //   - one PRIM_ARRAY_DUMP with bytes [1, 2, 3]
+
+        let int_type: u8 = 10; // HprofType::Int
+        let byte_type: u8 = 8; // HprofType::Byte
+        let field_data: &[u8] = &0xDEAD_BEEFu32.to_be_bytes();
+
+        let mut heap = Vec::new();
+        heap.extend(class_dump(0x10, 0, &[(int_type, 1)]));
+        heap.extend(instance_dump(0x20, 0x10, field_data));
+        heap.extend(prim_array_dump(0x30, byte_type, &[1, 2, 3]));
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&heap));
+
+        let out = do_redact_lean(&dump);
+        let (_, records) = parse_records(&out);
+
+        // Find the HEAP_DUMP body.
+        let heap_body = records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP || *t == tags::HEAP_DUMP_SEGMENT)
+            .map(|(_, b)| b.as_slice())
+            .expect("no heap dump record");
+
+        // Locate INSTANCE_DUMP sub-record — should be verbatim (int field NOT zeroed).
+        let inst_pos = heap_body
+            .windows(1)
+            .position(|w| w[0] == heap::INSTANCE_DUMP)
+            .expect("no INSTANCE_DUMP");
+        // data starts after: tag(1) + obj_id(4) + serial(4) + class_id(4) + data_len(4) = 17
+        let inst_data_offset = inst_pos + 1 + 4 + 4 + 4 + 4;
+        let inst_field_bytes = &heap_body[inst_data_offset..inst_data_offset + 4];
+        assert_eq!(
+            inst_field_bytes,
+            &0xDEAD_BEEFu32.to_be_bytes(),
+            "lean mode must NOT zero instance fields"
+        );
+
+        // Locate PRIM_ARRAY_DUMP sub-record — elements must be zeroed.
+        let arr_pos = heap_body
+            .windows(1)
+            .position(|w| w[0] == heap::PRIM_ARRAY_DUMP)
+            .expect("no PRIM_ARRAY_DUMP");
+        // elements start after: tag(1) + arr_id(4) + serial(4) + count(4) + type(1) = 14
+        let arr_data_offset = arr_pos + 1 + 4 + 4 + 4 + 1;
+        let elem_bytes = &heap_body[arr_data_offset..arr_data_offset + 3];
+        assert_eq!(
+            elem_bytes,
+            &[0, 0, 0],
+            "lean mode must zero prim array elements"
+        );
+    }
+
+    #[test]
+    fn complete_mode_zeros_prim_array_and_instance_fields() {
+        let int_type: u8 = 10;
+        let byte_type: u8 = 8;
+        let field_data: &[u8] = &0xDEAD_BEEFu32.to_be_bytes();
+
+        let mut heap = Vec::new();
+        heap.extend(class_dump(0x10, 0, &[(int_type, 1)]));
+        heap.extend(instance_dump(0x20, 0x10, field_data));
+        heap.extend(prim_array_dump(0x30, byte_type, &[1, 2, 3]));
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&heap));
+
+        let out = do_redact(&dump); // complete mode
+
+        let (_, records) = parse_records(&out);
+        let heap_body = records
+            .iter()
+            .find(|(t, _)| *t == tags::HEAP_DUMP || *t == tags::HEAP_DUMP_SEGMENT)
+            .map(|(_, b)| b.as_slice())
+            .expect("no heap dump record");
+
+        // Instance int field must be zeroed in complete mode.
+        let inst_pos = heap_body
+            .windows(1)
+            .position(|w| w[0] == heap::INSTANCE_DUMP)
+            .expect("no INSTANCE_DUMP");
+        let inst_data_offset = inst_pos + 1 + 4 + 4 + 4 + 4;
+        let inst_field_bytes = &heap_body[inst_data_offset..inst_data_offset + 4];
+        assert_eq!(
+            inst_field_bytes,
+            &[0, 0, 0, 0],
+            "complete mode must zero instance primitive fields"
+        );
+
+        // Array elements must be zeroed.
+        let arr_pos = heap_body
+            .windows(1)
+            .position(|w| w[0] == heap::PRIM_ARRAY_DUMP)
+            .expect("no PRIM_ARRAY_DUMP");
+        let arr_data_offset = arr_pos + 1 + 4 + 4 + 4 + 1;
+        let elem_bytes = &heap_body[arr_data_offset..arr_data_offset + 3];
+        assert_eq!(
+            elem_bytes,
+            &[0, 0, 0],
+            "complete mode must zero prim array elements"
+        );
+    }
+
+    #[test]
+    fn overread_guard_mid_field_boundary() {
+        // INSTANCE_DUMP with data_len=2, but class has an int field (sz=4).
+        // Old guard `written >= data_len` would read the int (4 bytes) even
+        // though only 2 bytes remain, corrupting the stream.
+        // New guard `written + sz > data_len` stops before reading.
+        let int_type: u8 = 10;
+        // class claims instance_size=4, but we'll write data_len=2 in instance
+        let mut heap = Vec::new();
+        heap.extend(class_dump(0x10, 0, &[(int_type, 1)]));
+        // Manually build an INSTANCE_DUMP with data_len=2 (truncated)
+        let mut inst = vec![heap::INSTANCE_DUMP];
+        inst.extend_from_slice(&u4(0x20)); // obj_id
+        inst.extend_from_slice(&u4(0)); // serial
+        inst.extend_from_slice(&u4(0x10)); // class_id
+        inst.extend_from_slice(&u4(2)); // data_len = 2 (short — int is 4)
+        inst.extend_from_slice(&[0xAB, 0xCD]); // only 2 bytes of data
+        heap.extend(inst);
+
+        let mut dump = header();
+        dump.extend(heap_dump_record(&heap));
+
+        // Must not panic or return error — should handle truncated layout gracefully.
+        let out = do_redact(&dump);
+        // Output should be parseable (same record structure).
+        let (_, records) = parse_records(&out);
+        assert!(
+            records
+                .iter()
+                .any(|(t, _)| *t == tags::HEAP_DUMP || *t == tags::HEAP_DUMP_SEGMENT),
+            "output must still contain a heap dump record"
+        );
+    }
+
+    #[test]
+    fn lean_zeros_all_primitive_array_element_types() {
+        // Verify that PRIM_ARRAY_DUMP is zeroed for every primitive type code.
+        // type code → (elem_size, nonzero element bytes)
+        let cases: &[(u8, &[u8])] = &[
+            (4, &[1]),                                               // boolean (1 byte)
+            (5, &[0xFF, 0xFE]),                                      // char    (2 bytes)
+            (6, &[0x3F, 0x80, 0x00, 0x00]),                          // float   (4 bytes)
+            (7, &[0x3F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),  // double (8 bytes)
+            (8, &[0xDE]),                                            // byte    (1 byte)
+            (9, &[0x00, 0x2A]),                                      // short   (2 bytes)
+            (10, &[0xDE, 0xAD, 0xBE, 0xEF]),                         // int     (4 bytes)
+            (11, &[0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x01]), // long (8 bytes)
+        ];
+
+        for &(type_code, nonzero_elem) in cases {
+            let mut heap = Vec::new();
+            heap.extend(prim_array_dump(0x10, type_code, nonzero_elem));
+
+            let mut dump = header();
+            dump.extend(heap_dump_record(&heap));
+
+            // Lean mode
+            let lean_out = do_redact_lean(&dump);
+            let (_, lean_records) = parse_records(&lean_out);
+            let heap_body = lean_records
+                .iter()
+                .find(|(t, _)| *t == tags::HEAP_DUMP || *t == tags::HEAP_DUMP_SEGMENT)
+                .map(|(_, b)| b.as_slice())
+                .unwrap_or_else(|| panic!("type_code={type_code}: no heap record in lean output"));
+
+            // Sub-record: tag(1) + arr_id(4) + serial(4) + count(4) + type(1) = 14 bytes header
+            let elem_offset = 1 + 4 + 4 + 4 + 1;
+            let elem_bytes = &heap_body[elem_offset..elem_offset + nonzero_elem.len()];
+            assert_eq!(
+                elem_bytes,
+                vec![0u8; nonzero_elem.len()].as_slice(),
+                "lean mode must zero type_code={type_code} array elements"
+            );
+
+            // Complete mode — same expectation for arrays
+            let complete_out = do_redact(&dump);
+            let (_, complete_records) = parse_records(&complete_out);
+            let heap_body = complete_records
+                .iter()
+                .find(|(t, _)| *t == tags::HEAP_DUMP || *t == tags::HEAP_DUMP_SEGMENT)
+                .map(|(_, b)| b.as_slice())
+                .unwrap_or_else(|| {
+                    panic!("type_code={type_code}: no heap record in complete output")
+                });
+            let elem_bytes = &heap_body[elem_offset..elem_offset + nonzero_elem.len()];
+            assert_eq!(
+                elem_bytes,
+                vec![0u8; nonzero_elem.len()].as_slice(),
+                "complete mode must zero type_code={type_code} array elements"
             );
         }
     }

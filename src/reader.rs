@@ -96,7 +96,7 @@ impl HprofReader {
         let lower = path.to_ascii_lowercase();
 
         // tar.gz: gunzip then stream the first .hprof entry from the tar archive.
-        #[cfg(feature = "native")]
+        #[cfg(any(feature = "native", feature = "redact-bin"))]
         if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
             return Self::open_tar_gz(path);
         }
@@ -107,7 +107,7 @@ impl HprofReader {
         peek.read_exact(&mut magic)?;
 
         // ZIP archive (PK\x03\x04): re-open with Seek and extract the .hprof entry.
-        #[cfg(feature = "native")]
+        #[cfg(any(feature = "native", feature = "redact-bin"))]
         if magic[..2] == [0x50, 0x4b] {
             return Self::open_zip(path);
         }
@@ -141,7 +141,7 @@ impl HprofReader {
     /// Truncated archives are handled leniently: gzip checksum/trailer errors
     /// are treated as EOF so the HPROF record loop can process whatever data
     /// was successfully decompressed.
-    #[cfg(feature = "native")]
+    #[cfg(any(feature = "native", feature = "redact-bin"))]
     fn open_tar_gz(path: &str) -> io::Result<Self> {
         let file = File::open(path)?;
         let truncated = Arc::new(AtomicBool::new(false));
@@ -204,9 +204,13 @@ impl HprofReader {
     }
 
     /// Open a `.hprof.zip`, find the first `.hprof` entry, and stream it through
-    /// the parser. Re-opens the file to get a `Seek`-capable handle; the entry is
-    /// decompressed on-the-fly with no full-file buffering.
-    #[cfg(feature = "native")]
+    /// the parser. The entry is decompressed on-the-fly with no full-file buffering.
+    ///
+    /// `ZipFile` borrows `ZipArchive`, so we use the same `Box::leak` pattern as
+    /// the tar path: leak the archive (just a File handle + central directory) and
+    /// extend the `ZipFile`'s lifetime to `'static`. This is safe because the leak
+    /// outlives the `HprofReader` and `ZipFile` never moves after creation.
+    #[cfg(any(feature = "native", feature = "redact-bin"))]
     fn open_zip(path: &str) -> io::Result<Self> {
         let file = File::open(path)?;
         let mut archive = zip::ZipArchive::new(file)
@@ -221,18 +225,20 @@ impl HprofReader {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "no .hprof entry found in zip")
             })?;
+        // Leak the archive so the `ZipFile` borrow can be extended to `'static`.
+        // The only thing leaked is the archive wrapper + File handle (~few hundred bytes);
+        // the HPROF content itself streams through without buffering.
+        let archive: &'static mut zip::ZipArchive<File> = Box::leak(Box::new(archive));
         let entry = archive
             .by_index(idx)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        // `ZipFile` is `Read` but borrows `archive`, so we must read into a Vec.
-        // For typical .hprof.zip sizes (tens to hundreds of MB decompressed) this
-        // is acceptable; the parser's own pass1 scan then proceeds from a Cursor.
-        // Cap the pre-allocation at 2 GiB to avoid OOM on corrupt ZIP size fields.
-        let cap = (entry.size() as usize).min(2 * 1024 * 1024 * 1024);
-        let mut hprof_bytes = Vec::with_capacity(cap);
-        let mut entry = entry;
-        entry.read_to_end(&mut hprof_bytes)?;
-        Self::from_reader(Cursor::new(hprof_bytes))
+        // SAFETY: `entry` borrows `archive` which has been given `'static` lifetime
+        // via `Box::leak`. The archive lives for the duration of the program, and
+        // `entry` is wrapped inside an `HprofReader` that cannot outlive this scope
+        // (the reader is returned to the caller). No mutation of `archive` happens
+        // after this point.
+        let entry: zip::read::ZipFile<'static> = unsafe { std::mem::transmute(entry) };
+        Self::from_reader(entry)
     }
 
     /// Construct a reader from any `Read` implementation.
