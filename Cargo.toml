@@ -37,7 +37,7 @@ path = "src/main.rs"
 [[bin]]
 name = "hprof-redact"
 path = "src/bin/hprof-redact.rs"
-required-features = ["native"]
+required-features = ["redact-bin"]
 
 [lib]
 name = "hprof_analyzer"
@@ -54,6 +54,9 @@ mat-oracle = []
 # avoid pulling in these non-WASM-compatible crates.
 default = ["native"]
 native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip", "dep:tar", "dep:ureq", "dep:self-replace", "dep:rmcp", "dep:tokio", "dep:anyhow", "dep:bincode"]
+# Minimal feature set for the standalone hprof-redact binary: only zip/tar compression.
+# Excludes the CLI, REPL, MCP server, and all their heavy transitive deps.
+redact-bin = ["dep:zip", "dep:tar"]
 
 [dependencies]
 base64 = "0.22"
