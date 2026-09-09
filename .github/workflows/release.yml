@@ -51,6 +51,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
     steps:
       - name: Checkout
         uses: actions/checkout@v7
