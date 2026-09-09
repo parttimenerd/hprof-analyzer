@@ -1,4 +1,4 @@
-tag: experimental
+tag: ready
 tagline: Fast heap dump analyser (Rust + Java CLI). Reproduces Eclipse MAT's System Overview, Leak
   Suspects, Top Consumers, and Threads views with a fraction of the memory overhead. Handles dumps
   larger than 10 GiB that MAT cannot open. Also ships an OQL query engine, an HTTP server for
