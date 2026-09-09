@@ -1509,21 +1509,34 @@ impl HprofSession {
         serde_json::json!({ "ok": true, "findings": findings_json }).to_string()
     }
 
-    /// Redact a heap dump in memory: zeroes all primitive field values and
-    /// array contents, returns the redacted raw `.hprof` bytes.
+    /// Redact a heap dump in memory and return the redacted raw `.hprof` bytes.
+    ///
+    /// `mode` selects the redaction depth:
+    ///   - `"lean"` (default): single-pass, zeros only primitive array elements
+    ///     (byte[], char[], short[], int[], long[], float[], double[], boolean[]).
+    ///     Instance scalar fields are left untouched.
+    ///   - `"complete"`: two-pass, also zeros primitive scalar fields on instances
+    ///     and static fields on classes.
     ///
     /// `cb(phase: string, fraction: number)` is called for progress updates.
     pub fn redact_with_progress(
         data: Vec<u8>,
         name: &str,
+        mode: &str,
         cb: js_sys::Function,
     ) -> Result<Vec<u8>, JsValue> {
+        use hprof_analyzer::redact::RedactMode;
+        let redact_mode = if mode == "complete" {
+            RedactMode::Complete
+        } else {
+            RedactMode::Lean
+        };
         let source = hprof_analyzer::HprofSource::Bytes {
             data: std::sync::Arc::new(data),
             name: name.to_string(),
         };
         let mut out: Vec<u8> = Vec::new();
-        hprof_analyzer::redact::redact(&source, &mut out, |phase, frac| {
+        hprof_analyzer::redact::redact(&source, &mut out, redact_mode, |phase, frac| {
             call_progress(&cb, phase, frac as f32);
         })
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
