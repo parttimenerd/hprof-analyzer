@@ -50,7 +50,7 @@ impl HprofSource {
             HprofSource::Bytes { data, .. } => {
                 let buf = ArcBuf(Arc::clone(data));
                 // ZIP magic: PK\x03\x04
-                #[cfg(feature = "native")]
+                #[cfg(any(feature = "native", feature = "redact-bin"))]
                 if buf.0.len() >= 4 && buf.0[0] == 0x50 && buf.0[1] == 0x4b {
                     return open_zip_bytes(buf);
                 }
@@ -108,10 +108,15 @@ impl From<&str> for HprofSource {
 }
 
 /// Decompress the first `.hprof` entry from an in-memory ZIP archive.
-/// `ZipArchive` requires `Read + Seek`; `Cursor<ArcBuf>` satisfies both.
-#[cfg(feature = "native")]
+///
+/// `ZipFile` borrows `ZipArchive`; we use `Box::leak` (same pattern as the
+/// tar/zip path in `reader.rs`) to give the archive `'static` lifetime so the
+/// entry reader can be passed into `HprofReader` without buffering the full
+/// decompressed content.  The only memory leaked is the `ZipArchive` wrapper
+/// (central directory + `Cursor<ArcBuf>` — a few KB at most).  The HPROF
+/// bytes themselves are decompressed on-the-fly.
+#[cfg(any(feature = "native", feature = "redact-bin"))]
 fn open_zip_bytes(buf: ArcBuf) -> io::Result<HprofReader> {
-    use std::io::Read;
     let mut archive = zip::ZipArchive::new(Cursor::new(buf)).map_err(io::Error::other)?;
     let idx = (0..archive.len())
         .find(|&i| {
@@ -121,11 +126,11 @@ fn open_zip_bytes(buf: ArcBuf) -> io::Result<HprofReader> {
                 .unwrap_or(false)
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no .hprof entry in zip"))?;
-    let mut entry = archive.by_index(idx).map_err(io::Error::other)?;
-    let cap = (entry.size() as usize).min(2 * 1024 * 1024 * 1024);
-    let mut hprof_bytes = Vec::with_capacity(cap);
-    entry.read_to_end(&mut hprof_bytes)?;
-    HprofReader::from_reader(Cursor::new(hprof_bytes))
+    let archive: &'static mut zip::ZipArchive<Cursor<ArcBuf>> = Box::leak(Box::new(archive));
+    let entry = archive.by_index(idx).map_err(io::Error::other)?;
+    // SAFETY: same as reader.rs open_zip — `archive` is leaked so `'static` is valid.
+    let entry: zip::read::ZipFile<'static> = unsafe { std::mem::transmute(entry) };
+    HprofReader::from_reader(entry)
 }
 
 impl From<String> for HprofSource {
