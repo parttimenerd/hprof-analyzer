@@ -134,6 +134,13 @@ pub struct RedactParams {
     /// Extension controls compression: .hprof (raw), .hprof.gz (gzip), .hprof.zip (zip).
     /// Recommended: same name with "-redacted" suffix, e.g. "/tmp/dump-redacted.hprof".
     pub output: String,
+    /// Use complete (two-pass) redaction: also zeros int/long/float/double/boolean/short/char
+    /// scalar fields on object instances and static fields on classes.
+    /// Default (false) is lean mode: single pass, zeros only primitive array elements
+    /// (byte[], int[], long[], char[], etc.) — faster and uses less memory.
+    /// Use complete=true when you need the strongest guarantee that no scalar values remain.
+    #[serde(default)]
+    pub complete: bool,
 }
 
 // ── Dominator tree node ───────────────────────────────────────────────────────
@@ -764,12 +771,17 @@ impl HprofMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
-    /// Redact a heap dump: zero all primitive field values and array contents.
+    /// Redact a heap dump: zero primitive array contents and optionally scalar fields.
     #[tool(
         description = "Redact a Java heap dump (.hprof) so it is safe to share. \
-                       Zeroes all primitive field values (int, long, byte, char, float, double, boolean, short) \
-                       and all primitive array element data (byte[], char[], int[], etc.). \
-                       Preserves the complete object graph: class names, field names, object IDs, \
+                       Two modes:\n\
+                       - lean (default, complete=false): single pass, zeros all primitive array elements \
+                         (byte[], char[], int[], long[], float[], double[], boolean[], short[]). \
+                         Fast and memory-efficient. Object instance scalar fields (int, long, etc.) are left intact.\n\
+                       - complete (complete=true): two-pass, zeros everything lean does PLUS all primitive \
+                         scalar fields on every object instance and static/constant-pool fields on classes. \
+                         Strongest guarantee; roughly 2× slower.\n\
+                       Both modes preserve the complete object graph: class names, field names, object IDs, \
                        reference links, and thread stacks are unchanged. \
                        The redacted file is fully readable by hprof-analyzer, Eclipse MAT, and jhat — \
                        structural analyses (histogram, dominator tree, leak suspects, GC roots) remain accurate. \
@@ -783,6 +795,7 @@ impl HprofMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = p.input.clone();
         let output = p.output.clone();
+        let complete = p.complete;
         tokio::task::spawn_blocking(move || {
             use crate::source::HprofSource;
             use std::{fs::File, io};
@@ -790,11 +803,16 @@ impl HprofMcpServer {
             let source = HprofSource::from(input.as_str());
             let lower = output.to_ascii_lowercase();
             let progress = |_phase: &str, _fraction: f64| {};
+            let mode = if complete {
+                crate::redact::RedactMode::Complete
+            } else {
+                crate::redact::RedactMode::Lean
+            };
 
             if lower.ends_with(".hprof.gz") {
                 let file = File::create(&output)?;
                 let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-                crate::redact::redact(&source, gz, progress)
+                crate::redact::redact(&source, gz, mode, progress)
             } else if lower.ends_with(".hprof.zip") {
                 let file = File::create(&output)?;
                 let mut zip = zip::ZipWriter::new(file);
@@ -802,25 +820,37 @@ impl HprofMcpServer {
                     .compression_method(zip::CompressionMethod::Deflated);
                 zip.start_file("dump.hprof", opts)
                     .map_err(io::Error::other)?;
-                crate::redact::redact(&source, &mut zip, progress)?;
+                crate::redact::redact(&source, &mut zip, mode, progress)?;
                 zip.finish().map_err(io::Error::other)?;
                 Ok(())
             } else {
                 let file = File::create(&output)?;
-                crate::redact::redact(&source, file, progress)
+                crate::redact::redact(&source, file, mode, progress)
             }
         })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
+        let mode_note = if p.complete {
+            "Mode: complete (two-pass)\n\
+             What was zeroed:\n\
+             - All primitive array elements (byte[], int[], long[], char[], float[], double[], boolean[], short[])\n\
+             - All primitive scalar fields on object instances (int, long, float, double, boolean, short, char, byte)\n\
+             - Static primitive field values and constant pool primitive values"
+        } else {
+            "Mode: lean (single-pass, default)\n\
+             What was zeroed:\n\
+             - All primitive array elements (byte[], int[], long[], char[], float[], double[], boolean[], short[])\n\
+             What was left intact:\n\
+             - Primitive scalar fields on object instances (int, long, etc.)\n\
+             Use complete=true to also zero instance scalar fields."
+        };
+
         let msg = format!(
             "Redacted dump written to: {output}\n\n\
-             What was zeroed:\n\
-             - All primitive field values (int, long, byte, char, float, double, boolean, short)\n\
-             - All primitive array element data (byte[], char[], int[], long[], etc.)\n\
-             - Static primitive field values and constant pool primitive values\n\n\
-             What was preserved:\n\
+             {mode_note}\n\n\
+             What was preserved (both modes):\n\
              - Class names, field names, method names\n\
              - Object graph structure (all reference links)\n\
              - Object IDs, class hierarchy, dominator tree\n\
@@ -828,7 +858,8 @@ impl HprofMcpServer {
              The redacted file is safe to share. Load it with load_dump to verify the object graph \
              or run hprof-analyzer heap summary on it directly.\n\
              Note: duplicate-string and collection fill-ratio analyses will be skipped (data is zeroed).",
-            output = p.output
+            output = p.output,
+            mode_note = mode_note,
         );
         Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
     }
@@ -938,7 +969,9 @@ impl ServerHandler for HprofMcpServer {
              11. browse_dominators({}) / inspect_object — follow object references\n\n\
              PRIVACY / SHARING WORKFLOW:\n\
              1. redact({input: \"/path/to/dump.hprof\", output: \"/tmp/dump-redacted.hprof\"})\n\
-                — zero all primitive values and array data (keeps object graph + class names)\n\
+                — lean mode (default): zeros all primitive array data; fast, single pass\n\
+             1b. redact({input: \"...\", output: \"...\", complete: true})\n\
+                — complete mode: also zeros scalar fields on instances and static fields on classes\n\
              2. Share the -redacted.hprof file; load it with load_dump to verify\n\
              3. Note: duplicate-string and collection fill-ratio analyses are skipped on redacted dumps\n\n\
              ALL get_report SECTIONS: leaks, top, threads, overview, triage, waste, indicators,\n\
