@@ -389,8 +389,14 @@ enum Cmd {
         #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
         dump: Option<String>,
     },
-    /// Redact a heap dump: zero all primitive field values and array contents
-    /// while preserving the object graph (IDs, class names, reference fields).
+    /// Redact a heap dump: zero primitive array elements while preserving the
+    /// object graph (IDs, class names, reference fields, instance scalar fields).
+    ///
+    /// Default (lean) mode is a single-pass stream: only PRIM_ARRAY_DUMP element
+    /// bytes are zeroed — this covers byte[], char[], short[], int[], long[],
+    /// float[], double[], and boolean[] arrays. Instance scalar fields (int, long,
+    /// etc. on objects) are left untouched. Add --complete for a two-pass run that
+    /// also zeros those.
     ///
     /// The output is a valid HPROF file that MAT, jhat, and hprof-analyzer can
     /// open. A custom marker record (tag 0xDE) is prepended so hprof-analyzer
@@ -408,6 +414,11 @@ enum Cmd {
         /// Output path (.hprof, .hprof.gz, or .hprof.zip).
         #[arg(value_hint = ValueHint::FilePath)]
         output: String,
+        /// Complete (two-pass) mode: also zeros primitive scalar fields on instances
+        /// and static fields on classes. Slower but leaves no primitive values anywhere.
+        /// Default is lean mode (single-pass, zeros only primitive array elements).
+        #[arg(long)]
+        complete: bool,
     },
 }
 
@@ -708,12 +719,18 @@ fn fail(msg: impl std::fmt::Display) -> ! {
     process::exit(1);
 }
 
-fn run_redact(input: &str, output: &str) -> io::Result<()> {
+fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
+    use hprof_analyzer::redact::RedactMode;
     use hprof_analyzer::source::HprofSource;
     use std::fs::File;
 
     let source = HprofSource::from(input);
     let lower = output.to_ascii_lowercase();
+    let mode = if complete {
+        RedactMode::Complete
+    } else {
+        RedactMode::Lean
+    };
 
     let progress = |phase: &str, fraction: f64| {
         if fraction == 0.0 {
@@ -726,7 +743,7 @@ fn run_redact(input: &str, output: &str) -> io::Result<()> {
     if lower.ends_with(".hprof.gz") {
         let file = File::create(output)?;
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-        hprof_analyzer::redact::redact(&source, gz, progress)
+        hprof_analyzer::redact::redact(&source, gz, mode, progress)
     } else if lower.ends_with(".hprof.zip") {
         let file = File::create(output)?;
         let mut zip = zip::ZipWriter::new(file);
@@ -734,12 +751,12 @@ fn run_redact(input: &str, output: &str) -> io::Result<()> {
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        hprof_analyzer::redact::redact(&source, &mut zip, progress)?;
+        hprof_analyzer::redact::redact(&source, &mut zip, mode, progress)?;
         zip.finish().map_err(io::Error::other)?;
         Ok(())
     } else {
         let file = File::create(output)?;
-        hprof_analyzer::redact::redact(&source, file, progress)
+        hprof_analyzer::redact::redact(&source, file, mode, progress)
     }
 }
 
@@ -1025,8 +1042,12 @@ fn main() {
                 fail(e);
             }
         }
-        Some(Cmd::Redact { input, output }) => {
-            if let Err(e) = run_redact(&input, &output) {
+        Some(Cmd::Redact {
+            input,
+            output,
+            complete,
+        }) => {
+            if let Err(e) = run_redact(&input, &output, complete) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
