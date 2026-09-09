@@ -2,6 +2,53 @@
 
 All notable changes to hprof-analyzer are documented here.
 
+## [0.3.0] — 2026-09-09
+
+### Added
+
+- **Lean redaction mode (new default for `hprof-redact`).** `RedactMode::Lean`
+  is a single-pass redactor that zeroes all primitive array element data
+  (`byte[]`, `char[]`, `int[]`, `long[]`, etc.) while copying `INSTANCE_DUMP`
+  and `CLASS_DUMP` bodies verbatim. No class-field map is built; no HashMap is
+  allocated. Use when throughput matters and leaking scalar fields (e.g.
+  `String.hash`) is acceptable.
+
+- **Complete redaction mode (opt-in via `--complete`).** `RedactMode::Complete`
+  is the original two-pass mode, renamed and made opt-in. It zeroes all
+  primitive values everywhere: array elements, scalar instance fields, and
+  CLASS_DUMP static values. Use when the strongest privacy guarantee is needed.
+
+- **`redact-bin` Cargo feature.** Minimal dependency set for the standalone
+  `hprof-redact` binary (`dep:zip` + `dep:tar` only). Excludes clap, tokio,
+  reedline, rmcp, scraper, ureq, self-replace, crossterm, anyhow, and bincode.
+  Keeps the binary under 1 MB on all platforms.
+
+- **`hprof-redact` binary now defaults to lean mode.** Pass `--complete` for
+  full two-pass redaction. Progress output is suppressed when writing to stdout
+  (piping-friendly).
+
+- **MCP `redact` tool: optional `complete` parameter.** `complete: false`
+  (default) uses lean mode; `complete: true` uses complete mode. The result
+  message describes what was zeroed vs. preserved.
+
+- **WASM: `redact_with_progress(data, name, mode, cb)`.** The `mode` parameter
+  accepts `"lean"` or `"complete"`. Previous callers without the parameter must
+  be updated.
+
+- **Browser: Redact modal.** The Redact button opens a dialog to choose lean
+  vs. complete mode before downloading the redacted dump.
+
+- **ZIP streaming in `open_zip` / `open_zip_bytes`.** ZIP input now streams
+  the decompressed HPROF content on-the-fly instead of buffering the entire
+  decompressed file in memory (same `Box::leak + transmute` pattern as the
+  existing tar path).
+
+### Fixed
+
+- **`copy_bytes` heap allocation eliminated.** The inner copy loop previously
+  allocated a `vec![0u8; 65536]` per call. Now delegates to `copy_exact` which
+  uses a stack `[u8; 4096]` buffer.
+
 ## [0.2.2] — 2026-09-04
 
 ### Added
@@ -117,7 +164,11 @@ All notable changes to hprof-analyzer are documented here.
 - **README "Browser mode" section removed.** Content was stale and duplicated
   the "Try it in the browser" section above it.
 
+## [0.2.0] — 2026-08-10
 
+### Added
+
+- **MCP server.** Exposes heap analysis via the Model Context
   Protocol so Claude Code, Cline, Claude Desktop, and any other MCP-compatible
   AI assistant can load and analyze heap dumps interactively. Tools: `get_session_info`,
   `get_oql_docs`, `load_dump`, `get_summary`, `get_histogram`, `get_report`, `query`,
@@ -170,21 +221,6 @@ All notable changes to hprof-analyzer are documented here.
   immediate-dominator class names toward the GC root, available in the JSON
   model for tooling that consumes the report programmatically.
 
-### Changed
-
-- Holder breakdown is omitted from the plain Markdown renderer (it is
-  present in the JSON model and HTML report only).
-
-### Fixed
-
-- `inspect_object` no longer panics when called with `with_graph=true` if
-  the inbound CSR was not cached (the graph cache stores forward edges only;
-  a bounds-check now guards the inbound lookup).
-
-## [0.2.0] — 2026-08-10
-
-### Added
-
 - **Truncation resilience.** Truncated dumps, corrupt gzip streams, and
   malformed heap records all produce a partial report with a `truncated_input`
   warning rather than a crash or error exit. Corrupt length fields are capped
@@ -219,7 +255,16 @@ All notable changes to hprof-analyzer are documented here.
   arrays and a `run_fast_analysis_with_progress()` path that skips the retained
   pass — enables large dumps to load in-browser without OOM.
 
+### Changed
+
+- Holder breakdown is omitted from the plain Markdown renderer (it is
+  present in the JSON model and HTML report only).
+
 ### Fixed
+
+- `inspect_object` no longer panics when called with `with_graph=true` if
+  the inbound CSR was not cached (the graph cache stores forward edges only;
+  a bounds-check now guards the inbound lookup).
 
 - All scan loops in pass 1, pass 2, and the field-decode layer now treat
   `InvalidData` (corrupt sub-tag, segment overrun, oversized array) identically
