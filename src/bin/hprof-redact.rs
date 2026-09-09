@@ -1,15 +1,16 @@
 //! `hprof-redact` — standalone heap dump redactor.
 //!
-//! Zeroes all primitive field values and array element data in a Java heap dump
-//! while preserving the complete object graph (class/field names, reference links,
-//! dominator tree). The output is safe to share and remains readable by
-//! hprof-analyzer, Eclipse MAT, and jhat.
+//! Zeroes primitive array elements (lean, default) or all primitive values
+//! (complete) in a Java heap dump while preserving the complete object graph
+//! (class/field names, reference links, dominator tree). The output is safe
+//! to share and remains readable by hprof-analyzer, Eclipse MAT, and jhat.
 //!
 //! Usage:
-//!   hprof-redact <INPUT> <OUTPUT>      # file → file
-//!   hprof-redact - <OUTPUT>            # stdin → file  (input read into memory)
-//!   hprof-redact <INPUT> -             # file  → stdout (raw .hprof only)
-//!   hprof-redact - -                   # stdin → stdout
+//!   hprof-redact <INPUT> <OUTPUT>             # lean mode (default)
+//!   hprof-redact --complete <INPUT> <OUTPUT>  # complete (two-pass) mode
+//!   hprof-redact - <OUTPUT>                   # stdin → file
+//!   hprof-redact <INPUT> -                    # file  → stdout (raw .hprof only)
+//!   hprof-redact - -                          # stdin → stdout
 //!
 //! Output compression is inferred from the OUTPUT extension:
 //!   .hprof       raw (no compression)
@@ -25,21 +26,27 @@ use std::{
     process,
 };
 
-use hprof_analyzer::{redact::redact, source::HprofSource};
+use hprof_analyzer::{
+    redact::{RedactMode, redact},
+    source::HprofSource,
+};
 
 fn usage() -> ! {
     eprintln!(
-        "Usage: hprof-redact <INPUT> <OUTPUT>\n\
+        "Usage: hprof-redact [--complete] <INPUT> <OUTPUT>\n\
          \n\
-         INPUT   path to .hprof/.hprof.gz/.hprof.zip, or '-' to read from stdin\n\
-         OUTPUT  output path (.hprof / .hprof.gz / .hprof.zip), or '-' for stdout\n\
+         INPUT    path to .hprof/.hprof.gz/.hprof.zip, or '-' to read from stdin\n\
+         OUTPUT   output path (.hprof / .hprof.gz / .hprof.zip), or '-' for stdout\n\
          \n\
-         Zeroes all primitive field values and array contents while preserving\n\
-         the object graph. Output is readable by hprof-analyzer, Eclipse MAT, jhat.\n\
+         --complete  two-pass mode: also zeros scalar fields on instances and static\n\
+                     fields on classes. Default is lean (single pass, arrays only).\n\
+         \n\
+         Preserves the object graph. Output readable by hprof-analyzer, Eclipse MAT, jhat.\n\
          \n\
          Examples:\n\
          \n\
          hprof-redact dump.hprof redacted.hprof\n\
+         hprof-redact --complete dump.hprof redacted.hprof\n\
          hprof-redact dump.hprof.gz redacted.hprof.gz\n\
          cat dump.hprof | hprof-redact - redacted.hprof\n\
          hprof-redact dump.hprof - | gzip > redacted.hprof.gz"
@@ -49,19 +56,21 @@ fn usage() -> ! {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        usage();
-    }
-    let input = &args[1];
-    let output = &args[2];
+    let (mode, input, output) = match args.as_slice() {
+        [_, input, output] => (RedactMode::Lean, input.as_str(), output.as_str()),
+        [_, flag, input, output] if flag == "--complete" => {
+            (RedactMode::Complete, input.as_str(), output.as_str())
+        }
+        _ => usage(),
+    };
 
-    if let Err(e) = run(input, output) {
+    if let Err(e) = run(input, output, mode) {
         eprintln!("hprof-redact: {e}");
         process::exit(1);
     }
 }
 
-fn run(input: &str, output: &str) -> io::Result<()> {
+fn run(input: &str, output: &str, mode: RedactMode) -> io::Result<()> {
     let progress = |phase: &str, fraction: f64| {
         // Only print to stderr when writing to a file (stdout might be piped).
         if output != "-" {
@@ -88,12 +97,12 @@ fn run(input: &str, output: &str) -> io::Result<()> {
     if output == "-" {
         let stdout = io::stdout();
         let mut out = stdout.lock();
-        redact(&source, &mut out, progress)?;
+        redact(&source, &mut out, mode, progress)?;
         out.flush()
     } else if lower.ends_with(".hprof.gz") {
         let file = std::fs::File::create(output)?;
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-        redact(&source, gz, progress)
+        redact(&source, gz, mode, progress)
     } else if lower.ends_with(".hprof.zip") {
         let file = std::fs::File::create(output)?;
         let mut zip = zip::ZipWriter::new(file);
@@ -101,11 +110,11 @@ fn run(input: &str, output: &str) -> io::Result<()> {
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        redact(&source, &mut zip, progress)?;
+        redact(&source, &mut zip, mode, progress)?;
         zip.finish().map_err(io::Error::other)?;
         Ok(())
     } else {
         let file = std::fs::File::create(output)?;
-        redact(&source, file, progress)
+        redact(&source, file, mode, progress)
     }
 }
