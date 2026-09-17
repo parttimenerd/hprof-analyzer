@@ -49,7 +49,11 @@ Expands a collapsible panel showing the **dominator chain** from the selected ob
 
 When you open a static report in a modern browser, the explorer automatically upgrades to full WASM-powered navigation. The WASM module can resolve any object in the heap, not just the top-N that were pre-captured at analysis time. An upgrade banner is shown when WASM is available.
 
-To use WASM mode, open the report via the hprof-analyzer browser tool (requires a running local server) or drag-drop the `.hprof` file into the report page.
+WASM mode activates automatically when:
+- The `.hprof` file is drag-dropped onto the report page in the browser, **or**
+- The report is opened via `hprof-analyzer server heap.hprof` and the browser connects to the local server (required for dumps larger than 3 GB).
+
+For static reports opened directly from disk, only the pre-captured top-N objects are navigable.
 
 ## Field names
 
