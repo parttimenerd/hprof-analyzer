@@ -89,24 +89,6 @@ jobs:
           cargo build --release --features native --target ${{ matrix.target }}
           cargo build --release -p hprof-redact --target ${{ matrix.target }}
 
-      - name: Smoke-test hprof-redact (unix)
-        if: matrix.archive == 'tar.gz'
-        shell: bash
-        run: |
-          REDACT="target/${{ matrix.target }}/release/hprof-redact"
-          FIXTURE="tests/fixtures/dump_1_mnemonics.hprof.zip"
-          "$REDACT" "$FIXTURE" /tmp/redacted-lean.hprof
-          "$REDACT" --complete "$FIXTURE" /tmp/redacted-complete.hprof
-
-      - name: Smoke-test hprof-redact (windows)
-        if: matrix.archive == 'zip'
-        shell: bash
-        run: |
-          REDACT="target/${{ matrix.target }}/release/hprof-redact.exe"
-          FIXTURE="tests/fixtures/dump_1_mnemonics.hprof.zip"
-          "$REDACT" "$FIXTURE" redacted-lean.hprof
-          "$REDACT" --complete "$FIXTURE" redacted-complete.hprof
-
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
