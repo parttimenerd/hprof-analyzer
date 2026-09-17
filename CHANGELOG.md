@@ -2,6 +2,23 @@
 
 All notable changes to hprof-analyzer are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Browser UI: `?file=<url>` query parameter.** Opening the browser UI with
+  `?file=<url>` auto-loads without user interaction. A URL ending in `.hprof`,
+  `.gz`, or `.zip` is fetched and loaded via WASM; any other URL is treated as
+  a server base URL and auto-connected. Enables plugin-launched workflows such
+  as `hprof-analyzer server dump.hprof` opening
+  `https://parttimenerd.github.io/hprof-analyzer/?file=http://127.0.0.1:7070`.
+
+### Changed
+
+- **`hprof-redact` moved to its own workspace crate (`crates/hprof-redact`,
+  `publish = false`).** The binary no longer appears in `cargo install
+  hprof-analyzer`; it is built and distributed exclusively by CI.
+
 ## [0.3.0] — 2026-09-09
 
 ### Added
