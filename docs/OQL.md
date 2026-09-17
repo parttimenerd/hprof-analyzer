@@ -656,7 +656,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | Field paths: `s.fieldName`, `s.a.b` | |
 | MAT-API method aliases: `getObjectAddress()`, `getUsedHeapSize()`, `getKey()`, `getValue()`, `intValue()`, `size()`, … | method → attr/field rewrite |
 
-¹ Requires full analysis (`hprof-analyzer analyze` or `POST /analyze` on the server).
+¹ Requires full analysis (run `hprof-analyzer heap.hprof` / `hprof-analyzer heap load heap.hprof`, or `POST /analyze` on the HTTP server).
 
 ### Differences from MAT
 

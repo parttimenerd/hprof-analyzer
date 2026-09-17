@@ -25,10 +25,10 @@ than the `.hprof`, it prints "Reopening parsed heap dump file" and skips the
 parse entirely.
 
 If you also want hprof-analyzer's own report, you can generate both in one pass
-(single hprof read, shared pipeline) with the `--mat` flag on `analyze`:
+(single hprof read, shared pipeline) with the `--mat` flag:
 
 ```
-hprof-analyzer analyze dump.hprof --mat /path/to/dump-dir/
+hprof-analyzer dump.hprof report.html --mat /path/to/dump-dir/
 ```
 
 This is cheaper than running `analyze` then `mat caches` separately (two full
@@ -73,7 +73,7 @@ These are intentional divergences that MAT accepts at load time without error:
 hprof-analyzer mat caches <hprof> <dir> [--mat-binary <path>] [--trace-rss]
 
 # Combined analysis + cache generation (single hprof parse)
-hprof-analyzer analyze <hprof> --mat <dir> [--mat-binary <path>]
+hprof-analyzer <hprof> [output] --mat <dir> [--mat-binary <path>]
 ```
 
 `--mat-binary` points to the `MemoryAnalyzer` executable. When given,
