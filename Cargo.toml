@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/hprof-wasm"]
+members = [".", "crates/hprof-wasm", "crates/hprof-redact"]
 resolver = "2"
 
 [package]
@@ -34,11 +34,6 @@ exclude = [
 [[bin]]
 name = "hprof-analyzer"
 path = "src/main.rs"
-
-[[bin]]
-name = "hprof-redact"
-path = "src/bin/hprof-redact.rs"
-required-features = ["redact-bin"]
 
 [lib]
 name = "hprof_analyzer"

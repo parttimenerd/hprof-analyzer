@@ -87,7 +87,7 @@ jobs:
       - name: Build
         run: |
           cargo build --release --features native --target ${{ matrix.target }}
-          cargo build --release --features redact-bin --bin hprof-redact --target ${{ matrix.target }}
+          cargo build --release -p hprof-redact --target ${{ matrix.target }}
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'

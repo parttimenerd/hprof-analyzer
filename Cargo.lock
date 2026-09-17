@@ -960,6 +960,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hprof-redact"
+version = "0.3.0"
+dependencies = [
+ "flate2",
+ "hprof-analyzer",
+ "zip",
+]
+
+[[package]]
 name = "hprof-wasm"
 version = "0.1.0"
 dependencies = [
