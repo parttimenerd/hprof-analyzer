@@ -5676,7 +5676,7 @@ window._hprofLoadUrl = async (url, mode = 'oql-shell') => {
 
 // ── ?file=<url> auto-load ─────────────────────────────────────────────────────
 // If the page is opened with ?file=<url>, either connect to a server or fetch
-// and load the dump directly, without user interaction.
+// and load the dump directly, showing the mode-selection dialog.
 //
 // Server URL  (no dump extension): ?file=http://127.0.0.1:7070
 // Dump URL    (.hprof/.gz/.zip):   ?file=http://127.0.0.1:7070/file/<token>
@@ -5685,7 +5685,8 @@ window._hprofLoadUrl = async (url, mode = 'oql-shell') => {
   if (!fileParam) return;
   const isDump = /\.(hprof|hprof\.gz|hprof\.zip|gz|zip)(\?.*)?$/i.test(fileParam);
   if (isDump) {
-    window._hprofLoadUrl(fileParam);
+    const name = fileParam.split('/').pop().split('?')[0].replace(/\.hprof$/, '');
+    loadSampleDump({ path: fileParam, name });
   } else {
     // Treat as a server base URL — populate the input and trigger connect.
     const input = document.getElementById('server-url');
