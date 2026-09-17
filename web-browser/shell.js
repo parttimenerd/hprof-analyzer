@@ -5673,3 +5673,23 @@ window._hprofLoadUrl = async (url, mode = 'oql-shell') => {
     document.getElementById(btnId)?.click();
   }
 };
+
+// ── ?file=<url> auto-load ─────────────────────────────────────────────────────
+// If the page is opened with ?file=<url>, either connect to a server or fetch
+// and load the dump directly, without user interaction.
+//
+// Server URL  (no dump extension): ?file=http://127.0.0.1:7070
+// Dump URL    (.hprof/.gz/.zip):   ?file=http://127.0.0.1:7070/file/<token>
+(function autoLoadFromQueryParam() {
+  const fileParam = new URLSearchParams(location.search).get('file');
+  if (!fileParam) return;
+  const isDump = /\.(hprof|hprof\.gz|hprof\.zip|gz|zip)(\?.*)?$/i.test(fileParam);
+  if (isDump) {
+    window._hprofLoadUrl(fileParam);
+  } else {
+    // Treat as a server base URL — populate the input and trigger connect.
+    const input = document.getElementById('server-url');
+    if (input) input.value = fileParam;
+    connectToServer();
+  }
+})();
