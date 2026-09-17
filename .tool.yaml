@@ -187,7 +187,7 @@ how_to:
     For large dumps MAT's first parse can peak at ~55 GiB RSS. hprof-analyzer generates
     the same cache files with much lower memory usage:
     ```bash
-    hprof-analyzer mat caches heap.hprof /path/to/heap-dir/
+    hprof-analyzer mat caches heap.hprof
     ```
     Open `heap.hprof` in MAT as usual — it detects the cache and skips the expensive first parse.
 
