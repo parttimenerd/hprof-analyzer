@@ -18,7 +18,7 @@ Your JVM left behind a heap dump. `hprof-analyzer` turns it into answers — lea
 | **MCP server** — AI-assisted triage in Claude, Cline, and other agents | `hprof-analyzer mcp` |
 | **HTTP API** — persistent endpoint for the browser UI (large dumps) and LLM agents | `hprof-analyzer server heap.hprof` |
 | **Heap redaction** — zero primitive values before sharing, preserve object graph | `hprof-analyzer redact heap.hprof safe.hprof` |
-| **MAT cache generation** — low-RSS alternative to MAT's first-open parse | `hprof-analyzer mat caches heap.hprof /mat/` |
+| **MAT cache generation** — low-RSS alternative to MAT's first-open parse | `hprof-analyzer mat caches heap.hprof` |
 | **Browser UI** — WebAssembly, works offline, up to 3 GB | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
 | **Re-render saved reports** — JSON → HTML/Markdown without the original dump | `hprof-analyzer report.json report.html` |
 
@@ -435,7 +435,7 @@ MAT's first open of a 34 GB heap dump peaks at **~55 GB RSS** inside the JVM. hp
 
 ```sh
 # Generate MAT cache files (low RSS, no JVM tuning needed)
-hprof-analyzer mat caches heap.hprof /path/to/heap-dir/
+hprof-analyzer mat caches heap.hprof
 
 # Now open heap.hprof in MAT as usual — it detects the cache and skips parsing
 ```

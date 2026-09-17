@@ -13,8 +13,8 @@ generated them.
 ## Workflow
 
 ```
-# Step 1: generate the cache (fast, low RSS)
-hprof-analyzer mat caches dump.hprof /path/to/dump-dir/
+# Step 1: generate the cache (fast, low RSS) — files written alongside dump.hprof
+hprof-analyzer mat caches dump.hprof
 
 # Step 2: open in MAT as usual — it detects the cache and skips its parser
 # File → Open Heap Dump → pick dump.hprof in the same dir
@@ -52,8 +52,8 @@ hprof parses vs one).
 | `<dump>.index` | Java serialization | Master snapshot metadata (class cache, GC roots, loader labels) |
 
 MAT expects files named `<hprof-basename>.<suffix>` in the same directory as
-the `.hprof`. The `<dir>` argument to `mat caches` is where the `.hprof` lives
-(or a separate output directory if you prefer to keep them together).
+the `.hprof`. The optional `<dir>` argument to `mat caches` lets you write cache
+files to a different location; if omitted, they are written alongside the `.hprof`.
 
 ## Known differences from MAT's own output
 
@@ -69,8 +69,8 @@ These are intentional divergences that MAT accepts at load time without error:
 ## CLI reference
 
 ```
-# Standalone cache generation
-hprof-analyzer mat caches <hprof> <dir> [--mat-binary <path>] [--trace-rss]
+# Standalone cache generation (writes index files alongside the .hprof)
+hprof-analyzer mat caches <hprof> [dir] [--mat-binary <path>] [--trace-rss]
 
 # Combined analysis + cache generation (single hprof parse)
 hprof-analyzer <hprof> [output] --mat <dir> [--mat-binary <path>]
