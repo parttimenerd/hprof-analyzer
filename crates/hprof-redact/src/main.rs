@@ -71,16 +71,7 @@ fn main() {
 }
 
 fn run(input: &str, output: &str, mode: RedactMode) -> io::Result<()> {
-    let progress = |phase: &str, fraction: f64| {
-        // Only print to stderr when writing to a file (stdout might be piped).
-        if output != "-" {
-            if fraction == 0.0 {
-                eprintln!("{phase}…");
-            } else if fraction == 1.0 {
-                eprintln!("{phase} done");
-            }
-        }
-    };
+    let progress = |_phase: &str, _fraction: f64| {};
 
     // Build the HprofSource — stdin is buffered into memory so the two-pass
     // redactor can open it twice without seeking.
