@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload binary artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hprof-analyzer-linux
           path: target/release/hprof-analyzer
@@ -88,7 +88,7 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust nightly + rust-src (for wasm64)
         uses: dtolnay/rust-toolchain@nightly
@@ -111,7 +111,7 @@ jobs:
       # Download AFTER cache restore — rust-cache restores target/ and would
       # overwrite the artifact if this step came first.
       - name: Download binary artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: hprof-analyzer-linux
           path: target/release
@@ -159,11 +159,11 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   # Package the linux-gnu binary from build-test alongside hprof-redact.
   # Reuses the build-test artifact to avoid a duplicate full Rust build.
@@ -193,7 +193,7 @@ jobs:
           key: x86_64-unknown-linux-gnu
 
       - name: Download hprof-analyzer binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: hprof-analyzer-linux
           path: target/x86_64-unknown-linux-gnu/release
@@ -214,7 +214,7 @@ jobs:
           tar czf "$staging.tar.gz" "$staging"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: x86_64-unknown-linux-gnu
           path: hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz
@@ -304,7 +304,7 @@ jobs:
           echo "ASSET=$staging.zip" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
@@ -316,10 +316,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -345,7 +345,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -457,7 +457,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -568,10 +568,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
