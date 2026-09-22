@@ -732,13 +732,7 @@ fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
         RedactMode::Lean
     };
 
-    let progress = |phase: &str, fraction: f64| {
-        if fraction == 0.0 {
-            eprintln!("{phase}…");
-        } else if fraction == 1.0 {
-            eprintln!("{phase} done");
-        }
-    };
+    let progress = |_phase: &str, _fraction: f64| {};
 
     if lower.ends_with(".hprof.gz") {
         let file = File::create(output)?;
