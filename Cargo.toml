@@ -102,6 +102,8 @@ tempfile = "3"
 
 [build-dependencies]
 flate2 = "1"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+serde = { version = "1", features = ["derive"] }
 
 # Clippy is run in CI (see .github/workflows/ci.yml). Most lints are enforced;
 # the allows below are deliberate patterns in the memory-critical hot paths,

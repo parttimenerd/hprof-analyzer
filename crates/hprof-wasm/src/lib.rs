@@ -1499,7 +1499,7 @@ impl HprofSession {
         };
 
         let patterns = hprof_analyzer::secrets::SecretPatterns::new();
-        let findings = patterns.scan(&string_values);
+        let findings = patterns.scan(&string_values, &std::collections::HashMap::new());
 
         let findings_json: Vec<serde_json::Value> = findings
             .into_iter()
