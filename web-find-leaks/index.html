@@ -312,11 +312,12 @@ main {
 }
 
 /* ── Sections toggle ── */
-#upload-section { }
-#upload-section.hidden,
-#progress-section.hidden,
-#results-section.hidden,
-#error-box.hidden { display: none !important; }
+#upload-section,
+#progress-section,
+#results-section { display: none; }
+#upload-section.active,
+#progress-section.active,
+#results-section.active { display: block; }
 </style>
 </head>
 <body>
@@ -339,7 +340,7 @@ main {
 
   <div id="error-box" role="alert"></div>
 
-  <div id="upload-section">
+  <div id="upload-section" class="active">
     <div id="drop-zone" tabindex="0" role="button" aria-label="Drop heap dump file or click to browse">
       <input type="file" id="file-input" accept=".hprof,.gz,.zip">
       <div class="drop-icon">📂</div>
@@ -385,8 +386,6 @@ main {
 
 <script type="module">
 // ── WASM loading ────────────────────────────────────────────────────────────
-// Loads hprof_wasm.js + hprof_wasm_bg.wasm from ../wasm/ (relative to this page).
-// These are deployed by the CI build step.
 const WASM_BASE = new URL('../wasm/', location.href).href;
 
 let HprofSession = null;
@@ -410,40 +409,15 @@ async function initWasm() {
   wasmReady = true;
 }
 
-// ── Category icons ───────────────────────────────────────────────────────────
-// Patterns are defined in src/secrets.rs (PATTERN_SPECS) and run server-side
-// via session.find_secrets(). This map just adds display icons.
-const CATEGORY_ICONS = {
-  'JDBC URL with credentials':   '🗄️',
-  'OpenAI / Anthropic API key':  '🤖',
-  'HuggingFace token':           '🤖',
-  'AWS access key':              '☁️',
-  'Bearer token':                '🔑',
-  'Credit card number':          '💳',
-  'Private key / certificate':   '🔐',
-  'Password property value':     '🔒',
-  'Secret property value':       '🔒',
-  'Token property value':        '🔑',
-  'API key property value':      '🔑',
-  'GitHub token':                '🐙',
-  'Google API key':              '🔍',
-  'Slack token':                 '💬',
-  'High-entropy hex secret':     '🧮',
-};
-
-// ── Masking ─────────────────────────────────────────────────────────────────
-function maskValue(s) {
-  if (s.length <= 8) return '•'.repeat(s.length);
-  // Keep first 6 and last 4, mask middle
-  const keep_start = Math.min(6, Math.floor(s.length * 0.25));
-  const keep_end = Math.min(4, Math.floor(s.length * 0.15));
-  const middle = s.length - keep_start - keep_end;
-  if (middle <= 0) return s.slice(0, keep_start) + '•'.repeat(4);
-  return s.slice(0, keep_start) + '•'.repeat(Math.min(middle, 12)) + s.slice(s.length - keep_end);
-}
-
 // ── UI helpers ───────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
+
+function showSection(id) {
+  for (const s of ['upload-section', 'progress-section', 'results-section']) {
+    const el = $(s);
+    el.classList.toggle('active', s === id);
+  }
+}
 
 function setProgress(label, pct) {
   $('progress-label').textContent = label;
@@ -459,12 +433,6 @@ function logLine(text, cls = '') {
   log.scrollTop = log.scrollHeight;
 }
 
-function showSection(id) {
-  for (const s of ['upload-section', 'progress-section', 'results-section']) {
-    $(s).style.display = s === id ? '' : 'none';
-  }
-}
-
 function showError(msg) {
   const box = $('error-box');
   box.textContent = '⚠ ' + msg;
@@ -472,7 +440,17 @@ function showError(msg) {
   showSection('upload-section');
 }
 
-// ── Drop zone wiring ─────────────────────────────────────────────────────────
+// ── Masking ──────────────────────────────────────────────────────────────────
+function maskValue(s) {
+  if (s.length <= 8) return '•'.repeat(s.length);
+  const keepStart = Math.min(6, Math.floor(s.length * 0.25));
+  const keepEnd = Math.min(4, Math.floor(s.length * 0.15));
+  const middle = s.length - keepStart - keepEnd;
+  if (middle <= 0) return s.slice(0, keepStart) + '•'.repeat(4);
+  return s.slice(0, keepStart) + '•'.repeat(Math.min(middle, 12)) + s.slice(s.length - keepEnd);
+}
+
+// ── Drop zone ────────────────────────────────────────────────────────────────
 let selectedFile = null;
 
 const dropZone = $('drop-zone');
@@ -480,7 +458,6 @@ const fileInput = $('file-input');
 
 dropZone.addEventListener('click', () => fileInput.click());
 dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
-
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
 dropZone.addEventListener('drop', e => {
@@ -489,10 +466,7 @@ dropZone.addEventListener('drop', e => {
   const f = e.dataTransfer.files[0];
   if (f) setFile(f);
 });
-
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) setFile(fileInput.files[0]);
-});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
 
 function setFile(f) {
   selectedFile = f;
@@ -517,6 +491,132 @@ function reset() {
 $('btn-reset').addEventListener('click', reset);
 $('btn-reset2').addEventListener('click', reset);
 
+// ── Core scan: runs find_secrets() via WASM betterleaks engine ────────────────
+// Falls back to OQL patterns if find_secrets isn't available in the deployed WASM.
+// OQL LIKE uses full-match Java regex — wrap patterns in .* for substring match.
+const OQL_PATTERNS = [
+  { category: 'JDBC URL with credentials',        oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE ".*jdbc:.*password=.*"` },
+  { category: 'JDBC URL with credentials',        oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE ".*jdbc:.*passwd=.*"` },
+  { category: 'OpenAI / Anthropic API key',       oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "sk-[A-Za-z0-9_-]{20,}"` },
+  { category: 'HuggingFace token',                oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "hf_[A-Za-z0-9]{16,}"` },
+  { category: 'AWS access key',                   oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "AKIA[0-9A-Z]{16}"` },
+  { category: 'Bearer token',                     oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE ".*Bearer [A-Za-z0-9._~+/=-]{20,}.*"` },
+  { category: 'Private key / certificate header', oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "-----BEGIN [A-Z ]+ KEY-----.*"` },
+  { category: 'Password property value',          oql: `SELECT toString(v) FROM java.lang.String v WHERE toString(v) LIKE "[Pp]assword[= :]+[^ ]{6,}.*"` },
+];
+
+async function scanWithFindSecrets(session) {
+  if (typeof session.find_secrets === 'function') {
+    logLine('Running betterleaks pattern engine…');
+    setProgress('Scanning for secrets…', 42);
+    const json = session.find_secrets();
+    const result = JSON.parse(json);
+    if (!result.ok) throw new Error(result.error?.message || 'find_secrets failed');
+    return result.findings; // [{category, value, locations}]
+  }
+
+  // Fallback: OQL patterns (older WASM builds without find_secrets)
+  logLine('Running OQL pattern scan (betterleaks engine not available in this WASM build)…');
+  const findings = [];
+  const total = OQL_PATTERNS.length;
+  for (let i = 0; i < total; i++) {
+    const p = OQL_PATTERNS[i];
+    setProgress(`Checking: ${p.category}…`, 42 + Math.round(((i + 0.5) / total) * 50));
+    logLine(`  checking ${p.category}…`);
+    try {
+      const result = JSON.parse(session.query(p.oql + ' LIMIT 50'));
+      const rows = result.rows || [];
+      const seen = new Set();
+      for (const row of rows) {
+        const val = Array.isArray(row) ? row[0] : (row[Object.keys(row)[0]] ?? null);
+        if (val != null && !seen.has(val)) {
+          seen.add(val);
+          findings.push({ category: p.category, value: String(val), locations: [] });
+        }
+      }
+      if (seen.size > 0) logLine(`  ⚠ found ${seen.size} match(es)`, 'hit');
+      else logLine(`  ✓ none found`, 'ok');
+    } catch (e) {
+      logLine(`  ⚠ query error: ${e.message}`);
+    }
+  }
+  return findings;
+}
+
+// ── Render results ───────────────────────────────────────────────────────────
+function renderResults(findings) {
+  const list = $('findings-list');
+  list.innerHTML = '';
+  showSection('results-section');
+
+  if (findings.length === 0) {
+    $('results-title').textContent = 'No secrets found';
+    $('results-badge').className = 'badge-clean';
+    $('results-badge').textContent = 'clean';
+    $('cta-box').style.display = 'none';
+    $('clean-cta-box').style.display = 'block';
+    return;
+  }
+
+  // Group by category
+  const byCategory = new Map();
+  for (const f of findings) {
+    if (!byCategory.has(f.category)) byCategory.set(f.category, []);
+    byCategory.get(f.category).push(f);
+  }
+
+  $('results-title').textContent = `Found ${findings.length} secret${findings.length !== 1 ? 's' : ''} in ${byCategory.size} categor${byCategory.size !== 1 ? 'ies' : 'y'}`;
+  $('results-badge').className = 'badge-found';
+  $('results-badge').textContent = findings.length + ' found';
+  $('cta-box').style.display = 'block';
+  $('clean-cta-box').style.display = 'none';
+
+  for (const [category, items] of byCategory) {
+    const card = document.createElement('div');
+    card.className = 'finding-card';
+
+    const catEl = document.createElement('div');
+    catEl.className = 'finding-category';
+    catEl.textContent = category;
+    card.appendChild(catEl);
+
+    // Show up to 3 values, then "+N more"
+    const shown = items.slice(0, 3);
+    const extra = items.length - shown.length;
+    for (const f of shown) {
+      const valEl = document.createElement('div');
+      valEl.className = 'finding-value';
+      valEl.setAttribute('title', 'Click to reveal');
+      valEl.style.cursor = 'pointer';
+      let revealed = false;
+      valEl.textContent = maskValue(f.value);
+      valEl.addEventListener('click', () => {
+        revealed = !revealed;
+        valEl.textContent = revealed ? f.value : maskValue(f.value);
+        valEl.style.color = revealed ? 'var(--red)' : '';
+      });
+      card.appendChild(valEl);
+
+      if (f.locations?.length) {
+        const locEl = document.createElement('div');
+        locEl.className = 'finding-meta';
+        locEl.textContent = f.locations.map(([cls, fld]) => {
+          const shortCls = cls.split('.').pop();
+          return `${shortCls}.${fld}`;
+        }).slice(0, 2).join(', ') + (f.locations.length > 2 ? ` +${f.locations.length - 2} more` : '');
+        card.appendChild(locEl);
+      }
+    }
+    if (extra > 0) {
+      const moreEl = document.createElement('div');
+      moreEl.className = 'finding-count';
+      moreEl.textContent = `+ ${extra} more value${extra !== 1 ? 's' : ''}`;
+      card.appendChild(moreEl);
+    }
+    list.appendChild(card);
+  }
+}
+
 // ── Main scan flow ───────────────────────────────────────────────────────────
 $('btn-scan').addEventListener('click', runScan);
 
@@ -537,22 +637,18 @@ async function runScan() {
 
   if (!wasmReady) {
     setProgress('Loading analysis engine…', 5);
-    try {
-      await initWasm();
-    } catch (e) {
-      showError('Failed to load analysis engine: ' + e.message + '. Make sure you are serving this page from a web server (not file://).');
+    try { await initWasm(); } catch (e) {
+      showError('Failed to load analysis engine: ' + e.message);
       return;
     }
   }
 
   setProgress('Parsing heap dump…', 8);
   logLine('Loading heap dump…');
-
   let session;
   try {
     session = await HprofSession.load_with_progress(bytes, selectedFile.name, (phase, frac) => {
-      const pct = 8 + Math.round(frac * 30);
-      setProgress(phase, pct);
+      setProgress(phase, 8 + Math.round(frac * 32));
     });
   } catch (e) {
     showError('Failed to parse heap dump: ' + e);
@@ -560,34 +656,28 @@ async function runScan() {
   }
 
   logLine('Heap loaded. Scanning for secrets…', 'ok');
-  setProgress('Scanning for secrets…', 40);
 
-  let findings = [];
+  let findings;
   try {
-    const resultJson = session.find_secrets();
-    const result = JSON.parse(resultJson);
-    if (!result.ok) throw new Error(result.error?.message || 'unknown error');
-    findings = result.findings || [];
-    logLine(`  scan complete — ${findings.length} finding(s)`, findings.length > 0 ? 'hit' : 'ok');
+    findings = await scanWithFindSecrets(session);
+    logLine(`Found ${findings.length} finding${findings.length !== 1 ? 's' : ''}.`, findings.length ? 'hit' : 'ok');
   } catch (e) {
-    showError('Scan failed: ' + e.message);
+    showError('Secret scan failed: ' + e.message);
     session.free();
     return;
   }
 
   session.free();
   setProgress('Done', 100);
-
   renderResults(findings);
 }
 
-// ── Demo mode (called from mock-upload page with ?demo=1) ───────────────────
+// ── Demo mode (?demo=1) ──────────────────────────────────────────────────────
 async function runDemo() {
   showSection('progress-section');
   $('pattern-log').innerHTML = '';
   setProgress('Loading sample dump…', 2);
 
-  // Fetch the pre-built fixture
   const fixtureUrl = new URL('../samples/spring-petclinic-h2-ai.hprof.gz', location.href).href;
   let bytes;
   try {
@@ -601,9 +691,7 @@ async function runDemo() {
 
   if (!wasmReady) {
     setProgress('Loading analysis engine…', 5);
-    try {
-      await initWasm();
-    } catch (e) {
+    try { await initWasm(); } catch (e) {
       showError('Failed to load analysis engine: ' + e.message);
       return;
     }
@@ -611,11 +699,10 @@ async function runDemo() {
 
   setProgress('Parsing heap dump…', 8);
   logLine('Loading Spring PetClinic + H2 + Spring AI sample dump…');
-
   let session;
   try {
     session = await HprofSession.load_with_progress(bytes, 'spring-petclinic-h2-ai.hprof.gz', (phase, frac) => {
-      setProgress(phase, 8 + Math.round(frac * 30));
+      setProgress(phase, 8 + Math.round(frac * 32));
     });
   } catch (e) {
     showError('Failed to parse sample dump: ' + e);
@@ -624,15 +711,12 @@ async function runDemo() {
 
   logLine('Sample heap loaded. Scanning for secrets…', 'ok');
 
-  let findings = [];
+  let findings;
   try {
-    const resultJson = session.find_secrets();
-    const result = JSON.parse(resultJson);
-    if (!result.ok) throw new Error(result.error?.message || 'unknown error');
-    findings = result.findings || [];
-    logLine(`  scan complete — ${findings.length} finding(s)`, findings.length > 0 ? 'hit' : 'ok');
+    findings = await scanWithFindSecrets(session);
+    logLine(`Found ${findings.length} finding${findings.length !== 1 ? 's' : ''}.`, findings.length ? 'hit' : 'ok');
   } catch (e) {
-    showError('Scan failed: ' + e.message);
+    showError('Secret scan failed: ' + e.message);
     session.free();
     return;
   }
@@ -642,48 +726,10 @@ async function runDemo() {
   renderResults(findings);
 }
 
-// ── Render results ───────────────────────────────────────────────────────────
-function renderResults(findings) {
-  const list = $('findings-list');
-  list.innerHTML = '';
-
-  showSection('results-section');
-
-  if (findings.length === 0) {
-    $('results-title').textContent = 'No secrets found';
-    $('results-badge').className = 'badge-clean';
-    $('results-badge').textContent = 'clean';
-    $('cta-box').style.display = 'none';
-    $('clean-cta-box').style.display = 'block';
-    return;
-  }
-
-  $('results-title').textContent = `Found ${findings.length} secret${findings.length > 1 ? 's' : ''}`;
-  $('results-badge').className = 'badge-found';
-  $('results-badge').textContent = findings.length + ' found';
-  $('cta-box').style.display = 'block';
-  $('clean-cta-box').style.display = 'none';
-
-  for (const f of findings) {
-    const card = document.createElement('div');
-    card.className = 'finding-card';
-    card.innerHTML = `
-      <div class="finding-category">${CATEGORY_ICONS[f.category] ?? '⚠️'} ${f.category}</div>
-      <div class="finding-value">${maskValue(f.value)}</div>
-      <div class="finding-meta">Found in java.lang.String (heap memory)</div>
-    `;
-    list.appendChild(card);
-  }
-}
-
-// ── Auto-run demo if ?demo=1 ─────────────────────────────────────────────────
 if (new URLSearchParams(location.search).get('demo') === '1') {
-  // Hide upload section, go straight to demo scan
-  showSection('progress-section');
   runDemo();
 }
 
-// Pre-load WASM in background for snappier UX
 initWasm().catch(() => {});
 </script>
 </body>
