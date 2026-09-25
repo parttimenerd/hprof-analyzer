@@ -105,6 +105,10 @@ pub struct HprofSession {
     cache: Option<hprof_analyzer::query::run::ReplCache>,
     cached_report_html: Option<String>,
     exploration: Option<ExplorationHolder>,
+    /// Cached attribution map from `find_secrets_prepare()`.
+    cached_attribution: Option<std::collections::HashMap<u32, Vec<(String, String)>>>,
+    /// Cached string values map from `find_secrets_prepare()`.
+    cached_string_values: Option<std::collections::HashMap<u32, String>>,
 }
 
 #[wasm_bindgen]
@@ -199,6 +203,8 @@ impl HprofSession {
             cache: Some(cache),
             cached_report_html: None,
             exploration: None,
+            cached_attribution: None,
+            cached_string_values: None,
         })
     }
 
@@ -523,6 +529,8 @@ impl HprofSession {
             cache: Some(cache),
             cached_report_html: None,
             exploration: None,
+            cached_attribution: None,
+            cached_string_values: None,
         })
     }
 
@@ -1462,17 +1470,11 @@ impl HprofSession {
 
 #[wasm_bindgen]
 impl HprofSession {
-    /// Scan for sensitive data in heap strings using built-in patterns.
+    /// Stage 1 of secret scanning: build string values and attribution map.
     ///
-    /// Builds the string-values map once (single file scan), then applies all
-    /// patterns in-memory — much faster than one `query()` call per pattern.
-    ///
-    /// Returns JSON:
-    /// ```json
-    /// {"ok":true,"findings":[{"category":"...","value":"..."},...]}
-    /// ```
-    /// or `{"ok":false,"error":{"message":"..."}}` on failure.
-    pub fn find_secrets(&mut self) -> String {
+    /// Call this first, update your progress UI, then call `find_secrets_scan()`.
+    /// Returns `{"ok":true}` or `{"ok":false,"error":{"message":"..."}}`.
+    pub fn find_secrets_prepare(&mut self) -> String {
         if self.cache.is_none() {
             match hprof_analyzer::query::run::ReplCache::build(&self.source, true) {
                 Ok(c) => self.cache = Some(c),
@@ -1510,8 +1512,35 @@ impl HprofSession {
             }
         };
 
+        self.cached_string_values = Some(string_values);
+        self.cached_attribution = Some(attribution);
+        serde_json::json!({ "ok": true }).to_string()
+    }
+
+    /// Stage 2 of secret scanning: match patterns against the prepared string map.
+    ///
+    /// Must be called after `find_secrets_prepare()`.
+    /// Returns JSON:
+    /// ```json
+    /// {"ok":true,"findings":[{"category":"...","value":"...","locations":[[cls,field],...]},...]}
+    /// ```
+    /// or `{"ok":false,"error":{"message":"..."}}` on failure.
+    pub fn find_secrets_scan(&mut self) -> String {
+        let string_values = match self.cached_string_values.as_ref() {
+            Some(sv) => sv,
+            None => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": { "message": "call find_secrets_prepare() first" }
+                })
+                .to_string();
+            }
+        };
+        let empty = std::collections::HashMap::new();
+        let attribution = self.cached_attribution.as_ref().unwrap_or(&empty);
+
         let patterns = hprof_analyzer::secrets::SecretPatterns::new();
-        let findings = patterns.scan(&string_values, &attribution);
+        let findings = patterns.scan(string_values, attribution);
 
         let findings_json: Vec<serde_json::Value> = findings
             .into_iter()
@@ -1529,7 +1558,34 @@ impl HprofSession {
             })
             .collect();
 
+        // Free the cached maps — no longer needed.
+        self.cached_string_values = None;
+        self.cached_attribution = None;
+
         serde_json::json!({ "ok": true, "findings": findings_json }).to_string()
+    }
+
+    /// Scan for sensitive data in heap strings using built-in betterleaks patterns.
+    ///
+    /// Convenience wrapper that calls `find_secrets_prepare()` + `find_secrets_scan()`
+    /// in one shot (no progress feedback between stages). Prefer the two-stage API
+    /// when you want to show progress.
+    ///
+    /// Returns JSON:
+    /// ```json
+    /// {"ok":true,"findings":[{"category":"...","value":"..."},...]}
+    /// ```
+    /// or `{"ok":false,"error":{"message":"..."}}` on failure.
+    pub fn find_secrets(&mut self) -> String {
+        let prep = self.find_secrets_prepare();
+        let ok: bool = serde_json::from_str::<serde_json::Value>(&prep)
+            .ok()
+            .and_then(|v| v.get("ok").and_then(|v| v.as_bool()))
+            .unwrap_or(false);
+        if !ok {
+            return prep;
+        }
+        self.find_secrets_scan()
     }
 
     /// Redact a heap dump in memory and return the redacted raw `.hprof` bytes.

@@ -508,13 +508,31 @@ const OQL_PATTERNS = [
 ];
 
 async function scanWithFindSecrets(session) {
+  if (typeof session.find_secrets_prepare === 'function') {
+    logLine('Building string attribution map…');
+    setProgress('Building attribution…', 42);
+    // yield to let the browser repaint before the blocking WASM call
+    await new Promise(r => setTimeout(r, 0));
+    const prepJson = session.find_secrets_prepare();
+    const prep = JSON.parse(prepJson);
+    if (!prep.ok) throw new Error(prep.error?.message || 'find_secrets_prepare failed');
+
+    logLine('Matching betterleaks patterns…');
+    setProgress('Matching patterns…', 72);
+    await new Promise(r => setTimeout(r, 0));
+    const scanJson = session.find_secrets_scan();
+    const result = JSON.parse(scanJson);
+    if (!result.ok) throw new Error(result.error?.message || 'find_secrets_scan failed');
+    return result.findings;
+  }
   if (typeof session.find_secrets === 'function') {
     logLine('Running betterleaks pattern engine…');
     setProgress('Scanning for secrets…', 42);
+    await new Promise(r => setTimeout(r, 0));
     const json = session.find_secrets();
     const result = JSON.parse(json);
     if (!result.ok) throw new Error(result.error?.message || 'find_secrets failed');
-    return result.findings; // [{category, value, locations}]
+    return result.findings;
   }
 
   // Fallback: OQL patterns (older WASM builds without find_secrets)
