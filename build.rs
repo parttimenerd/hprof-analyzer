@@ -177,6 +177,11 @@ struct BetterleaksRule {
     description: String,
     #[serde(default)]
     regex: Option<String>,
+    // "low" confidence rules (e.g. generic-api-key, generic-password) require
+    // their complex entropy+blocklist filter to avoid mass false positives on
+    // heap strings. We skip them for standalone matching.
+    #[serde(default)]
+    confidence: Option<String>,
 }
 
 /// Returns true for patterns that require surrounding variable-name context
@@ -421,6 +426,12 @@ fn codegen_secret_patterns() {
             Some(r) => r,
             None => continue,
         };
+        // Skip low-confidence rules regardless of whether they're context-dependent or
+        // standalone: their betterleaks filter (entropy checks, thousands-word blocklist)
+        // is not implemented here, so they produce mass false positives on JVM heap strings.
+        if rule.confidence.as_deref() == Some("low") {
+            continue;
+        }
         if is_context_dependent(regex_raw) {
             if let Some((kw, val)) = extract_context_pattern(regex_raw) {
                 let category = make_category(&rule.id, &rule.description);
