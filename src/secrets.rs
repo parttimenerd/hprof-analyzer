@@ -365,10 +365,13 @@ mod tests {
 
     #[test]
     fn password_equals() {
-        // betterleaks generic-password category
+        // The generic-password rule is excluded (conf=low, noisy on heap strings).
+        // A different rule still matches the `password=` key pattern.
         let r = scan(&["password=hunter2abc"]);
-        assert!(!r.is_empty());
-        assert_eq!(r[0].category, "Hardcoded password literal");
+        assert!(
+            !r.is_empty(),
+            "expected at least one finding for password= pattern"
+        );
     }
 
     #[test]
