@@ -155,9 +155,6 @@ pub struct AnalyzeOptions {
     /// Compute per-class reference-field statistics (null/non-null counts, total
     /// retained size of pointees). Opt-in; off by default. Adds O(n) pass.
     pub field_stats: bool,
-    /// Run secret detection and embed findings in the report. Opt-in; off by default.
-    /// Adds a full-heap string scan + referrer attribution pass.
-    pub detect_secrets: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -209,7 +206,6 @@ impl DetailLevel {
             bundle_path: None,
             skip_report: false,
             field_stats: false,
-            detect_secrets: false,
         }
     }
 }
