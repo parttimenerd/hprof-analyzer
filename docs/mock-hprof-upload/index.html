@@ -419,25 +419,46 @@ function setFile(f) {
 
 btnAnalyze.addEventListener('click', startFakeAnalysis);
 
+async function storeFileForHandoff(file) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('hprof-handoff', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('files');
+    req.onsuccess = e => {
+      const db = e.target.result;
+      const tx = db.transaction('files', 'readwrite');
+      tx.objectStore('files').put({ name: file.name, size: file.size, file }, 'pending');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 const STAGES = [
   { label: 'Uploading…',            sub: 'Transferring your heap dump to our analysis servers',  pct: 22, ms: 900 },
   { label: 'Upload complete',       sub: 'Verifying file integrity',                              pct: 35, ms: 500 },
   { label: 'Parsing heap dump…',    sub: 'Reading object graph and class hierarchy',              pct: 55, ms: 900 },
-  { label: 'Detecting leaks…',      sub: 'Running retention analysis and dominator algorithm',   pct: 75, ms: 900 },
-  { label: 'Building report…',      sub: 'Generating leak suspects and histogram',               pct: 92, ms: 700 },
+  { label: 'Scanning for secrets…', sub: 'Checking strings against 460 betterleaks patterns',    pct: 75, ms: 900 },
+  { label: 'Building report…',      sub: 'Generating findings and attribution',                   pct: 92, ms: 700 },
   { label: 'Finalizing…',           sub: 'Almost ready',                                          pct: 100, ms: 400 },
 ];
 
-function startFakeAnalysis() {
+async function startFakeAnalysis() {
+  const f = fileInput.files[0];
   document.getElementById('form-section').style.display = 'none';
   const overlay = document.getElementById('progress-overlay');
   overlay.classList.add('active');
 
+  // Store the real file for pick-up by find-leaks, if one was selected.
+  const dest = f ? '../find-leaks/?handoff=1' : '../find-leaks/?demo=1';
+  if (f) {
+    try { await storeFileForHandoff(f); } catch (_) { /* fall back to demo */ }
+  }
+
   let i = 0;
   function step() {
     if (i >= STAGES.length) {
-      // Redirect to find-leaks in demo mode
-      window.location.href = '../find-leaks/?demo=1';
+      window.location.href = dest;
       return;
     }
     const s = STAGES[i++];
