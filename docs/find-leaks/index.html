@@ -361,6 +361,8 @@ main {
     <div class="results-header">
       <h2 id="results-title">Results</h2>
       <span id="results-badge"></span>
+      <button class="btn-secondary" id="btn-show-all" style="display:none;margin-left:auto">Show all</button>
+      <button class="btn-secondary" id="btn-reveal" style="display:none">Reveal values</button>
     </div>
     <div class="findings-list" id="findings-list"></div>
     <div class="cta-box" id="cta-box" style="display:none">
@@ -571,50 +573,81 @@ function renderResults(findings) {
   $('cta-box').style.display = 'block';
   $('clean-cta-box').style.display = 'none';
 
-  for (const [category, items] of byCategory) {
-    const card = document.createElement('div');
-    card.className = 'finding-card';
+  let verbatim = false;
+  let showAll = false;
+  const hasExtra = findings.length > byCategory.size * 3;
 
-    const catEl = document.createElement('div');
-    catEl.className = 'finding-category';
-    catEl.textContent = category;
-    card.appendChild(catEl);
+  const btnReveal = $('btn-reveal');
+  const btnShowAll = $('btn-show-all');
+  btnReveal.style.display = '';
+  if (hasExtra) btnShowAll.style.display = '';
 
-    // Show up to 3 values, then "+N more"
-    const shown = items.slice(0, 3);
-    const extra = items.length - shown.length;
-    for (const f of shown) {
-      const valEl = document.createElement('div');
-      valEl.className = 'finding-value';
-      valEl.setAttribute('title', 'Click to reveal');
-      valEl.style.cursor = 'pointer';
-      let revealed = false;
-      valEl.textContent = maskValue(f.value);
-      valEl.addEventListener('click', () => {
-        revealed = !revealed;
-        valEl.textContent = revealed ? f.value : maskValue(f.value);
-        valEl.style.color = revealed ? 'var(--red)' : '';
-      });
-      card.appendChild(valEl);
+  function rebuild() {
+    const list = $('findings-list');
+    list.innerHTML = '';
+    for (const [category, items] of byCategory) {
+      const card = document.createElement('div');
+      card.className = 'finding-card';
 
-      if (f.locations?.length) {
-        const locEl = document.createElement('div');
-        locEl.className = 'finding-meta';
-        locEl.textContent = f.locations.map(([cls, fld]) => {
-          const shortCls = cls.split('.').pop();
-          return `${shortCls}.${fld}`;
-        }).slice(0, 2).join(', ') + (f.locations.length > 2 ? ` +${f.locations.length - 2} more` : '');
-        card.appendChild(locEl);
+      const catEl = document.createElement('div');
+      catEl.className = 'finding-category';
+      catEl.textContent = category;
+      card.appendChild(catEl);
+
+      const shown = showAll ? items : items.slice(0, 3);
+      const extra = items.length - shown.length;
+      for (const f of shown) {
+        const valEl = document.createElement('div');
+        valEl.className = 'finding-value';
+        valEl.style.color = verbatim ? 'var(--red)' : '';
+        valEl.style.cursor = verbatim ? 'default' : 'pointer';
+        valEl.title = verbatim ? '' : 'Click to reveal';
+        valEl.textContent = verbatim ? f.value : maskValue(f.value);
+        if (!verbatim) {
+          let revealed = false;
+          valEl.addEventListener('click', () => {
+            revealed = !revealed;
+            valEl.textContent = revealed ? f.value : maskValue(f.value);
+            valEl.style.color = revealed ? 'var(--red)' : '';
+          });
+        }
+        card.appendChild(valEl);
+
+        if (f.locations?.length) {
+          const locEl = document.createElement('div');
+          locEl.className = 'finding-meta';
+          locEl.textContent = f.locations.map(([cls, fld]) => {
+            const shortCls = cls.split('.').pop();
+            return `${shortCls}.${fld}`;
+          }).slice(0, 2).join(', ') + (f.locations.length > 2 ? ` +${f.locations.length - 2} more` : '');
+          card.appendChild(locEl);
+        }
       }
+      if (extra > 0) {
+        const moreEl = document.createElement('div');
+        moreEl.className = 'finding-count';
+        moreEl.textContent = `+ ${extra} more value${extra !== 1 ? 's' : ''}`;
+        card.appendChild(moreEl);
+      }
+      list.appendChild(card);
     }
-    if (extra > 0) {
-      const moreEl = document.createElement('div');
-      moreEl.className = 'finding-count';
-      moreEl.textContent = `+ ${extra} more value${extra !== 1 ? 's' : ''}`;
-      card.appendChild(moreEl);
-    }
-    list.appendChild(card);
   }
+
+  btnReveal.onclick = () => {
+    verbatim = !verbatim;
+    btnReveal.textContent = verbatim ? 'Hide values' : 'Reveal values';
+    btnReveal.style.borderColor = verbatim ? 'var(--red)' : '';
+    btnReveal.style.color = verbatim ? 'var(--red)' : '';
+    rebuild();
+  };
+
+  btnShowAll.onclick = () => {
+    showAll = !showAll;
+    btnShowAll.textContent = showAll ? 'Show less' : 'Show all';
+    rebuild();
+  };
+
+  rebuild();
 }
 
 // ── Main scan flow ───────────────────────────────────────────────────────────
