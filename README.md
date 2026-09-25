@@ -86,7 +86,7 @@ Drop a `.hprof` file onto the page and the analysis runs in your browser via Web
 
 Two companion demo pages show the tool in action:
 
-- **[Heap Dump Secret Finder](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — scan a heap dump for credentials, tokens, and API keys using the `--detect-secrets` flag, all in-browser.
+- **[Heap Dump Secret Finder](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — scan a heap dump for credentials, tokens, and API keys using `hprof-analyzer detect-secrets`, all in-browser.
 - **[HeapGuru mock site](https://parttimenerd.github.io/hprof-analyzer/mock-hprof-upload/)** — a realistic mock of a commercial heap-analysis SaaS, rendered entirely from a local `.hprof` without any upload.
 
 | Landing page | OQL shell | Leak suspects report |
