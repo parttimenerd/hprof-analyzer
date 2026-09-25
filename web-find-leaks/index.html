@@ -332,7 +332,7 @@ main {
 <main>
   <div class="hero">
     <h1><span class="icon">🔍</span>Heap Dump Secret Finder</h1>
-    <p>Drop your Java heap dump and discover what sensitive data is sitting in your JVM's memory — passwords, API keys, tokens, and more.</p>
+    <p>Heap dumps contain everything your JVM had in memory: passwords, API keys, tokens, connection strings. Treat them with care — don't share them blindly.</p>
     <div class="privacy-badge">
       🔒 Runs entirely in your browser — your dump never leaves your machine
     </div>
@@ -366,10 +366,10 @@ main {
     </div>
     <div class="findings-list" id="findings-list"></div>
     <div class="cta-box" id="cta-box" style="display:none">
-      <div class="cta-question">💡 Why does this matter?</div>
-      When you upload a heap dump to a free online analysis tool, <strong>all of the above goes to their servers</strong>. Database passwords, API keys, session tokens — everything your JVM had in memory at the time of the dump.
+      <div class="cta-question">💡 Keep your heap dump safe</div>
+      Heap dumps contain everything your JVM had in memory at the time of capture — database passwords, API keys, session tokens, internal URLs. <strong>Treat them like credentials: don't share them without thinking twice.</strong>
       <br><br>
-      This scan ran entirely in your browser. <strong>Nothing was transmitted.</strong> The same analysis on a third-party server hands them your secrets.
+      This scan ran entirely in your browser. <strong>Nothing was transmitted.</strong> If you need to share a dump for analysis, consider redacting it first.
       <div class="link-row">
         <a class="btn-secondary" href="../">Full heap analysis (also in-browser)</a>
         <button class="btn-secondary" id="btn-reset">Scan another dump</button>
