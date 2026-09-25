@@ -1503,7 +1503,18 @@ impl HprofSession {
 
         let findings_json: Vec<serde_json::Value> = findings
             .into_iter()
-            .map(|f| serde_json::json!({ "category": f.category, "value": f.value }))
+            .map(|f| {
+                let locations: Vec<serde_json::Value> = f
+                    .locations
+                    .iter()
+                    .map(|(cls, field)| serde_json::json!([cls, field]))
+                    .collect();
+                serde_json::json!({
+                    "category": f.category,
+                    "value": f.value,
+                    "locations": locations,
+                })
+            })
             .collect();
 
         serde_json::json!({ "ok": true, "findings": findings_json }).to_string()

@@ -202,6 +202,13 @@ struct Cli {
     #[arg(long)]
     field_stats: bool,
 
+    /// Scan the heap for secrets (API keys, passwords, tokens, connection
+    /// strings, etc.) and embed the findings in the HTML report. Uses all
+    /// betterleaks patterns plus heap-specific extras. Adds a string-scan
+    /// pass and a referrer-attribution pass.
+    #[arg(long)]
+    detect_secrets: bool,
+
     /// How many histogram rows (sorted by retained desc) get an expandable
     /// GC-root path in the report. Default 20; use 0 to disable. Overrides
     /// the value set by --detail. Analyze-only.
@@ -1636,6 +1643,7 @@ fn run_default(cli: Cli) {
             reachable_only: cli.reachable_only,
             ref_paths: cli.ref_paths,
             field_stats: cli.field_stats,
+            detect_secrets: cli.detect_secrets,
             obj_graph: cli.obj_graph.is_some() || cli.full_analysis,
             dev_report: cli.dev || cli.bundle_path.is_some(),
             bundle_path: cli.bundle_path.clone(),
@@ -4224,6 +4232,36 @@ fn run(
     attach_viz(&mut query_results, &collected);
     report.queries = std::mem::take(&mut query_results);
     report.truncated_input = truncated_input;
+
+    // Opt-in secret scan: builds a ReplCache (second parse pass) and runs
+    // full string extraction + referrer attribution.
+    if opts.detect_secrets {
+        use hprof_analyzer::query::run::ReplCache;
+        use hprof_analyzer::secrets::SecretPatterns;
+        use hprof_analyzer::source::HprofSource;
+        let sec_source = HprofSource::from(input);
+        match ReplCache::build(&sec_source, true) {
+            Err(e) => eprintln!("detect-secrets: failed to build cache: {e}"),
+            Ok(cache) => match cache.build_string_values() {
+                Err(e) => eprintln!("detect-secrets: failed to extract strings: {e}"),
+                Ok(string_values) => {
+                    let string_idxs = string_values.keys().copied().collect();
+                    let attribution = cache
+                        .build_string_referrers(&string_idxs, &string_values)
+                        .unwrap_or_default();
+                    report.secrets = SecretPatterns::new()
+                        .scan(&string_values, &attribution)
+                        .into_iter()
+                        .map(|f| report::SecretFinding {
+                            category: f.category,
+                            value: f.value,
+                            locations: f.locations,
+                        })
+                        .collect();
+                }
+            },
+        }
+    }
     let out_text = match format {
         OutputFormat::Md => {
             let md = report::render_markdown(&report);

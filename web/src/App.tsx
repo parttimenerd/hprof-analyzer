@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SecretFinding, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -351,6 +351,7 @@ function Nav({ report }: { report: Report }) {
   if ((report.leak_indicators?.direct_byte_buffer_capacity_sum ?? 0) > 0) addData("off-heap-nio", "Off-Heap NIO");
   if (report.alloc_sites?.traces_present && report.alloc_sites.sites.some(s => s.frames.length > 0)) addData("allocation-sites", "Allocation Sites");
   if (report.queries?.length) addData("custom-queries", "Custom Queries", String(report.queries.length));
+  if (report.secrets?.length) addData("secrets", "Secrets", String(report.secrets.length));
   if (report.obj_graph_flat) addData("object-graph", "Object Graph");
   if (report.type_ref_graph?.length) addData("type-ref-graph", "Type Graph");
 
@@ -10498,6 +10499,65 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
   );
 }
 
+function SecretsSection({ secrets }: { secrets: SecretFinding[] }) {
+  const [showValues, setShowValues] = React.useState(false);
+  const cols: TableColumn<SecretFinding>[] = [
+    {
+      id: "category",
+      name: "Category",
+      width: "220px",
+      selector: (r) => r.category,
+      sortable: true,
+    },
+    {
+      id: "location",
+      name: "Location",
+      width: "300px",
+      cell: (r) => {
+        if (!r.locations?.length) return <span style={{ color: "var(--muted)" }}>—</span>;
+        return (
+          <span title={r.locations.map(([c, f]) => `${c}.${f}`).join(", ")}>
+            {r.locations[0][0].split(".").pop()}.{r.locations[0][1]}
+            {r.locations.length > 1 && <span className="pill">+{r.locations.length - 1}</span>}
+          </span>
+        );
+      },
+      selector: (r) => r.locations?.[0] ? `${r.locations[0][0]}.${r.locations[0][1]}` : "",
+      sortable: true,
+    },
+    {
+      id: "value",
+      name: showValues ? "Value (visible)" : "Value (hidden)",
+      grow: 1,
+      cell: (r) => showValues
+        ? <code style={{ wordBreak: "break-all", fontSize: "0.8em" }}>{r.value.length > 120 ? r.value.slice(0, 120) + "…" : r.value}</code>
+        : <span style={{ color: "var(--muted)", fontStyle: "italic" }}>click "Show Values" to reveal</span>,
+      selector: (r) => r.value,
+    },
+  ];
+
+  return (
+    <section id="secrets" style={{ border: "1px solid var(--warn-border)", borderRadius: "var(--radius)", background: "var(--warn-bg)", marginBottom: "1.5rem", padding: "1rem 1.2rem" }}>
+      <h2 style={{ marginTop: 0 }}>⚠ Secrets Detected</h2>
+      <p className="subtitle">
+        Potential secrets found in heap strings — credentials, tokens, and API keys that should not be present in a production heap dump.
+        Values are hidden by default to avoid accidental exposure. Investigate and rotate any confirmed secrets.
+        Run with <code>--detect-secrets</code> to include attribution (which class field held the string).
+      </p>
+      <div style={{ marginBottom: "0.75rem" }}>
+        <button
+          onClick={() => setShowValues(v => !v)}
+          style={{ padding: "0.3rem 0.8rem", cursor: "pointer", borderRadius: "var(--radius)", border: "1px solid var(--warn-border)", background: showValues ? "var(--warn-border)" : "var(--card)", color: "var(--text)" }}
+        >
+          {showValues ? "Hide Values" : "Show Values"}
+        </button>
+        <span style={{ marginLeft: "0.75rem", color: "var(--muted)", fontSize: "0.85em" }}>{secrets.length} finding{secrets.length !== 1 ? "s" : ""}</span>
+      </div>
+      <StdTable columns={cols} data={secrets} searchKeys={["category", "value"]} defaultSortFieldId="category" />
+    </section>
+  );
+}
+
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow Size", <>an object's header plus its fields (and, for an array, its elements). Does <em>not</em> include referenced objects.</>],
@@ -12164,6 +12224,7 @@ export default function App({ report }: { report: Report }) {
       <DominatorDepthSection report={report} />
       <LeakIndicatorsSection data={report.leak_indicators} totalHeap={report.overview.total_shallow} />
       <CustomQueriesSection report={report} />
+      {report.secrets?.length ? <SecretsSection secrets={report.secrets} /> : null}
       <GlossarySection />
       <BackToTop />
       <footer className="report-footer">

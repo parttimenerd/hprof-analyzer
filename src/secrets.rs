@@ -23,7 +23,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretFinding {
     /// Human-readable category label.
-    pub category: &'static str,
+    pub category: String,
     /// The raw matched string value.
     pub value: String,
     /// Where this String was referenced from: (owner_class_name, field_name).
@@ -180,7 +180,7 @@ impl SecretPatterns {
                         .is_none()
                     {
                         findings.push(SecretFinding {
-                            category: pattern.category,
+                            category: pattern.category.to_owned(),
                             value: value.clone(),
                             locations: locations.clone(),
                         });
@@ -208,7 +208,7 @@ impl SecretPatterns {
                         .is_none()
                     {
                         findings.push(SecretFinding {
-                            category: pattern.category,
+                            category: pattern.category.to_owned(),
                             value: value.clone(),
                             locations: matched_locs,
                         });
@@ -628,7 +628,7 @@ mod tests {
             SecretPatterns::new().scan(&string_values, &std::collections::HashMap::new());
 
         let categories: std::collections::HashSet<&str> =
-            findings.iter().map(|f| f.category).collect();
+            findings.iter().map(|f| f.category.as_str()).collect();
 
         assert!(
             categories.contains("JDBC URL with credentials"),
