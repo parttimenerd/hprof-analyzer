@@ -1498,8 +1498,20 @@ impl HprofSession {
             }
         };
 
+        let string_idxs: std::collections::HashSet<u32> = string_values.keys().copied().collect();
+        let attribution = match cache.build_string_referrers(&string_idxs, &string_values) {
+            Ok(a) => a,
+            Err(e) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": { "message": e.to_string() }
+                })
+                .to_string();
+            }
+        };
+
         let patterns = hprof_analyzer::secrets::SecretPatterns::new();
-        let findings = patterns.scan(&string_values, &std::collections::HashMap::new());
+        let findings = patterns.scan(&string_values, &attribution);
 
         let findings_json: Vec<serde_json::Value> = findings
             .into_iter()

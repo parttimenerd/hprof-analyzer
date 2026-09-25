@@ -424,8 +424,10 @@ enum Cmd {
     /// credentials left in JVM memory. Patterns sourced from betterleaks
     /// (https://github.com/betterleaks/betterleaks, MIT License).
     ///
-    /// Prints one finding per line to stdout:
-    ///   CATEGORY\tVALUE
+    /// Prints one finding per line to stdout (values masked by default):
+    ///   CATEGORY\tCLASS.FIELD\tVALUE
+    ///
+    /// Use --verbatim to print secret values in plain text.
     DetectSecrets {
         /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
         #[arg(value_hint = ValueHint::FilePath)]
@@ -433,6 +435,9 @@ enum Cmd {
         /// When to show the live progress line on stderr.
         #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
         progress: ProgressWhen,
+        /// Print secret values verbatim instead of masking them.
+        #[arg(long)]
+        verbatim: bool,
     },
 }
 
@@ -768,7 +773,7 @@ fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
     }
 }
 
-fn run_detect_secrets(input: &str, progress: ProgressWhen) {
+fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool) {
     use hprof_analyzer::query::run::ReplCache;
     use hprof_analyzer::secrets::SecretPatterns;
     use hprof_analyzer::source::HprofSource;
@@ -819,15 +824,31 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen) {
     }
 
     for f in &findings {
+        let display_value = if verbatim {
+            f.value.clone()
+        } else {
+            mask_secret(&f.value)
+        };
         if f.locations.is_empty() {
-            println!("{}\t-\t{}", f.category, f.value);
+            println!("{}\t-\t{}", f.category, display_value);
         } else {
             for (class, field) in &f.locations {
-                println!("{}\t{}.{}\t{}", f.category, class, field, f.value);
+                println!("{}\t{}.{}\t{}", f.category, class, field, display_value);
             }
         }
     }
     eprintln!("{} finding(s).", findings.len());
+}
+
+fn mask_secret(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let n = chars.len();
+    if n <= 8 {
+        return "*".repeat(n);
+    }
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[n - 4..].iter().collect();
+    format!("{head}****{tail}")
 }
 
 /// Parse args and dispatch to the selected subcommand.
@@ -1122,8 +1143,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Cmd::DetectSecrets { input, progress }) => {
-            run_detect_secrets(&input, progress);
+        Some(Cmd::DetectSecrets {
+            input,
+            progress,
+            verbatim,
+        }) => {
+            run_detect_secrets(&input, progress, verbatim);
         }
     }
 }
