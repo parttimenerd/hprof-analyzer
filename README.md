@@ -20,7 +20,7 @@ Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak susp
 | **Heap redaction** (zero primitive values before sharing, object graph preserved) | `hprof-analyzer redact heap.hprof safe.hprof` |
 | **MAT cache generation** (low-RSS alternative to MAT's first-open parse) | `hprof-analyzer mat caches heap.hprof` |
 | **Browser UI** (WebAssembly, works offline, up to 3 GB) | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
-| **Secret detection** (scan heap strings for credentials and tokens) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
+| **Secret detection** (scan heap strings for credentials and tokens using [betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
 | **Re-render saved reports** (JSON to HTML/Markdown without the original dump) | `hprof-analyzer report.json report.html` |
 
 **Why use it:**
@@ -84,10 +84,7 @@ hprof-analyzer report.json.gz --format html report.html
 
 Drop a `.hprof` file onto the page and the analysis runs in your browser via WebAssembly, no install required. Heap dumps up to 3 GB are supported.
 
-Two companion demo pages show the tool in action:
-
-- **[Heap Dump Secret Finder](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — scan a heap dump for credentials, tokens, and API keys using `hprof-analyzer detect-secrets`, all in-browser.
-- **[HeapGuru mock site](https://parttimenerd.github.io/hprof-analyzer/mock-hprof-upload/)** — a realistic mock of a commercial heap-analysis SaaS, rendered entirely from a local `.hprof` without any upload.
+**➡ [Heap Dump Secret Finder](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — scan a heap dump for credentials, tokens, and API keys (powered by [betterleaks](https://github.com/betterleaks/betterleaks) patterns), all in-browser. Heap dumps contain everything the JVM had in memory — treat them with care.
 
 | Landing page | OQL shell | Leak suspects report |
 |:---:|:---:|:---:|
@@ -432,6 +429,27 @@ Redacted dumps are readable by hprof-analyzer, Eclipse MAT, and jhat. A marker r
 | **Complete** (`--complete`) | Array elements + scalar instance fields + CLASS_DUMP static values | Maximum privacy needed |
 
 A standalone `hprof-redact` binary is also available for environments where a small dependency footprint matters (under 1 MB). The MCP server exposes redaction via the `redact` tool.
+
+## Secret detection
+
+Heap dumps contain everything the JVM held in memory at the time of capture: database passwords, API keys, session tokens, bearer tokens, connection strings. The `detect-secrets` subcommand scans all `String` values against [betterleaks](https://github.com/betterleaks/betterleaks) patterns (460 service-specific rules, MIT License) plus heap-dump-specific extras (JDBC URLs, JWT tokens, Spring Security encoded passwords, and more).
+
+```sh
+# Human-readable output grouped by category (default)
+hprof-analyzer detect-secrets heap.hprof
+
+# Machine-readable TSV: CATEGORY<tab>CLASS.FIELD,...<tab>VALUE
+hprof-analyzer detect-secrets --format tsv heap.hprof
+
+# Print actual secret values instead of masking them
+hprof-analyzer detect-secrets --verbatim heap.hprof
+```
+
+Values are masked by default (`sk-an****...****t-AA`). Pass `--verbatim` only in a secure context — the output will contain live credentials.
+
+Attribution is included where possible: for each finding, the class and field name that held the string is shown (e.g. `com.example.Config.apiKey`), including `Map` entries where the key string names the credential (`Map["password"] → "s3cr3t"`).
+
+**[Try it in the browser →](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — runs entirely in WebAssembly, nothing is uploaded.
 
 ## Speeding up Eclipse MAT
 
