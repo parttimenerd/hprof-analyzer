@@ -94,8 +94,9 @@ static EXTRA_PATTERN_SPECS: &[(&str, &str)] = &[
     ("Token property value",            r"(?:[Aa]pi[_-]?)?[Tt]oken[= :]+[A-Za-z0-9._\-]{8,}"),
     // Generic api_key= / apiKey= etc.
     ("API key property value",          r"(?:[Aa]pi[_.-]?)?[Kk]ey[= :]+[A-Za-z0-9._\-]{8,}"),
-    // Generic high-entropy hex secrets (32+ hex chars)
-    ("High-entropy hex secret",         r"[0-9a-f]{32,}"),
+    // High-entropy hex secrets (32–64 hex chars, post-filtered by Shannon entropy).
+    // Longer strings are usually bitsets/bitmaps, not secrets.
+    ("High-entropy hex secret",         r"[0-9a-f]{32,64}"),
     // PEM private key / certificate headers (heap strings often contain just the header line)
     ("Private key / certificate",       r"-----BEGIN [A-Z ]+ KEY-----"),
     // Spring Security {noop} prefix — explicitly marks a plaintext (unencrypted) password
@@ -175,6 +176,13 @@ impl SecretPatterns {
             // Standalone patterns: match value alone.
             for pattern in &self.standalone {
                 if pattern.re.is_match(value) {
+                    // High-entropy hex: require Shannon entropy ≥ 3.0 bits/char.
+                    // This filters out H2/JVM bitsets which are mostly zeros.
+                    if pattern.category == "High-entropy hex secret"
+                        && hex_shannon_entropy(value) < 3.0
+                    {
+                        continue;
+                    }
                     if seen
                         .insert((pattern.category, value.as_str()), ())
                         .is_none()
@@ -219,6 +227,35 @@ impl SecretPatterns {
 
         findings
     }
+}
+
+/// Shannon entropy of a hex string in bits per character (max 4.0 for 16 symbols).
+/// Values below ~3.0 are dominated by a single nibble (e.g. all-zero bitsets).
+fn hex_shannon_entropy(s: &str) -> f64 {
+    let mut counts = [0u32; 16];
+    let mut total = 0u32;
+    for b in s.bytes() {
+        let nibble = match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            _ => continue,
+        };
+        counts[nibble as usize] += 1;
+        total += 1;
+    }
+    if total == 0 {
+        return 0.0;
+    }
+    let n = total as f64;
+    counts
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / n;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 /// The PATTERN_SPECS slice (generated from betterleaks.toml) plus EXTRA_PATTERN_SPECS
