@@ -747,6 +747,7 @@ pub fn build_model(
         thread_local_analysis,
         framework_analysis,
         field_stats,
+        secrets: Vec::new(),
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);

@@ -903,6 +903,7 @@ mod tests {
             thread_local_analysis: Vec::new(),
             framework_analysis: Vec::new(),
             field_stats: None,
+            secrets: Vec::new(),
         }
     }
 

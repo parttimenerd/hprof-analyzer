@@ -1751,6 +1751,22 @@ pub struct Report {
     /// of pointees). Present only when `--field-stats` was passed; `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_stats: Option<FieldStats>,
+    /// Secrets found in the heap: API keys, passwords, tokens, connection strings, etc.
+    /// Empty when `--detect-secrets` was not passed or nothing was found.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretFinding>,
+}
+
+/// A single secret detected in the heap.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SecretFinding {
+    pub category: String,
+    pub value: String,
+    /// (owner_class, field_label) pairs — empty when attribution was not requested.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<(String, String)>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

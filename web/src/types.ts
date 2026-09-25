@@ -855,6 +855,15 @@ export interface Report {
   framework_analysis?: FrameworkAnalysis[];
   // Per-class reference-field statistics. Present only when --field-stats was passed.
   field_stats?: FieldStats;
+  // Secrets detected in the heap. Present only when --detect-secrets was passed.
+  secrets?: SecretFinding[];
+}
+
+export interface SecretFinding {
+  category: string;
+  value: string;
+  /** [owner_class, field_label] pairs; empty when attribution was not collected. */
+  locations?: [string, string][];
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.
