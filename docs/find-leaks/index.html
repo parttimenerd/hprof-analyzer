@@ -781,6 +781,45 @@ if (new URLSearchParams(location.search).get('demo') === '1') {
   runDemo();
 }
 
+// ── Handoff mode (?handoff=1) — file passed from mock upload page via IndexedDB ──
+if (new URLSearchParams(location.search).get('handoff') === '1') {
+  (async () => {
+    let file = null;
+    try {
+      file = await new Promise((resolve, reject) => {
+        const req = indexedDB.open('hprof-handoff', 1);
+        req.onupgradeneeded = e => e.target.result.createObjectStore('files');
+        req.onsuccess = e => {
+          const db = e.target.result;
+          const tx = db.transaction('files', 'readonly');
+          const get = tx.objectStore('files').get('pending');
+          get.onsuccess = () => resolve(get.result?.file ?? null);
+          get.onerror = () => reject(get.error);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    } catch (_) {}
+
+    if (!file) { runDemo(); return; }
+
+    // Clean up the stored entry.
+    try {
+      await new Promise((resolve) => {
+        const req = indexedDB.open('hprof-handoff', 1);
+        req.onsuccess = e => {
+          const tx = e.target.result.transaction('files', 'readwrite');
+          tx.objectStore('files').delete('pending');
+          tx.oncomplete = resolve;
+        };
+        req.onerror = resolve;
+      });
+    } catch (_) {}
+
+    selectedFile = file;
+    runScan();
+  })();
+}
+
 initWasm().catch(() => {});
 </script>
 </body>
