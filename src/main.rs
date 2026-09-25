@@ -420,6 +420,20 @@ enum Cmd {
         #[arg(long)]
         complete: bool,
     },
+    /// Scan a heap dump for secrets: API keys, tokens, passwords, and other
+    /// credentials left in JVM memory. Patterns sourced from betterleaks
+    /// (https://github.com/betterleaks/betterleaks, MIT License).
+    ///
+    /// Prints one finding per line to stdout:
+    ///   CATEGORY\tVALUE
+    DetectSecrets {
+        /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+        /// When to show the live progress line on stderr.
+        #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
+        progress: ProgressWhen,
+    },
 }
 
 /// `mat` subcommands.
@@ -754,6 +768,68 @@ fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
     }
 }
 
+fn run_detect_secrets(input: &str, progress: ProgressWhen) {
+    use hprof_analyzer::query::run::ReplCache;
+    use hprof_analyzer::secrets::SecretPatterns;
+    use hprof_analyzer::source::HprofSource;
+
+    let show_progress = match progress {
+        ProgressWhen::Always => true,
+        ProgressWhen::Never => false,
+        ProgressWhen::Auto => std::io::stderr().is_terminal(),
+    };
+
+    let source = HprofSource::from(input);
+    let cache = ReplCache::build_with_progress(&source, true, &mut |stage, _frac| {
+        if show_progress {
+            eprint!("\r\x1b[K[hprof] {stage}...");
+        }
+    });
+    if show_progress {
+        eprint!("\r\x1b[K");
+    }
+    let cache = match cache {
+        Ok(c) => c,
+        Err(e) => fail(format!("failed to load {input}: {e}")),
+    };
+
+    let string_values = match cache.build_string_values() {
+        Ok(sv) => sv,
+        Err(e) => fail(format!("failed to extract string values: {e}")),
+    };
+
+    // Build the set of String dense indices for referrer lookup.
+    let string_idxs: std::collections::HashSet<u32> = string_values.keys().copied().collect();
+    if show_progress {
+        eprint!("\r\x1b[K[hprof] scanning referrers...");
+    }
+    let attribution = match cache.build_string_referrers(&string_idxs, &string_values) {
+        Ok(a) => a,
+        Err(e) => fail(format!("failed to scan referrers: {e}")),
+    };
+    if show_progress {
+        eprint!("\r\x1b[K");
+    }
+
+    let findings = SecretPatterns::new().scan(&string_values, &attribution);
+
+    if findings.is_empty() {
+        eprintln!("No secrets found.");
+        return;
+    }
+
+    for f in &findings {
+        if f.locations.is_empty() {
+            println!("{}\t-\t{}", f.category, f.value);
+        } else {
+            for (class, field) in &f.locations {
+                println!("{}\t{}.{}\t{}", f.category, class, field, f.value);
+            }
+        }
+    }
+    eprintln!("{} finding(s).", findings.len());
+}
+
 /// Parse args and dispatch to the selected subcommand.
 fn main() {
     // Restore default SIGPIPE handling so `… | head` (or any reader that closes
@@ -1045,6 +1121,9 @@ fn main() {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
+        }
+        Some(Cmd::DetectSecrets { input, progress }) => {
+            run_detect_secrets(&input, progress);
         }
     }
 }
