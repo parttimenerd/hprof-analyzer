@@ -98,6 +98,10 @@ static EXTRA_PATTERN_SPECS: &[(&str, &str)] = &[
     ("High-entropy hex secret",         r"[0-9a-f]{32,}"),
     // PEM private key / certificate headers (heap strings often contain just the header line)
     ("Private key / certificate",       r"-----BEGIN [A-Z ]+ KEY-----"),
+    // Spring Security {noop} prefix — explicitly marks a plaintext (unencrypted) password
+    ("Spring Security plaintext password", r"\{noop\}.+"),
+    // Spring Security delegating-password-encoder hashes — still a stored credential value
+    ("Spring Security encoded password",   r"\{(?:bcrypt|pbkdf2|scrypt|argon2|sha256)\}\$.{10,}"),
 ];
 
 impl Default for SecretPatterns {
@@ -575,6 +579,33 @@ mod tests {
             has_category(&r, "URL with credential param"),
             "findings: {r:?}"
         );
+    }
+
+    // ── Spring Security password encoding ────────────────────────────────────
+
+    #[test]
+    fn spring_noop_password() {
+        let r = scan(&["{noop}myplaintextpassword"]);
+        assert!(
+            has_category(&r, "Spring Security plaintext password"),
+            "findings: {r:?}"
+        );
+    }
+
+    #[test]
+    fn spring_bcrypt_password() {
+        let r = scan(&["{bcrypt}$2a$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW"]);
+        assert!(
+            has_category(&r, "Spring Security encoded password"),
+            "findings: {r:?}"
+        );
+    }
+
+    #[test]
+    fn spring_noop_too_short() {
+        // {noop} alone with empty value shouldn't match
+        let r = scan(&["{noop}"]);
+        assert!(!has_category(&r, "Spring Security plaintext password"));
     }
 
     // ── Integration: real Spring PetClinic fixture ────────────────────────────
