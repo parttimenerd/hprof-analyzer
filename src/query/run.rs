@@ -1916,6 +1916,268 @@ impl ReplCache {
         let source2 = self.source.clone();
         capture.decode_all(move || source2.open(), id_size)
     }
+
+    /// Scan all instances and record which (owner_class, field_label) holds
+    /// a reference to each String object in `string_dense_idxs`.
+    ///
+    /// `string_values` is the dense_idx→text map so that when a Map Entry's
+    /// `key` field points to a String, we can use its text as the field label
+    /// instead of the generic "value", producing attribution like
+    /// `(java.util.HashMap, apiKey)` rather than `(HashMap$Entry, value)`.
+    ///
+    /// Also scans OBJ_ARRAY_DUMP records so that the backing `table` arrays of
+    /// HashMap / Hashtable / Properties are traversed.
+    ///
+    /// Returns `HashMap<string_dense_idx, Vec<(owner_class_name, field_label)>>`.
+    // Called from main.rs (binary), not from the lib — suppress spurious dead_code lint.
+    #[allow(dead_code)]
+    pub fn build_string_referrers(
+        &self,
+        string_dense_idxs: &std::collections::HashSet<u32>,
+        string_values: &std::collections::HashMap<u32, String>,
+    ) -> std::io::Result<std::collections::HashMap<u32, Vec<(String, String)>>> {
+        use crate::pass2::Record;
+        use crate::types::HprofType;
+
+        let id_size = self.id_size as u8;
+        let ref_width = self.id_size;
+        let id_map = &self.p1.id_map;
+        let class_map = &self.p1.class_map;
+        let strings = &self.p1.strings;
+
+        // Resolve the dot-form name for each class.
+        let mut class_names: std::collections::HashMap<u64, String> =
+            std::collections::HashMap::with_capacity(class_map.len());
+        for (&addr, ci) in class_map {
+            if let Some(raw) = strings.get(&ci.name_id) {
+                class_names.insert(addr, raw.replace('/', "."));
+            }
+        }
+
+        // String class IDs — skip attributing String→String references.
+        let string_class_ids: std::collections::HashSet<u64> = class_names
+            .iter()
+            .filter(|(_, n)| *n == "java.lang.String")
+            .map(|(&id, _)| id)
+            .collect();
+
+        // Map entry class IDs — these need special key→value attribution.
+        // Covers HashMap$Entry, LinkedHashMap$Entry, Hashtable$Entry,
+        // ConcurrentHashMap$Node, WeakHashMap$Entry, LinkedList$Node,
+        // Properties (inherits Hashtable), and similar naming patterns.
+        let is_map_entry = |name: &str| -> bool {
+            let s = name.to_ascii_lowercase();
+            s.contains("$entry")
+                || s.contains("$node")
+                || s.contains("mapentry")
+                || (s.contains("entry")
+                    && (s.contains("map") || s.contains("hash") || s.contains("table")))
+        };
+
+        let field_type_width = |t: HprofType| -> usize {
+            match t {
+                HprofType::Object => ref_width,
+                HprofType::Boolean | HprofType::Byte => 1,
+                HprofType::Char | HprofType::Short => 2,
+                HprofType::Float | HprofType::Int => 4,
+                HprofType::Double | HprofType::Long => 8,
+            }
+        };
+
+        // Compute all Object-typed (field_name, byte_offset) pairs for a class,
+        // walking the super-chain (subclass fields first, matching HPROF layout).
+        let compute_obj_fields = |class_id: u64| -> Option<Vec<(String, usize)>> {
+            let mut chain: Vec<u64> = Vec::new();
+            let mut cur = class_id;
+            loop {
+                chain.push(cur);
+                match class_map.get(&cur) {
+                    Some(ci) if ci.super_id != 0 => cur = ci.super_id,
+                    _ => break,
+                }
+            }
+            let mut fields: Vec<(String, usize)> = Vec::new();
+            let mut offset = 0usize;
+            for caddr in &chain {
+                let ci = class_map.get(caddr)?;
+                for &(fname_id, ftype) in &ci.fields {
+                    let w = field_type_width(ftype);
+                    if ftype == HprofType::Object {
+                        let fname = strings
+                            .get(&fname_id)
+                            .cloned()
+                            .unwrap_or_else(|| fname_id.to_string());
+                        fields.push((fname, offset));
+                    }
+                    offset += w;
+                }
+            }
+            Some(fields)
+        };
+
+        // Helper: read a ref-width big-endian address from blob[offset..].
+        let read_ref = |blob: &[u8], offset: usize| -> Option<u64> {
+            if offset + ref_width > blob.len() {
+                return None;
+            }
+            let mut addr: u64 = 0;
+            for &b in &blob[offset..offset + ref_width] {
+                addr = (addr << 8) | b as u64;
+            }
+            if addr == 0 { None } else { Some(addr) }
+        };
+
+        // Helper: look up whether an object address is a known String dense_idx,
+        // and if so return its text.
+        let addr_to_string = |addr: u64| -> Option<(u32, &str)> {
+            let didx = id_map.index_of(addr)? as u32;
+            if string_dense_idxs.contains(&didx) {
+                Some((
+                    didx,
+                    string_values.get(&didx).map(String::as_str).unwrap_or(""),
+                ))
+            } else {
+                None
+            }
+        };
+
+        let mut field_cache: std::collections::HashMap<u64, Option<Vec<(String, usize)>>> =
+            std::collections::HashMap::new();
+
+        // Phase 1: single-pass scan with scan_all_records.
+        // For each Instance: attribute Object-typed fields to string referents.
+        //   - If the instance is a Map Entry: read `key` and `value` fields,
+        //     and if key is a String, label the value attribution as that key text.
+        //   - Otherwise: use the class-name + field-name as attribution.
+        // For each ObjArray: iterate element references and attribute each
+        //   String element as `(array_class_short_name, [n])`.
+        let mut result: std::collections::HashMap<u32, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+
+        let source = self.source.clone();
+        let open = move || source.open();
+        crate::pass2::scan_all_records(&open, id_size, |record| {
+            match record {
+                Record::Instance(_obj_addr, class_id, blob) => {
+                    if string_class_ids.contains(&class_id) {
+                        return;
+                    }
+                    let owner_class = match class_names.get(&class_id) {
+                        Some(n) => n,
+                        None => return,
+                    };
+
+                    // For Map entry types, try to read key→value and produce
+                    // attribution like (HashMap, "apiKey") for the value String.
+                    if is_map_entry(owner_class) {
+                        let obj_fields = field_cache
+                            .entry(class_id)
+                            .or_insert_with(|| compute_obj_fields(class_id));
+                        let fields = match obj_fields {
+                            Some(f) => f,
+                            None => return,
+                        };
+                        // Find "key" and "value" fields.
+                        let mut key_addr: Option<u64> = None;
+                        let mut val_addr: Option<u64> = None;
+                        for (fname, offset) in fields.iter() {
+                            if fname == "key" {
+                                key_addr = read_ref(blob, *offset);
+                            } else if fname == "value" {
+                                val_addr = read_ref(blob, *offset);
+                            }
+                        }
+                        if let Some(va) = val_addr {
+                            if let Some((val_didx, _)) = addr_to_string(va) {
+                                // Label: use the key string text if available, else "value".
+                                let label = key_addr
+                                    .and_then(addr_to_string)
+                                    .map(|(_, kt)| kt.to_owned())
+                                    .unwrap_or_else(|| "value".to_owned());
+                                // Owner: strip inner class suffix for readability,
+                                // e.g. "java.util.HashMap$Node" → "Map[...]"
+                                let container = owner_class
+                                    .split('$')
+                                    .next()
+                                    .unwrap_or(owner_class)
+                                    .to_owned();
+                                result.entry(val_didx).or_default().push((container, label));
+                            }
+                        }
+                        // Also check if the key itself is a known String
+                        // (e.g. scanning a Set of secrets, or key contains secret text).
+                        if let Some(ka) = key_addr {
+                            if let Some((key_didx, _)) = addr_to_string(ka) {
+                                let container = owner_class
+                                    .split('$')
+                                    .next()
+                                    .unwrap_or(owner_class)
+                                    .to_owned();
+                                result
+                                    .entry(key_didx)
+                                    .or_default()
+                                    .push((container, "key".to_owned()));
+                            }
+                        }
+                        return;
+                    }
+
+                    // Generic instance: attribute each Object field.
+                    let obj_fields = field_cache
+                        .entry(class_id)
+                        .or_insert_with(|| compute_obj_fields(class_id));
+                    let fields = match obj_fields {
+                        Some(f) => f,
+                        None => return,
+                    };
+                    for (field_name, offset) in fields.iter() {
+                        if let Some(ref_addr) = read_ref(blob, *offset) {
+                            if let Some((didx, _)) = addr_to_string(ref_addr) {
+                                result
+                                    .entry(didx)
+                                    .or_default()
+                                    .push((owner_class.clone(), field_name.clone()));
+                            }
+                        }
+                    }
+                }
+                Record::ObjArray(addr, array_class_id, _count, elem_bytes) => {
+                    // Attribute each String element in an object array.
+                    // Only emit attribution when the array itself has a meaningful class name
+                    // (skip raw Object[] used as generic backing storage unless we know the
+                    // parent container — that would require two-pass resolution).
+                    let arr_class = class_names
+                        .get(&array_class_id)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    // Skip java.lang.Object[] — too generic; noise ratio is high.
+                    if arr_class == "java.lang.Object[]" || arr_class.is_empty() {
+                        return;
+                    }
+                    let _ = addr; // array address unused for now
+                    let mut off = 0usize;
+                    while off + ref_width <= elem_bytes.len() {
+                        let mut ref_addr: u64 = 0;
+                        for &b in &elem_bytes[off..off + ref_width] {
+                            ref_addr = (ref_addr << 8) | b as u64;
+                        }
+                        if ref_addr != 0 {
+                            if let Some((didx, _)) = addr_to_string(ref_addr) {
+                                result
+                                    .entry(didx)
+                                    .or_default()
+                                    .push((arr_class.to_owned(), "[]".to_owned()));
+                            }
+                        }
+                        off += ref_width;
+                    }
+                }
+                Record::PrimArray(..) => {}
+            }
+        })?;
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
