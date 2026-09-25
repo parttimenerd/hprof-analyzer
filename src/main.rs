@@ -424,10 +424,10 @@ enum Cmd {
     /// credentials left in JVM memory. Patterns sourced from betterleaks
     /// (https://github.com/betterleaks/betterleaks, MIT License).
     ///
-    /// Prints one finding per line to stdout (values masked by default):
-    ///   CATEGORY\tCLASS.FIELD\tVALUE
+    /// Default output is human-readable grouped by category.
+    /// Use --format tsv for machine-readable: CATEGORY\tCLASS.FIELD,...\tVALUE
     ///
-    /// Use --verbatim to print secret values in plain text.
+    /// Values are masked by default; use --verbatim to print them in plain text.
     DetectSecrets {
         /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
         #[arg(value_hint = ValueHint::FilePath)]
@@ -438,6 +438,9 @@ enum Cmd {
         /// Print secret values verbatim instead of masking them.
         #[arg(long)]
         verbatim: bool,
+        /// Output format: human-readable (default) or tab-separated values.
+        #[arg(long, value_enum, default_value_t = SecretsFormat::Human)]
+        format: SecretsFormat,
     },
 }
 
@@ -680,6 +683,15 @@ enum ProgressWhen {
     Never,
 }
 
+#[derive(clap::ValueEnum, Clone, Default)]
+enum SecretsFormat {
+    /// Grouped, human-readable output with category headers and location hints.
+    #[default]
+    Human,
+    /// Tab-separated: CATEGORY\tLOCATIONS\tVALUE — one finding per line.
+    Tsv,
+}
+
 impl From<FormatArg> for OutputFormat {
     fn from(f: FormatArg) -> Self {
         match f {
@@ -773,7 +785,7 @@ fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
     }
 }
 
-fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool) {
+fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool, format: SecretsFormat) {
     use hprof_analyzer::query::run::ReplCache;
     use hprof_analyzer::secrets::SecretPatterns;
     use hprof_analyzer::source::HprofSource;
@@ -803,7 +815,6 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool) {
         Err(e) => fail(format!("failed to extract string values: {e}")),
     };
 
-    // Build the set of String dense indices for referrer lookup.
     let string_idxs: std::collections::HashSet<u32> = string_values.keys().copied().collect();
     if show_progress {
         eprint!("\r\x1b[K[hprof] scanning referrers...");
@@ -823,21 +834,81 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool) {
         return;
     }
 
+    // Group by category preserving first-seen order.
+    let mut categories: Vec<&str> = Vec::new();
+    let mut by_category: std::collections::HashMap<
+        &str,
+        Vec<&hprof_analyzer::secrets::SecretFinding>,
+    > = std::collections::HashMap::new();
     for f in &findings {
-        let display_value = if verbatim {
-            f.value.clone()
-        } else {
-            mask_secret(&f.value)
-        };
-        if f.locations.is_empty() {
-            println!("{}\t-\t{}", f.category, display_value);
-        } else {
-            for (class, field) in &f.locations {
-                println!("{}\t{}.{}\t{}", f.category, class, field, display_value);
+        let cat = f.category.as_str();
+        by_category
+            .entry(cat)
+            .or_insert_with(|| {
+                categories.push(cat);
+                Vec::new()
+            })
+            .push(f);
+    }
+
+    match format {
+        SecretsFormat::Tsv => {
+            for f in &findings {
+                let display_value = if verbatim {
+                    f.value.clone()
+                } else {
+                    mask_secret(&f.value)
+                };
+                let locs = if f.locations.is_empty() {
+                    "-".to_owned()
+                } else {
+                    f.locations
+                        .iter()
+                        .map(|(c, field)| format!("{c}.{field}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                println!("{}\t{}\t{}", f.category, locs, display_value);
             }
         }
+        SecretsFormat::Human => {
+            let n_cats = categories.len();
+            eprintln!(
+                "Found {} secret(s) in {} categor{}:",
+                findings.len(),
+                n_cats,
+                if n_cats == 1 { "y" } else { "ies" }
+            );
+            for cat in &categories {
+                let items = &by_category[cat];
+                eprintln!();
+                eprintln!(
+                    "  {cat} ({} value{})",
+                    items.len(),
+                    if items.len() == 1 { "" } else { "s" }
+                );
+                for f in items.iter() {
+                    let display_value = if verbatim {
+                        f.value.clone()
+                    } else {
+                        mask_secret(&f.value)
+                    };
+                    if f.locations.is_empty() {
+                        println!("    {display_value}");
+                    } else {
+                        let locs = f
+                            .locations
+                            .iter()
+                            .map(|(c, field)| format!("{c}.{field}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        println!("    {display_value}  [{locs}]");
+                    }
+                }
+            }
+            eprintln!();
+        }
     }
-    eprintln!("{} finding(s).", findings.len());
 }
 
 fn mask_secret(value: &str) -> String {
@@ -1147,8 +1218,9 @@ fn main() {
             input,
             progress,
             verbatim,
+            format,
         }) => {
-            run_detect_secrets(&input, progress, verbatim);
+            run_detect_secrets(&input, progress, verbatim, format);
         }
     }
 }
