@@ -20,6 +20,7 @@ Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak susp
 | **Heap redaction** (zero primitive values before sharing, object graph preserved) | `hprof-analyzer redact heap.hprof safe.hprof` |
 | **MAT cache generation** (low-RSS alternative to MAT's first-open parse) | `hprof-analyzer mat caches heap.hprof` |
 | **Browser UI** (WebAssembly, works offline, up to 3 GB) | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
+| **Secret detection** (scan heap strings for credentials and tokens) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
 | **Re-render saved reports** (JSON to HTML/Markdown without the original dump) | `hprof-analyzer report.json report.html` |
 
 **Why use it:**
@@ -82,6 +83,11 @@ hprof-analyzer report.json.gz --format html report.html
 **➡ [Open the browser UI](https://parttimenerd.github.io/hprof-analyzer/)**
 
 Drop a `.hprof` file onto the page and the analysis runs in your browser via WebAssembly, no install required. Heap dumps up to 3 GB are supported.
+
+Two companion demo pages show the tool in action:
+
+- **[Heap Dump Secret Finder](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — scan a heap dump for credentials, tokens, and API keys using the `--detect-secrets` flag, all in-browser.
+- **[HeapGuru mock site](https://parttimenerd.github.io/hprof-analyzer/mock-hprof-upload/)** — a realistic mock of a commercial heap-analysis SaaS, rendered entirely from a local `.hprof` without any upload.
 
 | Landing page | OQL shell | Leak suspects report |
 |:---:|:---:|:---:|
