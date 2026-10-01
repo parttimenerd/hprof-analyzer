@@ -97,13 +97,18 @@ The inner subquery must project `@objectAddress` for the outer `IN` check.
 
 ## AS RETAINED SET
 
-Computes the retained set of a class (all objects kept alive only by instances
-of this class). Produces a synthetic object count + retained size summary.
+Computes the retained set of a class (all objects kept alive exclusively by instances
+of this class). Returns one row per member object (the transitive closure of exclusively
+retained objects).
 The `AS RETAINED SET` clause goes after the SELECT expression:
 
 ```sql
 SELECT x AS RETAINED SET FROM java.lang.Thread x
 ```
+
+This returns one row per retained object. To summarize the result, collect the rows from
+the client — `AS RETAINED SET` cannot be combined with aggregates (`COUNT`, `SUM`, etc.)
+or used in UNION branches.
 
 ## dominators(x)
 
