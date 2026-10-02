@@ -274,7 +274,7 @@ impl HprofMcpServer {
              ## Top Classes by Retained Size\n\
              {classes}\n\
              NEXT STEPS — To answer \"find the leak\" or \"why OOM\":\n\
-             1. get_summary()                           — full suspect list + suggested OQL\n\
+             1. get_report({{\"section\":\"triage\"}})          — ⭐ severity-tagged signals; fastest diagnosis\n\
              2. get_report({{\"section\":\"leaks\"}})           — root paths, accumulation points, dominated objects\n\
              3. query({{\"oql\":\"top-retained-by-class\"}})    — which class retains most memory\n\
              4. query({{\"oql\":\"<view-name>\"}})              — any view below (no SQL needed)\
@@ -294,8 +294,11 @@ impl HprofMcpServer {
 
     /// Return a Markdown summary: top 5 suspects + top 5 classes by retained size.
     #[tool(
-        description = "Return a Markdown summary: top leak suspects and top classes by retained size. \
-                       Good first call after load_dump. \
+        description = "Return a Markdown summary: top leak suspects and top classes by retained size, \
+                       plus suggested OQL queries for the top suspects. \
+                       Prefer get_report({section:\"triage\"}) for the first diagnostic read — it gives \
+                       severity-tagged signals. Use get_summary when you want the suspect list with \
+                       ready-to-run follow-up queries. \
                        Follow up: query({oql:\"SELECT @objectId, @retainedHeapSize FROM <ClassName> ORDER BY @retainedHeapSize DESC LIMIT 10\"}) \
                        replacing <ClassName> with the top suspect class to find the largest instances."
     )]
@@ -349,11 +352,12 @@ impl HprofMcpServer {
 
     /// Return a section of the full analysis report as JSON.
     #[tool(description = "Return a report section. \
+                          \n\n⚠ INDEX NOTE: obj_index_1based in leaks JSON (dominator_tree + root_path) is 1-BASED — subtract 1 before passing to browse_dominators/inspect_object. browse_dominators 'index' and query @objectId are 0-based (use directly).\
                           \n\nFOR SIMPLE QUESTIONS — use these focused sections (small output, fast):\
+                          \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); BEST first call after load_dump\
                           \n  \"top-objects\"  — top N biggest individual objects by retained size (add limit:N, default 20)\
                           \n  \"top-classes\"  — top N classes by retained size with holder breakdown (add limit:N, default 20)\
                           \n  \"overview\"     — heap totals, object count, identifier size\
-                          \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); best first call after load_dump\
                           \n\nFOR LEAK INVESTIGATION:\
                           \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree (BEST for 'find the leak')\
                           \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
@@ -368,9 +372,7 @@ impl HprofMcpServer {
                           \n  \"components\"   — retained heap per class loader\
                           \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\"\
                           \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
-                          \n  \"all\"          — everything merged (very large — avoid in LLM workflows)\
-                          \n\nIn leaks JSON: obj_index_1based is 1-BASED — subtract 1 for browse_dominators/inspect_object. \
-                          browse_dominators 'index' and query @objectId are 0-based (use directly).")]
+                          \n  \"all\"          — everything merged (very large — avoid in LLM workflows)")]
     async fn get_report(
         &self,
         Parameters(p): Parameters<GetReportParams>,
@@ -775,7 +777,7 @@ impl HprofMcpServer {
                        ALWAYS call this first to check if a dump is already loaded. \
                        Returns {loaded:true, path, total_heap_bytes, total_objects, leak_suspects} if loaded, \
                        or {loaded:false} if not. \
-                       If loaded=true, skip load_dump and call get_summary directly.")]
+                       If loaded=true, skip load_dump and call get_report({section:\"triage\"}) directly.")]
     async fn get_session_info(&self) -> Result<CallToolResult, McpError> {
         let guard = self.session.lock().await;
         let result = match guard.as_ref() {
@@ -1016,7 +1018,7 @@ impl ServerHandler for HprofMcpServer {
              1. get_session_info()                    — check if a dump is already loaded\n\
              2. load_dump({path})                     — load .hprof; response includes immediate suspects\n\
              3. get_report({\"section\":\"triage\"})      — automated severity signals; read first\n\
-             4. get_summary()                         — top suspects + suggested OQL queries\n\
+             4. get_report({\"section\":\"leaks\"})       — root paths, dominated objects, dominator_tree\n\
              5. get_histogram({limit:20})             — class breakdown by retained size\n\
              6. get_report({\"section\":\"collections\"}) — fill ratios, map load factors, waste budget\n\
              7. get_report({\"section\":\"waste\"})       — reclaimable bytes: duplicate strings, empty colls\n\
