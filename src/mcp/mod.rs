@@ -62,8 +62,8 @@ pub struct GetReportParams {
     ///
     /// Default "all" (everything — very large, avoid in LLM workflows).
     pub section: Option<String>,
-    /// Max rows to return for "top-objects", "top-classes", and "threads" (default 20, max 100).
-    /// Ignored for other sections.
+    /// Max rows for "top-objects" and "threads" (default 20, max 100).
+    /// For "top-classes" default is 10 (holders data makes each row large).
     pub limit: Option<usize>,
 }
 
@@ -265,6 +265,20 @@ impl HprofMcpServer {
             ""
         };
 
+        let oql_hints: String = if result.report.leaks.suspects.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from("\n## OQL — drill into top suspect\n");
+            let top = &result.report.leaks.suspects[0];
+            s.push_str(&format!(
+                "query({{\"oql\":\"SELECT @objectId AS idx, @retainedHeapSize AS ret \
+                 FROM {} ORDER BY ret DESC LIMIT 10\"}})\n\
+                 → use idx with browse_dominators or inspect_object\n",
+                top.pretty_class
+            ));
+            s
+        };
+
         let summary = format!(
             "Loaded: {path}\n\
              Total heap: {heap} MB  |  Objects: {objs}\
@@ -272,7 +286,8 @@ impl HprofMcpServer {
              ## Top Leak Suspects ({n_suspects} detected)\n\
              {suspects}\n\
              ## Top Classes by Retained Size\n\
-             {classes}\n\
+             {classes}\
+             {oql_hints}\n\
              If the above answers the question, stop here.\n\
              For leak/OOM investigation: get_report({{\"section\":\"triage\"}}) → then follow each critical/warning signal.",
             path = p.path,
@@ -282,63 +297,10 @@ impl HprofMcpServer {
             n_suspects = result.report.leaks.suspects.len(),
             suspects = suspects_text,
             classes = top_classes_text,
+            oql_hints = oql_hints,
         );
         *session_ref.lock().await = Some(result);
         Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
-    }
-
-    /// Return a Markdown summary: top 5 suspects + top 5 classes by retained size.
-    #[tool(
-        description = "Return top leak suspects and top classes with suggested OQL queries. \
-                       NOTE: load_dump already returns this information — only call get_summary \
-                       if you need the suggested OQL queries for each suspect class."
-    )]
-    async fn get_summary(&self) -> Result<CallToolResult, McpError> {
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        let r = &sess.report;
-
-        let mut out = String::from("# Heap Summary\n\n## Top Leak Suspects\n\n");
-        for (i, s) in r.leaks.suspects.iter().take(5).enumerate() {
-            out.push_str(&format!(
-                "{}. **{}** — retained {} MB\n",
-                i + 1,
-                s.pretty_class,
-                s.retained / 1_000_000
-            ));
-        }
-        out.push_str("\n## Top Classes by Retained Size\n\n");
-        for (i, row) in r.top.biggest_classes.iter().take(5).enumerate() {
-            out.push_str(&format!(
-                "{}. `{}` — {} instances, retained {} MB\n",
-                i + 1,
-                row.pretty_class,
-                row.instances,
-                row.retained / 1_000_000
-            ));
-        }
-
-        // Suggest concrete follow-up OQL queries for the top 2 suspects.
-        if !r.leaks.suspects.is_empty() {
-            out.push_str("\n## Suggested OQL Queries\n\n");
-            for s in r.leaks.suspects.iter().take(2) {
-                out.push_str(&format!(
-                    "```sql\n-- Largest {} instances (get @objectId for browse_dominators/inspect_object)\n\
-                     SELECT @objectId AS idx, @retainedHeapSize AS ret FROM {} \
-                     ORDER BY ret DESC LIMIT 10\n```\n\n",
-                    s.pretty_class, s.pretty_class
-                ));
-            }
-            out.push_str(
-                "After running a query, use the `idx` value with:\n\
-                 - `browse_dominators({\"object_index\": <idx>})` — see what this object retains\n\
-                 - `inspect_object({\"object_index\": <idx>})` — class and size details\n",
-            );
-        }
-
-        Ok(CallToolResult::success(vec![ContentBlock::text(out)]))
     }
 
     /// Return a section of the full analysis report as JSON.
@@ -383,15 +345,22 @@ impl HprofMcpServer {
                 serde_json::to_string_pretty(&rows)
             }
             "top-classes" => {
-                let rows: Vec<_> = r.top.biggest_classes.iter().take(limit).collect();
+                let rows: Vec<_> = r
+                    .top
+                    .biggest_classes
+                    .iter()
+                    .take(p.limit.unwrap_or(10).min(100))
+                    .collect();
                 serde_json::to_string_pretty(&rows)
             }
             "leaks" => {
-                // Serialize the leaks report, but cap dominator_tree depth to 3
-                // levels to avoid multi-hundred-KB trees for single suspects.
+                // Serialize the leaks report, then:
+                // 1. cap dominator_tree depth+width to prevent 100KB+ trees
+                // 2. strip low-value fields from dominated_by_class to reduce bulk
                 let mut v = serde_json::to_value(&r.leaks)
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                 truncate_dom_tree_depth(&mut v, 3);
+                strip_dominated_by_class_noise(&mut v);
                 serde_json::to_string_pretty(&v)
             }
             "top" => serde_json::to_string_pretty(&r.top),
@@ -1294,6 +1263,27 @@ fn truncate_dom_tree_inner(
             }
         }
         _ => {}
+    }
+}
+
+/// Remove low-signal fields from `dominated_by_class` entries in the leaks JSON.
+/// Keeps: pretty_class, instances, retained. Drops: loader_id, loader_label,
+/// max_instance_shallow, incoming_ref_count (rarely actionable for LLMs).
+fn strip_dominated_by_class_noise(v: &mut serde_json::Value) {
+    const KEEP: &[&str] = &["pretty_class", "instances", "retained"];
+    if let Some(suspects) = v.get_mut("suspects").and_then(|s| s.as_array_mut()) {
+        for suspect in suspects.iter_mut() {
+            if let Some(dbc) = suspect
+                .get_mut("dominated_by_class")
+                .and_then(|d| d.as_array_mut())
+            {
+                for entry in dbc.iter_mut() {
+                    if let Some(map) = entry.as_object_mut() {
+                        map.retain(|k, _| KEEP.contains(&k.as_str()));
+                    }
+                }
+            }
+        }
     }
 }
 
