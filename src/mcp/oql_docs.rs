@@ -351,6 +351,43 @@ const WORKFLOW: &str = r#"# LLM Workflow Guide
 Recommended tool call sequence for analyzing heap dumps. Send ONE tool call at a time and
 wait for the response before sending the next.
 
+## Obtaining a heap dump
+
+Before you can analyze, you need a `.hprof` file. Three ways to capture one:
+
+### 1. jcmd (recommended — JDK 8+, no heap lock)
+```bash
+# Find the PID of your Java process
+jcmd                                   # lists all JVM processes with their PIDs
+
+# Capture the dump (triggers a safepoint — app pauses briefly)
+jcmd <PID> GC.heap_dump /tmp/app.hprof
+```
+
+### 2. jmap (classic, wider compatibility)
+```bash
+# Live — only reachable objects (smaller dump, faster)
+jmap -dump:live,format=b,file=/tmp/app.hprof <PID>
+
+# Full — all objects including unreachable garbage (larger, more complete)
+jmap -dump:format=b,file=/tmp/app.hprof <PID>
+```
+
+### 3. On OutOfMemoryError (automatic)
+Add JVM flags to capture a dump automatically when OOM is thrown:
+```
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/tmp/oom-dump.hprof
+```
+The file appears at the specified path after the JVM throws OOM.
+
+### Compressing large dumps
+Dumps for large heaps (several GB) can be compressed before analysis:
+```bash
+gzip /tmp/app.hprof            # creates app.hprof.gz  (hprof-analyzer accepts .gz)
+zip app.hprof.zip app.hprof    # creates app.hprof.zip (hprof-analyzer accepts .zip)
+```
+
 ## Answering "find the leak" or "why is there an OOM"
 
 ```
