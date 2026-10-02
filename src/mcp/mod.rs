@@ -269,14 +269,12 @@ impl HprofMcpServer {
             "Loaded: {path}\n\
              Total heap: {heap} MB  |  Objects: {objs}\
              {redacted_note}\n\
-             ## Leak Suspects ({n_suspects} detected)\n\
+             ## Top Leak Suspects ({n_suspects} detected)\n\
              {suspects}\n\
              ## Top Classes by Retained Size\n\
              {classes}\n\
-             NEXT STEPS:\n\
-             1. get_report({{\"section\":\"triage\"}})    — ⭐ severity-tagged signals; fastest diagnosis\n\
-             2. get_report({{\"section\":\"leaks\"}})     — root paths, accumulation points, dominated objects\n\
-             3. query({{\"oql\":\"top-retained-by-class\"}}) — confirm which class retains most",
+             If the above answers the question, stop here.\n\
+             For leak/OOM investigation: get_report({{\"section\":\"triage\"}}) → then follow each critical/warning signal.",
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = result.report.overview.total_objects,
@@ -291,13 +289,9 @@ impl HprofMcpServer {
 
     /// Return a Markdown summary: top 5 suspects + top 5 classes by retained size.
     #[tool(
-        description = "Return a Markdown summary: top leak suspects and top classes by retained size, \
-                       plus suggested OQL queries for the top suspects. \
-                       Prefer get_report({section:\"triage\"}) for the first diagnostic read — it gives \
-                       severity-tagged signals. Use get_summary when you want the suspect list with \
-                       ready-to-run follow-up queries. \
-                       Follow up: query({oql:\"SELECT @objectId, @retainedHeapSize FROM <ClassName> ORDER BY @retainedHeapSize DESC LIMIT 10\"}) \
-                       replacing <ClassName> with the top suspect class to find the largest instances."
+        description = "Return top leak suspects and top classes with suggested OQL queries. \
+                       NOTE: load_dump already returns this information — only call get_summary \
+                       if you need the suggested OQL queries for each suspect class."
     )]
     async fn get_summary(&self) -> Result<CallToolResult, McpError> {
         let guard = self.session.lock().await;
@@ -350,20 +344,20 @@ impl HprofMcpServer {
     /// Return a section of the full analysis report as JSON.
     #[tool(description = "Return a report section. \
                           \n\n⚠ INDEX NOTE: obj_index_1based in leaks JSON (dominator_tree + root_path) is 1-BASED — subtract 1 before passing to browse_dominators/inspect_object. browse_dominators 'index' and query @objectId are 0-based (use directly).\
-                          \n\nFOR SIMPLE QUESTIONS — use these focused sections (small output, fast):\
-                          \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); BEST first call after load_dump\
-                          \n                    After reading triage: act on EVERY critical/warning item — each has an id that tells you what to do next:\
+                          \n\nFOR SIMPLE QUESTIONS (just 1-2 calls after load_dump):\
+                          \n  \"top-classes\"  — top N classes by retained size (use for 'what's using the most memory?')\
+                          \n  \"top-objects\"  — top N biggest individual objects by retained size\
+                          \n  \"overview\"     — heap totals, object count, identifier size\
+                          \n  \"threads\"      — per-thread retained sizes + stack traces\
+                          \n\nFOR LEAK INVESTIGATION (start here when asked to find a leak or OOM):\
+                          \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); BEST first call for diagnosis\
+                          \n                    After reading triage: act on EVERY critical/warning item by its id:\
                           \n                    headline-retainer/threadlocal-leak → get_report(leaks); off-heap → get_report(indicators);\
                           \n                    gc-waste → query(heap-summary); component-retention-imbalance → get_report(components)\
-                          \n  \"top-objects\"  — top N biggest individual objects by retained size (add limit:N, default 20)\
-                          \n  \"top-classes\"  — top N classes by retained size with holder breakdown (add limit:N, default 20)\
-                          \n  \"overview\"     — heap totals, object count, identifier size\
-                          \n\nFOR LEAK INVESTIGATION:\
-                          \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree (BEST for 'find the leak')\
+                          \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree\
                           \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
                           \n  \"dominators\"   — big-drop objects (retain >> largest child)\
                           \n\nOTHER SECTIONS:\
-                          \n  \"threads\"      — per-thread retained sizes + stack traces (sorted by retained desc; limit controls thread count, frames capped at 20)\
                           \n  \"waste\"        — reclaimable memory: duplicate strings, empty collections\
                           \n  \"indicators\"   — anon classes, ThreadLocal null keys, DirectByteBuffer total\
                           \n  \"arrays\"       — array length distribution\
@@ -773,11 +767,12 @@ impl HprofMcpServer {
 
     /// Return information about the currently loaded dump (path, heap size, object count).
     /// Call this to check if a dump is already loaded before calling load_dump.
-    #[tool(description = "hprof-analyzer: Java heap dump analysis tool. \
-                       ALWAYS call this first to check if a dump is already loaded. \
-                       Returns {loaded:true, path, total_heap_bytes, total_objects, leak_suspects} if loaded, \
-                       or {loaded:false} if not. \
-                       If loaded=true, skip load_dump and call get_report({section:\"triage\"}) directly.")]
+    #[tool(
+        description = "Check if a heap dump is already loaded in this session. \
+                       Returns {loaded:true, path, ...} if a dump is cached, or {loaded:false}. \
+                       Skip this and call load_dump directly if you already know which file to load. \
+                       Useful when you don't have a specific file path (e.g. 'analyze the dump I already loaded')."
+    )]
     async fn get_session_info(&self) -> Result<CallToolResult, McpError> {
         let guard = self.session.lock().await;
         let result = match guard.as_ref() {
