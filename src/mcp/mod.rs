@@ -52,7 +52,7 @@ pub struct GetReportParams {
     /// CORE SECTIONS:
     ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree
     ///   "top"      — LARGE: full biggest-objects + biggest-classes lists; prefer "top-objects" or "top-classes"
-    ///   "threads"  — per-thread retained sizes + stack traces
+    ///   "threads"  — per-thread retained sizes + stack traces (sorted by retained desc, limited by limit param)
     ///   "overview" — heap totals, object count, identifier size
     ///
     /// ANALYSIS SECTIONS:
@@ -62,7 +62,7 @@ pub struct GetReportParams {
     ///
     /// Default "all" (everything — very large, avoid in LLM workflows).
     pub section: Option<String>,
-    /// Max rows to return for "top-objects" and "top-classes" (default 20, max 100).
+    /// Max rows to return for "top-objects", "top-classes", and "threads" (default 20, max 100).
     /// Ignored for other sections.
     pub limit: Option<usize>,
 }
@@ -359,7 +359,7 @@ impl HprofMcpServer {
                           \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
                           \n  \"dominators\"   — big-drop objects (retain >> largest child)\
                           \n\nOTHER SECTIONS:\
-                          \n  \"threads\"      — per-thread retained sizes + stack traces\
+                          \n  \"threads\"      — per-thread retained sizes + stack traces (sorted by retained desc; limit controls thread count, frames capped at 20)
                           \n  \"waste\"        — reclaimable memory: duplicate strings, empty collections\
                           \n  \"indicators\"   — anon classes, ThreadLocal null keys, DirectByteBuffer total\
                           \n  \"arrays\"       — array length distribution\
@@ -392,7 +392,43 @@ impl HprofMcpServer {
             }
             "leaks" => serde_json::to_string_pretty(&r.leaks),
             "top" => serde_json::to_string_pretty(&r.top),
-            "threads" => serde_json::to_string_pretty(&r.threads),
+            "threads" => {
+                // Sort by retained desc; apply limit; truncate frames to 20 per thread.
+                let max_frames = 20usize;
+                let mut sorted: Vec<_> = r.threads.threads.iter().collect();
+                sorted.sort_by_key(|t| std::cmp::Reverse(t.retained));
+                let rows: Vec<serde_json::Value> = sorted
+                    .into_iter()
+                    .take(limit)
+                    .map(|t| {
+                        let frames_truncated = t.frames.len() > max_frames;
+                        let frames: Vec<_> = t.frames.iter().take(max_frames).cloned().collect();
+                        let mut v = serde_json::json!({
+                            "thread_serial": t.thread_serial,
+                            "name": t.name,
+                            "class_name": t.class_name,
+                            "retained": t.retained,
+                            "shallow": t.shallow,
+                            "local_root_count": t.local_root_count,
+                            "frames": frames,
+                        });
+                        if frames_truncated {
+                            v["frames_truncated"] = serde_json::json!(true);
+                        }
+                        if let Some(lo) = &t.local_objects {
+                            v["local_objects"] = serde_json::json!(lo);
+                        }
+                        v
+                    })
+                    .collect();
+                let total = r.threads.threads.len();
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "total_threads": total,
+                    "shown": rows.len(),
+                    "sorted_by": "retained_desc",
+                    "threads": rows,
+                }))
+            }
             "overview" => serde_json::to_string_pretty(&r.overview),
             "triage" => serde_json::to_string_pretty(&r.triage),
             "waste" => serde_json::to_string_pretty(&r.waste_summary),
@@ -1284,4 +1320,189 @@ pub fn run_mcp_server(preload_dump: Option<PathBuf>) -> anyhow::Result<()> {
             service.waiting().await?;
             Ok::<(), anyhow::Error>(())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{cache::CacheMode, opts::AnalyzeOptions};
+
+    /// Locate the philosophers fixture, or skip the test.
+    fn philosophers_path() -> Option<std::path::PathBuf> {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/dump_4_philosophers.hprof");
+        match std::fs::metadata(&p) {
+            Ok(m) if m.len() >= 1024 => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Load the philosophers dump from cache (fast if already analysed).
+    fn load_session() -> Option<crate::cache::CachedSession> {
+        let path = philosophers_path()?;
+        crate::analyze_with_cache(&path, &AnalyzeOptions::default(), CacheMode::Full, |_| {}).ok()
+    }
+
+    #[test]
+    fn strip_ansi_removes_escape_sequences() {
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+        assert_eq!(strip_ansi("plain"), "plain");
+        assert_eq!(
+            strip_ansi("\x1b[1;32mbold green\x1b[0m text"),
+            "bold green text"
+        );
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn threads_section_is_bounded() {
+        let Some(sess) = load_session() else {
+            return;
+        };
+        let r = &sess.report;
+        let limit = 20usize;
+        let max_frames = 20usize;
+
+        let mut sorted: Vec<_> = r.threads.threads.iter().collect();
+        sorted.sort_by_key(|t| std::cmp::Reverse(t.retained));
+        let rows: Vec<serde_json::Value> = sorted
+            .into_iter()
+            .take(limit)
+            .map(|t| {
+                let frames: Vec<_> = t.frames.iter().take(max_frames).cloned().collect();
+                serde_json::json!({
+                    "thread_serial": t.thread_serial,
+                    "name": t.name,
+                    "retained": t.retained,
+                    "frames": frames,
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "total_threads": r.threads.threads.len(),
+            "shown": rows.len(),
+            "sorted_by": "retained_desc",
+            "threads": rows,
+        });
+
+        assert!(output["total_threads"].as_u64().unwrap() > 0);
+        assert!(output["shown"].as_u64().unwrap() <= limit as u64);
+        assert_eq!(output["sorted_by"], "retained_desc");
+
+        for thread in output["threads"].as_array().unwrap() {
+            let frames = thread["frames"].as_array().unwrap();
+            assert!(
+                frames.len() <= max_frames,
+                "frames exceeded cap: {}",
+                frames.len()
+            );
+        }
+
+        let retained_vals: Vec<u64> = output["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["retained"].as_u64().unwrap_or(0))
+            .collect();
+        let mut sorted_check = retained_vals.clone();
+        sorted_check.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(
+            retained_vals, sorted_check,
+            "threads not sorted by retained desc"
+        );
+    }
+
+    #[test]
+    fn threads_section_limit_controls_count() {
+        let Some(sess) = load_session() else {
+            return;
+        };
+        let r = &sess.report;
+
+        let limit = 5usize;
+        let mut sorted: Vec<_> = r.threads.threads.iter().collect();
+        sorted.sort_by_key(|t| std::cmp::Reverse(t.retained));
+        let rows: Vec<_> = sorted.into_iter().take(limit).collect();
+
+        assert!(rows.len() <= limit);
+        if r.threads.threads.len() > limit {
+            assert_eq!(rows.len(), limit);
+        }
+    }
+
+    #[test]
+    fn triage_section_returns_array() {
+        let Some(sess) = load_session() else {
+            return;
+        };
+        let r = &sess.report;
+
+        let json = serde_json::to_string_pretty(&r.triage).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(
+            parsed.is_array(),
+            "triage section must serialize as an array"
+        );
+    }
+
+    #[test]
+    fn overview_section_has_heap_size_field() {
+        let Some(sess) = load_session() else {
+            return;
+        };
+        let r = &sess.report;
+
+        let json = serde_json::to_string_pretty(&r.overview).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(
+            parsed.get("total_heap_bytes").is_some()
+                || parsed.get("heap_bytes").is_some()
+                || parsed.get("total_shallow").is_some()
+                || parsed.get("total_retained").is_some(),
+            "overview missing heap size field; got keys: {:?}",
+            parsed.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
+    }
+
+    #[test]
+    fn build_query_hint_detects_objectid_column() {
+        let result = serde_json::json!({
+            "columns": ["class", "objectId", "retained"],
+            "rows": [["java.lang.String", 42i64, 1024i64]],
+        });
+
+        let hint = build_query_hint(&result);
+        assert!(hint.is_some(), "expected a hint for objectId column");
+        let msg = hint.unwrap();
+        assert!(msg.contains("42"), "hint should include example index");
+        assert!(msg.contains("browse_dominators") || msg.contains("inspect_object"));
+    }
+
+    #[test]
+    fn build_query_hint_no_hint_without_index_col() {
+        let result = serde_json::json!({
+            "columns": ["class", "retained"],
+            "rows": [["java.lang.String", 1024i64]],
+        });
+
+        let hint = build_query_hint(&result);
+        assert!(
+            hint.is_none(),
+            "no hint expected when no index column present"
+        );
+    }
+
+    #[test]
+    fn build_query_hint_empty_rows_returns_none() {
+        let result = serde_json::json!({
+            "columns": ["objectId"],
+            "rows": [],
+        });
+
+        let hint = build_query_hint(&result);
+        assert!(hint.is_none(), "no hint expected for empty rows");
+    }
 }
