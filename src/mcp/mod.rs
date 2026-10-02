@@ -50,7 +50,7 @@ pub struct GetReportParams {
     ///   "top-classes"  — top 20 biggest classes by retained size with holder breakdown (use limit to adjust)
     ///
     /// CORE SECTIONS:
-    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree
+    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree (capped at depth 3)
     ///   "top"      — LARGE: full biggest-objects + biggest-classes lists; prefer "top-objects" or "top-classes"
     ///   "threads"  — per-thread retained sizes + stack traces (sorted by retained desc, limited by limit param)
     ///   "overview" — heap totals, object count, identifier size
@@ -390,7 +390,14 @@ impl HprofMcpServer {
                 let rows: Vec<_> = r.top.biggest_classes.iter().take(limit).collect();
                 serde_json::to_string_pretty(&rows)
             }
-            "leaks" => serde_json::to_string_pretty(&r.leaks),
+            "leaks" => {
+                // Serialize the leaks report, but cap dominator_tree depth to 3
+                // levels to avoid multi-hundred-KB trees for single suspects.
+                let mut v = serde_json::to_value(&r.leaks)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                truncate_dom_tree_depth(&mut v, 3);
+                serde_json::to_string_pretty(&v)
+            }
             "top" => serde_json::to_string_pretty(&r.top),
             "threads" => {
                 // Sort by retained desc; apply limit; truncate frames to 20 per thread.
@@ -1289,6 +1296,38 @@ fn build_query_hint(result: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Recursively cap `dominator_tree` / `children` depth in a JSON value.
+/// Any `children` array found at depth >= max_depth is replaced with an empty array.
+fn truncate_dom_tree_depth(v: &mut serde_json::Value, max_depth: usize) {
+    truncate_dom_tree_inner(v, 0, max_depth);
+}
+
+fn truncate_dom_tree_inner(v: &mut serde_json::Value, depth: usize, max_depth: usize) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if depth >= max_depth {
+                // At or past the depth cap: wipe all children arrays.
+                if let Some(children) = map.get_mut("children") {
+                    let was_empty = children.as_array().map(|a| a.is_empty()).unwrap_or(true);
+                    if !was_empty {
+                        *children = serde_json::json!([{"_truncated": true}]);
+                    }
+                }
+            } else {
+                for val in map.values_mut() {
+                    truncate_dom_tree_inner(val, depth + 1, max_depth);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                truncate_dom_tree_inner(item, depth, max_depth);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Strip ANSI escape sequences from a string (for clean error messages in MCP).
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -1555,5 +1594,64 @@ mod tests {
         let (out, name) = resolve_view_or_oql(raw);
         assert!(name.is_none(), "should not match a view name");
         assert_eq!(out, raw);
+    }
+
+    #[test]
+    fn truncate_dom_tree_strips_deep_children() {
+        let mut tree = serde_json::json!({
+            "name": "root",
+            "children": [
+                {
+                    "name": "depth1",
+                    "children": [
+                        {
+                            "name": "depth2",
+                            "children": [
+                                {
+                                    "name": "depth3",
+                                    "children": [
+                                        {"name": "depth4", "children": []}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        });
+
+        truncate_dom_tree_depth(&mut tree, 3);
+
+        // depth 0 (root) and depth 1 should be intact
+        let depth1 = &tree["children"][0];
+        assert_eq!(depth1["name"], "depth1");
+
+        // depth 2 children should be present but depth 3's children truncated
+        let depth2 = &depth1["children"][0];
+        assert_eq!(depth2["name"], "depth2");
+
+        let depth3 = &depth2["children"][0];
+        assert_eq!(depth3["name"], "depth3");
+
+        // depth 3 children should be replaced with truncation marker
+        let truncated = &depth3["children"];
+        assert!(
+            truncated
+                .as_array()
+                .map(|a| a.iter().any(|v| v.get("_truncated").is_some()))
+                .unwrap_or(false),
+            "depth 3 children should be truncated; got: {truncated}"
+        );
+    }
+
+    #[test]
+    fn truncate_dom_tree_leaves_shallow_tree_intact() {
+        let mut tree = serde_json::json!({
+            "name": "root",
+            "children": [{"name": "child", "children": []}]
+        });
+        let original = tree.clone();
+        truncate_dom_tree_depth(&mut tree, 3);
+        assert_eq!(tree, original, "shallow tree should be unchanged");
     }
 }
