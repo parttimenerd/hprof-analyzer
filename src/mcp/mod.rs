@@ -50,7 +50,7 @@ pub struct GetReportParams {
     ///   "top-classes"  — top 20 biggest classes by retained size with holder breakdown (use limit to adjust)
     ///
     /// CORE SECTIONS:
-    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree (capped at depth 3)
+    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree (capped at depth 3, 20 children/node)
     ///   "top"      — LARGE: full biggest-objects + biggest-classes lists; prefer "top-objects" or "top-classes"
     ///   "threads"  — per-thread retained sizes + stack traces (sorted by retained desc, limited by limit param)
     ///   "overview" — heap totals, object count, identifier size
