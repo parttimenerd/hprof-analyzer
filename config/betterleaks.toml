@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Zachary Rice (betterleaks contributors)
+# Source: https://github.com/betterleaks/betterleaks
+#
 # This file has been auto-generated. Do not edit manually.
 # If you would like to contribute new rules, please use
 # cmd/generate/config/main.go and follow the contributing guidelines
