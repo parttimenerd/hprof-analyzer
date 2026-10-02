@@ -1505,4 +1505,41 @@ mod tests {
         let hint = build_query_hint(&result);
         assert!(hint.is_none(), "no hint expected for empty rows");
     }
+
+    #[test]
+    fn resolve_view_or_oql_matches_known_view() {
+        let (oql, name) = resolve_view_or_oql("largest-objects");
+        assert!(name.is_some(), "should match known view");
+        assert_eq!(name.unwrap(), "largest-objects");
+        assert!(!oql.is_empty());
+    }
+
+    #[test]
+    fn resolve_view_or_oql_case_insensitive() {
+        let (_, name_lower) = resolve_view_or_oql("largest-objects");
+        let (_, name_upper) = resolve_view_or_oql("Largest-Objects");
+        assert_eq!(
+            name_lower, name_upper,
+            "case-insensitive match should return same view"
+        );
+    }
+
+    #[test]
+    fn resolve_view_or_oql_strips_run_prefix() {
+        let (oql_raw, _) = resolve_view_or_oql("largest-objects");
+        let (oql_run, name) = resolve_view_or_oql("/run largest-objects");
+        assert!(name.is_some());
+        assert_eq!(
+            oql_raw, oql_run,
+            "/run prefix should be stripped before matching"
+        );
+    }
+
+    #[test]
+    fn resolve_view_or_oql_passes_through_raw_oql() {
+        let raw = "SELECT * FROM java.lang.String LIMIT 5";
+        let (out, name) = resolve_view_or_oql(raw);
+        assert!(name.is_none(), "should not match a view name");
+        assert_eq!(out, raw);
+    }
 }
