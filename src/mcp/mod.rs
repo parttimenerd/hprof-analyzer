@@ -198,7 +198,7 @@ impl HprofMcpServer {
     #[tool(
         description = "hprof-analyzer: Load a Java heap dump (.hprof file) and cache analysis results. \
                        IMPORTANT: wait for this to complete before calling any other tool — it may take 5–15 min on first load, ~1 s on repeat loads. \
-                       After loading, call get_summary to orient, then get_histogram for class breakdown, then query for drill-down."
+                       After loading, call get_report({section:\"triage\"}) for severity-tagged diagnosis, then get_report({section:\"leaks\"}) to investigate."
     )]
     async fn load_dump(
         &self,
@@ -269,16 +269,14 @@ impl HprofMcpServer {
             "Loaded: {path}\n\
              Total heap: {heap} MB  |  Objects: {objs}\
              {redacted_note}\n\
-             ## Leak Suspects ({n_suspects} detected — from dominator-tree analysis)\n\
+             ## Leak Suspects ({n_suspects} detected)\n\
              {suspects}\n\
              ## Top Classes by Retained Size\n\
              {classes}\n\
-             NEXT STEPS — To answer \"find the leak\" or \"why OOM\":\n\
-             1. get_report({{\"section\":\"triage\"}})          — ⭐ severity-tagged signals; fastest diagnosis\n\
-             2. get_report({{\"section\":\"leaks\"}})           — root paths, accumulation points, dominated objects\n\
-             3. query({{\"oql\":\"top-retained-by-class\"}})    — which class retains most memory\n\
-             4. query({{\"oql\":\"<view-name>\"}})              — any view below (no SQL needed)\
-             {views}",
+             NEXT STEPS:\n\
+             1. get_report({{\"section\":\"triage\"}})    — ⭐ severity-tagged signals; fastest diagnosis\n\
+             2. get_report({{\"section\":\"leaks\"}})     — root paths, accumulation points, dominated objects\n\
+             3. query({{\"oql\":\"top-retained-by-class\"}}) — confirm which class retains most",
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = result.report.overview.total_objects,
@@ -286,7 +284,6 @@ impl HprofMcpServer {
             n_suspects = result.report.leaks.suspects.len(),
             suspects = suspects_text,
             classes = top_classes_text,
-            views = views_reference_table(),
         );
         *session_ref.lock().await = Some(result);
         Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
@@ -812,7 +809,7 @@ impl HprofMcpServer {
                     "top_suspect": top_suspect,
                     "graph_loaded": sess.mode == CacheMode::Graph,
                     "redacted_input": r.redacted_input,
-                    "_next": "get_summary() — human-readable overview with suspects and suggested OQL queries"
+                    "_next": "get_report({\"section\":\"triage\"}) — severity-tagged signals; fastest diagnosis"
                 });
                 if stale {
                     v["stale"] = serde_json::json!(true);
@@ -1021,38 +1018,12 @@ impl ServerHandler for HprofMcpServer {
              - get_report({\"section\":\"top-objects\"})      — top 20 biggest objects by retained size\n\
              - get_report({\"section\":\"top-classes\"})      — top 20 classes by retained size\n\
              - get_report({\"section\":\"top-objects\", \"limit\":5}) — adjust count with limit\n\
-             DO NOT use get_report({\"section\":\"top\"}) or get_report({\"section\":\"all\"}) for simple questions — they return megabytes of data.\n\n\
-             DEEP ANALYSIS WORKFLOW:\n\
-             1. get_session_info()                    — check if a dump is already loaded\n\
-             2. load_dump({path})                     — load .hprof; response includes immediate suspects\n\
-             3. get_report({\"section\":\"triage\"})      — automated severity signals; read first\n\
-             4. get_report({\"section\":\"leaks\"})       — root paths, dominated objects, dominator_tree\n\
-             5. get_histogram({limit:20})             — class breakdown by retained size\n\
-             6. get_report({\"section\":\"collections\"}) — fill ratios, map load factors, waste budget\n\
-             7. get_report({\"section\":\"waste\"})       — reclaimable bytes: duplicate strings, empty colls\n\
-             8. get_report({\"section\":\"retainers\"})   — which stack frames/fields keep things alive\n\
-             9. get_report({\"section\":\"references\"})  — Soft/Weak/Phantom reference breakdown\n\
-             10. query({oql:\"...\"})                   — custom OQL for any remaining questions\n\
-             11. browse_dominators({}) / inspect_object — follow object references\n\n\
-             PRIVACY / SHARING WORKFLOW:\n\
-             1. redact({input: \"/path/to/dump.hprof\", output: \"/tmp/dump-redacted.hprof\"})\n\
-                — lean mode (default): zeros all primitive array data; fast, single pass\n\
-             1b. redact({input: \"...\", output: \"...\", complete: true})\n\
-                — complete mode: also zeros scalar fields on instances and static fields on classes\n\
-             2. Share the -redacted.hprof file; load it with load_dump to verify\n\
-             3. Note: duplicate-string and collection fill-ratio analyses are skipped on redacted dumps\n\n\
-             ALL get_report SECTIONS: leaks, top, threads, overview, triage, waste, indicators,\n\
-               retainers, arrays, collections, references, dominators, components, alloc_sites,\n\
-               thread_locals, framework, field_stats, all\n\n\
-             SHORTCUT: All 20 view names usable in query() — e.g. query({oql:\"leak-suspects\"}).\n\
-               list_views() shows all names. leak-suspects view has >10 MB threshold; use get_report(leaks) instead.\n\n\
+             DO NOT use get_report({\"section\":\"top\"}) or get_report({\"section\":\"all\"}) — they return megabytes of data.\n\n\
              QUERY TIPS:\n\
              - Always SELECT @objectId to get indices for follow-up calls\n\
              - Objects in results appear as 'ClassName@index' — the number after '@' is the object_index\n\
-             - Use INSTANCEOF to match a class and all its subclasses\n\
-             - GROUP BY classof(x) to aggregate by class\n\
              - @retainedHeapSize = everything kept alive by this object (most useful for leak detection)\n\
-             - @usedHeapSize = shallow size (just the object itself)"
+             - Use INSTANCEOF to match subclasses; GROUP BY classof(x) to aggregate"
                 .to_string(),
         )
     }
@@ -1248,29 +1219,6 @@ fn resolve_view_or_oql(input: &str) -> (&str, Option<&str>) {
     }
     // Looks like raw OQL
     (trimmed, None)
-}
-
-/// Build a compact table of all named views for embedding in responses.
-fn views_reference_table() -> String {
-    let mut out = String::from("\n\n## Available Views (use directly in query())\n\n");
-    let mut cur_group = "";
-    for nq in NAMED_QUERIES {
-        if nq.group != cur_group {
-            if !cur_group.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&format!("**{}**\n", nq.group));
-            cur_group = nq.group;
-        }
-        let marker = if nq.needs_retained { " ★" } else { "" };
-        out.push_str(&format!("  `{}`{} — {}\n", nq.name, marker, nq.display));
-    }
-    out.push_str("\n★ = uses @retainedHeapSize (always available after load_dump)\n");
-    out.push_str("Usage: query({\"oql\": \"<view-name>\"})  — no SQL needed\n");
-    out.push_str(
-        "For reliable leak detection (all heap sizes): get_report({\"section\":\"leaks\"})\n",
-    );
-    out
 }
 
 /// Build a usage hint for query results that contain object indices.
