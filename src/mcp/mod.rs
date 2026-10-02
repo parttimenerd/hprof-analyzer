@@ -355,6 +355,9 @@ impl HprofMcpServer {
                           \n\n⚠ INDEX NOTE: obj_index_1based in leaks JSON (dominator_tree + root_path) is 1-BASED — subtract 1 before passing to browse_dominators/inspect_object. browse_dominators 'index' and query @objectId are 0-based (use directly).\
                           \n\nFOR SIMPLE QUESTIONS — use these focused sections (small output, fast):\
                           \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); BEST first call after load_dump\
+                          \n                    After reading triage: act on EVERY critical/warning item — each has an id that tells you what to do next:\
+                          \n                    headline-retainer/threadlocal-leak → get_report(leaks); off-heap → get_report(indicators);\
+                          \n                    gc-waste → query(heap-summary); component-retention-imbalance → get_report(components)\
                           \n  \"top-objects\"  — top N biggest individual objects by retained size (add limit:N, default 20)\
                           \n  \"top-classes\"  — top N classes by retained size with holder breakdown (add limit:N, default 20)\
                           \n  \"overview\"     — heap totals, object count, identifier size\
@@ -363,7 +366,7 @@ impl HprofMcpServer {
                           \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
                           \n  \"dominators\"   — big-drop objects (retain >> largest child)\
                           \n\nOTHER SECTIONS:\
-                          \n  \"threads\"      — per-thread retained sizes + stack traces (sorted by retained desc; limit controls thread count, frames capped at 20)
+                          \n  \"threads\"      — per-thread retained sizes + stack traces (sorted by retained desc; limit controls thread count, frames capped at 20)\
                           \n  \"waste\"        — reclaimable memory: duplicate strings, empty collections\
                           \n  \"indicators\"   — anon classes, ThreadLocal null keys, DirectByteBuffer total\
                           \n  \"arrays\"       — array length distribution\
@@ -1006,6 +1009,11 @@ impl ServerHandler for HprofMcpServer {
              ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
              1. load_dump({path})                        — load the file\n\
              2. get_report({\"section\":\"triage\"})         — ⭐ severity-tagged signals; fastest diagnosis\n\
+                AFTER READING TRIAGE: act on every critical/warning item by its id:\n\
+                  headline-retainer/threadlocal-leak → get_report(leaks)\n\
+                  off-heap → get_report(indicators) for DirectByteBuffer total\n\
+                  gc-waste → query(heap-summary) to see what's accumulating\n\
+                  component-retention-imbalance → get_report(components)\n\
              3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree\n\
              4. browse_dominators({object_index: ...})   — drill into accumulation point\n\
              5. get_report({\"section\":\"top-classes\"})     — which classes dominate memory\n\n\
