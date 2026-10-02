@@ -1249,13 +1249,19 @@ fn build_query_hint(result: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Recursively cap `dominator_tree` / `children` depth in a JSON value.
-/// Any `children` array found at depth >= max_depth is replaced with an empty array.
+/// Recursively cap `dominator_tree` / `children` depth and width in a JSON value.
+/// Any `children` array found at depth >= max_depth is replaced with a truncation marker.
+/// At any depth, children arrays are also capped to max_width entries.
 fn truncate_dom_tree_depth(v: &mut serde_json::Value, max_depth: usize) {
-    truncate_dom_tree_inner(v, 0, max_depth);
+    truncate_dom_tree_inner(v, 0, max_depth, 20);
 }
 
-fn truncate_dom_tree_inner(v: &mut serde_json::Value, depth: usize, max_depth: usize) {
+fn truncate_dom_tree_inner(
+    v: &mut serde_json::Value,
+    depth: usize,
+    max_depth: usize,
+    max_width: usize,
+) {
     match v {
         serde_json::Value::Object(map) => {
             if depth >= max_depth {
@@ -1267,14 +1273,24 @@ fn truncate_dom_tree_inner(v: &mut serde_json::Value, depth: usize, max_depth: u
                     }
                 }
             } else {
+                // Width cap: trim children array before recursing.
+                if let Some(children) = map.get_mut("children") {
+                    if let Some(arr) = children.as_array_mut() {
+                        let total = arr.len();
+                        if total > max_width {
+                            arr.truncate(max_width);
+                            arr.push(serde_json::json!({"_truncated": true, "_omitted": total - max_width}));
+                        }
+                    }
+                }
                 for val in map.values_mut() {
-                    truncate_dom_tree_inner(val, depth + 1, max_depth);
+                    truncate_dom_tree_inner(val, depth + 1, max_depth, max_width);
                 }
             }
         }
         serde_json::Value::Array(arr) => {
             for item in arr.iter_mut() {
-                truncate_dom_tree_inner(item, depth, max_depth);
+                truncate_dom_tree_inner(item, depth, max_depth, max_width);
             }
         }
         _ => {}
@@ -1606,5 +1622,33 @@ mod tests {
         let original = tree.clone();
         truncate_dom_tree_depth(&mut tree, 3);
         assert_eq!(tree, original, "shallow tree should be unchanged");
+    }
+
+    #[test]
+    fn truncate_dom_tree_caps_width_at_20() {
+        // Build a node with 50 children
+        let children: Vec<serde_json::Value> = (0..50)
+            .map(|i| serde_json::json!({"name": format!("child{i}"), "children": []}))
+            .collect();
+        let mut tree = serde_json::json!({"name": "root", "children": children});
+
+        truncate_dom_tree_depth(&mut tree, 3);
+
+        let kept = tree["children"].as_array().unwrap();
+        assert_eq!(
+            kept.len(),
+            21, // 20 real + 1 truncation marker
+            "should keep 20 children + 1 truncation marker"
+        );
+        let marker = &kept[20];
+        assert!(
+            marker.get("_truncated").is_some(),
+            "last entry should be truncation marker"
+        );
+        assert_eq!(
+            marker["_omitted"],
+            serde_json::json!(30),
+            "should report 30 omitted children"
+        );
     }
 }
