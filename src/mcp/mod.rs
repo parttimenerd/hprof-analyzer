@@ -443,7 +443,21 @@ impl HprofMcpServer {
             "thread_locals" => serde_json::to_string_pretty(&r.thread_local_analysis),
             "framework" => serde_json::to_string_pretty(&r.framework_analysis),
             "field_stats" => serde_json::to_string_pretty(&r.field_stats),
-            _ => serde_json::to_string_pretty(r),
+            section => {
+                if section != "all" {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "Unknown section {:?}. Valid sections: top-objects, top-classes, \
+                             leaks, top, threads, overview, triage, waste, indicators, retainers, \
+                             arrays, collections, references, dominators, components, alloc_sites, \
+                             thread_locals, framework, field_stats, all",
+                            section
+                        ),
+                        None,
+                    ));
+                }
+                serde_json::to_string_pretty(r)
+            }
         }
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
