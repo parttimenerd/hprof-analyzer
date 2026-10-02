@@ -4,6 +4,8 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-10-02
+
 ### Added
 
 - **Browser UI: `?file=<url>` query parameter.** Opening the browser UI with
@@ -18,6 +20,25 @@ All notable changes to hprof-analyzer are documented here.
 - **`hprof-redact` moved to its own workspace crate (`crates/hprof-redact`,
   `publish = false`).** The binary no longer appears in `cargo install
   hprof-analyzer`; it is built and distributed exclusively by CI.
+
+- **MCP: `get_summary` tool removed.** It was redundant with the `load_dump`
+  response, which now embeds a ready-to-run OQL query for the top leak suspect.
+  Agents should call `get_report({section:"triage"})` or `get_report({section:"leaks"})`
+  instead.
+
+- **MCP: `get_report({section:"top-classes"})` default limit reduced from 20 to 10.**
+  Each top-classes row carries holder breakdown data, making 20 rows
+  disproportionately large. Pass `limit` explicitly for more rows.
+
+- **MCP: dominator tree width capped at 20 children per node in leaks section.**
+  Previously a single node with thousands of children could produce multi-MB
+  responses. Truncated nodes carry `{"_truncated":true,"_omitted":<n>}`.
+
+- **MCP: `get_report` section routing clarified.** Tool description now
+  explicitly separates "simple question" sections (`top-classes`, `top-objects`,
+  `overview`, `threads`) from "leak investigation" sections (`triage`, `leaks`,
+  `retainers`, `dominators`), reducing unnecessary `triage` calls for histogram
+  lookups.
 
 ## [0.3.0] — 2026-09-09
 

@@ -320,12 +320,11 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 
 | Tool | Description |
 |------|-------------|
-| `get_session_info` | Check if a dump is loaded and see basic stats. Call this first. |
+| `get_session_info` | Check if a dump is loaded and see basic stats. Skip this if you already know the path. |
 | `get_oql_docs` | OQL language reference + workflow guide. No dump needed. |
 | `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file. Fast after first run. |
-| `get_summary` | Top 5 leak suspects + top 5 classes by retained size. |
 | `get_histogram` | Class histogram with instance + retained counts. |
-| `get_report` | Full report or a named section as JSON. Core: `leaks`, `top`, `threads`, `overview`. Analysis: `triage` ⭐, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`. Default: `all`. |
+| `get_report` | Full report or a named section as JSON. Simple questions: `top-classes`, `top-objects`, `overview`, `threads`. Leak investigation: `triage` ⭐, `leaks`, `retainers`, `dominators`, `indicators`. Default: `all`. |
 | `list_views` | List all 20 built-in named query views (usable directly in `query()`). |
 | `query` | Run an OQL query or a built-in view by name; returns `{columns, rows, row_count, truncated}`. |
 | `browse_dominators` | Navigate dominator tree. Omit `object_index` to start at the GC root. |
@@ -335,15 +334,14 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 ### Typical investigation
 
 ```
-1. get_session_info                     — check if a dump is already loaded
+1. get_session_info                     — check if a dump is already loaded (skip if you know the path)
 2. load_dump({path})                    — load the dump (fast from cache after first run)
 3. get_report({section:"triage"})  ⭐  — automated severity signals; fastest orientation
 4. get_report({section:"leaks"})        — root paths, accumulation points, dominated objects
-5. get_summary                          — top suspects + suggested OQL queries
-6. get_histogram                        — class-level breakdown by retained size
-7. query({oql:"..."})                   — drill in with OQL (or use a view name)
-8. browse_dominators                    — navigate the dominator tree from root or a suspect
-9. inspect_object                       — details on a specific object
+5. get_histogram                        — class-level breakdown by retained size
+6. query({oql:"..."})                   — drill in with OQL (or use a view name)
+7. browse_dominators                    — navigate the dominator tree from root or a suspect
+8. inspect_object                       — details on a specific object
 ```
 
 **Tip:** call `get_oql_docs({topic:"examples"})` for 20 worked queries covering common patterns: string waste, leak detection, dominator walk, thread locals, etc.
