@@ -1277,10 +1277,7 @@ mod tests {
         use std::sync::Arc;
 
         let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").expect("bind ephemeral"));
-        let addr = match server.server_addr() {
-            tiny_http::ListenAddr::IP(a) => a,
-            other => panic!("expected IP addr, got {other:?}"),
-        };
+        let addr = server.server_addr().to_ip().expect("expected an IP addr");
         let state = Arc::new(ServerState::load(FIXTURE, 5, true).expect("load"));
 
         let srv = Arc::clone(&server);
