@@ -1781,7 +1781,7 @@ impl InboundBuilder {
                     let addr = try_read!(r.id());
                     try_read!(r.skip(4)); // stack_trace_serial
                     let count = try_read!(r.u4()) as u64;
-                    let _elem_class_id = try_read!(r.id());
+                    let elem_class_id = try_read!(r.id());
                     let byte_len = count.saturating_mul(ids);
                     try_read!(r.read_bytes_reuse(scratch, byte_len as usize));
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
@@ -1792,6 +1792,19 @@ impl InboundBuilder {
                     };
 
                     let mut fwd: Vec<u32> = Vec::new();
+
+                    // Edge: object array → element class object. `fill_heap_2b`
+                    // emits this (`add_edge!(src_idx, elem_class_id, false, 0)`);
+                    // the rescan used to discard elem_class_id, dropping every
+                    // such edge and under-filling the inbound CSR.
+                    if let Some(dst) = cache.index_of(id_map, elem_class_id) {
+                        inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
+                        in_cursors[dst] += 1;
+                        if COLLECT_FWD {
+                            fwd.push(dst as u32);
+                        }
+                    }
+
                     for i in 0..count as usize {
                         let off = i * id_size as usize;
                         if off + id_size as usize <= scratch.len() {

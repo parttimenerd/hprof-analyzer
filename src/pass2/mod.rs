@@ -1530,6 +1530,15 @@ impl Pass2 {
         // Package the deferred inbound-CSR construction. Moves id_map,
         // class_addrs, field_plans and synthetic_edges out of build (all
         // unused here after the forward fill).
+        //
+        // NOTE: class_addr_to_hist / field_plans_dense are REQUIRED by the
+        // rescan path (`InboundBuilder::build_mat_scan`, taken when
+        // total_inb > 1e9). Passing empty containers here made that path skip
+        // every instance-field edge silently (`if let Some(..)` over an empty
+        // map), producing a wrong dominator tree — and therefore wrong retained
+        // sizes — on every dump above the threshold. The transpose path
+        // (`build_from_fwd`) drops them unused, which is why the defect was
+        // invisible on small dumps.
         let inbound = InboundBuilder {
             source: source.clone(),
             id_size,
@@ -1537,9 +1546,8 @@ impl Pass2 {
             id_map: Some(p1.id_map),
             id_map_c: None,
             id_map_codec: crate::cvec::Codec::None,
-            // build_from_fwd drops these immediately; build() (file-scan path) is unused.
-            class_addr_to_hist: HashMap::new(),
-            field_plans_dense: Vec::new(),
+            class_addr_to_hist,
+            field_plans_dense,
             in_cursors,
             total_inb,
             synthetic_edges,
