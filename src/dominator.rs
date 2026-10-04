@@ -11,16 +11,8 @@
 //!
 //! 1. Compute semidominators `semi[w]` for every vertex `w` (reverse pre-order),
 //!    using an eval/link union-find with path compression over predecessors.
-//! 2. Compute immediate dominators (forward pre-order) as the nearest common
-//!    ancestor, **in the dominator tree**, of each vertex's DFS parent and its
-//!    semidominator: `idom[w] = NCA(parent_pre[w], vertex[semi[w]])`. Each step
-//!    walks up the already-built part of the dominator tree, so it is an
-//!    incremental NCA against a tree that is still being assembled.
-//!
-//!    (Not the *semidominator* forest, despite the name overlap: implementing
-//!    step 2 against that forest instead gives wrong idoms. Verified by brute
-//!    force over 400 random graphs / 2219 reachable nodes — 0 mismatches for
-//!    the dominator tree, 91 for the semidominator forest.)
+//! 2. Compute immediate dominators via nearest-common-ancestor in the
+//!    semidominator forest (forward pre-order).
 //!
 //! # Indexing convention
 //! Objects are 0..n-1; the virtual root is index `n`.
@@ -73,6 +65,32 @@ pub fn compute_dominators(
     }
     crate::trace::probe("dominator: after init loop (semi/ancestor/label resident)");
 
+    // ── Diagnostic (HPROF_DBG_GRAPH=1): DFS spanning-tree sanity.
+    // In a DFS pre-order a node's parent always has a strictly smaller
+    // pre-order number, so parent_pre[i] >= i would mean the numbering is
+    // broken. parent_pre[i] == 0 means the node is a direct child of the
+    // virtual root in the DFS tree (should be ~= the GC-root count).
+    if std::env::var_os("HPROF_DBG_GRAPH").is_some() {
+        let mut bad = 0u64;
+        let mut at_vroot = 0u64;
+        for i in 1..count {
+            let p = rpo.parent_pre[i];
+            if p as usize >= i {
+                bad += 1;
+            }
+            if p == 0 {
+                at_vroot += 1;
+            }
+        }
+        eprintln!(
+            "[dbg] rpo tree: count={} parent_pre>=self={} parent_pre==vroot={} ({:.2}%)",
+            count,
+            bad,
+            at_vroot,
+            at_vroot as f64 * 100.0 / count as f64
+        );
+    }
+
     // vr_adjacent: which nodes have an implicit virtual-root predecessor (GC roots).
     // For these, the virtual root is always a predecessor in the eval step.
     let mut vr_adjacent = crate::bitset::Bitset::with_len(n + 1);
@@ -97,6 +115,14 @@ pub fn compute_dominators(
     //   Exhausted: return an io::Error so the caller exits cleanly with a clear
     //              message rather than emitting a silently-wrong dominator tree.
     let mut recovered_index: Option<Vec<u64>> = None;
+    // Diagnostic (HPROF_DBG_EXACT_OFF=1): force the Tier-2 exact per-node offset
+    // index so the blocked seek/skip framing is bypassed entirely. Lets us A/B
+    // "blocked decode is wrong" against "the algorithm is wrong". No behaviour
+    // change when the variable is unset.
+    if std::env::var_os("HPROF_DBG_EXACT_OFF").is_some() {
+        eprintln!("[dominator] forcing exact per-node offset index (HPROF_DBG_EXACT_OFF)");
+        recovered_index = Some(build_exact_offsets(n, inb_data)?);
+    }
     let mut attempt = 0u32;
     loop {
         // Reset the union-find work arrays for this attempt.
@@ -117,7 +143,109 @@ pub fn compute_dominators(
             &mut label,
         );
         match res {
-            Ok(()) => break,
+            Ok(()) => {
+                // Diagnostic (HPROF_DBG_GRAPH=1): how many nodes already got the
+                // virtual root as semidominator in Phase 1. If this is huge, the
+                // semidominator pass is where the tree collapses; if it is small
+                // while idom==vroot is huge, the NCA pass is at fault.
+                if std::env::var_os("HPROF_DBG_GRAPH").is_some() {
+                    let zero = semi.iter().filter(|&&s| s == 0).count();
+                    // LT invariant: semi[w] <= preorder(parent[w]) must always hold.
+                    let bad = (1..count)
+                        .filter(|&i| (semi[i] as usize) > (rpo.parent_pre[i] as usize))
+                        .count();
+                    // For sampled violators of semi<=parent_pre, decode the node's
+                    // predecessor list and check whether the DFS parent edge is in it.
+                    // If it is missing, the DFS tree (built from the forward CSR) and
+                    // the predecessor lists (built by a separate inbound rescan)
+                    // disagree about where the edges are attached.
+                    let mut viol_sampled = 0u64;
+                    let mut missing_parent_edge = 0u64;
+                    let mut zero_preds = 0u64;
+                    let vstep = (count / 20_000).max(1);
+                    for vi in (1..count).step_by(vstep) {
+                        if (semi[vi] as usize) <= (rpo.parent_pre[vi] as usize) {
+                            continue;
+                        }
+                        viol_sampled += 1;
+                        let w_node = rpo.vertex[vi] as usize;
+                        let block = w_node / crate::pass2::INB_BLOCK;
+                        if block >= inb_block_off.len() {
+                            continue;
+                        }
+                        let mut p = inb_block_off[block] as usize;
+                        let mut ok = true;
+                        for _ in (block * crate::pass2::INB_BLOCK)..w_node {
+                            if p < inb_data.len() && inb_data[p] == 0 {
+                                p += 1;
+                                continue;
+                            }
+                            match decode_checked(inb_data, p) {
+                                Some((cnt, c0)) => {
+                                    p += c0;
+                                    match skip_vbytes(inb_data, p, cnt) {
+                                        Some(np) => p = np,
+                                        None => {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if !ok {
+                            continue;
+                        }
+                        let (cnt_w, c0) = match decode_checked(inb_data, p) {
+                            Some(x) => x,
+                            None => continue,
+                        };
+                        p += c0;
+                        if cnt_w == 0 {
+                            zero_preds += 1;
+                            continue;
+                        }
+                        let want = rpo.parent_pre[vi];
+                        let mut prev = 0u32;
+                        let mut found = false;
+                        for _ in 0..cnt_w {
+                            match decode_checked(inb_data, p) {
+                                Some((d, c)) => {
+                                    p += c;
+                                    let pv = prev.wrapping_add(d);
+                                    prev = pv;
+                                    if pv == want {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        if !found {
+                            missing_parent_edge += 1;
+                        }
+                    }
+                    eprintln!(
+                        "[dbg] parent-edge: violators_sampled={} missing_dfs_parent_edge={} zero_preds={}",
+                        viol_sampled, missing_parent_edge, zero_preds
+                    );
+                    eprintln!(
+                        "[dbg] phase1 done: count={} semi==vroot={} ({:.2}%)  semi>parent_pre={} ({:.3}%)",
+                        count,
+                        zero,
+                        zero as f64 * 100.0 / count as f64,
+                        bad,
+                        bad as f64 * 100.0 / count as f64
+                    );
+                }
+
+                break;
+            }
             Err(desync) => {
                 attempt += 1;
                 if attempt == 1 {
@@ -154,17 +282,50 @@ pub fn compute_dominators(
     }
     drop(recovered_index);
 
+    // ── Production guard: the Lengauer-Tarjan invariant ──────────────────────
+    // A node's DFS parent is always one of its predecessors (the DFS tree is
+    // built from the graph's own out-edges) and `semi[w]` is the minimum over
+    // predecessors, so `semi[w] <= preorder(parent[w])` is a theorem, not a
+    // heuristic — it needs no external oracle to check. A violation PROVES the
+    // predecessor lists and the DFS tree disagree about where the edges are
+    // attached, hence that any dominator tree built from them is wrong. That is
+    // the silent-wrong-answer failure mode the recovery ladder above exists to
+    // prevent — and note the ladder cannot catch it, because it only fires on a
+    // decode that runs out of bounds, while this disagreement stays in bounds.
+    // So check it here and fail loudly rather than emit the tree. One O(count)
+    // integer scan, no allocation; never fires for a consistent graph.
+    //
+    // Runs after the loop (i.e. after the HPROF_DBG_GRAPH=1 diagnostic block, so
+    // a debug run still gets its full violator breakdown before failing).
+    let semi_bad_count = (1..count)
+        .filter(|&i| (semi[i] as usize) > (rpo.parent_pre[i] as usize))
+        .count();
+    if semi_bad_count > 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "dominator: the Lengauer-Tarjan invariant semi[w] <= preorder(parent[w]) \
+                 is violated by {} of {} reachable nodes ({:.3}%). The predecessor lists \
+                 disagree with the DFS tree, so the dominator tree — and every retained \
+                 size derived from it — would be wrong. This means the inbound CSR was \
+                 not built from the same edge set as the graph; compare the transpose \
+                 path against the rescan path (HPROF_FORCE_RESCAN_INBOUND=1 reproduces \
+                 inbound-path divergence on a small dump).",
+                semi_bad_count,
+                count,
+                semi_bad_count as f64 * 100.0 / count as f64
+            ),
+        ));
+    }
+
     // Phase 1 done: `ancestor` and `label` are dead. Reuse `ancestor`'s
     // buffer as `idom_pre` (no new allocation) and free `label`.
     let mut idom_pre = ancestor;
     crate::trace::drop_vec(label);
 
     // ── Phase 2: compute immediate dominators (forward pre-order) ────────
-    // SEMI-NCA: idom[w] = NCA(parent[w], vertex[semi[w]]) in the dominator
-    // tree — i.e. walk up the DOMINATOR tree from w's DFS parent, stopping at
-    // the first vertex whose pre-order <= semi[w]. Walking the *parent* chain
-    // instead would stop at a vertex that is merely higher in the DFS tree but
-    // need not dominate w.
+    // SEMI-NCA: idom[w] = nearest ancestor of parent[w] on the DFS path
+    // whose pre-order <= semi[w].
     idom_pre[0] = 0;
     for i in 1..count {
         let mut d = rpo.parent_pre[i];
@@ -193,6 +354,40 @@ pub fn compute_dominators(
         idom[node] = if dom_pre == 0 { vroot } else { dom_node };
     }
 
+    // ── Diagnostic (HPROF_DBG_GRAPH=1): provable-invariant checks.
+    // These need no external oracle: violating either means the tree is wrong.
+    if std::env::var_os("HPROF_DBG_GRAPH").is_some() {
+        // Dominator-definition invariant: idom[w] must be an ancestor of w in the
+        // DFS tree. Walk up parent_pre from w and look for idom[w].
+        let mut idom_not_ancestor = 0u64;
+        let mut checked = 0u64;
+        // Sample: the full check is O(n * depth).
+        let step = (count / 200_000).max(1);
+        for i in (1..count).step_by(step) {
+            checked += 1;
+            let want = idom_pre[i];
+            let mut d = i as u32;
+            let mut hops = 0u32;
+            let mut found = want == 0; // pre-order 0 == virtual root, always an ancestor
+            while !found && d != 0 && hops < 1_000_000 {
+                d = rpo.parent_pre[d as usize];
+                hops += 1;
+                if d == want {
+                    found = true;
+                }
+            }
+            if !found {
+                idom_not_ancestor += 1;
+            }
+        }
+        eprintln!(
+            "[dbg] invariants: semi>parent_pre={} ({:.3}%)  sampled={} idom_not_dfs_ancestor={}",
+            semi_bad_count,
+            semi_bad_count as f64 * 100.0 / count as f64,
+            checked,
+            idom_not_ancestor
+        );
+    }
     Ok(idom)
 }
 
@@ -516,6 +711,41 @@ mod tests {
         assert_eq!(idom[0], 3, "idom[0]=vroot");
         assert_eq!(idom[1], 0);
         assert_eq!(idom[2], 1);
+    }
+
+    /// Regression for the silent-wrong-tree failure mode: the inbound CSR must be
+    /// the exact transpose of the forward CSR the DFS ran on. Building the two
+    /// *inconsistently* — node 1's predecessor omitted even though the forward
+    /// graph has the edge 0 -> 1 — used to produce a plausible but wrong tree
+    /// with no error and no warning. The production invariant guard
+    /// (`semi[w] <= preorder(parent[w])`) must refuse it instead.
+    #[test]
+    fn inconsistent_inbound_vs_forward_is_rejected() {
+        let fwd_off = vec![0u32, 1, 2, 2];
+        let fwd_tgt = make_fwd_tgt(vec![1u32, 2u32]);
+        let roots = vec![0u32];
+
+        let run = |preds: Vec<Vec<u32>>| {
+            let mut rpo = rpo_dfs(3, &roots, &fwd_off, &fwd_tgt);
+            rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
+            let (o, d) = build_inb(3, &preds, &rpo.dfn);
+            compute_dominators(3, rpo, &roots, &o, &d)
+        };
+
+        // Consistent: node 1's predecessor is 0; node 2's is 1.
+        let consistent = run(vec![vec![], vec![0u32], vec![1u32]]).expect("consistent pair");
+        assert_eq!(consistent[1], 0, "consistent: 1 dominated by 0");
+
+        // Inconsistent: node 1's predecessor is missing although fwd has 0 -> 1,
+        // so node 1's decoded predecessor list is empty even though its DFS
+        // parent is node 0. semi[1] therefore stays 1, above preorder(parent[1]).
+        let err = run(vec![vec![], vec![], vec![1u32]])
+            .expect_err("inconsistent inbound must be rejected, not silently used");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Lengauer-Tarjan invariant"),
+            "unexpected error message: {msg}"
+        );
     }
 
     #[test]
