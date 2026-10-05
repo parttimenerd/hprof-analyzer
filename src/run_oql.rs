@@ -27,6 +27,7 @@ impl query::runflags::ClassIndexResolver for NoClassIndex {
 
 /// True if this query (or any UNION branch) uses an edge feature
 /// (`@inbounds` / `@outbounds` / `path()`).
+#[allow(dead_code)]
 pub(crate) fn query_uses_edges(q: &query::ast::Query) -> bool {
     query::runflags::plan_run(
         std::slice::from_ref(q),
@@ -40,6 +41,7 @@ pub(crate) fn query_uses_edges(q: &query::ast::Query) -> bool {
 /// The two query-gated edge structures built at the forward-CSR hook: the
 /// forward store (`@outbounds`/`path`) and a bounded inbound `(in_off, in_tgt)`
 /// CSR (`@inbounds`). Both `None` on a no-edge run.
+#[allow(dead_code)]
 pub(crate) type RetainedEdgeStructs = (
     Option<crate::query::retained_edges::RetainedEdges>,
     Option<(Vec<u32>, Vec<u32>)>,

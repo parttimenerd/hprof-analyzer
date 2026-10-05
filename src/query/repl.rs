@@ -5818,7 +5818,7 @@ fn fmt_time_hms() -> String {
     #[cfg(unix)]
     {
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        let t = secs as libc::time_t;
+        let t = secs as i64;
         unsafe {
             libc::localtime_r(&t, &mut tm);
         }
