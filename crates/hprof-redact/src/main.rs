@@ -8,6 +8,7 @@
 //! Usage:
 //!   hprof-redact <INPUT> <OUTPUT>             # lean mode (default)
 //!   hprof-redact --complete <INPUT> <OUTPUT>  # complete (two-pass) mode
+//!   hprof-redact --check <INPUT>              # check if already redacted
 //!   hprof-redact - <OUTPUT>                   # stdin → file
 //!   hprof-redact <INPUT> -                    # file  → stdout (raw .hprof only)
 //!   hprof-redact - -                          # stdin → stdout
@@ -27,6 +28,7 @@ use std::{
 };
 
 use hprof_analyzer::{
+    pass1::Pass1,
     redact::{RedactMode, redact},
     source::HprofSource,
 };
@@ -34,12 +36,15 @@ use hprof_analyzer::{
 fn usage() -> ! {
     eprintln!(
         "Usage: hprof-redact [--complete] <INPUT> <OUTPUT>\n\
+         Usage: hprof-redact --check <INPUT>\n\
          \n\
          INPUT    path to .hprof/.hprof.gz/.hprof.zip, or '-' to read from stdin\n\
          OUTPUT   output path (.hprof / .hprof.gz / .hprof.zip), or '-' for stdout\n\
          \n\
          --complete  two-pass mode: also zeros scalar fields on instances and static\n\
                      fields on classes. Default is lean (single pass, arrays only).\n\
+         --check     check whether INPUT is already redacted. Exits 0 if redacted,\n\
+                     1 if not, 2 on error. No OUTPUT required.\n\
          \n\
          Preserves the object graph. Output readable by hprof-analyzer, Eclipse MAT, jhat.\n\
          \n\
@@ -47,6 +52,7 @@ fn usage() -> ! {
          \n\
          hprof-redact dump.hprof redacted.hprof\n\
          hprof-redact --complete dump.hprof redacted.hprof\n\
+         hprof-redact --check dump.hprof\n\
          hprof-redact dump.hprof.gz redacted.hprof.gz\n\
          cat dump.hprof | hprof-redact - redacted.hprof\n\
          hprof-redact dump.hprof - | gzip > redacted.hprof.gz"
@@ -54,19 +60,53 @@ fn usage() -> ! {
     process::exit(1)
 }
 
+fn run_check(input: &str) {
+    let source: HprofSource = if input == "-" {
+        let mut buf = Vec::new();
+        if let Err(e) = io::stdin().read_to_end(&mut buf) {
+            eprintln!("hprof-redact: {e}");
+            process::exit(2);
+        }
+        HprofSource::from_bytes(buf, "stdin.hprof")
+    } else {
+        HprofSource::from(input)
+    };
+    match Pass1::run(&source, false) {
+        Ok(p1) => {
+            if p1.redacted {
+                println!("redacted");
+                process::exit(0);
+            } else {
+                println!("not redacted");
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("hprof-redact: {e}");
+            process::exit(2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let (mode, input, output) = match args.as_slice() {
-        [_, input, output] => (RedactMode::Lean, input.as_str(), output.as_str()),
+    match args.as_slice() {
+        [_, flag, input] if flag == "--check" => {
+            run_check(input);
+        }
+        [_, input, output] => {
+            if let Err(e) = run(input, output, RedactMode::Lean) {
+                eprintln!("hprof-redact: {e}");
+                process::exit(1);
+            }
+        }
         [_, flag, input, output] if flag == "--complete" => {
-            (RedactMode::Complete, input.as_str(), output.as_str())
+            if let Err(e) = run(input, output, RedactMode::Complete) {
+                eprintln!("hprof-redact: {e}");
+                process::exit(1);
+            }
         }
         _ => usage(),
-    };
-
-    if let Err(e) = run(input, output, mode) {
-        eprintln!("hprof-redact: {e}");
-        process::exit(1);
     }
 }
 

@@ -420,6 +420,18 @@ enum Cmd {
         #[arg(long)]
         complete: bool,
     },
+    /// Check whether a heap dump has already been redacted.
+    ///
+    /// Exits 0 and prints "redacted" if the redaction marker (tag 0xDE) is
+    /// present anywhere in the file. Exits 1 and prints "not redacted" if it
+    /// is absent. Exits 2 on I/O error.
+    ///
+    /// Accepts .hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz.
+    CheckRedacted {
+        /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+    },
     /// Scan a heap dump for secrets: API keys, tokens, passwords, and other
     /// credentials left in JVM memory. Patterns sourced from betterleaks
     /// (https://github.com/betterleaks/betterleaks, MIT License).
@@ -782,6 +794,25 @@ fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
     } else {
         let file = File::create(output)?;
         hprof_analyzer::redact::redact(&source, file, mode, progress)
+    }
+}
+
+fn run_check_redacted(input: &str) {
+    let source = source::HprofSource::from(input);
+    match pass1::Pass1::run(&source, false) {
+        Ok(p1) => {
+            if p1.redacted {
+                println!("redacted");
+                std::process::exit(0);
+            } else {
+                println!("not redacted");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -1213,6 +1244,9 @@ fn main() {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
+        }
+        Some(Cmd::CheckRedacted { input }) => {
+            run_check_redacted(&input);
         }
         Some(Cmd::DetectSecrets {
             input,
