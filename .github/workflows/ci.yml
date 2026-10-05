@@ -487,19 +487,20 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           BASE_URL="https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly"
+          NIGHTLY_DATE=$(date -u '+%Y.%m.%d')
 
           cd tap
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" <<'PYEOF'
+          python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" "$NIGHTLY_DATE" <<'PYEOF'
           import sys
-          base_url, sha_mac, sha_x86, sha_arm = sys.argv[1:]
+          base_url, sha_mac, sha_x86, sha_arm, version = sys.argv[1:]
           nightly = f'''class HprofAnalyzerNightly < Formula
             desc "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)"
             homepage "https://github.com/parttimenerd/hprof-analyzer"
             license "MIT"
-            version "nightly"
+            version "{version}"
 
             on_macos do
               on_arm do
