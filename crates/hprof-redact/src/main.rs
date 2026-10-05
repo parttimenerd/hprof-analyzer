@@ -28,7 +28,7 @@ use std::{
 };
 
 use hprof_analyzer::{
-    pass1::Pass1,
+    Pass1,
     redact::{RedactMode, redact},
     source::HprofSource,
 };
