@@ -4,6 +4,16 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`hprof-analyzer check-redacted <INPUT>`** — new subcommand that exits 0
+  and prints `redacted` if the dump contains the redaction marker (tag `0xDE`),
+  or exits 1 and prints `not redacted` otherwise. Exits 2 on I/O error.
+  Accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tar.gz`, `.tgz`.
+
+- **`hprof-redact --check <INPUT>`** — same check available in the standalone
+  binary without requiring the full `hprof-analyzer` install.
+
 ## [0.3.1] — 2026-10-02
 
 ### Added
