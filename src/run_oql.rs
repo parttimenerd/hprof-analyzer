@@ -152,6 +152,16 @@ pub(crate) fn run_oql_escalated(
         None
     };
 
+    // Cross-phase (carry) pruning: a carry result's rows are projected from the
+    // carried dense indices, so prune the SEEDS before `resume` runs the late
+    // stage. A post-hoc row filter could not stay aligned once the late stage
+    // applies a deferred WHERE / ORDER BY / LIMIT. Row-expanding late ops
+    // (dominators / AS RETAINED SET / edges) are left untouched, matching the
+    // row-mode rule below.
+    if let Some(dfn) = &reach_dfn {
+        query_state.prune_cross_phase_reachable(dfn);
+    }
+
     // Edge-retention hook (mirrors run()): build the query-gated forward store
     // and bounded inbound CSR from the LIVE forward CSR. Under Codec::None
     // g.class_idx is dense, so borrow it in place (no restore).

@@ -3615,6 +3615,15 @@ fn run(
     } else {
         None
     };
+    // Cross-phase (carry) pruning: a carry result's rows are projected from the
+    // carried dense indices, so prune the SEEDS here, before `resume` runs the
+    // late stage. A post-hoc row filter (below) cannot cover them: the late stage
+    // may drop (deferred WHERE), reorder (ORDER BY) or cap (LIMIT) rows, which
+    // would break any positional alignment. Row-expanding late ops are left
+    // untouched, matching the row-mode rule. `None` under the raw-heap default.
+    if let Some(dfn) = &reach_dfn {
+        query_state.prune_cross_phase_reachable(dfn);
+    }
     // MAT inbound decode needs dfn (dense→pre-order) to build the per-pre-order
     // offset table into inb_data. Save it compressed before clearing; restore
     // just before use so it doesn't inflate the emit_outbound peak (~40 MB win).

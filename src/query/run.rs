@@ -645,6 +645,15 @@ pub(crate) fn resume_with_string_values(
     // armed during the scan.
     let row_src_by_slot = state.take_row_src_by_slot();
 
+    // Cross-phase (carry) pruning: a carry result's rows are projected from the
+    // carried dense indices, so prune the SEEDS before the late stage runs. The
+    // finished-row filter below cannot cover them: the late stage may drop
+    // (deferred WHERE), reorder (ORDER BY) or cap (LIMIT) rows, which would break
+    // any positional alignment. Row-expanding late ops are left untouched.
+    if let Some(dfn) = dfn {
+        state.prune_cross_phase_reachable(dfn);
+    }
+
     let empty_id_map = stage_runner::IdMap::new(&[]);
     let real_id_map;
     let id_map: &stage_runner::IdMap<'_> = if addr_of.is_empty() {
@@ -990,6 +999,13 @@ fn resume_with_retained(
     };
 
     let row_src_by_slot = state.take_row_src_by_slot();
+
+    // Cross-phase (carry) pruning — see `resume_with_string_values` for why the
+    // seed set, not the finished rows, is what gets filtered.
+    if let Some(dfn) = dfn {
+        state.prune_cross_phase_reachable(dfn);
+    }
+
     let (finished, pending) = state.into_parts();
     let empty_id_map = IdMap::new(&[]);
     let real_id_map;

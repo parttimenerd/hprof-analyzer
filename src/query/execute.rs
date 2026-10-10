@@ -31,7 +31,10 @@ pub struct QueryExecState {
     /// (i.e. `--reachable-only` runs); every other run leaves this empty and
     /// allocates nothing. A slot ABSENT here means "no captured source" → the
     /// reachability filter keeps all of that result's rows (aggregates, scalars,
-    /// validation errors, carry results).
+    /// validation errors). CROSS-PHASE (carry) slots are also absent here, but are
+    /// pruned separately by `prune_cross_phase_reachable` — on their seed set
+    /// rather than on rows — because a carry's rows are projected from the carried
+    /// indices and may be reordered/capped by the late stage.
     row_src_by_slot: std::collections::HashMap<usize, Vec<u32>>,
 }
 
@@ -85,6 +88,73 @@ impl QueryExecState {
     /// GC-reachability before it consumes the state via `into_parts`.
     pub fn take_row_src_by_slot(&mut self) -> std::collections::HashMap<usize, Vec<u32>> {
         std::mem::take(&mut self.row_src_by_slot)
+    }
+
+    /// `--reachable-only` pruning for CROSS-PHASE (carry) queries.
+    ///
+    /// A carry result's rows are projected from the carried dense indices, so the
+    /// object that has to be GC-reachable is the CARRIED object — and the right
+    /// place to prune it is the seed set itself, BEFORE `resume` runs the late
+    /// stage. Pruning the finished rows afterwards cannot work: the late stage may
+    /// drop rows (a deferred WHERE), reorder them (ORDER BY) or cap them (LIMIT),
+    /// after which a positional source sidecar no longer lines up with the rows.
+    /// This is the carry-mode counterpart of the per-row `row_src_by_slot` prune
+    /// the row-mode executors use.
+    ///
+    /// Row-EXPANDING late ops (`dominators(x)` / `AS RETAINED SET` / edges) emit
+    /// rows that are NOT the matched objects, so their entries are left untouched
+    /// — the same rule the row-mode prune applies. Only the `IndexOnly` layout
+    /// (the one every query-path carry uses) is rewritten; any other layout is
+    /// left as-is rather than silently rebuilt into a different shape.
+    pub fn prune_cross_phase_reachable(&mut self, dfn: &[u32]) {
+        use crate::query::carry::CarryLayout;
+        use crate::query::plan::StageOp;
+
+        for entry in &mut self.pending {
+            let row_expanding = entry.plan.late_ops.iter().any(|op| {
+                matches!(
+                    op,
+                    StageOp::RetainedSet { .. }
+                        | StageOp::DominatorChildren { .. }
+                        | StageOp::DominatorOf
+                        | StageOp::EdgeLookup { .. }
+                        | StageOp::BoundedPath { .. }
+                )
+            });
+            if row_expanding || !matches!(entry.carry.layout(), CarryLayout::IndexOnly) {
+                continue;
+            }
+            let reachable = |idx: u32| dfn.get(idx as usize).is_some_and(|&d| d != u32::MAX);
+            if entry.carry.indices().iter().all(|&i| reachable(i)) {
+                continue; // nothing to drop → leave the carry (and its flags) alone
+            }
+            let kept: Vec<u32> = entry
+                .carry
+                .indices()
+                .into_iter()
+                .filter(|&i| reachable(i))
+                .collect();
+            let was_truncated = entry.carry.truncated();
+            // Rebuild the carry from the kept indices. A carry's cap is observable
+            // only through `truncated()`, and nothing pushes into a carry once the
+            // scan is over, so sizing the new cap to the kept length reproduces the
+            // original flag exactly: `kept.len()` when the original was a bounded
+            // sample (the trailing sentinel push then trips the cap and is dropped),
+            // `kept.len() + 1` when it was complete (nothing trips).
+            let cap = if was_truncated {
+                kept.len()
+            } else {
+                kept.len() + 1
+            };
+            let mut pruned = Carry::index_only(cap);
+            for &i in &kept {
+                pruned.push_index(i);
+            }
+            if was_truncated {
+                pruned.push_index(0);
+            }
+            entry.carry = pruned;
+        }
     }
 
     /// Re-add a `CrossPhaseEntry` (e.g. one taken from `into_parts` that was
@@ -4157,5 +4227,70 @@ mod tests {
         assert_eq!(res.rows[0][0], QueryValue::Int(10));
         assert_eq!(res.rows[1][0], QueryValue::Int(20));
         assert_eq!(res.rows[2][0], QueryValue::Int(30));
+    }
+
+    /// A carry (cross-phase) entry's SEED set is pruned by GC-reachability: the
+    /// late stage then projects rows only for reachable carried objects. This is
+    /// what makes `--reachable-only` bite on `@retainedHeapSize` and friends.
+    #[test]
+    fn prune_cross_phase_drops_unreachable_seeds() {
+        let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
+        let plan = pq(&q);
+        assert_eq!(plan.finalize_at, crate::query::plan::Phase::P3);
+        let mut st = QueryExecState::new();
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        for i in [0u32, 1, 2, 3] {
+            carry.push_index(i);
+        }
+        st.push_cross_phase(0, "q".to_string(), plan, carry);
+        // dfn: index 1 and 3 unreachable (u32::MAX), 0 and 2 reachable.
+        let dfn = vec![0u32, u32::MAX, 1, u32::MAX];
+        st.prune_cross_phase_reachable(&dfn);
+        assert_eq!(st.pending()[0].carry.indices(), vec![0, 2]);
+        assert!(!st.pending()[0].carry.truncated());
+    }
+
+    /// A truncated carry (a bounded sample) stays truncated after pruning — the
+    /// rebuilt carry must not claim to be complete.
+    #[test]
+    fn prune_cross_phase_preserves_truncated_flag() {
+        let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
+        let plan = pq(&q);
+        let mut st = QueryExecState::new();
+        let mut carry = crate::query::carry::Carry::index_only(3);
+        for i in [0u32, 1, 2, 3] {
+            carry.push_index(i); // the 4th trips the cap
+        }
+        assert!(carry.truncated());
+        st.push_cross_phase(0, "q".to_string(), plan, carry);
+        let dfn = vec![0u32, u32::MAX, 1, u32::MAX];
+        st.prune_cross_phase_reachable(&dfn);
+        assert_eq!(st.pending()[0].carry.indices(), vec![0, 2]);
+        assert!(
+            st.pending()[0].carry.truncated(),
+            "pruning must not turn a bounded sample into a complete result"
+        );
+    }
+
+    /// Row-EXPANDING late ops (dominators / AS RETAINED SET / edges) emit rows
+    /// that are NOT the matched objects, so their seeds are left untouched —
+    /// pruning them would silently change the answer.
+    #[test]
+    fn prune_cross_phase_skips_row_expanding_ops() {
+        let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
+        let plan = pq(&q);
+        let mut st = QueryExecState::new();
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        for i in [0u32, 1] {
+            carry.push_index(i);
+        }
+        st.push_cross_phase(0, "q".to_string(), plan, carry);
+        let dfn = vec![0u32, u32::MAX]; // index 1 unreachable
+        st.prune_cross_phase_reachable(&dfn);
+        assert_eq!(
+            st.pending()[0].carry.indices(),
+            vec![0, 1],
+            "row-expanding op seeds must not be pruned"
+        );
     }
 }
