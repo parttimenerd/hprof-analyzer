@@ -38,8 +38,24 @@ impl Codec {
     }
 }
 
-fn deflate_compress(raw: &[u8]) -> io::Result<Vec<u8>> {
-    let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+/// DEFLATE level actually requested by a codec.
+///
+/// The compressed blob produced by `CompressedBytes`/`CompressedU64` is an
+/// **in-memory carrier only**: every consumer decompresses it (`restore`) before
+/// use, and nothing ever writes the blob to an emitted file — the `.index` bytes
+/// come from MAT's own bit-packing streamer, which sees the *decompressed*
+/// values. DEFLATE is a format, so any level decompresses to the identical
+/// input. The level therefore affects only CPU time and how much RSS the carrier
+/// holds, never a byte anyone downstream can observe.
+fn deflate_level(codec: Codec) -> flate2::Compression {
+    match codec {
+        Codec::Deflate9 => flate2::Compression::best(),
+        _ => flate2::Compression::fast(),
+    }
+}
+
+fn deflate_compress(raw: &[u8], level: flate2::Compression) -> io::Result<Vec<u8>> {
+    let mut e = flate2::write::DeflateEncoder::new(Vec::new(), level);
     e.write_all(raw)?;
     e.finish()
 }
@@ -382,7 +398,7 @@ impl CompressedU64 {
             }),
             Codec::Deflate9 | Codec::Deflate1 => {
                 let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len * 8) };
-                let blob = deflate_compress(bytes)?;
+                let blob = deflate_compress(bytes, deflate_level(codec))?;
                 Ok(Self {
                     codec,
                     blob,
@@ -438,7 +454,7 @@ impl CompressedBytes {
                 raw: v,
             }),
             Codec::Deflate9 | Codec::Deflate1 => {
-                let blob = deflate_compress(&v)?;
+                let blob = deflate_compress(&v, deflate_level(codec))?;
                 Ok(Self {
                     codec,
                     blob,
@@ -530,6 +546,52 @@ mod tests {
     }
 
     #[test]
+    fn deflate_level_changes_only_size_not_restored_bytes() {
+        // The `CompressedBytes`/`CompressedU64` deflate blob is an in-memory
+        // carrier: `restore()` is always called before use and nothing writes
+        // the blob to an emitted file. This pins the property that makes
+        // honouring `Deflate1` (instead of silently deflating at level 9) safe:
+        // the restored bytes — the only thing any downstream consumer sees —
+        // must be identical at both levels.
+        //
+        // The data mimics a real carrier (dense, near-monotonic offsets): a
+        // level-1 blob is larger than a level-9 blob, so the levels really do
+        // differ and the equality below is not vacuous.
+        let mut state = 0x9E37_79B9u64;
+        let v: Vec<u64> = (0..200_000u64)
+            .map(|i| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                i.wrapping_mul(8).wrapping_add(state & 0x3f)
+            })
+            .collect();
+
+        let c1 = CompressedU64::compress(&v, Codec::Deflate1).unwrap();
+        let c9 = CompressedU64::compress(&v, Codec::Deflate9).unwrap();
+        assert_eq!(c1.restore().unwrap(), v, "Deflate1 must round-trip");
+        assert_eq!(c9.restore().unwrap(), v, "Deflate9 must round-trip");
+        assert_eq!(
+            c1.restore().unwrap(),
+            c9.restore().unwrap(),
+            "restored bytes must not depend on the deflate level"
+        );
+        assert!(
+            c1.held_bytes() >= c9.held_bytes(),
+            "level 1 should not out-compress level 9 ({} < {})",
+            c1.held_bytes(),
+            c9.held_bytes()
+        );
+
+        // Same property for the byte carrier (`inb_data`, hprof offsets).
+        let raw: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let b1 = CompressedBytes::compress(raw.clone(), Codec::Deflate1).unwrap();
+        let b9 = CompressedBytes::compress(raw.clone(), Codec::Deflate9).unwrap();
+        assert_eq!(b1.restore().unwrap(), raw, "Deflate1 bytes must round-trip");
+        assert_eq!(b9.restore().unwrap(), raw, "Deflate9 bytes must round-trip");
+    }
+
+    #[test]
     fn streaming_u32_compress_matches_oneshot() {
         // The chunked streaming compressor must produce a byte-identical blob to
         // the old one-shot (materialize-then-deflate) path, across chunk-boundary
@@ -539,7 +601,7 @@ mod tests {
             for &x in v {
                 bytes.extend_from_slice(&x.to_le_bytes());
             }
-            deflate_compress(&bytes).unwrap()
+            deflate_compress(&bytes, flate2::Compression::best()).unwrap()
         }
         let mut state = 0x1234_5678u32;
         // Sizes straddling the 16384-u32 (64 KiB) chunk boundary.
