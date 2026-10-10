@@ -577,7 +577,19 @@ pub fn run_oql_query(
     let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
     let flat_plans = vec![(q, plan)];
     let (flat, union_groups) = query::run::expand_union_queries(&flat_plans);
-    run_oql::run_oql_escalated(dump_path, &flat, &union_groups, reachable_only, opts)
+    // `reachable_only` travels two ways: as its own argument, and — for the
+    // scan — as `opts.reachable_only`, which arms the per-row source-index
+    // sidecar the final pruning keys off (`src/run_oql.rs`). If the two
+    // disagree the flag silently does nothing. They did: the CLI passed `true`
+    // here while handing down `AnalyzeOptions::default()`, whose
+    // `reachable_only` is `false`, so `heap query` never pruned a row and
+    // reported 762 `java.lang.Thread` objects where MAT reports 753. Derive
+    // one from the other rather than trusting callers to keep them in sync.
+    let opts = AnalyzeOptions {
+        reachable_only,
+        ..opts.clone()
+    };
+    run_oql::run_oql_escalated(dump_path, &flat, &union_groups, reachable_only, &opts)
 }
 
 /// Render one section of a Report to Markdown text.
