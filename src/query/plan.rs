@@ -350,6 +350,7 @@ fn select_item_display_name(it: &SelectItem) -> String {
         SelectItem::Aggregate { func, .. } => format!("{func:?}(...)"),
         SelectItem::Path { .. } => "path(...)".into(),
         SelectItem::ToString(_) => "toString(...)".into(),
+        SelectItem::Jsonify { .. } => "jsonify(...)".into(),
     }
 }
 
@@ -582,6 +583,9 @@ fn select_item_for_each_method<'a>(it: &'a SelectItem, f: &mut impl FnMut(&'a st
         }
         SelectItem::Aggregate { arg, .. } => select_item_for_each_method(arg, f),
         SelectItem::Star | SelectItem::Path { .. } | SelectItem::ToString(_) => {}
+        // jsonify(s) carries only the FROM alias and a literal depth — no Expr
+        // node can hide inside it, so there is no method to visit.
+        SelectItem::Jsonify { .. } => {}
     }
 }
 
@@ -893,6 +897,12 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             SelectItem::ToString(_) => {
                 needs.string_values = true;
             }
+            // jsonify(s) needs nothing from the scan: it projects the object as
+            // an `ObjRef` and is expanded afterwards from the dump + offsets.bin
+            // (see `crate::query::jsonify`). Leaving every need flag false is
+            // deliberate — it is what keeps a jsonify query resident-only, so
+            // the server serves it from the warm cache instead of re-scanning.
+            SelectItem::Jsonify { .. } => {}
             SelectItem::Expr(e) => {
                 expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, &mut needs));
                 // `contains` and `toString` method calls require the string-values
@@ -1774,6 +1784,9 @@ fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
             SelectItem::Path { .. } => {}
             // toString(s) has no external alias head to detect correlation.
             SelectItem::ToString(_) => {}
+            // jsonify(s) names the FROM alias (which is not an external head) and
+            // a literal depth, so it introduces no correlation.
+            SelectItem::Jsonify { .. } => {}
             SelectItem::Expr(e) => expr_for_each_attr(e, &mut |a| {
                 if let Some(h) = attr_alias_head(a) {
                     heads.insert(h.to_string());
@@ -1904,6 +1917,12 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
             needs.string_values = true;
             Ok(())
         }
+        // jsonify(x) as an aggregate argument has no meaningful fold (an aggregate
+        // over a JSON document is not defined here), so it is rejected rather
+        // than silently producing Null rows.
+        SelectItem::Jsonify { .. } => Err(QueryError(
+            "jsonify(x) may not be used as an aggregate argument".into(),
+        )),
         SelectItem::Expr(e) => {
             expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, needs));
             Ok(())

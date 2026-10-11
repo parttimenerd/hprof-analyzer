@@ -892,6 +892,18 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // toString(s): the String path is decoded late (ResolveStringValues);
             // a non-String object gets MAT's fallback display form at scan time.
             SelectItem::ToString(_) => self.tostring_display(class_id, src_idx),
+            // jsonify(s) projects a self-describing placeholder here and is
+            // expanded into JSON *after* the scan, by
+            // `crate::query::jsonify::expand_results` — that pass needs the
+            // dump + offsets.bin, which the executor does not have. The
+            // placeholder is a JSON string, so a path that never runs the
+            // post-pass shows `"@jsonify": "not expanded"` rather than a bare
+            // object reference.
+            SelectItem::Jsonify { .. } => QueryValue::Str(crate::query::jsonify::pending_cell(
+                src_idx,
+                self.resolver.class_name(class_id).unwrap_or("?"),
+                self.resolver.addr_of(src_idx),
+            )),
             SelectItem::Expr(e) => self.eval_expr(e, src_idx, class_id, blob),
         }
     }
@@ -1007,6 +1019,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // toString(s): arrays are never String-decoded, so this always renders
             // the MAT fallback display form <class> @ 0x<addr> at scan time.
             SelectItem::ToString(_) => self.tostring_display_named(class_name, src_idx),
+            // jsonify(x) on an array FROM: same placeholder as the instance
+            // path — `jsonify::expand_results` expands arrays too.
+            SelectItem::Jsonify { .. } => QueryValue::Str(crate::query::jsonify::pending_cell(
+                src_idx,
+                class_name,
+                self.resolver.addr_of(src_idx),
+            )),
             SelectItem::Expr(e) => self.eval_expr_array(e, src_idx, class_name, length),
         }
     }
@@ -2412,6 +2431,10 @@ pub fn column_name(it: &SelectItem) -> String {
             path_operand_name(to)
         ),
         SelectItem::ToString(a) => format!("toString({a})"),
+        SelectItem::Jsonify { alias, depth } => match depth {
+            Some(d) => format!("jsonify({alias}, {d})"),
+            None => format!("jsonify({alias})"),
+        },
         SelectItem::Expr(e) => expr_name(e),
     }
 }

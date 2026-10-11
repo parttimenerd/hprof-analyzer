@@ -656,6 +656,16 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     class: "?".to_string(),
                     addr: ctx.id_map.to_addr_opt(s),
                 },
+                // jsonify(x) is expanded after the scan by
+                // `jsonify::expand_results`; the late window emits the same
+                // self-describing placeholder the scan-time executor does, so a
+                // carry-mode query mixing jsonify with toString()/GROUP BY still
+                // hands the post-pass an index to work from.
+                SelectItem::Jsonify { .. } => QueryValue::Str(crate::query::jsonify::pending_cell(
+                    s as usize,
+                    ctx.class_name_of(s).unwrap_or("?"),
+                    ctx.id_map.to_addr_opt(s),
+                )),
                 _ => QueryValue::Null,
             })
             .collect();
@@ -1235,6 +1245,12 @@ fn project_array_index_item(
             class: class_name.to_string(),
             addr: ctx.id_map.to_addr_opt(dense),
         },
+        // See the note on the `s`-keyed arm above: the placeholder, not Null.
+        SelectItem::Jsonify { .. } => QueryValue::Str(crate::query::jsonify::pending_cell(
+            dense as usize,
+            class_name,
+            ctx.id_map.to_addr_opt(dense),
+        )),
         _ => QueryValue::Null,
     }
 }
@@ -1961,6 +1977,12 @@ fn project_late_row(
                 class: ctx.class_name_of(idx).unwrap_or("?").to_string(),
                 addr: ctx.id_map.to_addr_opt(idx),
             },
+            // See the note on the `s`-keyed arm above: the placeholder, not Null.
+            SelectItem::Jsonify { .. } => QueryValue::Str(crate::query::jsonify::pending_cell(
+                idx as usize,
+                ctx.class_name_of(idx).unwrap_or("?"),
+                ctx.id_map.to_addr_opt(idx),
+            )),
             SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, like_regexes),
             _ => QueryValue::Null,
         })

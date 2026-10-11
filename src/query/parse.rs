@@ -921,6 +921,38 @@ where
             let tostring_item =
                 dom_fn("toString").map(|a| (SelectItem::ToString(a), None::<String>));
 
+            // `jsonify(<alias>)` / `jsonify(<alias>, <depth>)` — recursively expand
+            // the FROM object into JSON. The depth is validated here (1..=MAX_DEPTH)
+            // rather than at plan time so the message can point at the literal.
+            let jsonify_item = ident_ci("jsonify")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(any_ident().labelled("jsonify alias"))
+                .then(
+                    just(Token::Comma)
+                        .ignore_then(select! { Token::Int(n) => n }.labelled("jsonify depth"))
+                        .or_not(),
+                )
+                .then_ignore(just(Token::RParen))
+                .validate(|(alias, depth), e, emitter| {
+                    let depth = match depth {
+                        None => None,
+                        Some(d) => {
+                            let max = crate::query::jsonify::MAX_DEPTH as i64;
+                            if !(1..=max).contains(&d) {
+                                emitter.emit(Rich::custom(
+                                    e.span(),
+                                    format!(
+                                        "jsonify(x, depth): depth must be an integer between \
+                                         1 and {max}, got {d}"
+                                    ),
+                                ));
+                            }
+                            Some(d.clamp(1, max) as u32)
+                        }
+                    };
+                    (SelectItem::Jsonify { alias, depth }, None::<String>)
+                });
+
             // CASE WHEN … THEN … ELSE … END as a select item.
             let case_item = case_expr
                 .clone()
@@ -986,6 +1018,7 @@ where
                 .or(agg)
                 .or(path_item)
                 .or(tostring_item)
+                .or(jsonify_item)
                 .or(star)
                 .or(case_item)
                 .or(select_attr_item)
@@ -1304,6 +1337,9 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
         SelectItem::Path { .. } => {}
         // `toString(s)` carries a single alias token; no dotted path to normalize.
         SelectItem::ToString(_) => {}
+        // `jsonify(s)` likewise carries only the FROM alias (plus an optional
+        // literal depth), so there is no dotted path to normalize.
+        SelectItem::Jsonify { .. } => {}
         SelectItem::Expr(e) => {
             normalize_expr(e, alias);
             // Lowering `e.getKey()`/`e.getValue()` in `normalize_expr` turns the
@@ -1543,6 +1579,7 @@ pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG", "PERCENTIL
 pub const FUNCS: &[&str] = &[
     "classof",
     "toString",
+    "jsonify",
     "toHex",
     "path",
     "dominators",

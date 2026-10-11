@@ -178,6 +178,9 @@ fn scan_select_item(item: &SelectItem, used: &mut BranchUse) {
         SelectItem::Star => {}
         // toString(s) uses the string-values side table, not edge CSRs.
         SelectItem::ToString(_) => {}
+        // jsonify(s) reads the dump by offset (objread + offsets.bin), so it
+        // arms no edge CSR either.
+        SelectItem::Jsonify { .. } => {}
         // An arithmetic/method-call column: recurse into the expression so a
         // buried @inbounds/@outbounds still arms its edge index.
         SelectItem::Expr(e) => scan_expr(e, used),

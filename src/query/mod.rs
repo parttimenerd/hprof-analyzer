@@ -8,6 +8,7 @@ pub mod carry;
 pub mod complete;
 pub mod execute;
 pub mod histogram;
+pub mod jsonify;
 pub mod model;
 pub mod optimize;
 pub mod parse;

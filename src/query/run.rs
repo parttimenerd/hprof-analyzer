@@ -894,6 +894,16 @@ pub fn run_resident_only(
     };
     let flat_results =
         resume_with_string_values(state, &flat, sv, None, dfn, &addr_vec, Some(&cache.shallow));
+    let mut flat_results = flat_results;
+    // jsonify(...) columns carry an ObjRef placeholder out of the scan; expand
+    // them here, while the ReplCache (dump path + offsets.bin + pass-1 tables)
+    // is still in hand and BEFORE UNION-collapse so each column can be matched
+    // to its SelectItem by position rather than by its rendered name.
+    crate::query::jsonify::expand_results(
+        &mut flat_results,
+        &flat,
+        Some(cache as &dyn crate::query::jsonify::JsonifySession),
+    );
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -973,6 +983,13 @@ pub fn run_resident_with_retained(
         &addr_vec,
         &cache.class_idx,
         &cache.class_names,
+    );
+    let mut flat_results = flat_results;
+    // Same jsonify post-pass as `run_resident_only` — see the note there.
+    crate::query::jsonify::expand_results(
+        &mut flat_results,
+        &flat,
+        Some(cache as &dyn crate::query::jsonify::JsonifySession),
     );
     Ok(collapse_union_results(flat_results, &groups))
 }
@@ -1144,6 +1161,12 @@ pub fn run_single_dump(
             &addr_vec,
             None,
         );
+        let mut flat_results = flat_results;
+        // The scan path consumed its `Pass1` into `Pass2::build`, so it has no
+        // class tables (or offsets.bin) left to decode objects with. `None` here
+        // makes every jsonify cell say exactly that instead of coming back as a
+        // bare ObjRef — see `jsonify::NO_SESSION_NOTE`.
+        crate::query::jsonify::expand_results(&mut flat_results, &flat, None);
         let collapsed = collapse_union_results(flat_results, &groups);
         return Ok(collapsed);
     }
@@ -1332,6 +1355,11 @@ pub fn run_single_dump(
     // sets were pruned right after the inner pass (above), and outer rows inside
     // resume (before the FROM semi-join) — both keyed by scan-captured source
     // index. Nothing to prune here.
+    //
+    // jsonify runs last, after the FROM-subquery semi-join and LIMIT, so it only
+    // expands rows that actually survive into the result. It degrades loudly: the
+    // scan path has no pass-1 tables to decode with (see `jsonify::NO_SESSION_NOTE`).
+    crate::query::jsonify::expand_results(&mut flat_results, &flat, None);
     Ok(collapse_union_results(flat_results, &groups))
 }
 /// joined by object identity) or an IN-predicate membership set (on some LHS).

@@ -239,6 +239,9 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Path { .. } => {}
             // toString(s) carries no RefPath hops; string values are a separate side table.
             SelectItem::ToString(_) => {}
+            // jsonify(s) carries no RefPath hops: it reads the dump directly,
+            // through `objread` + offsets.bin, not through the ref-walk CSR.
+            SelectItem::Jsonify { .. } => {}
             SelectItem::Expr(_) => {
                 unreachable!("Expr select item reached before arithmetic wiring")
             }
@@ -301,6 +304,8 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Path { .. } => {}
             // toString(s) carries no RefPath tail fields.
             SelectItem::ToString(_) => {}
+            // jsonify(s) carries no RefPath tail fields.
+            SelectItem::Jsonify { .. } => {}
             SelectItem::Expr(_) => {
                 unreachable!("Expr select item reached before arithmetic wiring")
             }

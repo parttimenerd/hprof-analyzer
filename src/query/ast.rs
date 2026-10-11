@@ -66,6 +66,16 @@ pub enum SelectItem {
     /// Only valid when the FROM class is `java.lang.String`. The `String` carries
     /// the FROM alias identifier (e.g. `s` in `toString(s)`).
     ToString(String),
+    /// `jsonify(alias [, depth])` — expand the FROM object into a JSON string,
+    /// following reference fields recursively. `alias` is the FROM alias
+    /// identifier (as in `toString(s)`); `depth` is the optional recursion depth
+    /// (levels below the root object), defaulting to
+    /// [`crate::query::jsonify::DEFAULT_DEPTH`].
+    ///
+    /// Unlike `toString`, this reads through `objread` + the cache's
+    /// `offsets.bin`, so it is bounded by an object budget and a depth cap and
+    /// never re-scans the dump. See `crate::query::jsonify` for the shape.
+    Jsonify { alias: String, depth: Option<u32> },
     /// An arithmetic expression column, e.g. `@usedHeapSize * 2`. Only emitted
     /// when the item actually contains an operator; a bare attr stays `Attr`.
     Expr(Box<Expr>),
