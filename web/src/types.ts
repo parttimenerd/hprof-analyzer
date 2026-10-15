@@ -195,6 +195,7 @@ export interface SystemOverview {
   unreachable_composition?: HeapComposition;
   unreachable_histogram: UnreachableClassRow[];
   unreachable_garbage_roots?: UnreachableGarbageRoot[];
+  unreachable_dominator_skipped?: boolean;
   histogram: HistRow[];
   histogram_truncated_to: number | null;
   loader_rollup: LoaderRollup[];

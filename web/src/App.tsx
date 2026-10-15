@@ -5939,7 +5939,12 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
           )}
-          {data?.unreachable_garbage_roots && data.unreachable_garbage_roots.length > 0 && (
+          {data?.unreachable_dominator_skipped ? (
+            <p className="subtitle" style={{ fontSize: "0.82rem" }}>
+              <em>Unreachable dominator tree skipped: {fmtCount(data.unreachable_count ?? 0)} unreachable objects exceeds the auto-skip threshold (500,000). Shallow heap by class is shown above instead of retained. Re-run with <code>--full-analysis</code> to force the full dominator pass.</em>
+            </p>
+          ) : (
+            data?.unreachable_garbage_roots && data.unreachable_garbage_roots.length > 0 && (
             <>
               <ZoomableTreemap
                 root={{ pretty_class: "(unreachable)", retained: data.unreachable_retained ?? 0, objects: data.unreachable_count ?? 0, children: data.unreachable_garbage_roots }}
@@ -5952,7 +5957,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
               />
               <UnreachableDomTreeSection roots={data.unreachable_garbage_roots} />
             </>
-          )}
+          ))}
           <details open>
             <summary>Unreachable Objects by Class ({fmtCount(rows.length)} rows)</summary>
             <p className="subtitle" style={{ fontSize: "0.82rem" }}>Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates the total reclaimable memory.</p>
