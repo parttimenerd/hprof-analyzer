@@ -49,6 +49,12 @@ const BLOCK_SPAN: u64 = 1u64 << 32;
 ///
 /// The fallback binary search is the Khuong-Morin branchless bisection with
 /// prefetching for the final narrowing.
+///
+/// Non-uniform distributions (post-GC scatter, ART/J9 allocators, huge sparse
+/// arrays alongside dense object regions) degrade interpolation to O(n).
+/// We detect stagnation — a probe that shrinks the range by less than 50% —
+/// and bail to binary search immediately, so worst-case cost is O(log n)
+/// regardless of distribution.
 #[inline]
 fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
     let n = slice.len();
@@ -77,8 +83,11 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
 
     // Interpolation phase: up to 4 probes. Each probe narrows the range
     // dramatically on uniformly-distributed data (typical JVM allocation).
-    // We stop when the range is ≤ 128 entries (fits in a few cache lines)
-    // and hand off to branchless binary search.
+    // We stop when either:
+    //   (a) range ≤ 128  — small enough for the branchless binary search below, or
+    //   (b) a probe shrinks the range by less than 50% — non-uniform distribution
+    //       detected; bail immediately to avoid O(n) degradation.
+    let mut prev_range = hi - lo;
     for _ in 0..4 {
         let range = hi - lo;
         if range <= 128 {
@@ -112,6 +121,14 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
         if d < lv || d > hv {
             return None;
         }
+        // Stagnation guard: if this probe shrunk the range by less than half,
+        // interpolation is working poorly (non-uniform distribution). Fall
+        // through to binary search rather than burning more interpolation probes.
+        let new_range = hi - lo;
+        if new_range > prev_range / 2 {
+            break;
+        }
+        prev_range = new_range;
     }
 
     // Branchless binary search (Khuong-Morin) with prefetching over [lo, hi].
@@ -731,6 +748,33 @@ mod tests {
                 assert_eq!(m2.index_of(a), Some(i));
             }
         }
+    }
+
+    // Non-uniform distribution: all objects clustered at the low end of a
+    // 4 GB block, with the block span value near u32::MAX. This is the case
+    // that degrades plain interpolation to O(n) — the formula always probes
+    // near lo, barely shrinking the range. The stagnation guard must kick in
+    // after the first bad probe and fall through to binary search.
+    #[test]
+    fn clustered_addresses_still_correct() {
+        let base = 0x7f00_0000_0000u64;
+        // 10 000 densely packed objects at base + 0..10000*8,
+        // but the block spans nearly 4 GB (one straggler near u32::MAX).
+        let mut addrs: Vec<u64> = (0u64..10_000).map(|k| base + k * 8).collect();
+        addrs.push(base + 0xFFFF_FFF8); // straggler — forces block span ≈ 4 GB
+        let mut m = IdMap::new();
+        for &a in &addrs {
+            m.push(a);
+        }
+        m.sort_and_dedup();
+        assert_eq!(m.block_base.len(), 1);
+        for (i, &a) in addrs.iter().enumerate() {
+            assert_eq!(m.index_of(a), Some(i), "missed addr {a:#x} at index {i}");
+        }
+        // Non-members must return None.
+        assert_eq!(m.index_of(base + 1), None);
+        assert_eq!(m.index_of(base + 10_000 * 8), None);
+        assert_eq!(m.index_of(base + 0x1000_0000), None);
     }
 
     // Single-block boundary coverage: every inserted addr round-trips, and
