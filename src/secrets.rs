@@ -167,9 +167,39 @@ impl SecretPatterns {
         string_values: &HashMap<u32, String>,
         attribution: &HashMap<u32, Vec<(String, String)>>,
     ) -> Vec<SecretFinding> {
-        let mut seen: HashMap<(&'static str, &str), ()> = HashMap::new();
+        let mut seen: HashMap<(String, String), ()> = HashMap::new();
         let mut findings: Vec<SecretFinding> = Vec::new();
+        self.scan_heap_strings_into(string_values, attribution, &mut seen, &mut findings);
+        findings
+    }
 
+    /// Scan both heap `java.lang.String` instances and JVM symbol table strings
+    /// (`STRING_IN_UTF8` records). Symbol table strings include annotation literals
+    /// (`@Value("${spring.datasource.url}")`), `@RequestMapping` paths, Spring EL
+    /// expressions, and other class-file constant-pool strings that lean-mode redaction
+    /// does not zero. Findings from both sources are merged and deduplicated.
+    ///
+    /// Symbol-table findings have location `[("JVM symbol table", "STRING_IN_UTF8")]`.
+    pub fn scan_with_symbol_table(
+        &self,
+        string_values: &HashMap<u32, String>,
+        attribution: &HashMap<u32, Vec<(String, String)>>,
+        symbol_strings: &HashMap<u64, String>,
+    ) -> Vec<SecretFinding> {
+        let mut seen: HashMap<(String, String), ()> = HashMap::new();
+        let mut findings: Vec<SecretFinding> = Vec::new();
+        self.scan_heap_strings_into(string_values, attribution, &mut seen, &mut findings);
+        self.scan_symbol_strings_into(symbol_strings, &mut seen, &mut findings);
+        findings
+    }
+
+    fn scan_heap_strings_into(
+        &self,
+        string_values: &HashMap<u32, String>,
+        attribution: &HashMap<u32, Vec<(String, String)>>,
+        seen: &mut HashMap<(String, String), ()>,
+        findings: &mut Vec<SecretFinding>,
+    ) {
         for (dense_idx, value) in string_values {
             let locations = attribution.get(dense_idx).cloned().unwrap_or_default();
 
@@ -183,10 +213,8 @@ impl SecretPatterns {
                     {
                         continue;
                     }
-                    if seen
-                        .insert((pattern.category, value.as_str()), ())
-                        .is_none()
-                    {
+                    let key = (pattern.category.to_owned(), value.clone());
+                    if seen.insert(key, ()).is_none() {
                         findings.push(SecretFinding {
                             category: pattern.category.to_owned(),
                             value: value.clone(),
@@ -211,10 +239,8 @@ impl SecretPatterns {
                     if matched_locs.is_empty() {
                         continue;
                     }
-                    if seen
-                        .insert((pattern.category, value.as_str()), ())
-                        .is_none()
-                    {
+                    let key = (pattern.category.to_owned(), value.clone());
+                    if seen.insert(key, ()).is_none() {
                         findings.push(SecretFinding {
                             category: pattern.category.to_owned(),
                             value: value.clone(),
@@ -224,8 +250,36 @@ impl SecretPatterns {
                 }
             }
         }
+    }
 
-        findings
+    /// Scan JVM symbol table strings (`STRING_IN_UTF8` id → text).
+    /// Only standalone patterns are applied — there are no field-name referrers.
+    fn scan_symbol_strings_into(
+        &self,
+        symbol_strings: &HashMap<u64, String>,
+        seen: &mut HashMap<(String, String), ()>,
+        findings: &mut Vec<SecretFinding>,
+    ) {
+        let symbol_location = vec![("JVM symbol table".to_owned(), "STRING_IN_UTF8".to_owned())];
+        for value in symbol_strings.values() {
+            for pattern in &self.standalone {
+                if pattern.re.is_match(value) {
+                    if pattern.category == "High-entropy hex secret"
+                        && hex_shannon_entropy(value) < 3.0
+                    {
+                        continue;
+                    }
+                    let key = (pattern.category.to_owned(), value.clone());
+                    if seen.insert(key, ()).is_none() {
+                        findings.push(SecretFinding {
+                            category: pattern.category.to_owned(),
+                            value: value.clone(),
+                            locations: symbol_location.clone(),
+                        });
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -648,6 +702,65 @@ mod tests {
         assert!(!has_category(&r, "Spring Security plaintext password"));
     }
 
+    // ── Symbol table scanning ─────────────────────────────────────────────────
+
+    fn scan_sym(values: &[(&str, &str)]) -> Vec<SecretFinding> {
+        let map: HashMap<u64, String> = values
+            .iter()
+            .enumerate()
+            .map(|(i, (_, s))| (i as u64, s.to_string()))
+            .collect();
+        SecretPatterns::new().scan_with_symbol_table(&HashMap::new(), &HashMap::new(), &map)
+    }
+
+    #[test]
+    fn symbol_table_jdbc_url_found() {
+        let r = scan_sym(&[("", "jdbc:postgresql://host/db?password=s3cr3t")]);
+        assert!(!r.is_empty(), "expected JDBC match in symbol strings");
+        assert_eq!(r[0].category, "JDBC URL with credentials");
+        assert_eq!(
+            r[0].locations,
+            vec![("JVM symbol table".to_owned(), "STRING_IN_UTF8".to_owned())]
+        );
+    }
+
+    #[test]
+    fn symbol_table_heap_string_deduplication() {
+        // Same secret appears in both heap strings and symbol table — must appear exactly once.
+        let heap: HashMap<u32, String> = [(0u32, "AKIAIOSFODNN7EXAMPLE".to_owned())].into();
+        let sym: HashMap<u64, String> = [(0u64, "AKIAIOSFODNN7EXAMPLE".to_owned())].into();
+        let findings = SecretPatterns::new().scan_with_symbol_table(&heap, &HashMap::new(), &sym);
+        assert_eq!(
+            findings.len(),
+            1,
+            "duplicate across sources must be deduplicated; got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn symbol_table_clean_class_names_not_flagged() {
+        // Class and method names from a real dump — must not match any secret pattern.
+        let r = scan_sym(&[
+            ("", "java/lang/String"),
+            ("", "()Ljava/util/List;"),
+            (
+                "",
+                "org/springframework/boot/autoconfigure/SpringBootApplication",
+            ),
+            ("", "getOwners"),
+        ]);
+        assert!(
+            r.is_empty(),
+            "structural names must not produce findings; got {r:?}"
+        );
+    }
+
+    #[test]
+    fn symbol_table_pem_header_found() {
+        let r = scan_sym(&[("", "-----BEGIN RSA PRIVATE KEY-----")]);
+        assert!(!r.is_empty(), "PEM header in symbol table must be flagged");
+    }
+
     // ── Integration: real Spring PetClinic fixture ────────────────────────────
     // Skipped automatically when the fixture is absent (CI before gen-spring-fixture.sh runs).
 
@@ -664,8 +777,11 @@ mod tests {
         let cache = crate::query::run::ReplCache::build(&source, true).expect("ReplCache::build");
         let string_values = cache.build_string_values().expect("build_string_values");
 
-        let findings =
-            SecretPatterns::new().scan(&string_values, &std::collections::HashMap::new());
+        let findings = SecretPatterns::new().scan_with_symbol_table(
+            &string_values,
+            &std::collections::HashMap::new(),
+            &cache.p1.strings,
+        );
 
         let categories: std::collections::HashSet<&str> =
             findings.iter().map(|f| f.category.as_str()).collect();
