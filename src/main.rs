@@ -389,19 +389,34 @@ enum Cmd {
         #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
         dump: Option<String>,
     },
-    /// Redact a heap dump: zero primitive array elements while preserving the
-    /// object graph (IDs, class names, reference fields, instance scalar fields).
+    /// Redact a heap dump: zero data values while preserving the object graph
+    /// (IDs, class names, field names, reference fields).
     ///
-    /// Default (lean) mode is a single-pass stream: only PRIM_ARRAY_DUMP element
-    /// bytes are zeroed — this covers byte[], char[], short[], int[], long[],
-    /// float[], double[], and boolean[] arrays. Instance scalar fields (int, long,
-    /// etc. on objects) are left untouched. Add --complete for a two-pass run that
-    /// also zeros those.
+    /// TWO MODES:
+    ///
+    /// Lean (default, single-pass): zeros all primitive array element bytes
+    /// (byte[], char[], int[], long[], float[], double[], short[], boolean[]).
+    /// This covers String values — their char[]/byte[] backing arrays are zeroed.
+    /// Scalar instance fields (int/long/etc. directly on objects) are left in place.
+    /// The JVM symbol table (STRING_IN_UTF8 records) is also left in place, so
+    /// annotation literal strings like @Value("${spring.datasource.url}") and
+    /// @RequestMapping("/api/v1/users") survive in the file verbatim.
+    ///
+    /// Complete (--complete, two-pass): everything lean does, PLUS:
+    ///   - scalar instance fields and CLASS_DUMP static primitive values
+    ///   - non-structural JVM symbol table entries: annotation values (@Value,
+    ///     @RequestMapping, etc.), Spring EL expressions, config key patterns
+    ///
+    ///   Structural names (class names, field names, method names, source file
+    ///   names) are preserved so the dump remains browsable in MAT/jhat.
+    ///
+    /// Use lean for quick sharing where field-level integers can be tolerated.
+    /// Use --complete when annotation-literal strings or scalar field values
+    /// (counters, hashes, enum ordinals) must not leak.
     ///
     /// The output is a valid HPROF file that MAT, jhat, and hprof-analyzer can
     /// open. A custom marker record (tag 0xDE) is prepended so hprof-analyzer
-    /// displays a "Redacted dump" banner and skips analyses that would be
-    /// meaningless on zeroed data.
+    /// displays a "Redacted dump" banner and skips meaningless analyses.
     ///
     /// Output format is inferred from the extension:
     ///   .hprof         raw binary
@@ -414,8 +429,10 @@ enum Cmd {
         /// Output path (.hprof, .hprof.gz, or .hprof.zip).
         #[arg(value_hint = ValueHint::FilePath)]
         output: String,
-        /// Complete (two-pass) mode: also zeros primitive scalar fields on instances
-        /// and static fields on classes. Slower but leaves no primitive values anywhere.
+        /// Complete (two-pass) mode: also zeros scalar instance fields, CLASS_DUMP
+        /// static values, and non-structural JVM symbol table strings (annotation
+        /// literals, Spring EL expressions, URL path constants, etc.).
+        /// Class names, field names, and method names are preserved for browsability.
         /// Default is lean mode (single-pass, zeros only primitive array elements).
         #[arg(long)]
         complete: bool,
@@ -858,7 +875,11 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool, forma
         eprint!("\r\x1b[K");
     }
 
-    let findings = SecretPatterns::new().scan(&string_values, &attribution);
+    let findings = SecretPatterns::new().scan_with_symbol_table(
+        &string_values,
+        &attribution,
+        &cache.p1.strings,
+    );
 
     if findings.is_empty() {
         eprintln!("No secrets found.");

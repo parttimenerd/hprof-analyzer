@@ -5,10 +5,15 @@
 //! hierarchy, reference fields). A custom top-level record (tag `0xDE`) is
 //! prepended so `hprof-analyzer` can detect and label the redacted dump.
 //!
+//! In complete mode, `STRING_IN_UTF8` record payloads are also zeroed: these
+//! records form the JVM symbol table and may contain interned string literals
+//! such as annotation values (`@Value("secret")`). The string IDs are preserved
+//! so LOAD_CLASS and CLASS_DUMP name references remain structurally intact.
+//!
 //! External tools (MAT, jhat) skip the marker via the standard length-prefixed
 //! skip path and open the file normally.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use crate::reader::HprofReader;
@@ -27,6 +32,10 @@ pub enum RedactMode {
     /// INSTANCE_DUMP and CLASS_DUMP bodies are copied verbatim.
     Lean,
     /// Two-pass: zeros all primitive values everywhere. (default)
+    ///
+    /// Also zeroes non-structural `STRING_IN_UTF8` payloads (interned literals
+    /// such as annotation values). Class names, field names, method names, and
+    /// source file names are kept readable.
     Complete,
 }
 
@@ -39,13 +48,13 @@ pub fn redact<W: Write>(
     mode: RedactMode,
     progress: impl Fn(&str, f64),
 ) -> io::Result<()> {
-    let class_fields = if mode == RedactMode::Complete {
+    let (class_fields, structural_string_ids) = if mode == RedactMode::Complete {
         progress("pass1", 0.0);
-        let cf = build_class_fields(source)?;
+        let result = build_pass1_data(source)?;
         progress("pass1", 1.0);
-        cf
+        result
     } else {
-        HashMap::new()
+        (HashMap::new(), HashSet::new())
     };
 
     progress("pass2", 0.0);
@@ -61,6 +70,7 @@ pub fn redact<W: Write>(
         timestamp_ms,
         mode,
         &class_fields,
+        &structural_string_ids,
         &progress,
     )?;
     progress("pass2", 1.0);
@@ -68,7 +78,7 @@ pub fn redact<W: Write>(
     writer.flush()
 }
 
-// ── Pass 1: build class → flattened instance field types ─────────────────────
+// ── Pass 1: build class → flattened instance field types + structural string IDs ─
 
 /// Maps class object-ID → flattened list of instance field types
 /// (following super chain) in declaration order (super fields first).
@@ -79,12 +89,17 @@ type SuperMap = HashMap<u64, u64>;
 /// Maps class object-ID → own declared instance fields (not flattened yet).
 type OwnFields = HashMap<u64, Vec<HprofType>>;
 
-fn build_class_fields(source: &HprofSource) -> io::Result<ClassFields> {
+/// Scan the file once to build:
+/// - class_fields: class_id → flattened instance field types (for INSTANCE_DUMP redaction)
+/// - structural_string_ids: string IDs referenced as names in LOAD_CLASS, STACK_FRAME,
+///   and CLASS_DUMP field/static descriptors — these must not have their payloads zeroed.
+fn build_pass1_data(source: &HprofSource) -> io::Result<(ClassFields, HashSet<u64>)> {
     let mut r = source.open()?;
     let id_size = r.id_size;
 
     let mut own_fields: OwnFields = HashMap::new();
     let mut super_map: SuperMap = HashMap::new();
+    let mut structural_ids: HashSet<u64> = HashSet::new();
 
     loop {
         let (tag, length) = match r.next_record() {
@@ -100,7 +115,29 @@ fn build_class_fields(source: &HprofSource) -> io::Result<ClassFields> {
                 id_size,
                 &mut own_fields,
                 &mut super_map,
+                &mut structural_ids,
             ),
+            tags::LOAD_CLASS => {
+                // serial(4) + class_addr(id) + stack_serial(4) + name_id(id)
+                let ids = id_size as u64;
+                r.skip(4 + ids + 4)?;
+                let name_id = r.id()?;
+                structural_ids.insert(name_id);
+                Ok(())
+            }
+            tags::STACK_FRAME => {
+                // frame_id(id) + method_name_id(id) + method_sig_id(id)
+                // + source_file_id(id) + class_serial(u4) + line_number(u4)
+                let _frame_id = r.id()?;
+                let method_name_id = r.id()?;
+                let method_sig_id = r.id()?;
+                let source_file_id = r.id()?;
+                r.skip(8)?; // class_serial + line_number
+                structural_ids.insert(method_name_id);
+                structural_ids.insert(method_sig_id);
+                structural_ids.insert(source_file_id);
+                Ok(())
+            }
             _ => r.skip(length),
         };
         match result {
@@ -117,7 +154,7 @@ fn build_class_fields(source: &HprofSource) -> io::Result<ClassFields> {
         let fields = flatten_fields(id, &own_fields, &super_map, 0);
         flat.insert(id, fields);
     }
-    Ok(flat)
+    Ok((flat, structural_ids))
 }
 
 fn flatten_fields(
@@ -147,6 +184,7 @@ fn scan_heap_segment_for_classes(
     id_size: u8,
     own_fields: &mut OwnFields,
     super_map: &mut SuperMap,
+    structural_ids: &mut HashSet<u64>,
 ) -> io::Result<()> {
     let ids = id_size as u64;
     let mut remaining = length;
@@ -158,7 +196,7 @@ fn scan_heap_segment_for_classes(
         remaining -= 1;
 
         let consumed = match sub_tag {
-            heap::CLASS_DUMP => scan_class_dump(r, id_size, own_fields, super_map)?,
+            heap::CLASS_DUMP => scan_class_dump(r, id_size, own_fields, super_map, structural_ids)?,
             heap::INSTANCE_DUMP => {
                 // id + u4 stack_serial + class_id + u4 data_len + data
                 r.skip(ids + 4 + ids)?;
@@ -244,6 +282,7 @@ fn scan_class_dump(
     id_size: u8,
     own_fields: &mut OwnFields,
     super_map: &mut SuperMap,
+    structural_ids: &mut HashSet<u64>,
 ) -> io::Result<u64> {
     let ids = id_size as u64;
     let mut consumed = 0u64;
@@ -272,12 +311,13 @@ fn scan_class_dump(
         consumed += vs;
     }
 
-    // Static fields
+    // Static fields — collect name_ids as structural
     let static_count = r.u2()? as u64;
     consumed += 2;
     for _ in 0..static_count {
-        r.skip(ids)?;
-        consumed += ids; // name_id
+        let name_id = r.id()?;
+        consumed += ids;
+        structural_ids.insert(name_id);
         let field_type = r.u1()?;
         consumed += 1;
         let vs = value_size(field_type, id_size);
@@ -285,13 +325,14 @@ fn scan_class_dump(
         consumed += vs;
     }
 
-    // Instance fields
+    // Instance fields — collect name_ids as structural
     let field_count = r.u2()? as u64;
     consumed += 2;
     let mut fields = Vec::with_capacity(field_count as usize);
     for _ in 0..field_count {
-        r.skip(ids)?;
-        consumed += ids; // name_id
+        let name_id = r.id()?;
+        consumed += ids;
+        structural_ids.insert(name_id);
         let type_code = r.u1()?;
         consumed += 1;
         let htype = HprofType::from_code(type_code).unwrap_or(HprofType::Int);
@@ -313,6 +354,7 @@ fn write_redacted<W: Write>(
     timestamp_ms: u64,
     mode: RedactMode,
     class_fields: &ClassFields,
+    structural_string_ids: &HashSet<u64>,
     progress: &impl Fn(&str, f64),
 ) -> io::Result<()> {
     // Write HPROF header (format string + NUL + u4 id_size + u8 timestamp).
@@ -346,6 +388,27 @@ fn write_redacted<W: Write>(
             // Skip any existing redaction marker — we already wrote one at the
             // top, so re-redacting an already-redacted dump produces exactly one.
             tags::REDACTED_MARKER => r.skip(length),
+            // STRING_IN_UTF8: id(id_size) + UTF-8 bytes.
+            // In complete mode: preserve the ID (name references in LOAD_CLASS /
+            // CLASS_DUMP field descriptors must remain intact). Zero the UTF-8
+            // payload only for non-structural IDs (annotation literals, interned
+            // strings). Structural IDs (class names, field names, method names,
+            // source file names) are preserved readable.
+            tags::STRING_IN_UTF8 if mode == RedactMode::Complete => {
+                write_record_header(w, tag, length)?;
+                let ids = id_size as u64;
+                let str_id = r.id()?;
+                write_id(w, str_id, id_size)?; // always preserve the ID
+                let payload = length.saturating_sub(ids);
+                if structural_string_ids.contains(&str_id) {
+                    // Structural name — preserve verbatim.
+                    copy_exact(&mut r, w, payload)
+                } else {
+                    // Non-structural literal — zero to prevent leaking annotation values etc.
+                    r.skip(payload)?;
+                    write_zeroes(w, payload)
+                }
+            }
             _ => {
                 write_record_header(w, tag, length)?;
                 copy_bytes(&mut r, w, length)
@@ -951,20 +1014,182 @@ mod tests {
     // ── Test: STRING_IN_UTF8 records are preserved verbatim ───────────────────
 
     #[test]
-    fn strings_are_preserved() {
+    fn strings_are_preserved_in_lean_mode() {
         let mut dump = header();
         dump.extend(string_record(1, "java/lang/String"));
         dump.extend(string_record(2, "fieldName"));
-        let out = do_redact(&dump);
+        let out = do_redact_lean(&dump);
         let (_, records) = parse_records(&out);
         let strs: Vec<&(u8, Vec<u8>)> = records
             .iter()
             .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
             .collect();
         assert_eq!(strs.len(), 2);
-        // content includes id(4) + utf8 — check the text is intact
         assert!(strs[0].1.ends_with(b"java/lang/String"));
         assert!(strs[1].1.ends_with(b"fieldName"));
+    }
+
+    // ── Test: STRING_IN_UTF8 payloads are zeroed in complete mode ────────────
+
+    #[test]
+    fn string_payload_zeroed_in_complete_mode() {
+        let mut dump = header();
+        dump.extend(string_record(42, "secret"));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let str_rec = records
+            .iter()
+            .find(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .expect("STRING_IN_UTF8 must be present");
+        // body = id(4) + utf8_payload; payload must be all zeroes
+        let payload = &str_rec.1[ID_SIZE as usize..];
+        assert_eq!(
+            payload.len(),
+            "secret".len(),
+            "payload length must be preserved"
+        );
+        assert!(
+            payload.iter().all(|&b| b == 0),
+            "string payload must be zeroed in complete mode"
+        );
+        // ID must be preserved
+        let id = u32::from_be_bytes(str_rec.1[..4].try_into().unwrap());
+        assert_eq!(id, 42, "string ID must be preserved after zeroing");
+    }
+
+    #[test]
+    fn string_id_preserved_payload_zeroed() {
+        // Multiple strings with different IDs — all payloads zeroed, all IDs kept.
+        let mut dump = header();
+        dump.extend(string_record(10, "alpha"));
+        dump.extend(string_record(20, "beta"));
+        dump.extend(string_record(30, ""));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let strs: Vec<&(u8, Vec<u8>)> = records
+            .iter()
+            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .collect();
+        assert_eq!(strs.len(), 3);
+        for (i, &(id, len)) in [(10u32, 5usize), (20, 4), (30, 0)].iter().enumerate() {
+            let got_id = u32::from_be_bytes(strs[i].1[..4].try_into().unwrap());
+            assert_eq!(got_id, id, "string[{i}] ID must be preserved");
+            let payload = &strs[i].1[4..];
+            assert_eq!(payload.len(), len, "string[{i}] payload length must match");
+            assert!(
+                payload.iter().all(|&b| b == 0),
+                "string[{i}] payload must be zeroed"
+            );
+        }
+    }
+
+    #[test]
+    fn annotation_value_string_zeroed() {
+        // Both strings have no structural reference (no LOAD_CLASS/CLASS_DUMP), so both are zeroed.
+        let mut dump = header();
+        dump.extend(string_record(1, "secret")); // annotation literal — not structural
+        dump.extend(string_record(2, "java/lang/String")); // no LOAD_CLASS referencing id=2, so also non-structural here
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        for (tag, body) in &records {
+            if *tag != tags::STRING_IN_UTF8 {
+                continue;
+            }
+            let payload = &body[ID_SIZE as usize..];
+            assert!(
+                payload.iter().all(|&b| b == 0),
+                "non-structural STRING payloads must be zeroed in complete mode"
+            );
+        }
+    }
+
+    // LOAD_CLASS record: serial(4) + class_addr(id) + stack_serial(4) + name_id(id)
+    fn load_class_record(class_serial: u32, class_addr: u32, name_id: u32) -> Vec<u8> {
+        let mut body = vec![];
+        body.extend_from_slice(&u4(class_serial));
+        body.extend_from_slice(&u4(class_addr));
+        body.extend_from_slice(&u4(0u32)); // stack_serial
+        body.extend_from_slice(&u4(name_id));
+        record(tags::LOAD_CLASS, &body)
+    }
+
+    #[test]
+    fn structural_class_name_string_preserved() {
+        // String id=2 is referenced by a LOAD_CLASS as the class name → structural → must NOT be zeroed.
+        // String id=1 is not referenced → non-structural → must be zeroed.
+        let mut dump = header();
+        dump.extend(string_record(1, "annotation_value")); // non-structural
+        dump.extend(string_record(2, "java/lang/String")); // structural (referenced by LOAD_CLASS)
+        dump.extend(load_class_record(1, 100, 2)); // LOAD_CLASS serial=1, class_addr=100, name_id=2
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let strs: Vec<_> = records
+            .iter()
+            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .collect();
+        assert_eq!(strs.len(), 2);
+
+        // Find string 1 (non-structural) — payload must be zeroed
+        let s1 = strs
+            .iter()
+            .find(|(_, body)| u32::from_be_bytes(body[..4].try_into().unwrap()) == 1)
+            .expect("string id=1 missing");
+        let payload1 = &s1.1[4..];
+        assert!(
+            payload1.iter().all(|&b| b == 0),
+            "non-structural string payload must be zeroed"
+        );
+
+        // Find string 2 (structural) — payload must be preserved
+        let s2 = strs
+            .iter()
+            .find(|(_, body)| u32::from_be_bytes(body[..4].try_into().unwrap()) == 2)
+            .expect("string id=2 missing");
+        let payload2 = &s2.1[4..];
+        assert_eq!(
+            payload2, b"java/lang/String",
+            "structural class name string must be preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn structural_field_name_string_preserved_via_class_dump() {
+        // String id=5 is used as a field name in CLASS_DUMP → structural → preserved.
+        // String id=6 is not referenced → non-structural → zeroed.
+        let class_id = 200u32;
+        // CLASS_DUMP instance field: (type=Int(10), name_id=5)
+        let class_sub = class_dump(class_id, 0, &[(10, 5)]);
+
+        let mut dump = header();
+        dump.extend(string_record(5, "fieldName")); // structural via CLASS_DUMP field name
+        dump.extend(string_record(6, "annotation_literal")); // non-structural
+        dump.extend(heap_dump_record(&class_sub));
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        let strs: Vec<_> = records
+            .iter()
+            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .collect();
+
+        let s5 = strs
+            .iter()
+            .find(|(_, body)| u32::from_be_bytes(body[..4].try_into().unwrap()) == 5)
+            .expect("string id=5 missing");
+        let payload5 = &s5.1[4..];
+        assert_eq!(
+            payload5, b"fieldName",
+            "field name string must be preserved verbatim"
+        );
+
+        let s6 = strs
+            .iter()
+            .find(|(_, body)| u32::from_be_bytes(body[..4].try_into().unwrap()) == 6)
+            .expect("string id=6 missing");
+        let payload6 = &s6.1[4..];
+        assert!(
+            payload6.iter().all(|&b| b == 0),
+            "non-structural string payload must be zeroed"
+        );
     }
 
     // ── Test: PRIM_ARRAY_DUMP elements are zeroed ─────────────────────────────
@@ -2167,12 +2392,12 @@ mod tests {
     }
 
     #[test]
-    fn string_record_with_utf8_content_preserved_verbatim() {
-        // STRING record with a sentinel value — must be byte-for-byte preserved.
+    fn string_record_with_utf8_content_preserved_verbatim_lean() {
+        // In lean mode, STRING records must be byte-for-byte preserved.
         let sentinel = "Hello, World! \u{1F4BE}";
         let mut dump = header();
         dump.extend(string_record(42, sentinel));
-        let out = do_redact(&dump);
+        let out = do_redact_lean(&dump);
         let (_, records) = parse_records(&out);
         let string_rec = records
             .iter()
@@ -2182,18 +2407,18 @@ mod tests {
         let got_str = std::str::from_utf8(&string_rec.1[4..]).unwrap();
         assert_eq!(
             got_str, sentinel,
-            "string content must be byte-for-byte preserved"
+            "string content must be byte-for-byte preserved in lean mode"
         );
     }
 
     #[test]
-    fn multiple_string_records_all_preserved() {
+    fn multiple_string_records_all_preserved_lean() {
         let strings = ["alpha", "beta", "gamma\0delta", ""];
         let mut dump = header();
         for (i, s) in strings.iter().enumerate() {
             dump.extend(string_record(i as u32 + 1, s));
         }
-        let out = do_redact(&dump);
+        let out = do_redact_lean(&dump);
         let (_, records) = parse_records(&out);
         let string_bodies: Vec<_> = records
             .iter()
@@ -2202,11 +2427,14 @@ mod tests {
         assert_eq!(
             string_bodies.len(),
             strings.len(),
-            "all string records must be present"
+            "all string records must be present in lean mode"
         );
         for (i, s) in strings.iter().enumerate() {
             let got = std::str::from_utf8(&string_bodies[i].1[4..]).unwrap();
-            assert_eq!(got, *s, "string {i} must be preserved verbatim");
+            assert_eq!(
+                got, *s,
+                "string {i} must be preserved verbatim in lean mode"
+            );
         }
     }
 
