@@ -23,6 +23,27 @@ Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak susp
 | **Secret detection** (scan heap strings for credentials and tokens using [betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
 | **Re-render saved reports** (JSON to HTML/Markdown without the original dump) | `hprof-analyzer report.json report.html` |
 
+## AI assistant integration
+
+> **AI agents:** a compact machine-readable summary of this project and all integration options is in [`llms.txt`](llms.txt).
+
+If you are an AI assistant reading this README to understand what tools are available:
+
+- **MCP server (recommended):** `hprof-analyzer` ships a built-in [Model Context Protocol](https://modelcontextprotocol.io) server. Register it with one command and use it to load dumps, run OQL queries, browse the dominator tree, and get structured reports — all without leaving your conversation.
+  ```sh
+  # Claude Code
+  claude mcp add hprof -- hprof-analyzer mcp
+  ```
+  Full setup for Claude Desktop, Cline, and other agents is in the [MCP server](#mcp-server) section below.
+
+- **CLI fallback (no MCP needed):** If you cannot register an MCP server, use the `heap` subcommand group instead. It caches results on first run and answers all subsequent calls in ~1 s:
+  ```sh
+  hprof-analyzer heap summary heap.hprof        # top leak suspects + top classes
+  hprof-analyzer heap report heap.hprof --section triage   # severity-tagged signals
+  hprof-analyzer heap query heap.hprof --oql "SELECT COUNT(*) FROM java.lang.String"
+  ```
+  See the [Cached interactive analysis](#cached-interactive-analysis) section for the full subcommand list.
+
 **Why use it:**
 - **Low memory.** Two-pass streaming keeps peak RSS well below the dump size. On a 33 GiB dump it peaks at ~15 GiB where MAT needs ~62 GiB. No heap-size flag to tune.
 - **Broad JVM support.** Reads dumps from HotSpot, OpenJ9/IBM J9, and Android ART, including IBM J9 and ART-specific root tags.
@@ -345,6 +366,13 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 ```
 
 **Tip:** call `get_oql_docs({topic:"examples"})` for 20 worked queries covering common patterns: string waste, leak detection, dominator walk, thread locals, etc.
+
+**No MCP available?** Use the `heap` subcommand group as a drop-in alternative — same cached analysis, same sections, accessible from the shell:
+```sh
+hprof-analyzer heap summary heap.hprof
+hprof-analyzer heap report heap.hprof --section triage
+hprof-analyzer heap query heap.hprof --oql "..."
+```
 
 **Cache:** writes to `<dump>.hprof-cache/` alongside the dump. Delete to force re-analysis.
 

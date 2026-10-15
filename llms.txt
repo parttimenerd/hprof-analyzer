@@ -1,0 +1,128 @@
+# hprof-analyzer
+
+Rust CLI + MCP server for Java heap dump analysis. Investigates OutOfMemoryErrors and memory leaks in JVM applications by parsing `.hprof` files. Generates MAT-parity reports (leak suspects, retained-size breakdown, OQL queries) with peak RSS well below the dump size.
+
+> Built by the [SapMachine](https://sapmachine.io) team. MIT licensed.
+
+## What this tool does
+
+- Parses `.hprof`, `.hprof.gz`, `.hprof.zip` heap dumps from HotSpot, OpenJ9, and Android ART
+- Builds a dominator tree, computes retained sizes, identifies leak suspects and top consumers
+- Runs SQL-flavoured OQL queries (Eclipse MAT-compatible dialect with extensions)
+- Exposes all of the above via an MCP server for AI assistant integration
+- Generates Eclipse MAT-compatible cache files (lower RSS than MAT itself)
+- Redacts sensitive values from heap dumps before sharing
+
+## How to use as an AI assistant
+
+### Option 1 — MCP server (recommended)
+
+Register the MCP server once, then use structured tools to load dumps, run queries, and browse results.
+
+**Claude Code:**
+```sh
+claude mcp add hprof -- hprof-analyzer mcp
+```
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+```json
+{
+  "mcpServers": {
+    "hprof": { "command": "hprof-analyzer", "args": ["mcp"] }
+  }
+}
+```
+
+**Cline / VS Code** (`.vscode/mcp.json`):
+```json
+{
+  "hprof": { "command": "hprof-analyzer", "args": ["mcp"] }
+}
+```
+
+#### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `get_session_info` | Check if a dump is loaded |
+| `load_dump` | Load a dump file (fast from cache after first run) |
+| `get_report` | Structured report or named section: `triage` ⭐, `leaks`, `top-classes`, `top-objects`, `threads`, `overview` |
+| `get_histogram` | Class histogram |
+| `query` | Run OQL or a built-in view by name |
+| `browse_dominators` | Navigate the dominator tree |
+| `inspect_object` | Details for a specific object |
+| `get_oql_docs` | OQL language reference (no dump needed) |
+| `redact` | Zero primitive values before sharing |
+
+#### MCP investigation workflow
+
+```
+1. load_dump({path: "/abs/path/to/heap.hprof"})
+2. get_report({section: "triage"})     ⭐ — severity-tagged signals, fastest orientation
+3. get_report({section: "leaks"})         — root paths, accumulation points
+4. get_histogram                          — class-level breakdown
+5. query({oql: "..."})                    — drill in with OQL
+6. browse_dominators                      — walk the dominator tree
+```
+
+### Option 2 — CLI fallback (no MCP needed)
+
+If you cannot register an MCP server, use the `heap` subcommand group. It caches results on the first run; all subsequent calls return in ~1 s.
+
+```sh
+# First orientation
+hprof-analyzer heap summary heap.hprof
+
+# Severity-tagged signals (fastest diagnosis)
+hprof-analyzer heap report heap.hprof --section triage
+
+# Leak suspects with root paths
+hprof-analyzer heap report heap.hprof --section leaks
+
+# OQL query
+hprof-analyzer heap query heap.hprof --oql "SELECT COUNT(*) FROM java.lang.String"
+
+# Browse dominator tree
+hprof-analyzer heap browse heap.hprof
+
+# Inspect a specific object (index from query @objectId column)
+hprof-analyzer heap inspect heap.hprof --index 42
+```
+
+Add `--json` to any `heap` subcommand for machine-readable output.
+
+Available `--section` values: `triage`, `leaks`, `top`, `threads`, `overview`, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`, `all`.
+
+**Important:** use `heap query` (not the `query` subcommand) for queries that need `@retainedHeapSize` or dominator attributes — the `query` subcommand does a fast streaming parse only.
+
+## Install
+
+```sh
+# macOS (Homebrew)
+brew tap parttimenerd/hprof-analyzer
+brew trust parttimenerd/hprof-analyzer
+brew install hprof-analyzer
+
+# macOS (Apple Silicon, direct)
+curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
+
+# Linux x86_64
+curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
+
+# Cargo (requires Rust 1.85+)
+cargo install hprof-analyzer
+```
+
+## Key files
+
+| Path | Contents |
+|------|----------|
+| `README.md` | Full user documentation |
+| `docs/OQL.md` | OQL language reference, grammar, attributes, worked examples |
+| `skills/hprof-analyzer.md` | Ready-made skill for AI assistants using the HTTP server |
+| `skills/hprof-analyzer-cli.md` | Ready-made skill for AI assistants using the CLI (no MCP) |
+| `docs/schema.json` | JSON Schema for the report format |
+| `DESIGN.md` | Architecture: two-pass parser, dominator tree, compressed indices |
+| `CHANGELOG.md` | Release history |
