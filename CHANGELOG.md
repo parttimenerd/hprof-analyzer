@@ -49,6 +49,17 @@ All notable changes to hprof-analyzer are documented here.
   cost on uniform distributions; eliminates the CPU spike on pathological
   dumps.
 
+- **Unreachable-forest dominator pass auto-skipped on large unreachable sets.**
+  The iterative CHK dominator over the unreachable subgraph is O(u²) in the
+  worst case. On post-GC dumps where most objects are already unreachable
+  (e.g. 90%+ of a Tomcat dump taken mid-collection) this pass dominated total
+  analysis time. When the unreachable object count exceeds 500 000 the pass is
+  now skipped automatically; the Unreachable Objects section shows
+  shallow-by-class instead of retained-by-class, and a note in the report
+  (Markdown and HTML) explains the skip with a hint to use `--full-analysis`
+  to force the full dominator pass. Zero impact on normal dumps with small
+  garbage fractions.
+
 ## [0.3.1] — 2026-10-02
 
 ### Added

@@ -192,7 +192,7 @@ hprof-analyzer heap report heap.hprof --section leaks
 | `--find-duplicates` | Detect content-identical `String` values and primitive arrays; reports wasted bytes and top offenders. |
 | `--collections` | Container attribution by holder `Class#field`: fill ratios, size distributions, collision rates. Adds ~300 MB peak RSS on large dumps. |
 | `--obj-graph[=small\|medium\|large]` | Capture the outbound-reference graph for the top retained objects. Enables the interactive Object Graph Explorer in HTML reports. Implied by `--full-analysis`. |
-| `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. **Note:** on dumps with a large unreachable object set the `unreachable-retained` phase (iterative dominator over the garbage subgraph) can dominate wall time; use `heap report` / `heap query` (disk-cached) for repeated analysis instead. |
+| `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. Also forces the unreachable-forest dominator pass regardless of unreachable object count (see note below). **Note:** on dumps with a large unreachable object set the `unreachable-retained` phase (iterative dominator over the garbage subgraph) can dominate wall time; use `heap report` / `heap query` (disk-cached) for repeated analysis instead. |
 | `--field-stats` | Per-class reference-field null/non-null/retained stats for the top-50 classes by instance count. |
 | `--ref-paths` | Capture field-name labels on reference edges (~2 bytes/edge). Enables named field breakdowns in `--field-stats` and richer root paths. |
 | `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default. |
@@ -201,6 +201,8 @@ hprof-analyzer heap report heap.hprof --section leaks
 | `--query <OQL>` | Run an OQL query and embed results in the report. May be repeated. |
 | `--query-file <PATH>` | Read one OQL query per non-empty line from a file. |
 | `--progress auto\|always\|never` | Control the live progress line on stderr. Default: `auto` (terminal only). |
+
+> **Unreachable-forest dominator pass:** When more than 500 000 objects are unreachable (common on dumps taken mid-GC or post-collection), the iterative dominator pass over the garbage subgraph is skipped automatically. The Unreachable Objects report section then shows shallow heap by class instead of retained heap, and a note explains the skip. Use `--full-analysis` to force the full dominator pass regardless of object count.
 
 ### Tune the report size with `--detail`
 
