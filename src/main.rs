@@ -1789,6 +1789,7 @@ fn run_default(cli: Cli) {
             ref_paths: cli.ref_paths,
             field_stats: cli.field_stats,
             obj_graph: cli.obj_graph.is_some() || cli.full_analysis,
+            force_unreachable_dominator: cli.full_analysis,
             dev_report: cli.dev || cli.bundle_path.is_some(),
             bundle_path: cli.bundle_path.clone(),
             ..opts
@@ -1999,6 +2000,7 @@ fn analyze_to_report_inner(
             g.class_names.len(),
             &g.class_obj_class_idx,
             &g.class_names,
+            opts.force_unreachable_dominator,
         )?;
     }
     t_pipe!("unreachable_retained done");
@@ -3323,6 +3325,7 @@ fn run(
             g.class_names.len(),
             &g.class_obj_class_idx,
             &g.class_names,
+            opts.force_unreachable_dominator,
         )?;
         crate::trace::probe("main: after unreachable_retained (fwd CSR + dfn still alive)");
         log(verbose, "unreachable-retained", t.elapsed().as_secs_f64());

@@ -3138,6 +3138,11 @@ fn build_system_overview(
             .as_ref()
             .map(|u| u.garbage_roots.clone())
             .unwrap_or_default(),
+        unreachable_dominator_skipped: g
+            .unreachable_retained
+            .as_ref()
+            .map(|u| u.dominator_skipped)
+            .unwrap_or(false),
         unreachable_histogram,
         histogram,
         histogram_truncated_to: None,

@@ -155,6 +155,11 @@ pub struct AnalyzeOptions {
     /// Compute per-class reference-field statistics (null/non-null counts, total
     /// retained size of pointees). Opt-in; off by default. Adds O(n) pass.
     pub field_stats: bool,
+    /// Force the unreachable-forest dominator pass even when the unreachable set
+    /// exceeds the auto-skip threshold. Set by --full-analysis. When false (default)
+    /// the pass is skipped on dumps where unreachable objects exceed 500K, falling
+    /// back to a shallow-by-class aggregate to keep wall time bounded.
+    pub force_unreachable_dominator: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -206,6 +211,7 @@ impl DetailLevel {
             bundle_path: None,
             skip_report: false,
             field_stats: false,
+            force_unreachable_dominator: false,
         }
     }
 }

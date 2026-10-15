@@ -847,6 +847,7 @@ mod tests {
                 unreachable_retained: 0,
                 unreachable_composition: Default::default(),
                 unreachable_garbage_roots: vec![],
+                unreachable_dominator_skipped: false,
                 unreachable_histogram: vec![],
                 histogram,
                 histogram_truncated_to: None,

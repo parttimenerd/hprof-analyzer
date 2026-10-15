@@ -3460,8 +3460,20 @@ A small unreachable heap (< 5% of heap total) is normal between GC cycles._\n\n"
     }
     t.render(out);
     out.push('\n');
-    // Garbage-root dominator trees.
-    render_garbage_root_trees(&o.unreachable_garbage_roots, graphs, out);
+    // Garbage-root dominator trees (omitted when the dominator pass was skipped).
+    if o.unreachable_dominator_skipped {
+        use crate::unreachable_retained;
+        out.push_str(&format!(
+            "_Unreachable dominator tree skipped: {} unreachable objects exceeds the \
+             auto-skip threshold ({}). Shallow-by-class shown above instead of \
+             retained-by-class. Re-run with `--full-analysis` to force the full \
+             dominator pass._\n\n",
+            fmt_count(o.unreachable_count),
+            fmt_count(unreachable_retained::DOMINATOR_SKIP_THRESHOLD as u64),
+        ));
+    } else {
+        render_garbage_root_trees(&o.unreachable_garbage_roots, graphs, out);
+    }
 }
 
 /// Render the top garbage-root dominator subtrees as indented ASCII trees.

@@ -4,6 +4,8 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-10-15
+
 ### Added
 
 - **`hprof-analyzer check-redacted <INPUT>`** — new subcommand that exits 0
@@ -13,6 +15,39 @@ All notable changes to hprof-analyzer are documented here.
 
 - **`hprof-redact --check <INPUT>`** — same check available in the standalone
   binary without requiring the full `hprof-analyzer` install.
+
+- **`detect-secrets` now scans JVM symbol table strings.** The JVM symbol
+  table (`STRING_IN_UTF8` records) contains class-file constant pool literals
+  that are separate from heap `java.lang.String` instances: annotation values
+  (`@Value("${spring.datasource.url}")`), `@RequestMapping` URL paths,
+  Spring EL expressions, JDBC URLs embedded in class constants, etc.
+  Previously these were invisible to `detect-secrets`; they are now scanned
+  with the same pattern set. Symbol table findings are attributed as
+  `JVM symbol table / STRING_IN_UTF8` in the output.
+
+### Fixed
+
+- **`redact --complete`: annotation literals and Spring EL expressions now
+  zeroed.** The JVM symbol table (`STRING_IN_UTF8` records) holds string
+  constants from class-file constant pools, including annotation attribute
+  values (`@Value("${spring.datasource.url}")`, `@RequestMapping("/owners")`),
+  Spring EL expressions, and other non-structural literals. These were
+  preserved verbatim by complete mode; they are now zeroed for any ID that is
+  not referenced as a structural name (class name via `LOAD_CLASS`, method/
+  source-file name via `STACK_FRAME`, or field name via `CLASS_DUMP`). Class
+  names, field names, method names, and source file names are kept readable
+  so the dump remains fully browsable in MAT and jhat. Lean mode is unchanged
+  — adding symbol-table selective zeroing to lean mode would require a second
+  pass, contradicting its single-pass design. Use `--complete` when annotation
+  strings must not appear in the shared file. (Fixes #3.)
+
+- **`pass2::fill_heap` pegging one core on clustered heap addresses.** The
+  interpolation search in `IdMap::search_offsets` stalled on non-uniform
+  address distributions (post-GC clusters, ART/J9 allocators) where each
+  probe barely narrowed the range. Added a stagnation guard: if a probe
+  fails to halve the range, fall through to binary search immediately. Zero
+  cost on uniform distributions; eliminates the CPU spike on pathological
+  dumps.
 
 ## [0.3.1] — 2026-10-02
 

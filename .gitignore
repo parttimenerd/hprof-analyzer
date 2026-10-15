@@ -22,6 +22,7 @@ web-browser/report_v3.html
 scripts/*.local.sh
 bigdump-rss.*
 *.timev
+.mcp.json
 
 # Scratch screenshots and throwaway HTML from local dev sessions.
 /*.png
@@ -55,6 +56,8 @@ tests/fixtures/*_Query.zip
 # Internal AI-assisted planning/spec docs — not part of the public project.
 docs/superpowers/
 docs/missing-views-plan.md
+# Disk cache directories generated next to docs/samples fixtures.
+docs/samples/*.hprof-cache/
 
 # Scratch files from local dev runs.
 /_ours.md
@@ -71,5 +74,6 @@ tests/web-stress/package-lock.json
 .claude/
 dist/*.html
 dist/*.json
+dist/*.zip
 # Experimental wasm64 build artifacts (opt-in; built via scripts/build-browser-wasm64.sh)
 dist/wasm64/

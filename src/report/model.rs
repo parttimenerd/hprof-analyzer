@@ -394,6 +394,11 @@ pub struct SystemOverview {
     /// cluster. Additive; not parity-compared.
     #[serde(default)]
     pub unreachable_garbage_roots: Vec<UnreachableGarbageRoot>,
+    /// True when the unreachable dominator pass was skipped because the unreachable
+    /// set exceeded the threshold. The unreachable histogram shows shallow-by-class
+    /// instead of retained-by-class; garbage_roots is empty.
+    #[serde(default)]
+    pub unreachable_dominator_skipped: bool,
     /// Ratio of unreachable shallow heap to total heap (reachable + unreachable).
     /// Range [0.0, 1.0]. 0.0 for an empty heap.
     #[serde(default)]

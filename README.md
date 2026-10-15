@@ -192,7 +192,7 @@ hprof-analyzer heap report heap.hprof --section leaks
 | `--find-duplicates` | Detect content-identical `String` values and primitive arrays; reports wasted bytes and top offenders. |
 | `--collections` | Container attribution by holder `Class#field`: fill ratios, size distributions, collision rates. Adds ~300 MB peak RSS on large dumps. |
 | `--obj-graph[=small\|medium\|large]` | Capture the outbound-reference graph for the top retained objects. Enables the interactive Object Graph Explorer in HTML reports. Implied by `--full-analysis`. |
-| `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. |
+| `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. **Note:** on dumps with a large unreachable object set the `unreachable-retained` phase (iterative dominator over the garbage subgraph) can dominate wall time; use `heap report` / `heap query` (disk-cached) for repeated analysis instead. |
 | `--field-stats` | Per-class reference-field null/non-null/retained stats for the top-50 classes by instance count. |
 | `--ref-paths` | Capture field-name labels on reference edges (~2 bytes/edge). Enables named field breakdowns in `--field-stats` and richer root paths. |
 | `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default. |
@@ -438,7 +438,7 @@ Before sharing a heap dump with colleagues, in a bug report, or with a vendor, y
 # Default: lean mode — zeroes all primitive array elements (byte[], char[], int[], …)
 hprof-analyzer redact heap.hprof safe.hprof
 
-# Complete mode — also zeroes scalar instance fields and CLASS_DUMP static values
+# Complete mode — also zeroes scalar instance fields, static values, and annotation literals
 hprof-analyzer redact --complete heap.hprof safe.hprof
 
 # Pipe-friendly: write to stdout (progress suppressed automatically)
@@ -449,16 +449,45 @@ Redacted dumps are readable by hprof-analyzer, Eclipse MAT, and jhat. A marker r
 
 **Lean vs. complete mode:**
 
-| Mode | What is zeroed | Use when |
-|------|---------------|----------|
-| **Lean** (default) | All primitive array elements (`byte[]`, `char[]`, `int[]`, `long[]`, etc.) | Speed matters; leaking scalar fields like `String.hash` is acceptable |
-| **Complete** (`--complete`) | Array elements + scalar instance fields + CLASS_DUMP static values | Maximum privacy needed |
+| Mode | What is zeroed | What survives |
+|------|---------------|---------------|
+| **Lean** (default, single-pass) | All primitive array elements (`byte[]`, `char[]`, `int[]`, `long[]`, etc.) — covers `String` values via their backing arrays | Scalar instance fields (`int`, `long`, etc. directly on objects); **JVM symbol table strings** (annotation literals, Spring EL expressions, `@RequestMapping` paths) |
+| **Complete** (`--complete`, two-pass) | Everything lean zeros + scalar instance/static fields + non-structural JVM symbol table strings | Class names, field names, method names (preserved for browsability) |
+
+**What survives lean mode that complete mode removes:**
+
+The JVM symbol table (`STRING_IN_UTF8` records) holds class-file constant pool strings that are loaded at class load time. These include annotation attribute values and other string literals — separate from the heap `java.lang.String` instances whose backing arrays lean mode already zeros.
+
+For example, a Spring Boot application dump will contain these as symbol table strings that survive lean mode:
+
+```
+${spring.info.build.location:classpath:META-INF/build-info.properties}
+${error.path:/error}
+${CONSOLE_LOG_THRESHOLD:-TRACE}
+/owners/find
+/owners/new
+/vets
+```
+
+These are `@Value`/`@RequestMapping` literals baked into class files. They are not `String` heap objects, so lean mode's array-zeroing does not touch them. Use `--complete` when annotation strings or config-key patterns must not appear in the shared file.
+
+**Coverage summary — redaction vs. secret detection:**
+
+| Data source | `redact` lean | `redact --complete` | `detect-secrets` |
+|-------------|:---:|:---:|:---:|
+| `java.lang.String` values (field, map, list) | ✅ backing `byte[]`/`char[]` zeroed | ✅ | ✅ scanned |
+| JVM symbol table — class/field/method names | ✅ | ✅ preserved for browsability | — (structural, not secrets) |
+| JVM symbol table — annotation literals (`@Value`, `@RequestMapping`, Spring EL) | ✗ | ✅ zeroed | ✅ scanned |
+| Raw `byte[]`/`char[]` not backing a String (crypto keys, password byte buffers) | ✅ zeroed | ✅ | ✗ not decoded |
+| `StringBuilder` / `StringBuffer` / `CharBuffer` | ✅ backing `char[]` zeroed | ✅ | ✗ not scanned |
+| Scalar instance fields (`int`, `long`, enum ordinals) | ✗ | ✅ | ✗ |
+| CLASS_DUMP static primitive values | ✗ | ✅ | ✗ |
 
 A standalone `hprof-redact` binary is also available for environments where a small dependency footprint matters (under 1 MB). The MCP server exposes redaction via the `redact` tool.
 
 ## Secret detection
 
-Heap dumps contain everything the JVM held in memory at the time of capture: database passwords, API keys, session tokens, bearer tokens, connection strings. The `detect-secrets` subcommand scans all `String` values against [betterleaks](https://github.com/betterleaks/betterleaks) patterns (460 service-specific rules, MIT License) plus heap-dump-specific extras (JDBC URLs, JWT tokens, Spring Security encoded passwords, and more).
+Heap dumps contain everything the JVM held in memory at the time of capture: database passwords, API keys, session tokens, bearer tokens, connection strings. The `detect-secrets` subcommand scans all `String` values and JVM symbol table strings against [betterleaks](https://github.com/betterleaks/betterleaks) patterns (460 service-specific rules, MIT License) plus heap-dump-specific extras (JDBC URLs, JWT tokens, Spring Security encoded passwords, and more).
 
 ```sh
 # Human-readable output grouped by category (default)
@@ -473,7 +502,7 @@ hprof-analyzer detect-secrets --verbatim heap.hprof
 
 Values are masked by default (`sk-an****...****t-AA`). Pass `--verbatim` only in a secure context — the output will contain live credentials.
 
-Attribution is included where possible: for each finding, the class and field name that held the string is shown (e.g. `com.example.Config.apiKey`), including `Map` entries where the key string names the credential (`Map["password"] → "s3cr3t"`).
+Attribution is included where possible: for each finding, the class and field name that held the string is shown (e.g. `com.example.Config.apiKey`), including `Map` entries where the key string names the credential (`Map["password"] → "s3cr3t"`). Symbol table findings are attributed as `JVM symbol table / STRING_IN_UTF8`.
 
 **[Try it in the browser →](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — runs entirely in WebAssembly, nothing is uploaded.
 
