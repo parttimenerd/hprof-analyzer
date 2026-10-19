@@ -49,7 +49,7 @@ mat-oracle = []
 # The WASM crate depends on hprof-analyzer with default-features = false to
 # avoid pulling in these non-WASM-compatible crates.
 default = ["native"]
-native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip", "dep:tar", "dep:ureq", "dep:self-replace", "dep:rmcp", "dep:tokio", "dep:anyhow", "dep:bincode"]
+native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip", "dep:tar", "dep:ureq", "dep:self-replace", "dep:rmcp", "dep:tokio", "dep:anyhow", "dep:bincode", "dep:indexed_deflate"]
 # Minimal feature set for the standalone hprof-redact binary: only zip/tar compression.
 # Excludes the CLI, REPL, MCP server, and all their heavy transitive deps.
 redact-bin = ["dep:zip", "dep:tar"]
@@ -89,6 +89,8 @@ anyhow  = { version = "1", optional = true }
 bincode = { version = "2", features = ["serde"], optional = true }
 # full regex (not regex-lite) for MAT's quoted-FROM Java-Pattern class matching
 regex = "1"
+# Seekable gz decoder for jsonify and array subscript on .hprof.gz files.
+indexed_deflate = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

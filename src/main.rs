@@ -20,6 +20,7 @@ mod cvec;
 mod diff;
 mod diff_reports;
 mod dominator;
+mod gzindex;
 mod html;
 mod id_map;
 mod mat;

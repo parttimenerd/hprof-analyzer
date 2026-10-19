@@ -877,6 +877,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gzip-header"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86848f4fd157d91041a62c78046fb7b248bcc2dce78376d436a1756e9a038577"
+dependencies = [
+ "crc32fast",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -937,6 +946,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "flate2",
+ "indexed_deflate",
  "jsonschema",
  "libc",
  "logos",
@@ -1226,6 +1236,17 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "indexed_deflate"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94285e6105b4fd185b5a9672737911a793c3a0b23ad7ac939b4ff9f9c2c637"
+dependencies = [
+ "gzip-header",
+ "miniz_oxide",
+ "thiserror",
 ]
 
 [[package]]

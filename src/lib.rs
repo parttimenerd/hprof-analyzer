@@ -7,6 +7,8 @@ mod chunkvec;
 mod collection_config;
 pub mod cvec;
 mod dominator;
+#[cfg(feature = "native")]
+pub mod gzindex;
 mod id_map;
 #[cfg(feature = "native")]
 pub mod mcp;

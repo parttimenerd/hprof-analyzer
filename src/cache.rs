@@ -304,6 +304,25 @@ impl CacheDir {
     pub fn has_hprof_offsets(&self) -> bool {
         self.path.join("offsets.bin").exists()
     }
+
+    /// Path to the gz block index inside this cache directory.
+    #[cfg(feature = "native")]
+    pub fn gz_index_path(&self) -> std::path::PathBuf {
+        self.path.join("gz_index.bin")
+    }
+
+    /// True when `gz_index.bin` is present in the cache directory.
+    #[cfg(feature = "native")]
+    pub fn has_gz_index(&self) -> bool {
+        self.gz_index_path().exists()
+    }
+
+    /// Build the gz block index for `gz_path` and write it to this cache dir.
+    /// This performs a full sequential decompression pass — can take minutes.
+    #[cfg(feature = "native")]
+    pub fn write_gz_index(&self, gz_path: &Path) -> io::Result<()> {
+        crate::gzindex::build(gz_path, &self.gz_index_path())
+    }
 }
 
 // ── Indexed file format ───────────────────────────────────────────────────────
