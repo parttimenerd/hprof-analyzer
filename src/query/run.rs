@@ -713,6 +713,9 @@ pub(crate) fn resume_with_string_values(
         gc_root_tags: &stage_runner::EMPTY_GC_ROOT_TAGS,
         class_idx: &[],
         class_names: &[],
+        dump_path: None,
+        offsets: &[],
+        id_size: 8,
     };
 
     // Split pending entries into three routes. toString-only and refwalk entries
@@ -1001,6 +1004,9 @@ pub fn run_resident_with_retained(
         &addr_vec,
         &cache.class_idx,
         &cache.class_names,
+        Some(std::path::PathBuf::from(cache.source.file_path())),
+        &cache.offsets,
+        cache.id_size,
     );
     let mut flat_results = flat_results;
     // Same jsonify post-pass as `run_resident_only` — see the note there.
@@ -1027,6 +1033,9 @@ fn resume_with_retained(
     addr_of: &[u64],
     class_idx: &[u32],
     class_names: &[String],
+    dump_path: Option<std::path::PathBuf>,
+    offsets: &[u64],
+    id_size: usize,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{
@@ -1071,6 +1080,9 @@ fn resume_with_retained(
         gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         class_idx,
         class_names,
+        dump_path,
+        offsets,
+        id_size,
     };
 
     let mut slotted: Vec<(usize, QueryResult)> = finished;

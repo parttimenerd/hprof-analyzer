@@ -160,6 +160,18 @@ pub struct LateCtx<'a> {
     pub class_idx: &'a [u32],
     /// Class histogram row names, indexed by the values in `class_idx`.
     pub class_names: &'a [String],
+    /// Absolute path to the dump file. Used by `array_index_rows` to seek to
+    /// object records for `s[i]` / `s[start:end]` evaluation. `None` when the
+    /// late context is constructed without a file reference (e.g. unit tests).
+    pub dump_path: Option<std::path::PathBuf>,
+    /// In-memory per-dense-index byte offsets captured during pass1 (from
+    /// `ReplCache`). When non-empty, `array_index_rows` uses these directly
+    /// instead of looking up the disk `offsets.bin`. Empty when the late context
+    /// was built without offset capture (fallback: disk read).
+    pub offsets: &'a [u64],
+    /// HPROF identifier width (4 or 8 bytes). Needed by `array_index_rows` to
+    /// parse array element type/class fields when seeking by offset.
+    pub id_size: usize,
 }
 
 impl LateCtx<'_> {
@@ -1256,21 +1268,24 @@ fn project_array_index_item(
 }
 
 /// Produce result rows for a query with `needs.array_index` (contains at least one
-/// `base[index]` or `base[start:end]` expression). In this release, array element
-/// data is not captured during the scan, so all `ArrayIndex`/`ArraySlice` columns
-/// project `Null`. Other columns (`@objectId`, `*`, etc.) are projected normally
-/// from the carried dense indices. Out-of-bounds and non-resolvable bases both
-/// yield `Null` without error, matching the AST contract. Limit is applied.
+/// `base[index]` or `base[start:end]` expression). Out-of-bounds and non-resolvable
+/// bases both yield `Null` without error, matching the AST contract. Limit is applied.
+///
+/// Requires `ctx.dump_path` and `ctx.offsets` to be populated (set by the
+/// REPL/MCP path via `ReplCache`). Without them all ArrayIndex/ArraySlice columns
+/// project `Null` with a note suggesting `load_dump` first.
 fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let class_name = q.from.class_name();
+    let alias = q.alias.as_deref().unwrap_or("");
     let has_deferred_pred = q.where_.as_ref().is_some_and(|p| {
         crate::query::plan::pred_uses_retained(p)
             || crate::query::plan::pred_uses_tostring(p)
             || crate::query::plan::pred_uses_refpath(p)
     });
+    let have_offsets = ctx.dump_path.is_some() && !ctx.offsets.is_empty();
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
     for &s in &seeds {
         if has_deferred_pred {
@@ -1279,15 +1294,84 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                 continue;
             }
         }
+        let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
         let row: Vec<QueryValue> = q
             .select
             .iter()
             .map(|it| match it {
-                // ArrayIndex and ArraySlice: element data not yet captured → Null.
-                SelectItem::Attr(Attr::ArrayIndex { .. })
-                | SelectItem::Attr(Attr::ArraySlice { .. }) => QueryValue::Null,
-                // All other columns: resolve normally from the dense index using
-                // the same late-phase projection as other stage entry functions.
+                SelectItem::Attr(Attr::ArrayIndex { base, index }) => {
+                    if !have_offsets {
+                        return QueryValue::Null;
+                    }
+                    let base_dense = resolve_base_dense(base, alias, s, ret, ctx, &like_regexes);
+                    let Some(offset) = ctx
+                        .offsets
+                        .get(base_dense as usize)
+                        .copied()
+                        .filter(|&o| o != 0)
+                    else {
+                        return QueryValue::Null;
+                    };
+                    let idx_val = eval_late_expr_multi(index, s, ret, ctx, &like_regexes);
+                    let skip = match &idx_val {
+                        QueryValue::Int(n) if *n >= 0 => *n as u64,
+                        _ => return QueryValue::Null,
+                    };
+                    let path = ctx.dump_path.as_deref().unwrap();
+                    match read_array_for_ctx(path, offset, ctx.id_size, skip, 1) {
+                        Some(arr) => arr
+                            .values
+                            .into_iter()
+                            .next()
+                            .map(field_value_to_query_value)
+                            .unwrap_or(QueryValue::Null),
+                        None => QueryValue::Null,
+                    }
+                }
+                SelectItem::Attr(Attr::ArraySlice { base, start, end }) => {
+                    if !have_offsets {
+                        return QueryValue::Null;
+                    }
+                    let base_dense = resolve_base_dense(base, alias, s, ret, ctx, &like_regexes);
+                    let Some(offset) = ctx
+                        .offsets
+                        .get(base_dense as usize)
+                        .copied()
+                        .filter(|&o| o != 0)
+                    else {
+                        return QueryValue::Null;
+                    };
+                    let skip = start
+                        .as_deref()
+                        .map(
+                            |e| match eval_late_expr_multi(e, s, ret, ctx, &like_regexes) {
+                                QueryValue::Int(n) if n >= 0 => n as u64,
+                                _ => 0,
+                            },
+                        )
+                        .unwrap_or(0);
+                    let cap = match (start.as_deref(), end.as_deref()) {
+                        (_, Some(e)) => {
+                            let end_val = match eval_late_expr_multi(e, s, ret, ctx, &like_regexes)
+                            {
+                                QueryValue::Int(n) if n >= 0 => n as u64,
+                                _ => return QueryValue::Null,
+                            };
+                            (end_val.saturating_sub(skip)) as usize
+                        }
+                        _ => crate::objread::MAX_ARRAY_ELEMENTS,
+                    };
+                    let path = ctx.dump_path.as_deref().unwrap();
+                    match read_array_for_ctx(path, offset, ctx.id_size, skip, cap) {
+                        Some(arr) => {
+                            let values: Vec<serde_json::Value> =
+                                arr.values.iter().map(field_value_to_json).collect();
+                            QueryValue::Str(serde_json::to_string(&values).unwrap_or_default())
+                        }
+                        None => QueryValue::Null,
+                    }
+                }
+                // All other columns: resolve normally from the dense index.
                 _ => project_array_index_item(it, s, ctx, class_name, &like_regexes),
             })
             .collect();
@@ -1305,6 +1389,15 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
             truncated = true;
         }
     }
+    let note = if !have_offsets {
+        Some(
+            "array element data requires offset index; run `load_dump` or `heap load` \
+             to build offsets.bin, then retry the query."
+                .to_string(),
+        )
+    } else {
+        None
+    };
     QueryResult {
         name: entry.name.clone(),
         oql: String::new(),
@@ -1313,14 +1406,119 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
         rows,
         truncated,
         error: None,
-        note: Some(
-            "array element data is not yet captured during the scan; \
-             ArrayIndex/ArraySlice columns project Null in this release."
-                .to_string(),
-        ),
+        note,
         viz: None,
         elapsed_ms: None,
     }
+}
+
+/// Resolve the base `Attr` of an `ArrayIndex`/`ArraySlice` to a dense index.
+///
+/// When `base` is the bare FROM alias (a `Field` whose name equals `alias`), the
+/// base IS the current loop object `s` — return it directly.  For any other attr
+/// evaluate it and extract the `ObjRef.index` (the base is a reference to another
+/// heap object).  Returns `u32::MAX` (sentinel for "unresolvable") on failure.
+fn resolve_base_dense(
+    base: &Attr,
+    alias: &str,
+    s: u32,
+    ret: u64,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> u32 {
+    // Bare alias: `s[0]` where s is the loop variable → s itself.
+    if let Attr::Field(name) = base {
+        if name == alias {
+            return s;
+        }
+    }
+    // Any other attr: evaluate and extract the ObjRef index.
+    let v = eval_late_expr_multi(&Expr::Attr(base.clone()), s, ret, ctx, like_regexes);
+    match v {
+        QueryValue::ObjRef { index, .. } => index as u32,
+        QueryValue::Int(n) if n >= 0 => n as u32,
+        _ => u32::MAX,
+    }
+}
+
+/// Convert a `FieldValue` from `objread` to a `QueryValue`.
+fn field_value_to_query_value(fv: crate::objread::FieldValue) -> QueryValue {
+    use crate::objread::FieldValue;
+    match fv {
+        FieldValue::Null => QueryValue::Null,
+        FieldValue::Ref(addr) => {
+            if addr == 0 {
+                QueryValue::Null
+            } else {
+                QueryValue::ObjRef {
+                    index: addr,
+                    class: String::new(),
+                    addr: Some(addr),
+                }
+            }
+        }
+        FieldValue::Prim(v) => match v {
+            serde_json::Value::Bool(b) => QueryValue::Bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    QueryValue::Int(i)
+                } else if let Some(f) = n.as_f64() {
+                    QueryValue::Float(f)
+                } else {
+                    QueryValue::Null
+                }
+            }
+            serde_json::Value::String(s) => QueryValue::Str(s),
+            _ => QueryValue::Null,
+        },
+    }
+}
+
+/// Convert a `FieldValue` to a `serde_json::Value` (for array-slice JSON output).
+fn field_value_to_json(fv: &crate::objread::FieldValue) -> serde_json::Value {
+    use crate::objread::FieldValue;
+    match fv {
+        FieldValue::Null => serde_json::Value::Null,
+        FieldValue::Ref(addr) => serde_json::json!(addr),
+        FieldValue::Prim(v) => v.clone(),
+    }
+}
+
+/// Read an array record using `ctx.dump_path`. For native builds with a gz file
+/// and a pre-built gz index, seeks via `open_for_offset`; falls back to
+/// `read_array_at` (plain file seek) otherwise.
+fn read_array_for_ctx(
+    path: &std::path::Path,
+    offset: u64,
+    id_size: usize,
+    skip: u64,
+    cap: usize,
+) -> Option<crate::objread::ArrayRead> {
+    #[cfg(feature = "native")]
+    {
+        use crate::objread;
+        if objread::is_gz_path(path) {
+            if let Ok(cd) = crate::cache::CacheDir::for_dump(path) {
+                if cd.has_gz_index() {
+                    if let Ok(mut reader) = objread::open_for_offset(path, &cd, offset) {
+                        return objread::read_array_via(
+                            reader.as_mut(),
+                            offset,
+                            id_size,
+                            skip,
+                            cap,
+                        )
+                        .ok()
+                        .flatten();
+                    }
+                }
+            }
+            return None; // gz without index: cannot seek
+        }
+    }
+    crate::objread::read_array_at(path, offset, id_size, skip, cap)
+        .ok()
+        .flatten()
 }
 
 /// Project a RefPath tail on a resolved-target dense index. Identity attrs answer
@@ -2089,6 +2287,9 @@ mod tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -2351,6 +2552,9 @@ mod classof_late_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx,
             class_names,
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -2474,6 +2678,9 @@ mod classof_late_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let q =
             crate::query::parse::parse("SELECT @usedHeapSize, @retainedHeapSize FROM C").unwrap();
@@ -2522,6 +2729,9 @@ mod classof_late_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let q = crate::query::parse::parse(
             "SELECT classof(x) AS c, SUM(@usedHeapSize) AS sh FROM C GROUP BY classof(x) ORDER BY sh DESC",
@@ -2618,6 +2828,9 @@ mod dom_ctx_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
@@ -2662,6 +2875,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         assert_eq!(
             run_dominator_children(&[0u32], usize::MAX, &ctx),
@@ -2698,6 +2914,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
@@ -2726,6 +2945,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
@@ -2757,6 +2979,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -2788,6 +3013,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
@@ -2818,6 +3046,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -2849,6 +3080,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = pq(&q);
@@ -2889,6 +3123,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = pq(&q);
@@ -2926,6 +3163,9 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = pq(&q);
@@ -2973,6 +3213,9 @@ mod refwalk_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -3009,6 +3252,9 @@ mod refwalk_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -3343,6 +3589,9 @@ mod edge_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -3594,6 +3843,9 @@ mod tostring_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -3768,6 +4020,9 @@ mod tostring_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         };
 
         let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[0]);
@@ -4003,6 +4258,9 @@ mod arith_late_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
         }
     }
 
@@ -4111,6 +4369,42 @@ mod arith_late_tests {
         assert!(
             eval_late_pred_multi(&p, 0, 500, &ctx2, &no_re),
             "HashMap object should pass instanceof arm even with low retained"
+        );
+    }
+
+    /// When `dump_path` is None (no context), ArrayIndex/ArraySlice project Null
+    /// and the result note mentions `load_dump`.
+    #[test]
+    fn array_index_without_ctx_projects_null_with_note() {
+        let q = crate::query::parse::parse("SELECT s[0] FROM int[] s").unwrap();
+        let plan = pq(&q);
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q".to_string(), plan, carry);
+        let retained = vec![0u64; 4];
+        let out = resume(st, &[q.clone(), q], &ctx_for(&retained));
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.rows[0][0], QueryValue::Null, "no offsets → Null");
+        assert!(
+            r.note.as_deref().unwrap_or("").contains("load_dump"),
+            "note should mention load_dump, got: {:?}",
+            r.note
+        );
+    }
+
+    /// `resolve_base_dense` returns the seed dense index when base is the FROM alias.
+    #[test]
+    fn resolve_base_dense_bare_alias_returns_s() {
+        let retained = vec![0u64; 4];
+        let ctx = ctx_for(&retained);
+        let base = crate::query::ast::Attr::Field("s".to_string());
+        let result =
+            resolve_base_dense(&base, "s", 3u32, 0, &ctx, &std::collections::HashMap::new());
+        assert_eq!(
+            result, 3u32,
+            "bare alias 's' should resolve to the loop variable"
         );
     }
 }

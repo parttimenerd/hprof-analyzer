@@ -28,6 +28,8 @@ mod md;
 #[cfg(test)]
 mod md_test;
 mod named_queries;
+#[allow(dead_code)]
+mod objread;
 mod opts;
 mod pass1;
 mod pass2;
@@ -3123,6 +3125,7 @@ fn run(
     };
     let truncated_input = p1.truncated_input;
     let redacted = p1.redacted;
+    let id_size = p1.id_size as usize;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -4210,6 +4213,9 @@ fn run(
             gc_root_tags: gc_root_tags_ref,
             class_idx: &g.class_idx,
             class_names: &g.class_names,
+            dump_path: Some(std::path::PathBuf::from(input)),
+            offsets: &[],
+            id_size,
         },
     );
 

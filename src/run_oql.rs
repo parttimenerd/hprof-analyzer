@@ -66,6 +66,7 @@ pub(crate) fn run_oql_escalated(
 ) -> io::Result<Vec<query::model::QueryResult>> {
     let source = crate::source::HprofSource::from(input);
     let p1 = pass1::Pass1::run(&source, false)?;
+    let id_size = p1.id_size as usize;
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -363,6 +364,9 @@ pub(crate) fn run_oql_escalated(
             gc_root_tags: gc_root_tags_ref,
             class_idx: &g.class_idx,
             class_names: &g.class_names,
+            dump_path: Some(std::path::PathBuf::from(input)),
+            offsets: &[],
+            id_size,
         },
     );
 

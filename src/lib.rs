@@ -16,6 +16,8 @@ mod md;
 #[cfg(test)]
 mod md_test;
 pub mod named_queries;
+#[cfg(feature = "native")]
+pub mod objread;
 pub mod opts;
 mod pass1;
 pub use pass1::Pass1;
