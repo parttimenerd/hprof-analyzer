@@ -725,6 +725,55 @@ impl HprofMcpServer {
             ),
         });
 
+        // Append field values when offsets.bin is present and the object is an instance.
+        if let Ok(Some(offsets)) = sess.cache.read_hprof_offsets() {
+            if let Some(&offset) = offsets.get(idx).filter(|&&o| o != 0) {
+                let dump_path = &sess.dump_path;
+                let id_size = sess.pass1.id_size as usize;
+                let class_map = &sess.pass1.class_map;
+                let strings_map = &sess.pass1.strings;
+                let fields_result =
+                    if crate::objread::is_gz_path(dump_path) && sess.cache.has_gz_index() {
+                        crate::objread::open_for_offset(dump_path, &sess.cache, offset)
+                            .ok()
+                            .and_then(|mut r| {
+                                crate::objread::read_instance_via(
+                                    r.as_mut(),
+                                    offset,
+                                    class_map,
+                                    strings_map,
+                                    id_size,
+                                )
+                                .ok()
+                                .flatten()
+                            })
+                    } else {
+                        crate::objread::read_instance_at(
+                            dump_path,
+                            offset,
+                            class_map,
+                            strings_map,
+                            id_size,
+                        )
+                        .ok()
+                        .flatten()
+                    };
+                if let Some((_class_addr, _stack_serial, fields)) = fields_result {
+                    let fields_json: Vec<serde_json::Value> = fields
+                        .iter()
+                        .map(|f| {
+                            serde_json::json!({
+                                "class": f.owner,
+                                "name": f.name,
+                                "value": field_value_to_json(&f.value),
+                            })
+                        })
+                        .collect();
+                    result["fields"] = serde_json::json!(fields_json);
+                }
+            }
+        }
+
         if let Some(refs) = inbound_refs {
             result["inbound_refs"] = serde_json::json!(refs);
         }
@@ -1332,6 +1381,15 @@ pub fn run_mcp_server(preload_dump: Option<PathBuf>) -> anyhow::Result<()> {
             service.waiting().await?;
             Ok::<(), anyhow::Error>(())
         })
+}
+
+fn field_value_to_json(fv: &crate::objread::FieldValue) -> serde_json::Value {
+    use crate::objread::FieldValue;
+    match fv {
+        FieldValue::Prim(v) => v.clone(),
+        FieldValue::Ref(addr) => serde_json::json!({"address": format!("0x{addr:x}")}),
+        FieldValue::Null => serde_json::Value::Null,
+    }
 }
 
 #[cfg(test)]

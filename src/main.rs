@@ -1575,13 +1575,61 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                 .get(cidx)
                 .map(|s| s.as_str())
                 .unwrap_or("<unknown>");
-            let obj = serde_json::json!({
-                "object_index": idx,
-                "class": class_name,
-                "shallow_bytes": shallow[idx],
-                "retained_bytes": retained[idx],
-            });
+
+            // Attempt to read field values from the dump (requires offsets.bin).
+            let fields_result: Option<Vec<hprof_analyzer::objread::InstanceField>> = sess
+                .cache
+                .read_hprof_offsets()
+                .ok()
+                .flatten()
+                .and_then(|offsets| offsets.get(idx).copied().filter(|&o| o != 0))
+                .and_then(|offset| {
+                    let path = &sess.dump_path;
+                    let id_size = sess.pass1.id_size as usize;
+                    let cm = &sess.pass1.class_map;
+                    let st = &sess.pass1.strings;
+                    if hprof_analyzer::objread::is_gz_path(path) && sess.cache.has_gz_index() {
+                        hprof_analyzer::objread::open_for_offset(path, &sess.cache, offset)
+                            .ok()
+                            .and_then(|mut r| {
+                                hprof_analyzer::objread::read_instance_via(
+                                    r.as_mut(),
+                                    offset,
+                                    cm,
+                                    st,
+                                    id_size,
+                                )
+                                .ok()
+                                .flatten()
+                            })
+                    } else {
+                        hprof_analyzer::objread::read_instance_at(path, offset, cm, st, id_size)
+                            .ok()
+                            .flatten()
+                    }
+                    .map(|(_, _, f)| f)
+                });
+
             if json {
+                let mut obj = serde_json::json!({
+                    "object_index": idx,
+                    "class": class_name,
+                    "shallow_bytes": shallow[idx],
+                    "retained_bytes": retained[idx],
+                });
+                if let Some(fields) = &fields_result {
+                    let fj: Vec<serde_json::Value> = fields
+                        .iter()
+                        .map(|f| {
+                            serde_json::json!({
+                                "class": f.owner,
+                                "name": f.name,
+                                "value": inspect_field_value_to_json(&f.value),
+                            })
+                        })
+                        .collect();
+                    obj["fields"] = serde_json::json!(fj);
+                }
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
                 println!("Object #{idx}");
@@ -1592,6 +1640,19 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                     retained[idx],
                     retained[idx] as f64 / 1_000_000.0
                 );
+                if let Some(fields) = &fields_result {
+                    if !fields.is_empty() {
+                        println!("  Fields:");
+                        for f in fields {
+                            println!(
+                                "    {}.{} = {}",
+                                f.owner,
+                                f.name,
+                                inspect_field_display(&f.value)
+                            );
+                        }
+                    }
+                }
             }
         }
         HeapCmd::Docs { topic } => {
@@ -4443,6 +4504,24 @@ fn run(
     log(verbose, "total", t_total.elapsed().as_secs_f64());
     t_dark!("write+total done");
     Ok(())
+}
+
+fn inspect_field_value_to_json(fv: &hprof_analyzer::objread::FieldValue) -> serde_json::Value {
+    match fv {
+        hprof_analyzer::objread::FieldValue::Prim(v) => v.clone(),
+        hprof_analyzer::objread::FieldValue::Ref(addr) => {
+            serde_json::json!({"address": format!("0x{addr:x}")})
+        }
+        hprof_analyzer::objread::FieldValue::Null => serde_json::Value::Null,
+    }
+}
+
+fn inspect_field_display(fv: &hprof_analyzer::objread::FieldValue) -> String {
+    match fv {
+        hprof_analyzer::objread::FieldValue::Prim(v) => v.to_string(),
+        hprof_analyzer::objread::FieldValue::Ref(addr) => format!("0x{addr:x}"),
+        hprof_analyzer::objread::FieldValue::Null => "null".to_string(),
+    }
 }
 
 /// Emit pass-1 parse stats (counts + class histogram) as JSON to stdout.
