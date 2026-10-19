@@ -13,6 +13,7 @@
 //! peak-RSS budget on multi-GB dumps; see the inline notes before changing it.
 
 mod bitset;
+mod cache;
 mod chunkvec;
 mod collection_config;
 mod cvec;

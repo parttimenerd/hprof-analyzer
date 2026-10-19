@@ -7,18 +7,21 @@
 //! - `pass1.bin.zst`     — Pass1Snapshot (bincode), zstd-3
 //! - `arrays.bin`        — 6 dense arrays in indexed format (seekable)
 //! - `graph.bin`         — forward/inbound edges (delta-encoded + zstd-3), Graph mode only
+//! - `offsets.bin`       — per-object HPROF byte offsets (delta-encoded i64, zstd-3)
 //!
 //! `hash` = hex(first-64-bytes-of-dump ++ file-size-le8 ++ mtime-ns-le8).
 //! Cache busts automatically on any change to the dump file.
 //!
 //! # File format
 //!
-//! Both `arrays.bin` and `graph.bin` share a seekable indexed format:
+//! Both `arrays.bin`, `graph.bin`, and `offsets.bin` share a seekable indexed format:
 //! ```text
 //! [4B magic: b"HPCA"] [2B version: u16 LE = 1] [1B n_arrays]
 //! [index: n × { name[16B], offset: u64 LE, len: u64 LE }]
 //! [data: concatenated independent zstd frames, one per array]
 //! ```
+
+#![allow(dead_code)]
 
 use std::{
     fs::{self, File},
@@ -276,6 +279,30 @@ impl CacheDir {
     /// Total bytes used by all files in the cache directory.
     pub fn size_bytes(&self) -> u64 {
         dir_size(&self.path)
+    }
+
+    // ── Object-offset layer ───────────────────────────────────────────────────
+
+    /// Write per-object HPROF record offsets to `offsets.bin` (delta-encoded,
+    /// zstd-3). Used by `jsonify` and `heap inspect` to seek directly to an
+    /// object's record without rescanning the dump.
+    #[cfg(feature = "native")]
+    pub fn write_hprof_offsets(&self, offs: &[u64]) -> io::Result<()> {
+        let frame = encode_delta_u64_zstd(offs)?;
+        write_indexed_file(&self.path.join("offsets.bin"), &["offsets"], &[frame])
+    }
+
+    /// Read `offsets.bin`. Returns `None` when the cache predates offset
+    /// capture — callers must degrade gracefully.
+    #[cfg(feature = "native")]
+    pub fn read_hprof_offsets(&self) -> io::Result<Option<Vec<u64>>> {
+        read_delta_u64_array(&self.path.join("offsets.bin"), "offsets")
+    }
+
+    /// True when `offsets.bin` is present in the cache directory.
+    #[cfg(feature = "native")]
+    pub fn has_hprof_offsets(&self) -> bool {
+        self.path.join("offsets.bin").exists()
     }
 }
 
@@ -566,4 +593,49 @@ fn dir_size(path: &Path) -> u64 {
         .filter(|m| m.is_file())
         .map(|m| m.len())
         .sum()
+}
+
+// ── Delta-u64 codec (offsets.bin) ─────────────────────────────────────────────
+
+/// Decode an `i64`-delta + zstd stream (written by [`encode_delta_u64_zstd`])
+/// back to `u64` values. Returns `None` when the named entry is absent.
+#[cfg(feature = "native")]
+fn read_delta_u64_array(path: &std::path::Path, name: &str) -> io::Result<Option<Vec<u64>>> {
+    let Some((f, len)) = seek_to_entry(path, name)? else {
+        return Ok(None);
+    };
+    let raw = decompress_zstd_frame(f, len)?;
+    let mut out = Vec::with_capacity(raw.len() / 8);
+    let mut acc = 0i64;
+    for c in raw.chunks_exact(8) {
+        let d = i64::from_le_bytes(c.try_into().expect("chunks_exact(8)"));
+        acc = acc.wrapping_add(d);
+        out.push(acc as u64);
+    }
+    Ok(Some(out))
+}
+
+/// Delta-encode a `u64` slice as little-endian `i64` deltas and compress with
+/// zstd-3. Object record offsets are near-monotonic in dense-id order, so the
+/// deltas are small and compress well.
+#[cfg(feature = "native")]
+fn encode_delta_u64_zstd(data: &[u64]) -> io::Result<Vec<u8>> {
+    use std::io::Write;
+    const STAGE_BYTES: usize = 256 * 1024;
+    let mut enc = zstd::Encoder::new(Vec::new(), 3)?;
+    let mut buf: Vec<u8> = Vec::with_capacity(STAGE_BYTES);
+    let mut prev = 0i64;
+    for &v in data {
+        let d = (v as i64).wrapping_sub(prev);
+        prev = v as i64;
+        buf.extend_from_slice(&d.to_le_bytes());
+        if buf.len() >= STAGE_BYTES {
+            enc.write_all(&buf)?;
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() {
+        enc.write_all(&buf)?;
+    }
+    enc.finish()
 }
