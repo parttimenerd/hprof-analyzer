@@ -3837,6 +3837,11 @@
           "format": "uint64",
           "minimum": 0
         },
+        "unreachable_dominator_skipped": {
+          "description": "True when the unreachable dominator pass was skipped because the unreachable\nset exceeded the threshold. The unreachable histogram shows shallow-by-class\ninstead of retained-by-class; garbage_roots is empty.",
+          "type": "boolean",
+          "default": false
+        },
         "unreachable_garbage_roots": {
           "description": "Top garbage-root dominator subtrees in the unreachable forest, sorted by\nretained desc and capped (top-5 roots × depth-4). Each entry is the root\nof a subtree of unreachable objects with no reachable predecessor; the\ntree structure reflects the dominator relationships within that garbage\ncluster. Additive; not parity-compared.",
           "type": "array",
