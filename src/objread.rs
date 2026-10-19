@@ -22,6 +22,8 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
+#[cfg(feature = "native")]
+use crate::cache::CacheDir;
 use crate::pass1::ClassInfo;
 use crate::types::HprofType;
 
@@ -62,16 +64,33 @@ pub enum FieldValue {
     Null,
 }
 
+/// True when `path` has a `.gz` or `.tgz` extension.
+pub fn is_gz_path(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with(".gz") || lower.ends_with(".tgz")
+}
+
 /// Whether `path` can be read at an arbitrary byte offset cheaply.
 ///
 /// `Pass1::hprof_offsets` are positions in the *decompressed* stream. For a
 /// plain (uncompressed) `.hprof` those are also file offsets, so a `seek` is
-/// enough. For gzip / zip / tar.gz inputs they are not, and reaching one would
-/// mean decompressing everything before it — exactly the rescan this module
-/// exists to avoid — so callers must refuse rather than silently do that.
-pub fn is_seekable(path: &Path) -> io::Result<bool> {
+/// enough. For gzip inputs a gz block index must exist (built by `heap load`)
+/// to enable cheap seeking. For zip inputs seeking is never supported.
+///
+/// Pass `cache_dir` (the `CacheDir` for this dump) so gz index presence can be
+/// checked without recomputing the hash; pass `None` to skip the gz index check
+/// (gz files will report not-seekable).
+#[cfg_attr(not(feature = "native"), allow(unused_variables))]
+pub fn is_seekable(path: &Path, cache_dir: Option<&CacheDir>) -> io::Result<bool> {
+    if is_gz_path(path) {
+        #[cfg(feature = "native")]
+        if let Some(cd) = cache_dir {
+            return Ok(cd.has_gz_index());
+        }
+        return Ok(false);
+    }
     let lower = path.to_string_lossy().to_ascii_lowercase();
-    if lower.ends_with(".gz") || lower.ends_with(".tgz") || lower.ends_with(".zip") {
+    if lower.ends_with(".zip") {
         return Ok(false);
     }
     let mut f = File::open(path)?;
@@ -80,6 +99,40 @@ pub fn is_seekable(path: &Path) -> io::Result<bool> {
     let gzip = n >= 2 && magic[..2] == [0x1f, 0x8b];
     let zip = n >= 2 && magic[..2] == [0x50, 0x4b];
     Ok(!gzip && !zip)
+}
+
+/// Open a seekable reader positioned at `offset` in the (decompressed) HPROF
+/// stream. For plain files this is a plain file seek. For `.gz` files this uses
+/// the pre-built gz block index from `cache_dir`.
+///
+/// Callers should check `is_seekable` first; this returns an error if the gz
+/// index is absent.
+#[cfg(feature = "native")]
+pub fn open_for_offset(
+    path: &Path,
+    cache_dir: &CacheDir,
+    offset: u64,
+) -> io::Result<Box<dyn Read>> {
+    if is_gz_path(path) {
+        let index_path = cache_dir.gz_index_path();
+        if !index_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "gz block index not found at {}; run `heap load {}` to build it",
+                    index_path.display(),
+                    path.display()
+                ),
+            ));
+        }
+        let mut dec = crate::gzindex::open(path, &index_path)?;
+        dec.seek(SeekFrom::Start(offset))?;
+        Ok(Box::new(dec))
+    } else {
+        let mut f = File::open(path)?;
+        f.seek(SeekFrom::Start(offset))?;
+        Ok(Box::new(io::BufReader::new(f)))
+    }
 }
 
 /// Read the `INSTANCE_DUMP` record at `offset` and decode its fields.
@@ -99,8 +152,34 @@ pub fn read_instance_at(
     }
     let mut f = File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
+    read_instance_from(&mut f, offset, class_map, strings, id_size)
+}
+
+/// Read the `INSTANCE_DUMP` record via any seekable reader already positioned
+/// at `offset`. Used by the native `open_for_offset` path (gz + plain files).
+#[cfg(feature = "native")]
+pub fn read_instance_via(
+    reader: &mut dyn Read,
+    offset: u64,
+    class_map: &HashMap<u64, ClassInfo>,
+    strings: &HashMap<u64, String>,
+    id_size: usize,
+) -> io::Result<Option<(u64, u64, Vec<InstanceField>)>> {
+    if offset == 0 {
+        return Ok(None);
+    }
+    read_instance_from(reader, offset, class_map, strings, id_size)
+}
+
+fn read_instance_from(
+    reader: &mut dyn Read,
+    offset: u64,
+    class_map: &HashMap<u64, ClassInfo>,
+    strings: &HashMap<u64, String>,
+    id_size: usize,
+) -> io::Result<Option<(u64, u64, Vec<InstanceField>)>> {
     let mut head = [0u8; 1];
-    f.read_exact(&mut head)?;
+    reader.read_exact(&mut head)?;
     if head[0] != INSTANCE_DUMP {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -112,7 +191,7 @@ pub fn read_instance_at(
         ));
     }
     let mut buf = vec![0u8; id_size + 4 + id_size + 4];
-    f.read_exact(&mut buf)?;
+    reader.read_exact(&mut buf)?;
     let obj_addr = be_u64(&buf[0..id_size]);
     let class_addr = be_u64(&buf[id_size + 4..id_size + 4 + id_size]);
     let data_len = be_u64(&buf[id_size + 4 + id_size..]) as usize;
@@ -123,7 +202,7 @@ pub fn read_instance_at(
         ));
     }
     let mut blob = vec![0u8; data_len];
-    f.read_exact(&mut blob)?;
+    reader.read_exact(&mut blob)?;
 
     let fields = decode_fields(class_addr, &blob, class_map, strings, id_size);
     Ok(Some((obj_addr, class_addr, fields)))
@@ -171,8 +250,34 @@ pub fn read_array_at(
     }
     let mut f = File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
+    read_array_from(&mut f, offset, id_size, skip, cap)
+}
+
+/// Read the array record via any reader already positioned at `offset`.
+/// Used by the native `open_for_offset` path (gz + plain files).
+#[cfg(feature = "native")]
+pub fn read_array_via(
+    reader: &mut dyn Read,
+    offset: u64,
+    id_size: usize,
+    skip: u64,
+    cap: usize,
+) -> io::Result<Option<ArrayRead>> {
+    if offset == 0 {
+        return Ok(None);
+    }
+    read_array_from(reader, offset, id_size, skip, cap)
+}
+
+fn read_array_from(
+    reader: &mut dyn Read,
+    offset: u64,
+    id_size: usize,
+    skip: u64,
+    cap: usize,
+) -> io::Result<Option<ArrayRead>> {
     let mut tag = [0u8; 1];
-    f.read_exact(&mut tag)?;
+    reader.read_exact(&mut tag)?;
     let is_obj = match tag[0] {
         OBJ_ARRAY_DUMP => true,
         PRIM_ARRAY_DUMP => false,
@@ -189,18 +294,18 @@ pub fn read_array_at(
     };
     // addr(id) + stack_serial(u4) + count(u4)
     let mut head = vec![0u8; id_size + 4 + 4];
-    f.read_exact(&mut head)?;
+    reader.read_exact(&mut head)?;
     let addr = be_u64(&head[..id_size]);
     let count = be_u64(&head[id_size + 4..id_size + 8]);
 
     // Object arrays name their element class; primitive arrays name an element type.
     let (elem_ty, elem_class_addr) = if is_obj {
         let mut cbuf = vec![0u8; id_size];
-        f.read_exact(&mut cbuf)?;
+        reader.read_exact(&mut cbuf)?;
         (None, be_u64(&cbuf))
     } else {
         let mut code = [0u8; 1];
-        f.read_exact(&mut code)?;
+        reader.read_exact(&mut code)?;
         let ty = HprofType::from_code(code[0]).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -219,23 +324,25 @@ pub fn read_array_at(
         elem_ty.map(|t| t.byte_size()).unwrap_or(0)
     };
     // Never skip past the end: a bogus offset in a corrupt dump would otherwise
-    // seek beyond the record and read whatever follows it.
+    // read beyond the record.
     let skipped = skip.min(count);
     let n = (count - skipped).min(cap as u64) as usize;
     if skipped > 0 && elem_size > 0 {
         let step = (skipped as u128) * (elem_size as u128);
-        f.seek(SeekFrom::Current(i64::try_from(step).map_err(|_| {
+        let step = usize::try_from(step).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("implausible array skip {skipped}×{elem_size} at offset {offset}"),
             )
-        })?))?;
+        })?;
+        // Read+discard (works for both seekable files and read-only gz decoders).
+        io::copy(&mut reader.take(step as u64), &mut io::sink())?;
     }
     let mut values = Vec::with_capacity(n);
     if elem_size > 0 && n > 0 {
         // n is capped, so this is at most `cap * 8` bytes.
         let mut buf = vec![0u8; n * elem_size];
-        f.read_exact(&mut buf)?;
+        reader.read_exact(&mut buf)?;
         for chunk in buf.chunks_exact(elem_size) {
             values.push(if let Some(ty) = elem_ty {
                 decode_value(ty, chunk, id_size)

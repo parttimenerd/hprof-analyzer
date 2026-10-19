@@ -1107,7 +1107,7 @@ mod imp {
             mark_unavailable(res, cols, NO_SESSION_NOTE);
             return;
         };
-        match objread::is_seekable(sess.dump_path()) {
+        match objread::is_seekable(sess.dump_path(), None) {
             Ok(true) => {}
             Ok(false) => {
                 mark_unavailable(res, cols, COMPRESSED_NOTE);
