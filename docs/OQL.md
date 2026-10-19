@@ -233,7 +233,67 @@ SELECT @objectId, value[0] AS first FROM byte[] b LIMIT 10
 SELECT @objectId, value[1:4] AS mid FROM byte[] b LIMIT 10
 ```
 
+**Requires `offsets.bin`** (built by `heap load` / `load_dump`). Without it,
+subscript expressions return `null` with no error. Not available in the web
+version.
+
 ---
+
+## Object expansion: `jsonify`
+
+`jsonify(x)` expands an object to a JSON tree, following references up to a
+configurable depth (default 3). It is the equivalent of Eclipse MAT's object
+inspector, usable directly in OQL.
+
+```sql
+SELECT jsonify(x) FROM INSTANCEOF java.util.HashMap x LIMIT 3
+SELECT jsonify(x, 2) FROM java.lang.Thread x LIMIT 5
+```
+
+**Requires `offsets.bin`** (built automatically by `heap load` / `load_dump`).
+Not available in the web version.
+
+### jsonify output format
+
+Each expanded object is a JSON object with `@address`, `@class`, and a key per
+field. References are expanded recursively up to `depth` levels.
+
+When a limit is reached, the affected field carries `@notExpanded` explaining
+why:
+
+| `@notExpanded` value | Meaning |
+|----------------------|---------|
+| `"depth limit (N)"` | Reference sits past the depth cap |
+| `"cycle"` | Back-edge to an ancestor — the reference graph contains a cycle |
+| `"object budget reached (…)"` | Too many objects decoded in this cell |
+
+When any cut happened, the root object gains an `"@truncated"` key listing all
+reasons (e.g. `"depth limit reached (3 levels); a reference cycle was cut"`).
+
+**Cycle example** — `A.next → B`, `B.prev → A`:
+
+```json
+{
+  "@class": "com.acme.A",
+  "@address": "0x1000",
+  "next": {
+    "@class": "com.acme.B",
+    "@address": "0x2000",
+    "prev": {
+      "@ref": "0x1000",
+      "@index": 0,
+      "@class": "com.acme.A",
+      "@notExpanded": "cycle"
+    }
+  },
+  "@truncated": "a reference cycle was cut"
+}
+```
+
+The `@ref` / `@index` / `@class` keys on a cut node let you identify the target
+object without re-expanding it. `@index` is the dense object index (same as
+`@objectId`) — pass it to `inspect_object` or `browse_dominators` for further
+inspection.
 
 ## Worked examples
 
@@ -630,10 +690,13 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `GROUP BY` / `HAVING` | `GROUP BY classof(x) HAVING COUNT(*) > 100` |
 | Arithmetic expressions in SELECT and WHERE | `@usedHeapSize * 8 AS bits` |
 | System properties snapshot (`@systemProperties`) | `SELECT @systemProperties` |
-| Reachable-only filter (`--reachable-only` flag) | excludes GC-unreachable objects |
+| Reachable-only filter (default) / raw scan (`all=true` / `--all`) | `--all` bypasses GC-reachability; useful when a dump has many unreachable objects |
 | Interactive REPL with Tab completion and history | `hprof-analyzer query heap.hprof --repl` |
 | Report embedding (`--query` / `--query-file`) | fold OQL results into HTML/MD/JSON report |
 | Named queries library (`/run <name>`) | `/run top-classes-by-count` |
+| `@index` / `@class` attribute aliases | `@index` = `@objectId`; `@class` = `@displayName` |
+| `jsonify(x [, depth])` — expand object to JSON tree | `SELECT jsonify(x) FROM INSTANCEOF java.util.HashMap x LIMIT 3` |
+| `s[n]` / `s[a:b]` array subscript / slice | `SELECT s[0] FROM int[] s LIMIT 10` |
 
 ### Compatible with MAT
 
@@ -652,7 +715,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | `<expr> AS <name>` column alias | `@usedHeapSize AS bytes` |
 | `COUNT(*)`, `SUM`, `MIN`, `MAX`, `AVG` | |
 | `classof(x)`, `toString(x)` (String only), `dominators(x)`, `dominatorof(x)` | |
-| `@objectAddress`, `@objectId`, `@usedHeapSize`, `@retainedHeapSize`¹, `@displayName`, `@length`, `@GCRoots` | |
+| `@objectAddress`, `@objectId` (alias: `@index`), `@usedHeapSize`, `@retainedHeapSize`¹, `@displayName` (alias: `@class`), `@length`, `@GCRoots` | |
 | Field paths: `s.fieldName`, `s.a.b` | |
 | MAT-API method aliases: `getObjectAddress()`, `getUsedHeapSize()`, `getKey()`, `getValue()`, `intValue()`, `size()`, … | method → attr/field rewrite |
 
@@ -662,7 +725,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 
 | Area | MAT | hprof-analyzer |
 |------|-----|----------------|
-| **Unreachable objects** | Discarded at index time | Included in raw scan; MAT ⊆ ours |
+| **Unreachable objects** | Discarded at index time — queries only see GC-reachable objects | By default matches MAT (reachable-only). Pass `--all` / `all=true` to include unreachable objects. Useful when a dump has many unreachable objects and a query returns 0 rows. |
 | **`s.count` / `s.offset` on String** | Works (pre-JDK9 layout) | "Unknown field" — use `s.value`, `s.coder`, `s.hash` (modern JDK) |
 | **Integer `/0`** | Throws `ArithmeticException` | Returns `NULL` — analyzer never crashes on a bad row |
 | **`toString()` on non-String** | Calls JVM `toString()` via reflection | Returns `NULL` — static analysis cannot invoke live JVM methods |
@@ -674,7 +737,6 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | Construct | Example | Notes |
 |-----------|---------|-------|
 | `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Hex address (`FROM OBJECTS 0x7f3a`) works; decimal object-id lookup requires a new lexer token to distinguish from hex at parse time |
-| `s[0]` / `s[1:3]` array element access | `SELECT s[0] FROM int[]` | Parsed and planned; execution returns `NULL`; blocked on scan-time element capture (memory-intensive design decision) |
 | `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Iterating class objects (not heap instances) — needs a new executor path |
 
 ### Silent NULLs (not an error, but worth knowing)
