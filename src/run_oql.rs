@@ -67,6 +67,12 @@ pub(crate) fn run_oql_escalated(
     let source = crate::source::HprofSource::from(input);
     let p1 = pass1::Pass1::run(&source, false)?;
     let id_size = p1.id_size as usize;
+    // Read offsets.bin from cache dir if available (written by `heap load`).
+    // If absent, array subscript and jsonify return their "no offsets" note.
+    let disk_offsets: Vec<u64> = crate::cache::CacheDir::for_dump(std::path::Path::new(input))
+        .ok()
+        .and_then(|cd| cd.read_hprof_offsets().ok().flatten())
+        .unwrap_or_default();
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -365,7 +371,7 @@ pub(crate) fn run_oql_escalated(
             class_idx: &g.class_idx,
             class_names: &g.class_names,
             dump_path: Some(std::path::PathBuf::from(input)),
-            offsets: &[],
+            offsets: &disk_offsets,
             id_size,
         },
     );

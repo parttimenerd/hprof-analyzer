@@ -523,14 +523,34 @@ pub fn analyze_with_cache(
             .read_pass1()?
             .ok_or_else(|| std::io::Error::other("cache corrupt: missing pass1"))?;
         let class_names = cache.read_class_names()?.unwrap_or_default();
-        return Ok(CachedSession {
+        let session = CachedSession {
             dump_path: path.to_path_buf(),
             report,
             pass1,
             cache,
             mode,
             class_names,
-        });
+        };
+        // Back-fill offsets.bin for caches that predate offset capture, and
+        // gz_index.bin for gz dumps. Both are skipped when already present.
+        if !session.cache.has_hprof_offsets() {
+            let source = HprofSource::from(
+                path.to_str()
+                    .ok_or_else(|| std::io::Error::other("non-UTF8 path"))?,
+            );
+            progress("offsets");
+            if let Ok(mut p1_fresh) = pass1::Pass1::run(&source, true) {
+                let off = std::mem::take(&mut p1_fresh.hprof_offsets);
+                if !off.is_empty() {
+                    let _ = session.cache.write_hprof_offsets(&off);
+                }
+            }
+        }
+        if objread::is_gz_path(path) && !session.cache.has_gz_index() {
+            progress("gz-index");
+            let _ = session.cache.write_gz_index(path);
+        }
+        return Ok(session);
     }
 
     // Slow path: run full pipeline, then write cache.
@@ -539,7 +559,8 @@ pub fn analyze_with_cache(
         path.to_str()
             .ok_or_else(|| std::io::Error::other("non-UTF8 path"))?,
     );
-    let p1 = pass1::Pass1::run(&source, false)?;
+    let mut p1 = pass1::Pass1::run(&source, true)?;
+    let offsets = std::mem::take(&mut p1.hprof_offsets);
     let snap = pass1::Pass1Snapshot::from_pass1(&p1);
 
     let mut prog_fn = |stage: &str, _frac: f32| progress(stage);
@@ -550,6 +571,17 @@ pub fn analyze_with_cache(
     cache.write_pass1(&snap)?;
     if let Err(e) = cache.write_class_names(&class_names) {
         eprintln!("hprof-cache: failed to write class_names.json.zst: {e}");
+    }
+    if !offsets.is_empty() {
+        if let Err(e) = cache.write_hprof_offsets(&offsets) {
+            eprintln!("hprof-cache: failed to write offsets.bin: {e}");
+        }
+    }
+    if objread::is_gz_path(path) && !cache.has_gz_index() {
+        progress("gz-index");
+        if let Err(e) = cache.write_gz_index(path) {
+            eprintln!("hprof-cache: failed to write gz_index.bin: {e}");
+        }
     }
 
     Ok(CachedSession {
