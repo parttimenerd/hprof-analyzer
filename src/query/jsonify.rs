@@ -502,6 +502,7 @@ mod imp {
     struct Decoder<'a> {
         sess: &'a dyn JsonifySession,
         path: PathBuf,
+        cache_dir: Option<crate::cache::CacheDir>,
         offsets: OffsetTable,
         max_objects: usize,
         nodes: HashMap<usize, Shallow>,
@@ -518,9 +519,11 @@ mod imp {
             offsets: OffsetTable,
             max_objects: usize,
         ) -> Self {
+            let cache_dir = crate::cache::CacheDir::for_dump(path).ok();
             Self {
                 sess,
                 path: path.to_path_buf(),
+                cache_dir,
                 offsets,
                 max_objects,
                 nodes: HashMap::new(),
@@ -601,13 +604,48 @@ mod imp {
             off: u64,
             class: String,
         ) -> io::Result<(Shallow, Vec<usize>)> {
-            let read = objread::read_instance_at(
-                &self.path,
-                off,
-                self.sess.class_map(),
-                self.sess.strings(),
-                self.sess.id_size(),
-            );
+            let read = if objread::is_gz_path(&self.path) {
+                #[cfg(feature = "native")]
+                if let Some(cd) = &self.cache_dir {
+                    match objread::open_for_offset(&self.path, cd, off) {
+                        Ok(mut rdr) => objread::read_instance_via(
+                            &mut *rdr,
+                            off,
+                            self.sess.class_map(),
+                            self.sess.strings(),
+                            self.sess.id_size(),
+                        ),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    return Ok((
+                        Shallow::Opaque {
+                            class,
+                            why: "gz index not built; run `heap load` first".into(),
+                        },
+                        Vec::new(),
+                    ));
+                }
+                #[cfg(not(feature = "native"))]
+                {
+                    let _ = (idx, off);
+                    return Ok((
+                        Shallow::Opaque {
+                            class,
+                            why: "gz not supported on this platform".into(),
+                        },
+                        Vec::new(),
+                    ));
+                }
+            } else {
+                objread::read_instance_at(
+                    &self.path,
+                    off,
+                    self.sess.class_map(),
+                    self.sess.strings(),
+                    self.sess.id_size(),
+                )
+            };
             let Some((addr, _class_addr, fields)) = (match read {
                 Ok(v) => v,
                 Err(e) => {
@@ -709,7 +747,38 @@ mod imp {
             } else {
                 objread::MAX_ARRAY_ELEMENTS
             };
-            let read = objread::read_array_at(&self.path, off, self.sess.id_size(), 0, cap);
+            let read = if objread::is_gz_path(&self.path) {
+                #[cfg(feature = "native")]
+                if let Some(cd) = &self.cache_dir {
+                    match objread::open_for_offset(&self.path, cd, off) {
+                        Ok(mut rdr) => {
+                            objread::read_array_via(&mut *rdr, off, self.sess.id_size(), 0, cap)
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    return Ok((
+                        Shallow::Opaque {
+                            class,
+                            why: "gz index not built; run `heap load` first".into(),
+                        },
+                        Vec::new(),
+                    ));
+                }
+                #[cfg(not(feature = "native"))]
+                {
+                    let _ = (idx, off, cap);
+                    return Ok((
+                        Shallow::Opaque {
+                            class,
+                            why: "gz not supported on this platform".into(),
+                        },
+                        Vec::new(),
+                    ));
+                }
+            } else {
+                objread::read_array_at(&self.path, off, self.sess.id_size(), 0, cap)
+            };
             let Some(arr) = (match read {
                 Ok(v) => v,
                 Err(e) => {
@@ -801,13 +870,35 @@ mod imp {
                 };
                 // Pre-9 a String may share a `char[]` and own a window of it.
                 let skip = job.offset.unwrap_or(0).max(0) as u64;
-                let Ok(Some(arr)) = objread::read_array_at(
-                    &self.path,
-                    voff,
-                    id_size,
-                    skip,
-                    objread::MAX_STRING_CHARS,
-                ) else {
+                let arr_result = if objread::is_gz_path(&self.path) {
+                    #[cfg(feature = "native")]
+                    if let Some(cd) = &self.cache_dir {
+                        objread::open_for_offset(&self.path, cd, voff).and_then(|mut rdr| {
+                            objread::read_array_via(
+                                &mut *rdr,
+                                voff,
+                                id_size,
+                                skip,
+                                objread::MAX_STRING_CHARS,
+                            )
+                        })
+                    } else {
+                        continue;
+                    }
+                    #[cfg(not(feature = "native"))]
+                    {
+                        continue;
+                    }
+                } else {
+                    objread::read_array_at(
+                        &self.path,
+                        voff,
+                        id_size,
+                        skip,
+                        objread::MAX_STRING_CHARS,
+                    )
+                };
+                let Ok(Some(arr)) = arr_result else {
                     continue;
                 };
                 let Some(ty) = arr.elem_ty else { continue };
@@ -1130,7 +1221,8 @@ mod imp {
             mark_unavailable(res, cols, NO_SESSION_NOTE);
             return;
         };
-        match objread::is_seekable(sess.dump_path(), None) {
+        let cache_dir_opt = crate::cache::CacheDir::for_dump(sess.dump_path()).ok();
+        match objread::is_seekable(sess.dump_path(), cache_dir_opt.as_ref()) {
             Ok(true) => {}
             Ok(false) => {
                 mark_unavailable(res, cols, COMPRESSED_NOTE);
@@ -1223,6 +1315,115 @@ mod imp {
             }
         }
         push_note(res, why);
+    }
+
+    #[cfg(test)]
+    mod cycle_tests {
+        use super::*;
+
+        /// Two instances that reference each other (A.next→B, B.prev→A).
+        /// `render_index` must cut the back-edge and set the cycle flag rather
+        /// than looping forever.
+        #[test]
+        fn mutual_reference_cycle_is_cut() {
+            let mut nodes: HashMap<usize, Shallow> = HashMap::new();
+            nodes.insert(
+                0,
+                Shallow::Instance {
+                    addr: 0x1000,
+                    class: "com.acme.A".into(),
+                    fields: vec![(
+                        "next".into(),
+                        FieldNode::Ref {
+                            idx: Some(1),
+                            addr: 0x2000,
+                            class: Some("com.acme.B".into()),
+                        },
+                    )],
+                },
+            );
+            nodes.insert(
+                1,
+                Shallow::Instance {
+                    addr: 0x2000,
+                    class: "com.acme.B".into(),
+                    fields: vec![(
+                        "prev".into(),
+                        FieldNode::Ref {
+                            idx: Some(0),
+                            addr: 0x1000,
+                            class: Some("com.acme.A".into()),
+                        },
+                    )],
+                },
+            );
+
+            let mut on_path: Vec<usize> = Vec::new();
+            let mut st = RenderState {
+                depth_cap: 10,
+                object_limit: 100,
+                budget: false,
+                depth_cut: false,
+                cycle: false,
+                expanded: nodes.len(),
+            };
+
+            let v = render_index(&nodes, 0, 10, &mut on_path, &mut st);
+
+            assert!(st.cycle, "cycle flag must be set");
+            // B expands under A.next; B.prev should carry @notExpanded="cycle".
+            let prev = &v["next"]["prev"];
+            assert_eq!(
+                prev.get("@notExpanded").and_then(|v| v.as_str()),
+                Some("cycle"),
+                "back-edge must be marked as a cycle: {v}"
+            );
+            assert_eq!(
+                prev.get("@ref").and_then(|v| v.as_str()),
+                Some("0x1000"),
+                "cycle ref must point to A's address: {v}"
+            );
+        }
+
+        /// A self-referential instance (A.self_→A) — the simplest possible cycle.
+        #[test]
+        fn self_reference_cycle_is_cut() {
+            let mut nodes: HashMap<usize, Shallow> = HashMap::new();
+            nodes.insert(
+                0,
+                Shallow::Instance {
+                    addr: 0xdead,
+                    class: "com.acme.Self".into(),
+                    fields: vec![(
+                        "self_".into(),
+                        FieldNode::Ref {
+                            idx: Some(0),
+                            addr: 0xdead,
+                            class: Some("com.acme.Self".into()),
+                        },
+                    )],
+                },
+            );
+
+            let mut on_path: Vec<usize> = Vec::new();
+            let mut st = RenderState {
+                depth_cap: 5,
+                object_limit: 50,
+                budget: false,
+                depth_cut: false,
+                cycle: false,
+                expanded: 1,
+            };
+
+            let v = render_index(&nodes, 0, 5, &mut on_path, &mut st);
+
+            assert!(st.cycle, "cycle flag must be set for self-reference");
+            assert_eq!(
+                v["self_"].get("@notExpanded").and_then(|v| v.as_str()),
+                Some("cycle"),
+                "self-reference field must be marked as a cycle: {v}"
+            );
+        }
     }
 }
 

@@ -548,6 +548,10 @@ enum HeapCmd {
         /// OQL query text.
         #[arg(long = "oql", value_name = "OQL")]
         oql: String,
+        /// Include GC-unreachable objects (raw heap scan). By default only
+        /// GC-reachable objects are returned (Eclipse MAT parity).
+        #[arg(long)]
+        all: bool,
         /// Emit JSON instead of an ASCII table.
         #[arg(long)]
         json: bool,
@@ -1418,7 +1422,12 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                 }
             }
         }
-        HeapCmd::Query { dump, oql, json } => {
+        HeapCmd::Query {
+            dump,
+            oql,
+            json,
+            all,
+        } => {
             let dump_str = dump.as_str();
             // Resolve view name or raw OQL
             let resolved_oql = named_queries::NAMED_QUERIES
@@ -1426,8 +1435,10 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                 .find(|nq| nq.name.eq_ignore_ascii_case(oql.trim()))
                 .map(|nq| nq.oql.to_string())
                 .unwrap_or_else(|| oql.clone());
-            let results = hprof_analyzer::run_oql_query(dump_str, &resolved_oql, true, &lib_opts)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let reachable_only = !all;
+            let results =
+                hprof_analyzer::run_oql_query(dump_str, &resolved_oql, reachable_only, &lib_opts)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
             for r in results {
                 if json {
                     let cols: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();

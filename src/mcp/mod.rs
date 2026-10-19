@@ -105,6 +105,11 @@ pub struct QueryParams {
     ///   "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM java.lang.String ORDER BY ret DESC LIMIT 10"
     ///   "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"
     pub oql: String,
+    /// Include GC-unreachable objects in results. By default, only GC-reachable
+    /// objects are returned (Eclipse MAT parity). Set to true to include all
+    /// objects regardless of reachability — useful when queries return fewer
+    /// rows than expected.
+    pub all: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -484,7 +489,9 @@ impl HprofMcpServer {
                        Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object. \
                        Tip: SELECT jsonify(x) FROM ... expands objects to JSON trees (requires load_dump to have been called first, \
                        which builds the needed offset index automatically). \
-                       Array subscript s[0]/s[0:3] also requires the offset index from load_dump.")]
+                       Array subscript s[0]/s[0:3] also requires the offset index from load_dump. \
+                       If a query returns fewer rows than expected (e.g. 0 rows for a class that COUNT(*) finds), \
+                       try all=true to include GC-unreachable objects (raw heap scan).")]
     async fn query(
         &self,
         Parameters(p): Parameters<QueryParams>,
@@ -504,11 +511,13 @@ impl HprofMcpServer {
         let (oql, view_name) = resolve_view_or_oql(&p.oql);
         let oql = oql.to_string();
         let vname = view_name.map(|s| s.to_string());
+        let include_all = p.all.unwrap_or(false);
 
-        let result = tokio::task::spawn_blocking(move || run_query_on_dump(&dump_path, &oql))
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let result =
+            tokio::task::spawn_blocking(move || run_query_on_dump(&dump_path, &oql, include_all))
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // Inject view_name into result so LLM knows which view ran.
         let result = if let (Some(name), Some(obj)) = (&vname, result.as_object()) {
@@ -1151,7 +1160,11 @@ fn build_node(
 
 // ── OQL query helper ──────────────────────────────────────────────────────────
 
-fn run_query_on_dump(dump_path: &std::path::Path, oql: &str) -> std::io::Result<serde_json::Value> {
+fn run_query_on_dump(
+    dump_path: &std::path::Path,
+    oql: &str,
+    all: bool,
+) -> std::io::Result<serde_json::Value> {
     use crate::{query, run_oql};
 
     let q = match query::parse::parse_or_report(oql) {
@@ -1172,13 +1185,13 @@ fn run_query_on_dump(dump_path: &std::path::Path, oql: &str) -> std::io::Result<
     let dump_str = dump_path
         .to_str()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "non-UTF8 path"))?;
-    let results = run_oql::run_oql_escalated(
-        dump_str,
-        &flat,
-        &union_groups,
-        true,
-        &AnalyzeOptions::default(),
-    )?;
+    let reachable_only = !all;
+    let opts = AnalyzeOptions {
+        reachable_only,
+        ..AnalyzeOptions::default()
+    };
+    let results =
+        run_oql::run_oql_escalated(dump_str, &flat, &union_groups, reachable_only, &opts)?;
 
     if let Some(r) = results.into_iter().next() {
         let cols: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();

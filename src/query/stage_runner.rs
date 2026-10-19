@@ -1372,6 +1372,25 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                     }
                 }
                 // All other columns: resolve normally from the dense index.
+                // @length needs a special case: read it from the array header when
+                // offsets are available (the scan-time length is not in LateCtx).
+                SelectItem::Attr(Attr::Length) if have_offsets => {
+                    let base_dense = s; // @length of the FROM array, not a sub-expr
+                    if let Some(offset) = ctx
+                        .offsets
+                        .get(base_dense as usize)
+                        .copied()
+                        .filter(|&o| o != 0)
+                    {
+                        let path = ctx.dump_path.as_deref().unwrap();
+                        match read_array_for_ctx(path, offset, ctx.id_size, 0, 0) {
+                            Some(arr) => QueryValue::Int(arr.count as i64),
+                            None => QueryValue::Null,
+                        }
+                    } else {
+                        QueryValue::Null
+                    }
+                }
                 _ => project_array_index_item(it, s, ctx, class_name, &like_regexes),
             })
             .collect();

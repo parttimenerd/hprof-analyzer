@@ -5,6 +5,7 @@
 //! `crate::run_oql::run_oql_escalated` regardless of which crate is being
 //! compiled.
 
+use std::collections::HashMap;
 use std::io;
 
 use crate::opts::{AnalyzeOptions, DEFAULT_QUERY_PATH_DEPTH};
@@ -47,16 +48,72 @@ pub(crate) type RetainedEdgeStructs = (
     Option<(Vec<u32>, Vec<u32>)>,
 );
 
-/// Auto-escalated `query`-subcommand path for cross-phase OQL features
-/// (@retainedHeapSize, dominators()/AS RETAINED SET, @inbounds/@outbounds/path,
-/// @GCRoots/@GCRootInfo/@info, N-hop RefPath). Mirrors the `run()` analysis
-/// pipeline's call sequence (pass1 → pass2 → rpo → inbound → dominators →
-/// retained → resume) but SKIPS report generation, alloc-site aggregation,
-/// unreachable-retained, and all the RSS-tuning compress/restore dance. It uses
-/// `cvec::Codec::None` throughout so the dense arrays stay live — correctness
-/// over peak memory (the query subcommand has no RSS contract). Returns the same
-/// `Vec<QueryResult>` the fast path produces, so the caller's finalize/print loop
-/// is unchanged. `reachable_only` governs final row pruning (skipped under `--all`).
+// Auto-escalated `query`-subcommand path for cross-phase OQL features
+// (@retainedHeapSize, dominators()/AS RETAINED SET, @inbounds/@outbounds/path,
+// @GCRoots/@GCRootInfo/@info, N-hop RefPath). Mirrors the `run()` analysis
+// pipeline's call sequence (pass1 → pass2 → rpo → inbound → dominators →
+// retained → resume) but SKIPS report generation, alloc-site aggregation,
+// unreachable-retained, and all the RSS-tuning compress/restore dance. It uses
+// `cvec::Codec::None` throughout so the dense arrays stay live — correctness
+// over peak memory (the query subcommand has no RSS contract). Returns the same
+// `Vec<QueryResult>` the fast path produces, so the caller's finalize/print loop
+// is unchanged. `reachable_only` governs final row pruning (skipped under `--all`).
+
+// Minimal `JsonifySession` for the `heap query` / MCP escalated path.
+// Captures what we need from `Pass1` before it is consumed by `Pass2::build`,
+// then borrows class-name / class-idx data from the `Pass2Graph` returned
+// by the build step.  `addr_vec` is the dense-indexed address table built
+// before pass2 consumes `id_map`; used for `index_of_addr` via binary search.
+#[cfg(feature = "native")]
+struct EscalatedJsonifySession<'a> {
+    dump_path: std::path::PathBuf,
+    class_map: HashMap<u64, crate::pass1::ClassInfo>,
+    strings: HashMap<u64, String>,
+    kind: Vec<u8>,
+    id_size: usize,
+    n: usize,
+    addr_vec: &'a [u64],
+    class_idx: &'a [u32],
+    class_names: &'a [String],
+    offsets: Vec<u64>,
+}
+
+#[cfg(feature = "native")]
+impl crate::query::jsonify::JsonifySession for EscalatedJsonifySession<'_> {
+    fn dump_path(&self) -> &std::path::Path {
+        &self.dump_path
+    }
+    fn class_map(&self) -> &HashMap<u64, crate::pass1::ClassInfo> {
+        &self.class_map
+    }
+    fn strings(&self) -> &HashMap<u64, String> {
+        &self.strings
+    }
+    fn id_size(&self) -> usize {
+        self.id_size
+    }
+    fn object_count(&self) -> usize {
+        self.n
+    }
+    fn kind_of(&self, idx: usize) -> u8 {
+        self.kind.get(idx).copied().unwrap_or(0)
+    }
+    fn index_of_addr(&self, addr: u64) -> Option<usize> {
+        self.addr_vec.binary_search(&addr).ok()
+    }
+    fn class_name_of_index(&self, idx: usize) -> Option<String> {
+        let ci = *self.class_idx.get(idx)?;
+        self.class_names.get(ci as usize).cloned()
+    }
+    fn offsets_in_memory(&self) -> Option<&[u64]> {
+        if self.offsets.is_empty() {
+            None
+        } else {
+            Some(&self.offsets)
+        }
+    }
+}
+
 pub(crate) fn run_oql_escalated(
     input: &str,
     flat: &[(query::ast::Query, query::plan::QueryPlan)],
@@ -73,6 +130,17 @@ pub(crate) fn run_oql_escalated(
         .ok()
         .and_then(|cd| cd.read_hprof_offsets().ok().flatten())
         .unwrap_or_default();
+    // Clone pass1 fields needed by EscalatedJsonifySession before p1 is consumed.
+    // Only used by jsonify on the native path; cloned early so the original
+    // fields remain intact for Pass2::build.
+    #[cfg(feature = "native")]
+    let p1_class_map = p1.class_map.clone();
+    #[cfg(feature = "native")]
+    let p1_strings = p1.strings.clone();
+    #[cfg(feature = "native")]
+    let p1_kind = p1.kind.clone();
+    #[cfg(feature = "native")]
+    let p1_n = p1.id_map.len();
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -107,7 +175,14 @@ pub(crate) fn run_oql_escalated(
     // This covers the string-values path (needs_sv) AND any query that SELECT-projects
     // @objectAddress in a retained/refwalk/cross-phase context. Without this, late-window
     // @objectAddress would read from an empty id_map and return 0 for every object.
+    // Also needed for jsonify (EscalatedJsonifySession.index_of_addr binary-searches it).
+    let has_jsonify = flat.iter().any(|(q, _)| {
+        q.select
+            .iter()
+            .any(|it| matches!(it, query::ast::SelectItem::Jsonify { .. }))
+    });
     let needs_addr = needs_sv
+        || has_jsonify
         || flat
             .iter()
             .any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
@@ -409,6 +484,32 @@ pub(crate) fn run_oql_escalated(
             if let Some(src) = row_src_by_slot.get(&slot) {
                 query::run::filter_result_by_src(r, src, dfn);
             }
+        }
+    }
+
+    // Expand jsonify() placeholders now that we have pass1 + pass2 data.
+    // Uses disk offsets (from offsets.bin) when available; otherwise the
+    // session returns NO_OFFSETS_NOTE for jsonify cells.
+    #[cfg(feature = "native")]
+    {
+        if has_jsonify {
+            let ej_sess = EscalatedJsonifySession {
+                dump_path: std::path::PathBuf::from(input),
+                class_map: p1_class_map,
+                strings: p1_strings,
+                kind: p1_kind,
+                id_size,
+                n: p1_n,
+                addr_vec: &addr_vec,
+                class_idx: &g.class_idx,
+                class_names: &g.class_names,
+                offsets: disk_offsets,
+            };
+            crate::query::jsonify::expand_results(
+                &mut flat_results,
+                flat,
+                Some(&ej_sess as &dyn crate::query::jsonify::JsonifySession),
+            );
         }
     }
 
