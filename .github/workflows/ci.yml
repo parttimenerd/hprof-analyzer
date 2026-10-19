@@ -318,6 +318,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p hprof-analyzer --no-verify
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
@@ -329,14 +337,6 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p hprof-analyzer --no-verify --allow-dirty
 
   # Tagged release: open a PR on the Homebrew tap with updated URLs + SHA256s.
   update-homebrew-tap:
