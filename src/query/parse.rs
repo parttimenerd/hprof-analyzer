@@ -269,11 +269,11 @@ where
         .then(select! { Token::At(name) => name })
         .validate(|(prefix, name): (Option<String>, String), e, emitter| {
             let base = match name.as_str() {
-                "objectId" => Attr::ObjectId,
+                "objectId" | "index" => Attr::ObjectId,
                 "objectAddress" => Attr::ObjectAddress,
                 "usedHeapSize" | "shallowHeapSize" | "shallowSize" => Attr::UsedHeapSize,
                 "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
-                "displayName" => Attr::DisplayName,
+                "displayName" | "class" => Attr::DisplayName,
                 "name" => Attr::DisplayName,
                 "length" => Attr::Length,
                 "inbounds" => Attr::Inbounds,
@@ -1618,10 +1618,12 @@ pub const METHODS: &[&str] = &[
 /// including the leading `@` so they can be offered as completions directly.
 pub const ATTRIBUTES: &[&str] = &[
     "@objectId",
+    "@index",
     "@objectAddress",
     "@usedHeapSize",
     "@retainedHeapSize",
     "@displayName",
+    "@class",
     "@name",
     "@length",
     "@inbounds",
