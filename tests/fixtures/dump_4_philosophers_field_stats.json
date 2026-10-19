@@ -778,6 +778,7 @@
         "children": []
       }
     ],
+    "unreachable_dominator_skipped": false,
     "heap_fragmentation_ratio": 0.06422193050942514,
     "top_class_concentration_bp": 3193,
     "gc_roots_retained_by_type": [
