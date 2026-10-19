@@ -1512,6 +1512,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// disarmed (the default) or for the aggregate path (a single scalar row with
     /// no source object) — in which case the caller keeps all rows unconditionally.
     pub fn finish_with_src(self, name: &str) -> (QueryResult, Option<Vec<u32>>) {
+        // If the scan was stopped early because `scan_limit` was reached, the
+        // (N+1)th matching object's `visit_instance` was never called, so
+        // `self.truncated` was never set by the in-visit limit check. Capture
+        // whether we hit the scan limit now, before `self` is consumed.
+        let scan_limit_hit = self.scan_satisfied();
         let columns = query_columns(self.query);
         // GROUP BY mode: finalize all per-group accumulators into result rows.
         if let Some(group_map) = self.group_map {
@@ -1692,7 +1697,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     columns,
                     row_count: rows.len() as u64,
                     rows,
-                    truncated: self.truncated,
+                    truncated: self.truncated || scan_limit_hit,
                     error: None,
                     note,
                     viz: None,
