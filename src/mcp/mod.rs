@@ -198,7 +198,9 @@ impl HprofMcpServer {
     #[tool(
         description = "hprof-analyzer: Load a Java heap dump (.hprof file) and cache analysis results. \
                        IMPORTANT: wait for this to complete before calling any other tool — it may take 5–15 min on first load, ~1 s on repeat loads. \
-                       After loading, call get_report({section:\"triage\"}) for severity-tagged diagnosis, then get_report({section:\"leaks\"}) to investigate."
+                       After loading, call get_report({section:\"triage\"}) for severity-tagged diagnosis, then get_report({section:\"leaks\"}) to investigate. \
+                       After loading, jsonify() and array subscript in OQL queries will return actual object data \
+                       (requires native file system access; not available in the web version)."
     )]
     async fn load_dump(
         &self,
@@ -479,7 +481,10 @@ impl HprofMcpServer {
                        All 20 view names are listed in the oql parameter description — use them directly. \
                        Returns {columns, rows, truncated, row_count, view_name?}. \
                        Rows are plain JSON. Objects appear as 'ClassName@index' — the number after '@' is object_index. \
-                       Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object.")]
+                       Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object. \
+                       Tip: SELECT jsonify(x) FROM ... expands objects to JSON trees (requires load_dump to have been called first, \
+                       which builds the needed offset index automatically). \
+                       Array subscript s[0]/s[0:3] also requires the offset index from load_dump.")]
     async fn query(
         &self,
         Parameters(p): Parameters<QueryParams>,
@@ -625,6 +630,8 @@ impl HprofMcpServer {
                        (b) 'index' field in browse_dominators output (0-based, use directly), \
                        (c) obj_index_1based from get_report dominator_tree/root_path (1-BASED — subtract 1 first!). \
                        Returns shallow_bytes (object itself) and retained_bytes (everything kept alive only by this object). \
+                       When the dump was loaded with load_dump (which builds the offset index automatically), \
+                       also returns 'fields': [{class, name, value}] for instance objects. \
                        After inspect, call browse_dominators({object_index: <same>}) to see what it retains.")]
     async fn inspect_object(
         &self,

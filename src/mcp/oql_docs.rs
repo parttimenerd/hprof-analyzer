@@ -152,6 +152,7 @@ the cached pipeline). In the REPL without full analysis it may require `--full`.
 |----------|-------------|
 | `classof(x)` | Class object for the instance `x` |
 | `toString(x)` | String value (for java.lang.String instances only) |
+| `jsonify(x)` / `jsonify(x, depth)` | Expand object `x` to a JSON tree. `depth` controls levels of references followed (default 3). Requires `offsets.bin` built by `heap load`/`load_dump`. **Not available in the web version** (requires native file I/O). |
 
 ## Aggregate functions
 
@@ -188,6 +189,24 @@ Field access is available for instance/static fields declared in the class.
 Method dispatch is limited to a fixed set: `size()` on known collection types (ArrayList, HashMap, HashSet, etc.),
 `intValue()`/`longValue()` on boxed primitives, `length()` on arrays, `getName()`/`getObjectId()` etc. on any object,
 and `equals()`. Arbitrary method calls not in this list return `NULL`.
+
+## Array subscript
+
+Access array elements with subscript notation:
+- `s[0]` — first element of array `s`
+- `s[2]` — element at index 2
+- `s[0:4]` — slice: elements 0..3 returned as a JSON array string
+
+Requires `offsets.bin` (built by `heap load` or `load_dump`). Returns `NULL` when offsets are absent.
+**Not available in the web version.**
+
+```sql
+-- First element of each byte array
+SELECT s[0] FROM byte[] s LIMIT 10
+
+-- First 4 bytes of each byte array (returned as JSON array)
+SELECT s[0:4] FROM byte[] s WHERE s.@length >= 4 LIMIT 5
+```
 
 ## Class matching modifiers
 
@@ -324,6 +343,31 @@ SELECT @objectId AS idx, classof(x) AS class
 FROM INSTANCEOF java.lang.Object x
 WHERE <target_address> IN (SELECT @objectAddress FROM @outbounds)
 LIMIT 20
+```
+
+## Object expansion and array access
+
+These features require `offsets.bin` — built automatically by `heap load` (CLI) or
+`load_dump` (MCP). **Not available in the web version.**
+
+```sql
+-- Expand a String to JSON (shows backing char[] contents, hash, etc.)
+SELECT jsonify(s) FROM java.lang.String s LIMIT 3
+```
+
+```sql
+-- Expand any object to JSON with limited depth
+SELECT jsonify(x, 2) FROM INSTANCEOF java.util.HashMap x LIMIT 3
+```
+
+```sql
+-- First byte of each byte array
+SELECT s[0] FROM byte[] s LIMIT 10
+```
+
+```sql
+-- First 4 bytes as a JSON array
+SELECT s[0:4] FROM byte[] s WHERE s.@length >= 4 LIMIT 5
 ```
 
 ## Working with object indices
@@ -690,7 +734,9 @@ Details for one object: class, shallow_bytes, retained_bytes.
 - `obj_index_1based` values from `get_report` (in `dominator_tree` and `root_path`) are **1-based** — subtract 1 before passing to `browse_dominators`/`inspect_object`.
 - `index` values returned by `browse_dominators` itself are **0-based** — use directly.
 - `@objectAddress` is the raw heap address — for cross-referencing with other JVM tools.
-- Cache files live next to the dump as `<dump>.hprof-cache/`. Safe to delete to force re-analysis.
+- Cache files live next to the dump as `<dump>.hprof-cache/<hash>/`. Safe to delete to force re-analysis.
+  The offset index lives at `<dump>.hprof-cache/<hash>/offsets.bin`; for `.gz` dumps a block index is at `gz_index.bin` in the same directory.
 - To analyze a different dump: call `load_dump` again with the new path (replaces current session).
 - `get_oql_docs({"topic":"examples"})` has 20 more ready-to-run query patterns.
+- **`jsonify(x)` and array subscript `s[0]`/`s[0:3]`** require `offsets.bin` (built automatically by `heap load` or `load_dump`). These features use seek-based reads on the raw dump file and are **not available in the web version** of the analyzer.
 "#;
