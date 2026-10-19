@@ -4,7 +4,71 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
-## [0.3.2] — 2026-10-15
+## [0.3.3] — 2026-10-19
+
+### Added
+
+- **`jsonify(x [, depth])` OQL function** — expands any heap object into a
+  JSON tree. References are followed recursively up to `depth` levels (default
+  3). Reference cycles are detected and cut: the back-edge renders as
+  `{"@ref":"0x…","@index":N,"@class":"…","@notExpanded":"cycle"}` and the root
+  gains `"@truncated":"a reference cycle was cut"`. Depth cuts and budget cuts
+  are similarly annotated with `@notExpanded`. Available in the REPL, MCP
+  `query` tool, and `heap query` CLI. Requires `offsets.bin` (written
+  automatically by `heap load` / `load_dump`). Not available in the web
+  version.
+
+- **`s[n]` / `s[a:b]` array subscript and slice** — `SELECT s[0] FROM int[] s`
+  returns the element at index 0; `s[1:4]` returns a JSON array of elements
+  1–3. Out-of-bounds returns `null`. Requires `offsets.bin`. Not available in
+  the web version.
+
+- **`heap load` and MCP `load_dump` write `offsets.bin`** — the byte offset of
+  every object in the dump is captured during the pass1 scan and written to
+  `<dump>.hprof-cache/<hash>/offsets.bin`. For `.hprof.gz` files a seekable
+  block index (`gz_index.bin`) is also built. Both files enable `jsonify` and
+  array subscript without re-scanning the dump. Already-present files are
+  skipped.
+
+- **`inspect_object` (MCP) and `heap inspect` (CLI) show field values** — after
+  `load_dump` / `heap load`, object inspection includes the actual field values
+  read from the dump file, not just class / shallow / retained sizes.
+
+- **`heap query --all` / MCP `query` `all=true`** — bypass GC-reachability
+  filtering and scan the raw heap. Useful for dumps where most objects are
+  GC-unreachable (e.g. captured with `jmap -dump:format=b` without `:live`),
+  where reachable-only queries return 0 rows while `COUNT(*)` finds objects.
+
+- **`@index` and `@class` attribute aliases** — `@index` is an alias for
+  `@objectId`; `@class` is an alias for `@displayName`. They match the keys
+  used in `jsonify` compact-ref output so agents can write follow-up queries
+  directly from the JSON.
+
+### Fixed
+
+- **`heap query` / MCP `query` reachability filter was broken** — `heap query
+  --reachable-only` and the MCP query path had an opts mismatch where the
+  `AnalyzeOptions` struct was constructed with `reachable_only=false` regardless
+  of the flag. Now correctly honours the flag.
+
+- **Cross-phase queries dropped unreachable rows incorrectly** — `filter_result_by_src`
+  was applied to carry-seed queries even when `reachable_only=false`, causing
+  correct unreachable rows to be silently dropped.
+
+- **`heap query` ignored `--reachable-only`** — the flag was parsed but not
+  threaded into the scan driver's `arm_row_capture` call.
+
+- **`LIMIT` was not consumed by the scan** — `plan.scan_limit` was set but the
+  scan driver never read it, so `LIMIT N` only trimmed results post-scan instead
+  of stopping early.
+
+- **`pass2` inbound-CSR rescan path dropped edges** — a bug in the CSR rebuild
+  for the inbound graph caused some edges to be silently omitted, producing
+  incorrect retained-size and dominator results for affected objects.
+
+- **`cvec` ignored the requested deflate level** — compressed carriers always
+  used level 6 regardless of the level passed by the caller.
+
 
 ### Added
 
