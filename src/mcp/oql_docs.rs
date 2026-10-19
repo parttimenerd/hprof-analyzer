@@ -739,4 +739,14 @@ Details for one object: class, shallow_bytes, retained_bytes.
 - To analyze a different dump: call `load_dump` again with the new path (replaces current session).
 - `get_oql_docs({"topic":"examples"})` has 20 more ready-to-run query patterns.
 - **`jsonify(x)` and array subscript `s[0]`/`s[0:3]`** require `offsets.bin` (built automatically by `heap load` or `load_dump`). These features use seek-based reads on the raw dump file and are **not available in the web version** of the analyzer.
+- **Query returns 0 rows but `COUNT(*)` finds objects?** Set `all=true` in `query()`. By default
+  only GC-reachable objects are returned (Eclipse MAT parity). Some dumps (especially those captured
+  with `-XX:+HeapDumpOnOutOfMemoryError`) have most objects marked unreachable — `all=true` bypasses
+  reachability filtering and scans the raw heap. Example:
+  `query({"oql": "SELECT @objectId FROM java.lang.String LIMIT 5", "all": true})`
+- **`jsonify` output format**: When a reference cycle is detected, the back-edge is rendered as
+  `{"@ref": "0x1234", "@index": N, "@class": "...", "@notExpanded": "cycle"}` instead of recursing.
+  The root object gains `"@truncated": "a reference cycle was cut"`.
+- **`@index` and `@class`** are aliases for `@objectId` and `@displayName` respectively — useful
+  when writing queries that reference the compact keys from `jsonify` output.
 "#;
