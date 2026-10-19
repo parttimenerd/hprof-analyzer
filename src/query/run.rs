@@ -1838,6 +1838,12 @@ pub struct ReplCache {
     pub class_idx: Vec<u32>,
     /// Class-histogram row names (indexed by class_idx values).
     pub class_names: Vec<String>,
+    /// Per-dense-index byte offsets of each object's HPROF record in the
+    /// decompressed stream, captured during pass1. Used by jsonify() and array
+    /// subscript to seek directly to any object without re-scanning the dump.
+    /// Empty when the dump was loaded without offset capture (should not happen
+    /// in practice — `build_with_progress` always sets `capture_hprof_offsets`).
+    pub offsets: Vec<u64>,
 }
 
 impl ReplCache {
@@ -1863,7 +1869,8 @@ impl ReplCache {
             ..crate::AnalyzeOptions::default()
         };
         let source_cache = source.clone();
-        let p1_owned = crate::pass1::Pass1::run(&source_cache, false)?;
+        let mut p1_owned = crate::pass1::Pass1::run(&source_cache, true)?;
+        let offsets = std::mem::take(&mut p1_owned.hprof_offsets);
         progress("pass1_a", 1.0);
         let p1_for_pass2 = crate::pass1::Pass1::run(&source_cache, false)?;
         progress("pass1_b", 1.0);
@@ -1899,7 +1906,7 @@ impl ReplCache {
             None
         };
         let id_size = p1_owned.id_size as usize;
-        Ok(ReplCache {
+        let cache = ReplCache {
             p1: p1_owned,
             n,
             shallow,
@@ -1910,7 +1917,18 @@ impl ReplCache {
             id_size,
             reachable_only,
             source: source.clone(),
-        })
+            offsets,
+        };
+        // Write offsets.bin to the default cache dir so future `heap query` runs
+        // can use jsonify without a prior `heap load`. Ignore errors — the query
+        // still works via the in-memory offsets captured above.
+        #[cfg(feature = "native")]
+        if let Ok(cd) = crate::cache::CacheDir::for_dump(std::path::Path::new(source.file_path())) {
+            if !cd.has_hprof_offsets() && !cache.offsets.is_empty() {
+                let _ = cd.write_hprof_offsets(&cache.offsets);
+            }
+        }
+        Ok(cache)
     }
 
     /// Scan the HPROF source and decode all String instance values.

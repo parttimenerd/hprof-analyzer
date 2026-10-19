@@ -198,6 +198,12 @@ pub trait JsonifySession {
     fn index_of_addr(&self, addr: u64) -> Option<usize>;
     /// Dotted class name of a dense object index, for display.
     fn class_name_of_index(&self, idx: usize) -> Option<String>;
+    /// In-memory offset table captured during pass1 (e.g. from ReplCache).
+    /// When non-empty, `OffsetTable` uses this directly instead of reading
+    /// `offsets.bin` from disk, making jsonify work immediately after `load_dump`.
+    fn offsets_in_memory(&self) -> Option<&[u64]> {
+        None
+    }
 }
 
 impl JsonifySession for crate::query::run::ReplCache {
@@ -225,6 +231,13 @@ impl JsonifySession for crate::query::run::ReplCache {
     fn class_name_of_index(&self, idx: usize) -> Option<String> {
         let ci = *self.class_idx.get(idx)?;
         self.class_names.get(ci as usize).cloned()
+    }
+    fn offsets_in_memory(&self) -> Option<&[u64]> {
+        if self.offsets.is_empty() {
+            None
+        } else {
+            Some(&self.offsets)
+        }
     }
 }
 
@@ -363,7 +376,17 @@ mod imp {
     }
 
     impl OffsetTable {
-        fn open(dump: &Path, n: usize) -> io::Result<Option<Self>> {
+        fn open(dump: &Path, n: usize, mem: Option<&[u64]>) -> io::Result<Option<Self>> {
+            // Use in-memory offsets (from ReplCache) when available — no disk read.
+            if let Some(s) = mem {
+                if s.len() == n {
+                    return Ok(Some(Self {
+                        full: Some(s.to_vec()),
+                        stream: None,
+                        memo: HashMap::new(),
+                    }));
+                }
+            }
             let dir = crate::cache::CacheDir::for_dump(dump)?;
             if !dir.has_hprof_offsets() {
                 return Ok(None);
@@ -1127,21 +1150,22 @@ mod imp {
         }
         let path = sess.dump_path().to_path_buf();
         for &(col, depth) in cols {
-            let table = match OffsetTable::open(&path, sess.object_count()) {
-                Ok(Some(t)) => t,
-                Ok(None) => {
-                    mark_unavailable(res, &[(col, depth)], NO_OFFSETS_NOTE);
-                    continue;
-                }
-                Err(e) => {
-                    mark_unavailable(
-                        res,
-                        &[(col, depth)],
-                        &format!("could not read the object-offset table: {e}"),
-                    );
-                    continue;
-                }
-            };
+            let table =
+                match OffsetTable::open(&path, sess.object_count(), sess.offsets_in_memory()) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        mark_unavailable(res, &[(col, depth)], NO_OFFSETS_NOTE);
+                        continue;
+                    }
+                    Err(e) => {
+                        mark_unavailable(
+                            res,
+                            &[(col, depth)],
+                            &format!("could not read the object-offset table: {e}"),
+                        );
+                        continue;
+                    }
+                };
             // (row, dense index) for every cell we will expand. The index comes
             // out of the scan-time placeholder — see `pending_cell`.
             let mut roots: Vec<(usize, usize)> = Vec::new();
