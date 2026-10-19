@@ -126,10 +126,13 @@ pub(crate) fn run_oql_escalated(
     let id_size = p1.id_size as usize;
     // Read offsets.bin from cache dir if available (written by `heap load`).
     // If absent, array subscript and jsonify return their "no offsets" note.
+    #[cfg(feature = "native")]
     let disk_offsets: Vec<u64> = crate::cache::CacheDir::for_dump(std::path::Path::new(input))
         .ok()
         .and_then(|cd| cd.read_hprof_offsets().ok().flatten())
         .unwrap_or_default();
+    #[cfg(not(feature = "native"))]
+    let disk_offsets: Vec<u64> = Vec::new();
     // Clone pass1 fields needed by EscalatedJsonifySession before p1 is consumed.
     // Only used by jsonify on the native path; cloned early so the original
     // fields remain intact for Pass2::build.

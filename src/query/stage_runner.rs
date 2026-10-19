@@ -1299,6 +1299,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
             .select
             .iter()
             .map(|it| match it {
+                #[cfg(feature = "native")]
                 SelectItem::Attr(Attr::ArrayIndex { base, index }) => {
                     if !have_offsets {
                         return QueryValue::Null;
@@ -1328,6 +1329,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                         None => QueryValue::Null,
                     }
                 }
+                #[cfg(feature = "native")]
                 SelectItem::Attr(Attr::ArraySlice { base, start, end }) => {
                     if !have_offsets {
                         return QueryValue::Null;
@@ -1374,6 +1376,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                 // All other columns: resolve normally from the dense index.
                 // @length needs a special case: read it from the array header when
                 // offsets are available (the scan-time length is not in LateCtx).
+                #[cfg(feature = "native")]
                 SelectItem::Attr(Attr::Length) if have_offsets => {
                     let base_dense = s; // @length of the FROM array, not a sub-expr
                     if let Some(offset) = ctx
@@ -1433,6 +1436,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
 
 /// Resolve the base `Attr` of an `ArrayIndex`/`ArraySlice` to a dense index.
 ///
+#[cfg(feature = "native")]
 /// When `base` is the bare FROM alias (a `Field` whose name equals `alias`), the
 /// base IS the current loop object `s` — return it directly.  For any other attr
 /// evaluate it and extract the `ObjRef.index` (the base is a reference to another
@@ -1461,6 +1465,7 @@ fn resolve_base_dense(
 }
 
 /// Convert a `FieldValue` from `objread` to a `QueryValue`.
+#[cfg(feature = "native")]
 fn field_value_to_query_value(fv: crate::objread::FieldValue) -> QueryValue {
     use crate::objread::FieldValue;
     match fv {
@@ -1494,6 +1499,7 @@ fn field_value_to_query_value(fv: crate::objread::FieldValue) -> QueryValue {
 }
 
 /// Convert a `FieldValue` to a `serde_json::Value` (for array-slice JSON output).
+#[cfg(feature = "native")]
 fn field_value_to_json(fv: &crate::objread::FieldValue) -> serde_json::Value {
     use crate::objread::FieldValue;
     match fv {
@@ -1506,6 +1512,7 @@ fn field_value_to_json(fv: &crate::objread::FieldValue) -> serde_json::Value {
 /// Read an array record using `ctx.dump_path`. For native builds with a gz file
 /// and a pre-built gz index, seeks via `open_for_offset`; falls back to
 /// `read_array_at` (plain file seek) otherwise.
+#[cfg(feature = "native")]
 fn read_array_for_ctx(
     path: &std::path::Path,
     offset: u64,
@@ -4414,6 +4421,7 @@ mod arith_late_tests {
     }
 
     /// `resolve_base_dense` returns the seed dense index when base is the FROM alias.
+    #[cfg(feature = "native")]
     #[test]
     fn resolve_base_dense_bare_alias_returns_s() {
         let retained = vec![0u64; 4];
