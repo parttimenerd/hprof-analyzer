@@ -269,6 +269,14 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         self
     }
 
+    /// True when every executor has reached its `scan_limit` and no further
+    /// visits can produce new rows. When `true`, the outer scan loop can break
+    /// early rather than visiting every remaining object. Safe to call after
+    /// each `visit_instance`/`visit_array` call.
+    pub fn is_done(&self) -> bool {
+        !self.execs.is_empty() && self.execs.iter().all(|e| e.scan_satisfied())
+    }
+
     /// Build the string-capture sidecar if any exec has `needs.string_values`.
     /// Returns `None` when no toString(s) query is present.
     fn arm_string_capture(
@@ -585,14 +593,18 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
         self.capture_refwalk(src_idx, class_id, blob);
         self.capture_string_values(src_idx, class_id, blob);
         for ex in &mut self.execs {
-            ex.visit_instance(src_idx, class_id, blob);
+            if !ex.scan_satisfied() {
+                ex.visit_instance(src_idx, class_id, blob);
+            }
         }
     }
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
         self.capture_refwalk_array_length(src_idx, length);
         self.capture_refwalk_array_addr(src_idx);
         for ex in &mut self.execs {
-            ex.visit_array(src_idx, class_name, length);
+            if !ex.scan_satisfied() {
+                ex.visit_array(src_idx, class_name, length);
+            }
         }
     }
 }
@@ -866,6 +878,9 @@ pub fn run_resident_only(
         if cache.p1.kind[i] == 0 {
             let class_addr = cache.p1.class_addr_table[cache.class_ids[i] as usize];
             driver.visit_instance(i, class_addr, &[]);
+            if driver.is_done() {
+                break;
+            }
         }
     }
 
@@ -949,6 +964,9 @@ pub fn run_resident_with_retained(
         if cache.p1.kind[i] == 0 {
             let class_addr = cache.p1.class_addr_table[cache.class_ids[i] as usize];
             driver.visit_instance(i, class_addr, &[]);
+            if driver.is_done() {
+                break;
+            }
         }
     }
     let state = driver.finish_state();
@@ -2649,6 +2667,33 @@ mod tests {
         let mut driver2 = ScanDriver::new(entries2);
         driver2.visit_instance(0, 1, &be8(0x100));
         assert!(driver2.take_refwalk_csr(8).is_none());
+    }
+
+    #[test]
+    fn scan_driver_is_done_when_all_executors_satisfied() {
+        let resolver = FakeResolver {
+            names: [(10u64, "com.acme.Foo".to_string())].into_iter().collect(),
+        };
+        let q = parse("SELECT @objectId FROM com.acme.Foo LIMIT 2").unwrap();
+        let plan = crate::query::optimize::optimize(
+            pq(&q),
+            &q,
+            &crate::query::optimize::SchemaStats::default(),
+        );
+        assert_eq!(plan.scan_limit, Some(2), "optimizer must push LIMIT 2 down");
+        let entries = vec![(0usize, SingleScanExecutor::new(&q, &plan, &resolver))];
+        let mut driver = ScanDriver::new(entries);
+        assert!(!driver.is_done(), "not done before any visits");
+        driver.visit_instance(0, 10, &[]);
+        assert!(!driver.is_done(), "not done after 1 of 2");
+        driver.visit_instance(1, 10, &[]);
+        assert!(driver.is_done(), "done after scan_limit reached");
+        // A third visit must be skipped (executor already satisfied).
+        driver.visit_instance(2, 10, &[]);
+        let state = driver.finish_state();
+        let (finished, _pending) = state.into_parts();
+        let (_slot, res) = finished.into_iter().next().unwrap();
+        assert_eq!(res.row_count, 2, "exactly 2 rows after early stop");
     }
 
     #[test]

@@ -819,6 +819,30 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         self.resolver
     }
 
+    /// True when this executor has already matched `scan_limit` objects and can
+    /// stop accepting new visits. Only set by the optimizer when stopping early
+    /// is safe (no ORDER BY, no subquery source). Carry and aggregate executors
+    /// never satisfy early (they must see every match). Used by `ScanDriver` to
+    /// skip dispatching to satisfied executors and to stop the outer scan loop.
+    pub fn scan_satisfied(&self) -> bool {
+        // Carry mode never early-stops (retained ORDER BY + LIMIT run late).
+        if self.carry.is_some() {
+            return false;
+        }
+        // Aggregate mode never early-stops (must see every object).
+        if self.agg_acc.is_some() {
+            return false;
+        }
+        // GROUP BY mode never early-stops (must see every object).
+        if self.group_map.is_some() {
+            return false;
+        }
+        match self.plan.scan_limit {
+            Some(lim) => self.matched >= lim,
+            None => false,
+        }
+    }
+
     /// Consume a carry executor, returning the accumulated carry. Panics if this
     /// executor is not in carry mode (caller must check `is_carry`).
     pub fn take_carry(self) -> Carry {
@@ -3781,6 +3805,57 @@ mod tests {
         assert_eq!(
             res.row_count, 3,
             "FROM-subquery + ORDER BY must not truncate to LIMIT in finish()"
+        );
+    }
+
+    #[test]
+    fn scan_satisfied_returns_true_after_scan_limit_reached() {
+        // scan_satisfied() must return true as soon as matched >= scan_limit.
+        // scan_limit is set by the optimizer's pushdown_limit pass; simulate it
+        // by optimizing a simple LIMIT 2 query (no ORDER BY, no subquery).
+        let q = crate::query::parse::parse("SELECT @objectId FROM C c LIMIT 2").unwrap();
+        let plan = crate::query::optimize::optimize(
+            pq(&q),
+            &q,
+            &crate::query::optimize::SchemaStats::default(),
+        );
+        assert_eq!(plan.scan_limit, Some(2), "optimizer must push LIMIT 2 down");
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        assert!(!ex.scan_satisfied(), "not satisfied before any visits");
+        ex.visit_instance(1, 10, &[]);
+        assert!(!ex.scan_satisfied(), "not satisfied after 1 of 2");
+        ex.visit_instance(2, 10, &[]);
+        assert!(
+            ex.scan_satisfied(),
+            "must be satisfied after matched >= scan_limit"
+        );
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 2, "exactly 2 rows despite 3 visits");
+    }
+
+    #[test]
+    fn scan_satisfied_false_for_carry_executor() {
+        // Carry-mode executors must never report scan_satisfied — retained
+        // ORDER BY + LIMIT run in the late phase, so we cannot stop early.
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C c ORDER BY @retainedHeapSize DESC LIMIT 2",
+        )
+        .unwrap();
+        let plan = crate::query::optimize::optimize(
+            pq(&q),
+            &q,
+            &crate::query::optimize::SchemaStats::default(),
+        );
+        let sc = FieldSchema::count_only();
+        let carry = crate::query::carry::Carry::index_only(100);
+        let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        assert!(
+            !ex.scan_satisfied(),
+            "carry executor must never report scan_satisfied"
         );
     }
 
