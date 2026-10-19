@@ -4,125 +4,101 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
-## [0.3.3] — 2026-10-19
+## [0.3.2] — 2026-10-19
+
+Several items in this release were cherry-picked from
+[Pigsy-Monk/hprof-analyzer](https://github.com/Pigsy-Monk/hprof-analyzer/)
+and are marked *(PM)* below.
 
 ### Added
 
 - **`jsonify(x [, depth])` OQL function** — expands any heap object into a
-  JSON tree. References are followed recursively up to `depth` levels (default
-  3). Reference cycles are detected and cut: the back-edge renders as
-  `{"@ref":"0x…","@index":N,"@class":"…","@notExpanded":"cycle"}` and the root
-  gains `"@truncated":"a reference cycle was cut"`. Depth cuts and budget cuts
-  are similarly annotated with `@notExpanded`. Available in the REPL, MCP
-  `query` tool, and `heap query` CLI. Requires `offsets.bin` (written
-  automatically by `heap load` / `load_dump`). Not available in the web
-  version.
+  JSON tree up to `depth` levels deep (default 3). Cycles, depth cuts, and
+  budget cuts are annotated with `@notExpanded`. Available in the REPL, MCP
+  `query` tool, and `heap query` CLI. Requires `offsets.bin`. Not available
+  in the web version. Object-read infrastructure cherry-picked *(PM)*.
 
 - **`s[n]` / `s[a:b]` array subscript and slice** — `SELECT s[0] FROM int[] s`
-  returns the element at index 0; `s[1:4]` returns a JSON array of elements
-  1–3. Out-of-bounds returns `null`. Requires `offsets.bin`. Not available in
-  the web version.
+  returns element at index 0; `s[1:4]` returns a JSON array. Requires
+  `offsets.bin`. Not available in the web version.
 
-- **`heap load` and MCP `load_dump` write `offsets.bin`** — the byte offset of
-  every object in the dump is captured during the pass1 scan and written to
-  `<dump>.hprof-cache/<hash>/offsets.bin`. For `.hprof.gz` files a seekable
-  block index (`gz_index.bin`) is also built. Both files enable `jsonify` and
-  array subscript without re-scanning the dump. Already-present files are
-  skipped.
+- **`heap load` / `load_dump` write `offsets.bin`** — byte offset of every
+  object written to `<dump>.hprof-cache/<hash>/offsets.bin`; `.hprof.gz`
+  files also get a seekable block index (`gz_index.bin`). Enables `jsonify`
+  and array subscript without re-scanning.
 
-- **`inspect_object` (MCP) and `heap inspect` (CLI) show field values** — after
-  `load_dump` / `heap load`, object inspection includes the actual field values
-  read from the dump file, not just class / shallow / retained sizes.
+- **`inspect_object` / `heap inspect` show field values** — actual field
+  values from the dump file, not just sizes.
 
 - **`heap query --all` / MCP `query` `all=true`** — bypass GC-reachability
-  filtering and scan the raw heap. Useful for dumps where most objects are
-  GC-unreachable (e.g. captured with `jmap -dump:format=b` without `:live`),
-  where reachable-only queries return 0 rows while `COUNT(*)` finds objects.
+  filtering; useful for dumps taken without `:live`. *(PM)*
 
-- **`@index` and `@class` attribute aliases** — `@index` is an alias for
-  `@objectId`; `@class` is an alias for `@displayName`. They match the keys
-  used in `jsonify` compact-ref output so agents can write follow-up queries
-  directly from the JSON.
+- **`@index` / `@class` attribute aliases** — aliases for `@objectId` /
+  `@displayName`, matching `jsonify` compact-ref output keys.
 
-### Fixed
+- **`hprof-analyzer check-redacted <INPUT>`** — exits 0 if the dump contains
+  the redaction marker, 1 otherwise, 2 on I/O error.
 
-- **`heap query` / MCP `query` reachability filter was broken** — `heap query
-  --reachable-only` and the MCP query path had an opts mismatch where the
-  `AnalyzeOptions` struct was constructed with `reachable_only=false` regardless
-  of the flag. Now correctly honours the flag.
+- **`hprof-redact --check <INPUT>`** — same check in the standalone binary.
 
-- **Cross-phase queries dropped unreachable rows incorrectly** — `filter_result_by_src`
-  was applied to carry-seed queries even when `reachable_only=false`, causing
-  correct unreachable rows to be silently dropped.
-
-- **`heap query` ignored `--reachable-only`** — the flag was parsed but not
-  threaded into the scan driver's `arm_row_capture` call.
-
-- **`LIMIT` was not consumed by the scan** — `plan.scan_limit` was set but the
-  scan driver never read it, so `LIMIT N` only trimmed results post-scan instead
-  of stopping early.
-
-- **`pass2` inbound-CSR rescan path dropped edges** — a bug in the CSR rebuild
-  for the inbound graph caused some edges to be silently omitted, producing
-  incorrect retained-size and dominator results for affected objects.
-
-- **`cvec` ignored the requested deflate level** — compressed carriers always
-  used level 6 regardless of the level passed by the caller.
-
-
-### Added
-
-- **`hprof-analyzer check-redacted <INPUT>`** — new subcommand that exits 0
-  and prints `redacted` if the dump contains the redaction marker (tag `0xDE`),
-  or exits 1 and prints `not redacted` otherwise. Exits 2 on I/O error.
-  Accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tar.gz`, `.tgz`.
-
-- **`hprof-redact --check <INPUT>`** — same check available in the standalone
-  binary without requiring the full `hprof-analyzer` install.
-
-- **`detect-secrets` now scans JVM symbol table strings.** The JVM symbol
-  table (`STRING_IN_UTF8` records) contains class-file constant pool literals
-  that are separate from heap `java.lang.String` instances: annotation values
-  (`@Value("${spring.datasource.url}")`), `@RequestMapping` URL paths,
-  Spring EL expressions, JDBC URLs embedded in class constants, etc.
-  Previously these were invisible to `detect-secrets`; they are now scanned
-  with the same pattern set. Symbol table findings are attributed as
-  `JVM symbol table / STRING_IN_UTF8` in the output.
+- **`detect-secrets` scans JVM symbol table strings** — `STRING_IN_UTF8`
+  records (annotation values, `@RequestMapping` paths, JDBC URLs, etc.) are
+  now scanned alongside heap strings. *(PM)*
 
 ### Fixed
+
+- **`heap query` / MCP `query` reachability filter was broken** — opts
+  mismatch caused `reachable_only=false` regardless of the flag.
+
+- **Cross-phase queries dropped unreachable rows incorrectly** —
+  `filter_result_by_src` was applied even when `reachable_only=false`.
+
+- **`heap query` ignored `--reachable-only`** — flag was not threaded into
+  `arm_row_capture`.
+
+- **`LIMIT` not consumed by the scan** — `plan.scan_limit` was set but never
+  read; `LIMIT N` only trimmed post-scan instead of stopping early.
+
+- **`pass2` inbound-CSR rescan path dropped edges** — CSR rebuild bug caused
+  silently omitted edges, producing incorrect retained-size and dominator results.
+
+- **`cvec` ignored the requested deflate level** — always used level 6.
 
 - **`redact --complete`: annotation literals and Spring EL expressions now
-  zeroed.** The JVM symbol table (`STRING_IN_UTF8` records) holds string
-  constants from class-file constant pools, including annotation attribute
-  values (`@Value("${spring.datasource.url}")`, `@RequestMapping("/owners")`),
-  Spring EL expressions, and other non-structural literals. These were
-  preserved verbatim by complete mode; they are now zeroed for any ID that is
-  not referenced as a structural name (class name via `LOAD_CLASS`, method/
-  source-file name via `STACK_FRAME`, or field name via `CLASS_DUMP`). Class
-  names, field names, method names, and source file names are kept readable
-  so the dump remains fully browsable in MAT and jhat. Lean mode is unchanged
-  — adding symbol-table selective zeroing to lean mode would require a second
-  pass, contradicting its single-pass design. Use `--complete` when annotation
-  strings must not appear in the shared file. (Fixes #3.)
+  zeroed** — non-structural `STRING_IN_UTF8` entries are zeroed; structural
+  names (class, field, method, source file) are preserved. *(PM)*
 
-- **`pass2::fill_heap` pegging one core on clustered heap addresses.** The
-  interpolation search in `IdMap::search_offsets` stalled on non-uniform
-  address distributions (post-GC clusters, ART/J9 allocators) where each
-  probe barely narrowed the range. Added a stagnation guard: if a probe
-  fails to halve the range, fall through to binary search immediately. Zero
-  cost on uniform distributions; eliminates the CPU spike on pathological
-  dumps.
+- **`pass2::fill_heap` pegging one core on clustered heap addresses** —
+  stagnation guard added to interpolation search; falls through to binary
+  search when a probe fails to halve the range. *(PM)*
 
-- **Unreachable-forest dominator pass auto-skipped on large unreachable sets.**
-  The iterative CHK dominator over the unreachable subgraph is O(u²) in the
-  worst case. On post-GC dumps where most objects are already unreachable
-  (e.g. 90%+ of a Tomcat dump taken mid-collection) this pass dominated total
-  analysis time. When the unreachable object count exceeds 500 000 the pass is
-  now skipped automatically; the Unreachable Objects section shows
-  shallow-by-class instead of retained-by-class, and a note in the report
-  (Markdown and HTML) explains the skip with a hint to use `--full-analysis`
-  to force the full dominator pass. Zero impact on normal dumps with small
-  garbage fractions.
+- **Unreachable-forest dominator pass auto-skipped above 500 000 unreachable
+  objects** — shows shallow-by-class instead; `--full-analysis` forces the
+  full pass. *(PM)*
+
+- **MAT `.threads` file now matches Eclipse MAT exactly** — real addresses,
+  complete locals list, correct empty-frame placeholder. *(PM)*
+
+- **Unreachable class objects have their own shallow size** — previously
+  bucketed incorrectly in the Unreachable Objects histogram. *(PM)*
+
+- **Alias histogram rows folded into one `ClassImpl`** — duplicate entries
+  and incorrect retained totals in the MAT class cache are fixed. *(PM)*
+
+- **`FROM OBJECTS <array>` queries served from the resident cache.** *(PM)*
+
+- **Server refuses dump re-reads by default; `--allow-rescan` opt-in.**
+  `--no-rescan` kept as a deprecated no-op. *(PM)*
+
+- **Six misleading report renderings corrected.** *(PM)*
+
+- **`graph.bin` forward targets stored as a chunked container** — reduces
+  peak RSS when building large MAT caches. *(PM)*
+
+- **Inbound CSR read at point of use, not up front** — cuts resident memory
+  for queries that never touch inbound edges. *(PM)*
+
+- **From-cache path no longer materialises the whole graph cache.** *(PM)*
 
 ## [0.3.1] — 2026-10-02
 
