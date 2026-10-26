@@ -1316,14 +1316,14 @@ impl InboundBuilder {
                             &mut inb_flat,
                             &mut in_cursors,
                             &mut scratch,
-                            // Inbound pass: boxed-, String-, and dup-array-holder
-                            // counting happen only on the forward fill, so pass
-                            // empty sets (hooks skipped) and throwaway counters.
-                            &std::collections::HashSet::new(),
+                            // Inbound pass: holder counting happens only on the
+                            // forward fill, so skip it (has_any_holder = false).
+                            false,
+                            &crate::bitset::Bitset::default(),
                             &mut std::collections::HashMap::new(),
-                            &std::collections::HashSet::new(),
+                            &crate::bitset::Bitset::default(),
                             &mut std::collections::HashMap::new(),
-                            &std::collections::HashSet::new(),
+                            &crate::bitset::Bitset::default(),
                             &mut std::collections::HashMap::new(),
                             None, // dup_string_collector: inbound pass skips Pass B
                         )?;

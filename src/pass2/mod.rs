@@ -1265,6 +1265,40 @@ impl Pass2 {
         let mut field_name_pool_idx: std::collections::HashMap<String, u16> =
             std::collections::HashMap::new();
         crate::trace::probe("pass2: after fwd_targets alloc");
+
+        // Build holder bitsets once before the segment loop.
+        // fill_heap_2b is called once per HEAP_DUMP_SEGMENT; rebuilding these
+        // inside the function multiplies id_map.index_of work by segment count.
+        let holder_has_any =
+            !captured_boxed_addrs.is_empty() || !string_addrs.is_empty() || !dup_addrs.is_empty();
+        let (holder_boxed_bits, holder_string_bits, holder_dup_bits) = if holder_has_any {
+            let mut bboxed = crate::bitset::Bitset::with_len(n);
+            let mut bstring = crate::bitset::Bitset::with_len(n);
+            let mut bdup = crate::bitset::Bitset::with_len(n);
+            for &addr in captured_boxed_addrs.iter() {
+                if let Some(i) = p1.id_map.index_of(addr) {
+                    bboxed.set(i);
+                }
+            }
+            for &addr in string_addrs.iter() {
+                if let Some(i) = p1.id_map.index_of(addr) {
+                    bstring.set(i);
+                }
+            }
+            for &addr in dup_addrs.iter() {
+                if let Some(i) = p1.id_map.index_of(addr) {
+                    bdup.set(i);
+                }
+            }
+            (bboxed, bstring, bdup)
+        } else {
+            (
+                crate::bitset::Bitset::default(),
+                crate::bitset::Bitset::default(),
+                crate::bitset::Bitset::default(),
+            )
+        };
+
         // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
         // write cursor during the fill, then restored by right-shift below.
         {
@@ -1296,11 +1330,12 @@ impl Pass2 {
                         &mut inb_flat_stub,
                         &mut in_degree_stub,
                         &mut scratch,
-                        &captured_boxed_addrs,
+                        holder_has_any,
+                        &holder_boxed_bits,
                         &mut boxed_holder_counts,
-                        &string_addrs,
+                        &holder_string_bits,
                         &mut string_holder_counts,
-                        &dup_addrs,
+                        &holder_dup_bits,
                         &mut dup_array_holder_counts,
                         dup_string_collector.as_mut(),
                     ),
@@ -1938,47 +1973,18 @@ impl Pass2 {
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
-        boxed_addrs: &std::collections::HashSet<u64>,
+        has_any_holder: bool,
+        boxed_bits: &crate::bitset::Bitset,
         boxed_holder_counts: &mut HashMap<u64, u64>,
-        string_addrs: &std::collections::HashSet<u64>,
+        string_bits: &crate::bitset::Bitset,
         string_holder_counts: &mut HashMap<u64, u64>,
-        dup_addrs: &std::collections::HashSet<u64>,
+        dup_bits: &crate::bitset::Bitset,
         dup_array_holder_counts: &mut HashMap<u64, u64>,
         mut dup_string_collector: Option<&mut DupStringPassB>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
         let do_names = fwd_field_name_idx.is_some() && do_fwd;
-
-        // Convert address-keyed HashSets to dense-index Bitsets so the hot
-        // per-field-ref holder checks become O(1) bitset reads instead of 3
-        // separate HashMap hash/compare probes per non-null field reference.
-        let n = id_map.len();
-        let has_any_holder =
-            !boxed_addrs.is_empty() || !string_addrs.is_empty() || !dup_addrs.is_empty();
-        let mut boxed_bits = crate::bitset::Bitset::default();
-        let mut string_bits = crate::bitset::Bitset::default();
-        let mut dup_bits = crate::bitset::Bitset::default();
-        if has_any_holder {
-            boxed_bits = crate::bitset::Bitset::with_len(n);
-            string_bits = crate::bitset::Bitset::with_len(n);
-            dup_bits = crate::bitset::Bitset::with_len(n);
-            for &addr in boxed_addrs.iter() {
-                if let Some(i) = id_map.index_of(addr) {
-                    boxed_bits.set(i);
-                }
-            }
-            for &addr in string_addrs.iter() {
-                if let Some(i) = id_map.index_of(addr) {
-                    string_bits.set(i);
-                }
-            }
-            for &addr in dup_addrs.iter() {
-                if let Some(i) = id_map.index_of(addr) {
-                    dup_bits.set(i);
-                }
-            }
-        }
 
         macro_rules! add_edge {
             ($src:expr, $dst_addr:expr, $excluded:expr, $name_idx:expr) => {
@@ -2117,10 +2123,24 @@ impl Pass2 {
                                 let off = off as usize;
                                 if off + id_size as usize <= scratch.len() {
                                     let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                    // Holder-count checks: convert the 3 address-keyed
-                                    // HashSet lookups into a single dense-index resolution
-                                    // (warm in IndexCache after add_edge! below) + 3 bitset
-                                    // reads. Only paid when at least one set is non-empty.
+                                    let name_idx = if do_names && fi < named_plan.len() {
+                                        let fname = &named_plan[fi].2;
+                                        if fname.is_empty() {
+                                            0u16
+                                        } else if let Some(&idx) = field_name_pool_idx.get(fname) {
+                                            idx
+                                        } else {
+                                            let new_idx = field_name_pool.len() as u16;
+                                            field_name_pool.push(fname.clone());
+                                            field_name_pool_idx.insert(fname.clone(), new_idx);
+                                            new_idx
+                                        }
+                                    } else {
+                                        0u16
+                                    };
+                                    add_edge!(src_idx, ref_val, excluded, name_idx);
+                                    // Holder-count checks run AFTER add_edge! so
+                                    // cache.index_of is a warm cache hit, not a miss.
                                     if has_any_holder && ref_val != 0 {
                                         if let Some(dst_idx) = cache.index_of(id_map, ref_val) {
                                             if boxed_bits.get(dst_idx) {
@@ -2140,22 +2160,6 @@ impl Pass2 {
                                             }
                                         }
                                     }
-                                    let name_idx = if do_names && fi < named_plan.len() {
-                                        let fname = &named_plan[fi].2;
-                                        if fname.is_empty() {
-                                            0u16
-                                        } else if let Some(&idx) = field_name_pool_idx.get(fname) {
-                                            idx
-                                        } else {
-                                            let new_idx = field_name_pool.len() as u16;
-                                            field_name_pool.push(fname.clone());
-                                            field_name_pool_idx.insert(fname.clone(), new_idx);
-                                            new_idx
-                                        }
-                                    } else {
-                                        0u16
-                                    };
-                                    add_edge!(src_idx, ref_val, excluded, name_idx);
                                 }
                             }
                         }
