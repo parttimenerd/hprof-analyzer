@@ -707,17 +707,17 @@ If all you need is a class histogram, [`hprof-slurp`](https://github.com/agourla
 
 ## Performance
 
-Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`ea0ace8`](https://github.com/parttimenerd/hprof-analyzer/commit/ea0ace8), 2026-08-12. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak.
+Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`060caf5`](https://github.com/parttimenerd/hprof-analyzer/commit/060caf5), 2026-10-26. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak.
 
 | Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
 |----------|-----------|------------|-----------|-----------|----------|------------|-----------|
-| Renaissance scala-doku | 51 MiB | 2.4 s | 40 MiB | 5.7 s | 373 MiB | 0:04 | 1.63 GiB |
-| gauss-mix | 70 MiB | 2.1 s | 44 MiB | 3.3 s | 195 MiB | 0:04 | 1.61 GiB |
-| naive-bayes (1.3 GiB) | 1.3 GiB | 5.0 s | 67 MiB | 8.2 s | 382 MiB | 0:05 | 1.73 GiB |
-| VS Code JVM (1.1 GiB) | 1.1 GiB | 0:43 | 216 MiB | 1:13 | 2.51 GiB | 0:28 | 2.39 GiB |
-| HeapothesYs 16g | 11 GiB | 2:49 | 565 MiB | 4:07 | 6.32 GiB | 1:06 | 4.99 GiB |
-| HeapothesYs 28g | 20 GiB | 5:31 | 1.05 GiB | 8:00 | 12.1 GiB | 2:10 | 5.27 GiB |
-| Real-world 34g | 34 GiB | 18:28 | 16.1 GiB | 18:34 | 19.8 GiB | 2:19:17 | 5.18 GiB |
+| Renaissance scala-doku | 51 MiB | 1.2 s | 132 MiB | 2.2 s | 213 MiB | 4.6 s | 1.65 GiB |
+| gauss-mix | 70 MiB | 1.0 s | 118 MiB | 1.7 s | 184 MiB | 4.5 s | 1.61 GiB |
+| naive-bayes (1.3 GiB) | 1.3 GiB | 2.6 s | 188 MiB | 4.5 s | 332 MiB | 5.5 s | 1.73 GiB |
+| VS Code JVM (1.1 GiB) | 1.1 GiB | 18.8 s | 483 MiB | 27.6 s | 820 MiB | 28.8 s | 2.50 GiB |
+| HeapothesYs 16g | 11 GiB | 1:07 | 965 MiB | 1:41 | 2.19 GiB | 1:05 | 4.57 GiB |
+| HeapothesYs 28g | 20 GiB | 2:11 | 1.82 GiB | 3:15 | 3.73 GiB | 2:06 | 5.28 GiB |
+| Real-world 34g | 34 GiB | 15:01 | 14.57 GiB | 19:05 | 16.70 GiB | 2:19:17 | 5.18 GiB |
 
 MAT was run with `ParseHeapDump.sh -Xmx80g` (leak-suspects + top-components). `hprof-analyzer` holds peak RSS well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
 
