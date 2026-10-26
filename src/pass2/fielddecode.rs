@@ -1326,10 +1326,10 @@ impl FieldDecodeState {
                 self.holder_class_map.insert(class_id, key);
                 key
             };
-            // Need to clone the layout to avoid holding a reference into self
-            // while also mutating self.edges.
-            let layout: Vec<(u32, u32)> = self.obj_field_layout[&class_id].clone();
-            for (field_key, offset) in layout {
+            // SAFETY: obj_field_layout is not mutated in the loop below (only
+            // self.edges is pushed to), so the raw pointer remains valid.
+            let layout: *const Vec<(u32, u32)> = &self.obj_field_layout[&class_id];
+            for &(field_key, offset) in unsafe { &*layout } {
                 if self.edges.len() >= self.caps.field_ref_cap {
                     self.edges_truncated = true;
                     break;
@@ -1352,22 +1352,27 @@ impl FieldDecodeState {
             self.light_field_layout
                 .entry(class_id)
                 .or_insert_with(|| enumerate_object_fields(class_id, class_map, obj_ref_width));
-            let layout: Vec<(u64, u32)> = self.light_field_layout[&class_id].clone();
-            let holder_name = if let Some(n) = self.pretty_name_cache.get(&class_id) {
-                n.clone()
+            // SAFETY: light_field_layout is not mutated in the loop below (only
+            // self.array_owner_by_addr is inserted to), so the raw pointer remains valid.
+            let layout: *const Vec<(u64, u32)> = &self.light_field_layout[&class_id];
+            // SAFETY: pretty_name_cache is not mutated in the loop below (only
+            // self.array_owner_by_addr is inserted to), so the raw pointer remains valid.
+            let holder_name: *const String = if let Some(n) = self.pretty_name_cache.get(&class_id)
+            {
+                n as *const String
             } else {
                 let n = pretty_name(class_id, p1);
-                self.pretty_name_cache.insert(class_id, n.clone());
-                n
+                self.pretty_name_cache.insert(class_id, n);
+                self.pretty_name_cache.get(&class_id).unwrap() as *const String
             };
-            for (fname_id, offset) in layout {
+            for &(fname_id, offset) in unsafe { &*layout } {
                 let o = offset as usize;
                 if o + obj_ref_width <= blob.len() {
                     let pointee = read_ref(&blob[o..], obj_ref_width);
                     if pointee != 0 && !self.array_owner_by_addr.contains_key(&pointee) {
                         let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
                         self.array_owner_by_addr
-                            .insert(pointee, format!("{}#{}", holder_name, fname));
+                            .insert(pointee, format!("{}#{}", unsafe { &*holder_name }, fname));
                     }
                 }
                 if self.array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
