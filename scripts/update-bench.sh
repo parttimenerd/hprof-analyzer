@@ -96,8 +96,10 @@ run_mat() {
   local dir base
   dir=$(dirname "$dump")
   base=$(basename "$dump" .hprof)
-  # Remove MAT index files so we measure a cold parse, not cache reuse
-  rm -f "${dir}/${base}".*.index "${dir}/${base}".index 2>/dev/null || true
+  # Remove MAT index files so we measure a cold parse, not cache reuse.
+  # Use find instead of a glob because zsh (the ThinkStation default shell) errors
+  # on unmatched globs, and the rm || true would silently swallow the no-op.
+  find "$dir" -maxdepth 1 -name "${base}*.index" -delete 2>/dev/null || true
   /usr/bin/time -v bash "$MAT" -Xmx80g "$dump" > "$log" 2>&1 || true
   # Check for errors
   if grep -qi "FileNotFoundException\|Application error" "$log"; then
