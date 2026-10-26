@@ -862,6 +862,12 @@ impl HprofMcpServer {
     /// Redact a heap dump: zero primitive array contents and optionally scalar fields.
     #[tool(
         description = "Redact a Java heap dump (.hprof) so it is safe to share. \
+                       DISCLAIMER: redaction zeros data values but does NOT remove class names, \
+                       field names, method names, thread names, source file names, object graph \
+                       structure, or JVM metadata. The result can still reveal the application's \
+                       architecture, library versions, frameworks in use, and data-access patterns. \
+                       It significantly reduces leaked data but provides no privacy guarantee — \
+                       only share with parties who need to diagnose the memory issue.\n\
                        Two modes:\n\
                        - lean (default, complete=false): single pass, zeros all primitive array elements \
                          (byte[], char[], int[], long[], float[], double[], boolean[], short[]). \
