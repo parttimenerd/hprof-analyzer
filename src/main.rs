@@ -2365,6 +2365,10 @@ fn analyze_to_report_inner(
         g.type_ref_pairs = Some(pairs);
         g.type_ref_pair_fields = Some(pair_fields);
         g.obj_graph_edges = Some(obj_graph);
+        // fwd_field_name_idx and field_name_pool were only needed for the
+        // capture above; drop them now to free ~160 MB before inbound.
+        g.fwd_field_name_idx = None;
+        g.field_name_pool = None;
         crate::trace::probe("main: after capture_type_ref_and_obj_graph");
     }
 
@@ -3878,6 +3882,10 @@ fn run(
         g.type_ref_pairs = Some(pairs);
         g.type_ref_pair_fields = Some(pair_fields);
         g.obj_graph_edges = Some(obj_graph);
+        // fwd_field_name_idx and field_name_pool were only needed for the
+        // capture above; drop them now to free ~160 MB before inbound.
+        g.fwd_field_name_idx = None;
+        g.field_name_pool = None;
         crate::trace::probe("main: after capture_type_ref_and_obj_graph");
         t_dark!("capture_type_ref_and_obj_graph done");
     }
