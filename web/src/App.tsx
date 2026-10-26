@@ -475,6 +475,15 @@ const SECTION_LABELS: Record<string, string> = {
   "duplicate-strings": "Duplicate Strings",
 };
 
+// Navigate to a hash and push a browser history entry so the back button works.
+// replaceState was used previously, which ate the browser history.
+function navTo(hash: string) {
+  history.pushState(null, "", `#${hash}`);
+  // pushState doesn't fire hashchange; dispatch it manually so NavBreadcrumb
+  // and any other hashchange listeners stay in sync.
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
 function NavBreadcrumb() {
   // Store raw hashes only; resolve labels at render time so ObjGraphCtx
   // loading order doesn't drop entries recorded before context was ready.
@@ -493,7 +502,11 @@ function NavBreadcrumb() {
       });
     };
     window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
+    window.addEventListener("popstate", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("popstate", onHashChange);
+    };
   }, []);
 
   function labelFor(hash: string): string {
@@ -1366,7 +1379,7 @@ function LoaderCell({ label }: { label?: string | null }) {
 // Does NOT scroll — shows a nav-toast instead so the user stays in place.
 function pivotClass(cls: string) {
   window.dispatchEvent(new CustomEvent("pivot-class", { detail: cls }));
-  history.replaceState(null, "", "#dominator-analysis");
+  navTo("dominator-analysis");
   window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Dominator Analysis", sectionId: "dominator-analysis" } }));
 }
 
@@ -5589,7 +5602,7 @@ function DomGraphView({ pairs, idoms }: {
           <button className="show-more-btn" style={{ flexShrink: 0 }}
             onClick={() => fireInspect({ kind: "instances", cls: selected, page: 0 })}>Instances →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
-            onClick={() => { window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: selected })); history.replaceState(null, "", "#type-ref-graph"); window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } })); }}>Type Graph →</button>
+            onClick={() => { window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: selected })); navTo("type-ref-graph"); window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } })); }}>Type Graph →</button>
           <button className="show-more-btn" style={{ flexShrink: 0 }}
             onClick={() => pivotClass(selected)}>WhoHolds →</button>
         </div>
@@ -7414,7 +7427,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 </button>
                 <button className="show-more-btn" title="Open class in Object Graph Explorer" onClick={() => {
                   window.dispatchEvent(new CustomEvent("explore-class", { detail: selected }));
-                  history.replaceState(null, "", "#object-graph");
+                  navTo("object-graph");
                   window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Object Graph Explorer", sectionId: "object-graph" } }));
                 }}>
                   Explorer →
@@ -10132,7 +10145,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                     title={`Open ${currentNode.display_class} in Type Reference Graph`}
                     onClick={() => {
                       window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: currentNode.display_class }));
-                      history.replaceState(null, "", "#type-ref-graph");
+                      navTo("type-ref-graph");
                       window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } }));
                     }}>
                     Open in Type Graph →
@@ -11072,7 +11085,7 @@ function InspectorClassPage({ cls, histogram, report, onNavigate }: {
         <button className="show-more-btn"
           onClick={() => {
             window.dispatchEvent(new CustomEvent("trg-focus-class", { detail: cls }));
-            history.replaceState(null, "", "#type-ref-graph");
+            navTo("type-ref-graph");
             window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Updated in Type Graph", sectionId: "type-ref-graph" } }));
           }}>
           Type Graph →
@@ -11482,14 +11495,14 @@ function InspectorInstancePage({ idx, cls, onNavigate }: {
         </button>
         <button className="show-more-btn" title="Open in Object Graph Explorer to follow reference chains" onClick={() => {
           (window as any).__explorerNavigate?.("explore", idx);
-          history.replaceState(null, "", `#explore/${idx}`);
+          navTo(`explore/${idx}`);
           window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Loaded in Object Graph Explorer", sectionId: "object-graph" } }));
         }}>
           Object Explorer →
         </button>
         <button className="show-more-btn" title="Open in the dominator tree view of Object Graph Explorer" onClick={() => {
           (window as any).__explorerNavigate?.("domtree", idx);
-          history.replaceState(null, "", `#domtree/${idx}`);
+          navTo(`domtree/${idx}`);
           window.dispatchEvent(new CustomEvent("nav-toast", { detail: { label: "Loaded in Object Graph Explorer", sectionId: "object-graph" } }));
         }}>
           Dominator Tree →

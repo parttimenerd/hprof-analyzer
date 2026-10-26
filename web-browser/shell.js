@@ -276,12 +276,32 @@ let selectedFile = null;  // File object selected on the upload screen
 // Removed: analysis now runs inline before showing the shell.
 
 // ── Screen helpers ────────────────────────────────────────────────────────────
-function showScreen(id) {
+function showScreen(id, { pushHistory = true } = {}) {
   for (const sid of ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen']) {
     const el = document.getElementById(sid);
     if (el) el.style.display = sid === id ? 'flex' : 'none';
   }
+  // Keep the URL hash in sync so the browser back button navigates between screens
+  // rather than leaving the app entirely. upload-screen is the default (no hash).
+  if (pushHistory) {
+    const hash = id === 'upload-screen' ? '' : id;
+    if (window.location.hash.slice(1) !== hash) {
+      if (id === 'upload-screen') {
+        history.pushState({ screen: id }, '', location.pathname);
+      } else {
+        history.pushState({ screen: id }, '', '#' + hash);
+      }
+    }
+  }
 }
+
+// Restore the correct screen when the browser back/forward button is used.
+window.addEventListener('popstate', () => {
+  const hash = window.location.hash.slice(1);
+  const valid = ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen'];
+  const target = valid.includes(hash) ? hash : 'upload-screen';
+  showScreen(target, { pushHistory: false });
+});
 
 // ── Toast notifications ────────────────────────────────────────────────────────
 // showToast(msg, type='info'|'success'|'error', durationMs=3500)
