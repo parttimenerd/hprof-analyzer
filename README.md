@@ -45,7 +45,7 @@ If you are an AI assistant reading this README to understand what tools are avai
   See the [Cached interactive analysis](#cached-interactive-analysis) section for the full subcommand list.
 
 **Why use it:**
-- **Low memory.** Two-pass streaming keeps peak RSS well below the dump size for dumps ≥ 1 GiB (e.g. ~15 GiB on a 34 GiB dump). Tiny dumps have a fixed ~130–200 MiB floor. No heap-size flag to tune.
+- **Low memory.** Two-pass streaming keeps peak RSS well below the dump size for dumps ≥ 1 GiB (e.g. ~15 GiB on a 34 GiB dump, where MAT needs ~50–80 GiB of Java heap). Tiny dumps have a fixed ~130–200 MiB floor. No heap-size flag to tune.
 - **Broad JVM support.** Reads dumps from HotSpot, OpenJ9/IBM J9, and Android ART, including IBM J9 and ART-specific root tags.
 - **CI-friendly.** No prompts, no GUI. JSON output is stable enough to diff; use it to gate a build on retained-size regressions.
 - **Resilient.** Truncated dumps, corrupt gzip, and malformed records produce a partial report with a warning rather than a crash.
@@ -162,7 +162,7 @@ All REPL commands (`!top`, `!sort`, `!stats`, `!obj`, …) and the full OQL engi
 
 ## Analysis reports
 
-Run one command and get a report covering the same ground as Eclipse MAT's System Overview, Leak Suspects, and Top Consumers analyses, plus additional views. Peak RSS stays well below the dump size for dumps ≥ 1 GiB: ~15 GiB on a 34 GiB dump, with a fixed ~130–200 MiB floor for small dumps (see [Performance](#performance)). The report is a single file you can email, attach to a ticket, or diff in CI.
+Run one command and get a report covering the same ground as Eclipse MAT's System Overview, Leak Suspects, and Top Consumers analyses, plus additional views. Peak RSS stays well below the dump size for dumps ≥ 1 GiB: ~15 GiB on a 34 GiB dump, where MAT needs ~50–80 GiB of Java heap (see [Performance](#performance)). Tiny dumps have a fixed ~130–200 MiB floor. The report is a single file you can email, attach to a ticket, or diff in CI.
 
 Report sections:
 
@@ -717,7 +717,7 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 1
 | VS Code JVM (1.1 GiB) | 1.1 GiB | 18.8 s | 483 MiB | 27.6 s | 820 MiB | 28.8 s | 2.50 GiB |
 | HeapothesYs 16g | 11 GiB | 1:07 | 965 MiB | 1:41 | 2.19 GiB | 1:05 | 4.57 GiB |
 | HeapothesYs 28g | 20 GiB | 2:11 | 1.82 GiB | 3:15 | 3.73 GiB | 2:06 | 5.28 GiB |
-| Real-world 34g | 34 GiB | 15:01 | 14.57 GiB | 19:05 | 16.70 GiB | 2:19:17 | 5.18 GiB |
+| Real-world 34g | 34 GiB | 15:01 | 14.57 GiB | 19:05 | 16.70 GiB | ~2:20 (stale) | ~50 GiB (stale) |
 
 MAT was run with `ParseHeapDump.sh -Xmx80g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
 
