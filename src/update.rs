@@ -4,7 +4,9 @@
 //! current version, latest nightly build, and latest stable release.
 //!
 //! With a channel argument: downloads the archive for the current platform
-//! and atomically replaces the running binary.
+//! and atomically replaces the running binary.  Before replacing, shows
+//! the changelog (release notes) for every stable release between the
+//! currently running version and the target.
 //!
 //! The target triple is baked in at compile time (BUILD_TARGET) so no
 //! runtime detection is needed.
@@ -76,9 +78,31 @@ fn show_status() -> Result<(), String> {
     let nightly = fetch_release_info(Channel::Nightly);
     let latest = fetch_release_info(Channel::Latest);
 
-    println!("  nightly  {}", format_release_info(&nightly));
-    println!("  latest   {}", format_release_info(&latest));
+    println!("  nightly  {}", format_release_summary(&nightly));
+    println!("  latest   {}", format_release_summary(&latest));
     println!();
+
+    // Show changelog for latest stable releases newer than current version.
+    if let Ok(ref info) = latest {
+        if version_gt(&info.tag, CURRENT_VERSION) {
+            let changelog = fetch_changelog_since(CURRENT_VERSION);
+            match changelog {
+                Ok(entries) if !entries.is_empty() => {
+                    println!("Changes since {CURRENT_VERSION}:");
+                    println!();
+                    for entry in &entries {
+                        println!("  {} ({})", entry.tag, entry.published_at);
+                        for line in entry.body.lines().take(20) {
+                            println!("    {line}");
+                        }
+                        println!();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     println!("To update, run:");
     println!("  hprof-analyzer update nightly   # replace with latest nightly build");
     println!("  hprof-analyzer update latest    # replace with latest stable release");
@@ -87,60 +111,127 @@ fn show_status() -> Result<(), String> {
 
 /// Minimal GitHub release info we care about.
 struct ReleaseInfo {
+    tag: String,
     name: String,
     published_at: String,
-    body_first_line: String,
+    body: String,
+}
+
+struct ChangelogEntry {
+    tag: String,
+    published_at: String,
+    body: String,
 }
 
 fn fetch_release_info(channel: Channel) -> Result<ReleaseInfo, String> {
     let url = channel.api_url();
-    let mut resp = ureq::get(&url)
-        .header("User-Agent", "hprof-analyzer")
-        .header("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|e| format!("{e}"))?;
+    let json = fetch_json(&url)?;
+    parse_release_info(&json)
+}
 
-    if resp.status() != 200 {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    let json: serde_json::Value =
-        serde_json::from_reader(resp.body_mut().as_reader()).map_err(|e| format!("{e}"))?;
-
+fn parse_release_info(json: &serde_json::Value) -> Result<ReleaseInfo, String> {
+    let tag = json["tag_name"].as_str().unwrap_or("?").to_string();
     let name = json["name"].as_str().unwrap_or("?").to_string();
     let published_at = json["published_at"]
         .as_str()
         .unwrap_or("?")
-        // Trim the time portion — just show the date.
         .split('T')
         .next()
         .unwrap_or("?")
         .to_string();
-    // First non-empty line of the release body that contains "Commit:"
-    let body_first_line = json["body"]
-        .as_str()
-        .unwrap_or("")
-        .lines()
-        .find(|l| l.contains("Commit:"))
-        .map(|l| l.trim().to_string())
-        .unwrap_or_default();
+    let body = json["body"].as_str().unwrap_or("").to_string();
 
     Ok(ReleaseInfo {
+        tag,
         name,
         published_at,
-        body_first_line,
+        body,
     })
 }
 
-fn format_release_info(r: &Result<ReleaseInfo, String>) -> String {
+/// Fetch all stable releases newer than `since_version`, ordered newest-first.
+fn fetch_changelog_since(since_version: &str) -> Result<Vec<ChangelogEntry>, String> {
+    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=30");
+    let json = fetch_json(&url)?;
+
+    let releases = json.as_array().ok_or("expected JSON array")?;
+    let mut entries = Vec::new();
+
+    for release in releases {
+        let tag = release["tag_name"].as_str().unwrap_or("").to_string();
+        // Skip nightly / pre-release / draft entries.
+        if tag == "nightly"
+            || release["prerelease"].as_bool().unwrap_or(false)
+            || release["draft"].as_bool().unwrap_or(false)
+        {
+            continue;
+        }
+        // Only include versions strictly newer than since_version.
+        if !version_gt(&tag, since_version) {
+            break; // GitHub returns newest-first; once we hit something ≤ current, stop.
+        }
+        let published_at = release["published_at"]
+            .as_str()
+            .unwrap_or("?")
+            .split('T')
+            .next()
+            .unwrap_or("?")
+            .to_string();
+        let body = release["body"].as_str().unwrap_or("").to_string();
+        entries.push(ChangelogEntry {
+            tag,
+            published_at,
+            body,
+        });
+    }
+
+    Ok(entries)
+}
+
+/// Return true if `tag` (like "v0.3.0" or "0.3.0") is strictly newer than
+/// `current` (like "0.2.0").  Falls back to string comparison if parsing
+/// fails, so unknown formats never hard-error.
+fn version_gt(tag: &str, current: &str) -> bool {
+    fn strip(s: &str) -> &str {
+        s.trim_start_matches('v')
+    }
+    fn parse(s: &str) -> Option<(u64, u64, u64)> {
+        let mut parts = strip(s).splitn(3, '.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next().unwrap_or("0").parse().ok()?;
+        Some((major, minor, patch))
+    }
+    match (parse(tag), parse(current)) {
+        (Some(a), Some(b)) => a > b,
+        _ => strip(tag) > strip(current),
+    }
+}
+
+fn format_release_summary(r: &Result<ReleaseInfo, String>) -> String {
     match r {
         Ok(info) => {
-            let commit = if info.body_first_line.is_empty() {
+            // Show first non-empty content line from the body (skip headers/blanks).
+            let preview = info
+                .body
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with('#'))
+                .unwrap_or("");
+            let preview_str = if preview.is_empty() {
                 String::new()
             } else {
-                format!("  ({})", info.body_first_line)
+                let truncated = if preview.len() > 72 {
+                    format!("{}…", &preview[..72])
+                } else {
+                    preview.to_string()
+                };
+                format!("  ({truncated})")
             };
-            format!("{} — published {}{}", info.name, info.published_at, commit)
+            format!(
+                "{} — published {}{}",
+                info.name, info.published_at, preview_str
+            )
         }
         Err(e) => format!("(could not fetch: {e})"),
     }
@@ -150,6 +241,41 @@ fn format_release_info(r: &Result<ReleaseInfo, String>) -> String {
 fn do_update(channel: Channel) -> Result<(), String> {
     let exe =
         std::env::current_exe().map_err(|e| format!("cannot locate current executable: {e}"))?;
+
+    // Show changelog before downloading.
+    if channel == Channel::Latest {
+        match fetch_changelog_since(CURRENT_VERSION) {
+            Ok(entries) if !entries.is_empty() => {
+                eprintln!("Changes since {CURRENT_VERSION}:");
+                eprintln!();
+                for entry in &entries {
+                    eprintln!("  {} ({})", entry.tag, entry.published_at);
+                    for line in entry.body.lines().take(20) {
+                        eprintln!("    {line}");
+                    }
+                    eprintln!();
+                }
+            }
+            Ok(_) => {
+                eprintln!("Already at the latest stable version ({CURRENT_VERSION}).");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("(could not fetch changelog: {e})");
+            }
+        }
+    } else {
+        // Nightly: show the release body as a brief summary.
+        if let Ok(info) = fetch_release_info(channel) {
+            if !info.body.is_empty() {
+                eprintln!("Nightly build: {}", info.name);
+                for line in info.body.lines().take(10) {
+                    eprintln!("  {line}");
+                }
+                eprintln!();
+            }
+        }
+    }
 
     let (archive_name, is_zip) = archive_name();
     let url = format!("{base}/{archive_name}", base = channel.download_base());
@@ -251,6 +377,20 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
+    let mut resp = ureq::get(url)
+        .header("User-Agent", "hprof-analyzer")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| format!("{e}"))?;
+
+    if resp.status() != 200 {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    serde_json::from_reader(resp.body_mut().as_reader()).map_err(|e| format!("{e}"))
+}
+
 /// Extract the `hprof-analyzer[.exe]` binary from a `.tar.gz` archive.
 fn extract_from_tar_gz(data: &[u8]) -> Result<Vec<u8>, String> {
     use flate2::read::GzDecoder;
@@ -309,4 +449,19 @@ fn extract_from_zip(data: &[u8]) -> Result<Vec<u8>, String> {
     Err(format!(
         "archive did not contain a `hprof-analyzer` binary for target `{TARGET}`"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_gt_basic() {
+        assert!(version_gt("v0.3.0", "0.2.0"));
+        assert!(version_gt("0.2.1", "0.2.0"));
+        assert!(version_gt("v1.0.0", "0.9.9"));
+        assert!(!version_gt("v0.2.0", "0.2.0"));
+        assert!(!version_gt("v0.1.9", "0.2.0"));
+        assert!(!version_gt("0.2.0", "v0.2.0"));
+    }
 }
