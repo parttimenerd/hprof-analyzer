@@ -71,7 +71,7 @@ fn parse_query_path_depth(s: &str) -> Result<usize, String> {
     Ok(n)
 }
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum, ValueHint, builder::PossibleValue};
 use clap_complete::Shell;
 
 /// Analyze a heap dump or re-render a saved report. The input is sniffed:
@@ -105,7 +105,8 @@ use clap_complete::Shell;
         OQL grammar, the -- @viz chart directive, and the --query= equals-form\n  \
         gotcha are documented in docs/OQL.md.\n\n\
         Install zsh completions:\n  \
-        hprof-analyzer completions zsh > \"${fpath[1]}/_hprof-analyzer\"",
+        hprof-analyzer completions zsh > \"${fpath[1]}/_hprof-analyzer\"\n  \
+        Then start a new shell (or run: exec zsh) for completions to take effect.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -231,7 +232,11 @@ struct Cli {
     ///   --obj-graph          → small  (100 edges/obj, ~1–3 MB delta)
     ///   --obj-graph=medium   → medium (150 edges/obj, ~2–5 MB delta)
     ///   --obj-graph=large    → large  (300 edges/obj, ~5–15 MB delta)
-    #[arg(long, num_args = 0..=1, default_missing_value = "small", value_name = "TIER")]
+    #[arg(long, num_args = 0..=1, default_missing_value = "small", value_name = "TIER", value_parser = [
+        PossibleValue::new("small").help("100 edges/obj, ~1–3 MB report delta (default)"),
+        PossibleValue::new("medium").help("150 edges/obj, ~2–5 MB report delta"),
+        PossibleValue::new("large").help("300 edges/obj, ~5–15 MB report delta"),
+    ])]
     obj_graph: Option<String>,
 
     /// Collection-detail size preset for --collections / --full-analysis.
@@ -245,7 +250,12 @@ struct Cli {
     ///   --size max     → original uncapped limits (10M edges, 200k collections)
     ///
     /// Only affects --collections / --full-analysis; ignored for basic analysis.
-    #[arg(long, default_value = "default", value_name = "SIZE")]
+    #[arg(long, default_value = "default", value_name = "SIZE", value_parser = [
+        PossibleValue::new("small").help("1M edges, 10k collections tracked; lowest RSS"),
+        PossibleValue::new("default").help("2.5M edges, 50k collections; balanced (default)"),
+        PossibleValue::new("large").help("5M edges, 100k collections; richer output"),
+        PossibleValue::new("max").help("10M edges, 200k collections; uncapped"),
+    ])]
     size: String,
 
     /// Embed the React app bundle as plain readable JS in the HTML report
@@ -390,11 +400,39 @@ enum Cmd {
     ///   claude mcp add hprof -- hprof-analyzer mcp
     Mcp {
         /// Pre-load this dump on startup (faster for single-dump sessions).
-        #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+        #[arg(long, value_name = "HPROF", value_hint = ValueHint::FilePath)]
         dump: Option<String>,
     },
-    /// Redact a heap dump: zero data values while preserving the object graph
-    /// (IDs, class names, field names, reference fields).
+    /// Reduce data exposure in a heap dump before sharing — but read the
+    /// disclaimer below before treating the result as safe.
+    ///
+    /// !! DISCLAIMER — what redaction does NOT remove !!
+    ///
+    /// Redaction zeros data values (array bytes, scalar fields) but the
+    /// following information is always preserved so the file remains a valid,
+    /// browsable HPROF dump:
+    ///
+    ///   - All class names (e.g. com.example.PaymentService)
+    ///
+    ///   - All field names (e.g. password, apiKey, connectionString)
+    ///
+    ///   - All method names and source file names (in thread stack frames)
+    ///
+    ///   - Thread names (java.lang.Thread.name)
+    ///
+    ///   - Object graph structure: which objects reference which, retained sizes
+    ///
+    ///   - JVM internal metadata: class loader hierarchy, GC roots
+    ///
+    ///   - In LEAN mode also: scalar instance fields (int/long/boolean on objects),
+    ///     static field values, and STRING_IN_UTF8 symbol table entries —
+    ///     annotation literals like @Value("${spring.datasource.url}") survive
+    ///
+    /// The redacted file can still reveal the application's architecture,
+    /// library versions, which frameworks are in use, and data-access patterns.
+    /// It is NOT suitable for sharing with untrusted parties or publishing
+    /// publicly. Use it to share with colleagues or vendors who need to diagnose
+    /// a memory issue and who would otherwise need the raw dump.
     ///
     /// TWO MODES:
     ///
@@ -522,7 +560,26 @@ enum HeapCmd {
         /// Section to print: leaks, top, threads, overview, triage, waste, indicators,
         /// retainers, arrays, collections, references, dominators, components, alloc_sites,
         /// thread_locals, framework, field_stats, or all (default).
-        #[arg(long, value_name = "SECTION")]
+        #[arg(long, value_name = "SECTION", value_parser = [
+            PossibleValue::new("triage").help("Severity-tagged signals; best first call for diagnosis"),
+            PossibleValue::new("leaks").help("Leak suspects with root paths and dominator tree"),
+            PossibleValue::new("top").help("Biggest objects and classes by retained size"),
+            PossibleValue::new("overview").help("Heap totals, object count, identifier size"),
+            PossibleValue::new("threads").help("Per-thread retained sizes and stack traces"),
+            PossibleValue::new("waste").help("Duplicate strings and empty collections"),
+            PossibleValue::new("indicators").help("Anon classes, ThreadLocal null keys, DirectByteBuffer total"),
+            PossibleValue::new("retainers").help("Top stack frames/fields by retained size"),
+            PossibleValue::new("arrays").help("Array length distribution"),
+            PossibleValue::new("collections").help("Collection fill ratios and map load factors"),
+            PossibleValue::new("references").help("Soft/Weak/Phantom reference counts"),
+            PossibleValue::new("dominators").help("Big-drop objects (retain >> largest child)"),
+            PossibleValue::new("components").help("Retained heap per class loader"),
+            PossibleValue::new("alloc_sites").help("Allocation sites"),
+            PossibleValue::new("thread_locals").help("Thread-local variable analysis"),
+            PossibleValue::new("framework").help("Framework-specific analysis"),
+            PossibleValue::new("field_stats").help("Field statistics"),
+            PossibleValue::new("all").help("All sections (default)"),
+        ])]
         section: Option<String>,
         /// Emit JSON instead of Markdown.
         #[arg(long)]
@@ -589,7 +646,13 @@ enum HeapCmd {
     /// Print OQL documentation.
     Docs {
         /// Topic: syntax, attributes, examples, workflow, or all (default).
-        #[arg(long, value_name = "TOPIC")]
+        #[arg(long, value_name = "TOPIC", value_parser = [
+            PossibleValue::new("syntax").help("OQL syntax reference"),
+            PossibleValue::new("attributes").help("@objectId, @retainedHeapSize, and other built-in attributes"),
+            PossibleValue::new("examples").help("20 ready-to-run query patterns"),
+            PossibleValue::new("workflow").help("Recommended investigation sequence"),
+            PossibleValue::new("all").help("All documentation (default)"),
+        ])]
         topic: Option<String>,
     },
     /// List the 20 built-in named query views (ready-to-run OQL, no dump needed).
@@ -1063,7 +1126,20 @@ fn main() {
         },
         Some(Cmd::Completions { shell }) => {
             let mut cmd = Cli::command();
-            clap_complete::generate(shell, &mut cmd, "hprof-analyzer", &mut io::stdout());
+            if shell == Shell::Zsh {
+                let mut buf = Vec::new();
+                clap_complete::generate(shell, &mut cmd, "hprof-analyzer", &mut buf);
+                let script = String::from_utf8_lossy(&buf);
+                print!("{}", patch_zsh_completions(&script));
+            } else if shell == Shell::Bash {
+                let mut buf = Vec::new();
+                clap_complete::generate(shell, &mut cmd, "hprof-analyzer", &mut buf);
+                let script = String::from_utf8_lossy(&buf);
+                let flags = classify_bash_flags(&cmd);
+                print!("{}", patch_bash_completions(&script, &flags));
+            } else {
+                clap_complete::generate(shell, &mut cmd, "hprof-analyzer", &mut io::stdout());
+            }
         }
         Some(Cmd::Dev { cmd }) => match cmd {
             DevCmd::EmitSchema => {
@@ -1818,8 +1894,187 @@ fn print_dom_tree(node: &serde_json::Value, indent: usize) {
     }
 }
 
+/// File-type classification for a bash completion flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BashFileKind {
+    Hprof,
+    Json,
+}
+
+/// Walk the Clap command tree and return a map of `--flag` → `BashFileKind`
+/// for every named option whose help text indicates it accepts a heap dump
+/// (`.hprof`) or a JSON report (`.json`).  New args are picked up automatically
+/// as long as their help text follows the same convention.
+fn classify_bash_flags(cmd: &clap::Command) -> std::collections::HashMap<String, BashFileKind> {
+    let mut out = std::collections::HashMap::new();
+    classify_bash_flags_rec(cmd, &mut out);
+    out
+}
+
+fn classify_bash_flags_rec(
+    cmd: &clap::Command,
+    out: &mut std::collections::HashMap<String, BashFileKind>,
+) {
+    use clap::ValueHint;
+    for arg in cmd.get_arguments() {
+        if !matches!(arg.get_value_hint(), ValueHint::FilePath) {
+            continue;
+        }
+        // Classify by value_name convention:
+        //   HPROF → heap dump input  (*.hprof *.hprof.gz …)
+        //   JSON  → report JSON input (*.json *.json.gz)
+        // Developers adding a new flag that accepts a dump should set
+        // `value_name = "HPROF"` (or "JSON") to get automatic filtering.
+        // Fallback: also check the help text for `.hprof` / `.json report`.
+        let vname = arg
+            .get_value_names()
+            .and_then(|v| v.first())
+            .map(|s| s.as_str().to_ascii_uppercase())
+            .unwrap_or_default();
+        let help = arg
+            .get_help()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let kind = if vname == "HPROF" || help.contains(".hprof") || help.contains("heap dump") {
+            Some(BashFileKind::Hprof)
+        } else if vname == "JSON" || (help.contains(".json") && help.contains("report")) {
+            Some(BashFileKind::Json)
+        } else {
+            None
+        };
+        if let Some(kind) = kind {
+            if let Some(long) = arg.get_long() {
+                out.insert(format!("--{long}"), kind);
+            }
+        }
+    }
+    for sub in cmd.get_subcommands() {
+        classify_bash_flags_rec(sub, out);
+    }
+}
+
+/// Patch the clap-generated bash completion script to filter file completions
+/// by extension for hprof and JSON report args.
+///
+/// For each named arg that takes a heap dump or JSON report, replaces the bare
+/// `compgen -f "${cur}"` with a filtered version that includes directories
+/// (for navigation) and only files matching the relevant extensions.
+fn patch_bash_completions(
+    script: &str,
+    flags: &std::collections::HashMap<String, BashFileKind>,
+) -> String {
+    // Regex patterns for grep -E filtering.
+    const HPROF_PATTERN: &str = r"\.(hprof|hprof\.gz|hprof\.zip|tgz|tar\.gz)$";
+    const JSON_PATTERN: &str = r"\.(json|json\.gz)$";
+
+    let lines: Vec<&str> = script.lines().collect();
+    let mut out = String::with_capacity(script.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        // Look for a case arm line ending in `)` starting with `--flag`.
+        // Handles `--flag)` and `--flag|-s)`.
+        let trimmed = line.trim();
+        let pending_kind: Option<BashFileKind> =
+            if trimmed.ends_with(')') && trimmed.starts_with("--") {
+                let flag_token: &str = trimmed
+                    .trim_end_matches(')')
+                    .split('|')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                flags.get(flag_token).copied()
+            } else {
+                None
+            };
+
+        if let Some(kind) = pending_kind {
+            out.push_str(line);
+            out.push('\n');
+            i += 1;
+            while i < lines.len() {
+                let next = lines[i];
+                let nt = next.trim();
+                if nt.starts_with("COMPREPLY=($(compgen -f") {
+                    let pattern = match kind {
+                        BashFileKind::Hprof => HPROF_PATTERN,
+                        BashFileKind::Json => JSON_PATTERN,
+                    };
+                    // Directories for navigation + extension-filtered files.
+                    let indent = &next[..next.len() - next.trim_start().len()];
+                    out.push_str(&format!(
+                        "{indent}COMPREPLY=( $(compgen -d -- \"${{cur}}\") $(compgen -f -- \"${{cur}}\" | grep -E '{pattern}') )\n"
+                    ));
+                } else {
+                    out.push_str(next);
+                    out.push('\n');
+                }
+                let nt2 = next.trim();
+                if nt2 == ";;" || nt2 == "esac" {
+                    break;
+                }
+                i += 1;
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+        i += 1;
+    }
+
+    // Preserve trailing-newline parity with the input.
+    if out.ends_with('\n') && !script.ends_with('\n')
+        || out.ends_with("\n\n") && script.ends_with('\n')
+    {
+        out.truncate(out.len() - 1);
+    }
+    out
+}
+
 /// The default (no-subcommand) command: sniff the input and either run the
 /// full analyze pipeline (HPROF) or re-render a saved Report JSON.
+fn patch_zsh_completions(script: &str) -> String {
+    // clap emits `_files` for every FilePath hint, completing all files.
+    // Patch the generated zsh script line-by-line: for args that accept heap
+    // dumps or JSON reports, replace the bare `_files` action with an
+    // extension-filtered variant. Output paths and other file args stay as-is.
+    const HPROF_GLOB: &str = r#"_files -g "*.hprof *.hprof.gz *.hprof.zip *.tgz *.tar.gz""#;
+    const JSON_GLOB: &str = r#"_files -g "*.json *.json.gz""#;
+
+    let result: String = script
+        .lines()
+        .map(|line| {
+            if !line.contains(":_files'") {
+                return format!("{line}\n");
+            }
+            let is_hprof = line.contains(":input -- ")
+                || line.contains(":input:_files'")
+                || line.contains(":dump -- ")
+                || line.contains(":path -- Path to the .hprof")
+                || line.contains("::path -- Path to the .hprof")
+                || line.contains("--dump=[")
+                || line.contains(":output -- Output path (.hprof")
+                || line.contains(":input -- Path to the heap dump");
+            let is_json = line.contains(":ours -- ") || line.contains("::reports -- Report JSON");
+
+            if is_hprof {
+                format!("{}\n", line.replace(":_files'", &format!(":{HPROF_GLOB}'")))
+            } else if is_json {
+                format!("{}\n", line.replace(":_files'", &format!(":{JSON_GLOB}'")))
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+
+    if script.ends_with('\n') && result.ends_with("\n\n") {
+        result[..result.len() - 1].to_owned()
+    } else {
+        result
+    }
+}
+
 fn run_default(cli: Cli) {
     let Some(input) = cli.input else {
         // No subcommand and no input: this is a usage error, so write help to
@@ -4654,6 +4909,258 @@ mod cli_tests {
         assert!(
             parse_query_path_depth("abc").is_err(),
             "non-numeric must error"
+        );
+    }
+}
+
+#[cfg(test)]
+mod completions_tests {
+    use super::*;
+    use clap::CommandFactory;
+    use clap_complete::Shell;
+
+    fn zsh_script() -> String {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Zsh, &mut cmd, "hprof-analyzer", &mut buf);
+        let raw = String::from_utf8(buf).unwrap();
+        patch_zsh_completions(&raw)
+    }
+
+    fn files_actions(script: &str) -> Vec<String> {
+        script
+            .lines()
+            .filter(|l| l.contains(":_files"))
+            .map(|l| l.trim().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn hprof_inputs_use_extension_filter() {
+        let script = zsh_script();
+        // Every positional/named arg that accepts a dump path must use the glob filter.
+        let hprof_glob = r#"_files -g "*.hprof *.hprof.gz *.hprof.zip *.tgz *.tar.gz""#;
+        for line in files_actions(&script) {
+            let is_hprof_arg = line.contains(":input -- ")
+                || line.contains(":input:_files")
+                || line.contains(":dump -- ")
+                || line.contains(":path -- Path to the .hprof")
+                || line.contains("::path -- Path to the .hprof")
+                || line.contains("--dump=[")
+                || line.contains(":output -- Output path (.hprof")
+                || line.contains(":input -- Path to the heap dump");
+            if is_hprof_arg {
+                assert!(
+                    line.contains(hprof_glob),
+                    "hprof arg missing extension filter:\n  {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn json_inputs_use_extension_filter() {
+        let script = zsh_script();
+        let json_glob = r#"_files -g "*.json *.json.gz""#;
+        for line in files_actions(&script) {
+            let is_json_arg =
+                line.contains(":ours -- ") || line.contains("::reports -- Report JSON");
+            if is_json_arg {
+                assert!(
+                    line.contains(json_glob),
+                    "json arg missing extension filter:\n  {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn output_paths_and_other_args_are_unrestricted() {
+        let script = zsh_script();
+        // These args must NOT have an extension filter — the user picks the extension.
+        let unrestricted = [
+            "::output -- Output path; writes to stdout",
+            ":OUTPUT:_files",
+            ":OUTPUT:_files",
+            "--query-file=",
+            "--collection-config=",
+            "--bundle-path=",
+            "--mat-binary=",
+        ];
+        for line in files_actions(&script) {
+            let is_unrestricted = unrestricted.iter().any(|pat| line.contains(pat));
+            if is_unrestricted {
+                assert!(
+                    !line.contains("_files -g"),
+                    "output/other arg should not have extension filter:\n  {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_bare_files_on_hprof_args() {
+        // Inverse of hprof_inputs_use_extension_filter: no hprof-description line
+        // should end with bare `:_files'` (without a -g glob).
+        let script = zsh_script();
+        for line in script.lines() {
+            if !line.contains(":_files'") {
+                continue;
+            }
+            // bare _files = ends with `:_files'` not followed by ` -g`
+            let is_hprof_arg = line.contains(":input -- ")
+                || line.contains(":input:_files'")
+                || line.contains(":dump -- ")
+                || line.contains(":path -- Path to the .hprof")
+                || line.contains("::path -- Path to the .hprof")
+                || line.contains("--dump=[")
+                || line.contains(":output -- Output path (.hprof")
+                || line.contains(":input -- Path to the heap dump");
+            if is_hprof_arg {
+                assert!(
+                    !line.contains(":_files'"),
+                    "hprof arg still has bare _files (not filtered):\n  {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn script_is_valid_zsh_compdef() {
+        let script = zsh_script();
+        assert!(
+            script.starts_with("#compdef hprof-analyzer"),
+            "script must start with #compdef"
+        );
+        assert!(
+            script.contains("_hprof-analyzer()"),
+            "must define completion fn"
+        );
+    }
+
+    #[test]
+    fn section_arg_has_value_completions() {
+        let script = zsh_script();
+        // Key sections should appear as named completions, not _default
+        for section in ["triage", "leaks", "overview", "threads", "waste"] {
+            assert!(
+                script.contains(&format!("{section}\\:")),
+                "--section is missing completion for '{section}'"
+            );
+        }
+        // Must not fall back to _default for --section
+        assert!(
+            !script.contains(":SECTION:_default"),
+            "--section must not use _default"
+        );
+    }
+
+    #[test]
+    fn topic_arg_has_value_completions() {
+        let script = zsh_script();
+        for topic in ["syntax", "attributes", "examples", "workflow"] {
+            assert!(
+                script.contains(&format!("{topic}\\:")),
+                "--topic is missing completion for '{topic}'"
+            );
+        }
+        assert!(
+            !script.contains(":TOPIC:_default"),
+            "--topic must not use _default"
+        );
+    }
+
+    #[test]
+    fn obj_graph_tier_has_value_completions() {
+        let script = zsh_script();
+        for tier in ["small", "medium", "large"] {
+            // tiers appear in the TIER completions block
+            assert!(
+                script.contains(&format!("{tier}\\:")),
+                "--obj-graph is missing completion for tier '{tier}'"
+            );
+        }
+        assert!(
+            !script.contains(":TIER:_default"),
+            "--obj-graph must not use _default"
+        );
+    }
+
+    #[test]
+    fn size_arg_has_value_completions() {
+        let script = zsh_script();
+        for size in ["small", "default", "large", "max"] {
+            assert!(
+                script.contains(&format!("{size}\\:")),
+                "--size is missing completion for '{size}'"
+            );
+        }
+        assert!(
+            !script.contains(":SIZE:_default"),
+            "--size must not use _default"
+        );
+    }
+
+    fn bash_script() -> String {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Bash, &mut cmd, "hprof-analyzer", &mut buf);
+        let raw = String::from_utf8(buf).unwrap();
+        let cmd2 = Cli::command();
+        let flags = classify_bash_flags(&cmd2);
+        patch_bash_completions(&raw, &flags)
+    }
+
+    fn bash_compgen_lines(script: &str) -> Vec<String> {
+        script
+            .lines()
+            .filter(|l| l.contains("compgen -f") || l.contains("grep -E"))
+            .map(|l| l.trim().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn bash_hprof_flags_use_extension_filter() {
+        let script = bash_script();
+        // Verify the script contains extension-filtered completion for hprof files.
+        let has_filter = script
+            .lines()
+            .any(|l| l.contains("grep -E") && l.contains("hprof"));
+        assert!(
+            has_filter,
+            "bash completions must contain hprof extension filter (grep -E line)"
+        );
+    }
+
+    #[test]
+    fn bash_unfiltered_flags_stay_unfiltered() {
+        let script = bash_script();
+        // --collection-config, --query-file, --bundle-path, --mat-binary, --port
+        // have no hprof/json hint in their help text — they should NOT be filtered.
+        // At least one unfiltered compgen -f must remain.
+        let unfiltered = bash_compgen_lines(&script)
+            .into_iter()
+            .filter(|l| {
+                // An unfiltered line uses bare compgen -f, not our grep wrapper
+                l.contains("compgen -f") && !l.contains("grep -E")
+            })
+            .count();
+        assert!(
+            unfiltered > 0,
+            "expected some unfiltered compgen -f lines to remain for output/config args"
+        );
+    }
+
+    #[test]
+    fn bash_script_defines_completion_function() {
+        let script = bash_script();
+        assert!(
+            script.contains("_hprof__analyzer()"),
+            "bash completion script must define the _hprof__analyzer function"
+        );
+        assert!(
+            script.contains("complete -F _hprof__analyzer"),
+            "bash completion script must register the completion function"
         );
     }
 }

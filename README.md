@@ -76,6 +76,35 @@ sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
 hprof-analyzer heap.hprof report.html
 ```
 
+### Shell completions
+
+`hprof-analyzer` ships tab-completion for **zsh** and **bash**. Completions filter file arguments by extension — only `.hprof` and related files are shown for dump inputs, and only `.json` files for report inputs.
+
+**zsh**
+
+```sh
+hprof-analyzer completions zsh > "${fpath[1]}/_hprof-analyzer"
+exec zsh   # reload the shell to activate completions
+```
+
+If you see a permission error, pick any directory on your `$fpath`:
+
+```sh
+echo $fpath
+hprof-analyzer completions zsh > /usr/local/share/zsh/site-functions/_hprof-analyzer
+exec zsh
+```
+
+**bash**
+
+```sh
+hprof-analyzer completions bash > ~/.local/share/bash-completion/completions/hprof-analyzer
+# Or, for system-wide completions:
+sudo hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
+```
+
+Then open a new shell (or run `source ~/.local/share/bash-completion/completions/hprof-analyzer`) to activate.
+
 Compressed dumps are read transparently — no manual decompression needed:
 
 | Format | Notes |
