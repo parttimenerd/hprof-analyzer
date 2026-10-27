@@ -1,0 +1,9 @@
+# Heap dump and its analysis cache (too large for git).
+*.hprof
+*.hprof-cache/
+
+# Maven build output.
+target/
+
+# IDE files.
+.idea/
