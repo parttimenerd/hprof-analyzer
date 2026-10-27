@@ -2042,6 +2042,13 @@ fn patch_zsh_completions(script: &str) -> String {
     const HPROF_GLOB: &str = r#"_files -g "*.hprof *.hprof.gz *.hprof.zip *.tgz *.tar.gz""#;
     const JSON_GLOB: &str = r#"_files -g "*.json *.json.gz""#;
 
+    // clap puts the optional `input` and `output` positionals before the subcommand
+    // position in _arguments, so typing a subcommand name (e.g. "heap") consumes it
+    // as `input` and file completions bleed in alongside subcommand names.  Fix by
+    // moving the subcommand and state specs first, then adjusting the $line index
+    // (subcommand is now $line[1] instead of $line[3]).
+    let script = fix_toplevel_subcommand_order(script);
+
     let result: String = script
         .lines()
         .map(|line| {
@@ -2073,6 +2080,66 @@ fn patch_zsh_completions(script: &str) -> String {
     } else {
         result
     }
+}
+
+/// clap generates the top-level `_arguments` block with the optional `input` and `output`
+/// positionals *before* the subcommand spec.  zsh processes these in order, so the first
+/// word after the program name (e.g. "heap") is consumed as the `input` positional rather
+/// than as a subcommand, which causes file completions to bleed into subcommand positions.
+///
+/// This function swaps the order so the subcommand spec comes first:
+///   before: ::input … :: :_hprof-analyzer_commands  *::: :->hprof-analyzer
+///   after:  :: :_hprof-analyzer_commands  *::: :->hprof-analyzer  ::input … ::output …
+///
+/// It also updates the three `$line[3]` references in the state dispatcher to `$line[1]`
+/// since the subcommand is now the first positional.
+fn fix_toplevel_subcommand_order(script: &str) -> String {
+    // Match the 4-line block that ends the top-level _arguments spec.  These lines are
+    // unique: no subcommand's own _arguments block has an "::input -- A `.hprof`" line.
+    let input_marker = "'::input -- A ";
+    let output_marker = "'::output -- ";
+    let cmd_marker = r#"":: :_hprof-analyzer_commands" \"#;
+    let state_marker = r#""*::: :->hprof-analyzer" \"#;
+
+    let lines: Vec<&str> = script.lines().collect();
+    let Some(block_start) = lines.windows(4).position(|w| {
+        w[0].contains(input_marker)
+            && w[1].contains(output_marker)
+            && w[2].trim() == cmd_marker
+            && w[3].trim() == state_marker
+    }) else {
+        return script.to_owned();
+    };
+
+    // Rebuild the script with the subcommand + state lines moved before input/output.
+    let mut out = String::with_capacity(script.len());
+    for (i, line) in lines.iter().enumerate() {
+        if i == block_start {
+            // Emit: subcommand spec, state spec, input, output (swapped order)
+            out.push_str(lines[block_start + 2]);
+            out.push('\n');
+            out.push_str(lines[block_start + 3]);
+            out.push('\n');
+            out.push_str(lines[block_start]);
+            out.push('\n');
+            out.push_str(lines[block_start + 1]);
+            out.push('\n');
+        } else if i > block_start && i < block_start + 4 {
+            // Already emitted above; skip.
+        } else {
+            // Fix the three $line[3] references in the top-level state dispatcher.
+            // They all appear within ~10 lines after the state marker.
+            let fixed = line.replace("$line[3]", "$line[1]");
+            out.push_str(&fixed);
+            out.push('\n');
+        }
+    }
+
+    // lines() strips the trailing newline; re-add exactly one if the input had one.
+    if out.ends_with('\n') && (!script.ends_with('\n') || out.ends_with("\n\n")) {
+        out.truncate(out.len() - 1);
+    }
+    out
 }
 
 fn run_default(cli: Cli) {
@@ -5043,6 +5110,34 @@ mod completions_tests {
         assert!(
             script.contains("_hprof-analyzer()"),
             "must define completion fn"
+        );
+    }
+
+    #[test]
+    fn subcommand_spec_precedes_input_positional() {
+        // The subcommand position must come before ::input/::output in the top-level
+        // _arguments block so that typing "heap <TAB>" completes heap's subcommands
+        // rather than file paths.  Also verify $line[1] (not $line[3]) is used in the
+        // state dispatcher after the reorder.
+        let script = zsh_script();
+        let cmd_pos = script
+            .find(r#"":: :_hprof-analyzer_commands""#)
+            .expect("subcommand spec not found");
+        let input_pos = script
+            .find("'::input -- A ")
+            .expect("input positional not found");
+        assert!(
+            cmd_pos < input_pos,
+            "subcommand spec must appear before ::input positional in _arguments"
+        );
+        assert!(
+            !script.contains("$line[3]"),
+            "top-level state dispatcher must use $line[1] after reorder, not $line[3]"
+        );
+        // $line[1] must appear in the top-level state dispatcher context string
+        assert!(
+            script.contains("hprof-analyzer-command-$line[1]"),
+            "curcontext must reference $line[1]"
         );
     }
 
