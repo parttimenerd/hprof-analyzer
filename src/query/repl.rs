@@ -1574,10 +1574,30 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "top" | "head" => {
-                            let n = if rest.trim().is_empty() {
+                            let n: usize = if rest.trim().is_empty() {
                                 10
                             } else {
-                                rest.trim().parse::<usize>().unwrap_or(0)
+                                match rest.trim().parse::<usize>() {
+                                    Ok(v) if v > 0 => v,
+                                    Ok(_) => {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}error: N must be a positive integer (got 0){cr}"
+                                        )?;
+                                        stdout.flush()?;
+                                        continue;
+                                    }
+                                    Err(_) => {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}error: invalid argument {:?} — expected a positive integer{cr}",
+                                            rest.trim()
+                                        )?;
+                                        writeln!(stdout, "{cd}usage: !top [N]  (default 10){cr}")?;
+                                        stdout.flush()?;
+                                        continue;
+                                    }
+                                }
                             };
                             if n > 0 {
                                 let before_len = last_result.as_ref().map(|r| r.rows.len());
@@ -1617,10 +1637,30 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "tail" => {
-                            let n = if rest.trim().is_empty() {
+                            let n: usize = if rest.trim().is_empty() {
                                 10
                             } else {
-                                rest.trim().parse::<usize>().unwrap_or(0)
+                                match rest.trim().parse::<usize>() {
+                                    Ok(v) if v > 0 => v,
+                                    Ok(_) => {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}error: N must be a positive integer (got 0){cr}"
+                                        )?;
+                                        stdout.flush()?;
+                                        continue;
+                                    }
+                                    Err(_) => {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}error: invalid argument {:?} — expected a positive integer{cr}",
+                                            rest.trim()
+                                        )?;
+                                        writeln!(stdout, "{cd}usage: !tail [N]  (default 10){cr}")?;
+                                        stdout.flush()?;
+                                        continue;
+                                    }
+                                }
                             };
                             if n > 0 {
                                 let before_len = last_result.as_ref().map(|r| r.rows.len());
@@ -3498,24 +3538,45 @@ fn handle_filter(
             };
             // Check for /regex/ syntax
             let re_opt = if actual_pattern.starts_with('/') && actual_pattern.len() > 2 {
-                let end = actual_pattern.rfind('/').unwrap_or(0);
-                if end > 0 {
-                    let inner = &actual_pattern[1..end];
-                    let flags = &actual_pattern[end + 1..];
-                    let flagged = if flags.contains('i') {
-                        format!("(?i){inner}")
-                    } else {
-                        inner.to_string()
-                    };
-                    match regex::Regex::new(&flagged) {
-                        Ok(re) => Some(re),
-                        Err(e) => {
-                            writeln!(out, "{ce}invalid regex: {e}{cr}")?;
-                            return Ok(());
+                // Find the closing slash (must be after position 0 to be distinct from leading /)
+                let end = actual_pattern[1..].rfind('/').map(|i| i + 1);
+                match end {
+                    Some(end) if end > 0 => {
+                        let inner = &actual_pattern[1..end];
+                        let flags = &actual_pattern[end + 1..];
+                        for c in flags.chars().filter(|c| !matches!(c, 'i')) {
+                            writeln!(
+                                out,
+                                "{cd}note: regex flag {c:?} is not supported (only 'i' is available){cr}"
+                            )?;
+                        }
+                        let flagged = if flags.contains('i') {
+                            format!("(?i){inner}")
+                        } else {
+                            inner.to_string()
+                        };
+                        match regex::Regex::new(&flagged) {
+                            Ok(re) => Some(re),
+                            Err(e) => {
+                                writeln!(out, "{ce}invalid regex: {e}{cr}")?;
+                                return Ok(());
+                            }
                         }
                     }
-                } else {
-                    None
+                    _ => {
+                        // Looks like a regex (starts with /) but has no closing /; warn rather
+                        // than silently falling through to a substring match on the literal "/...".
+                        writeln!(
+                            out,
+                            "{ce}hint: regex patterns must be enclosed in slashes: /pattern/{cr}"
+                        )?;
+                        writeln!(
+                            out,
+                            "{cd}treating {:?} as a literal substring match{cr}",
+                            actual_pattern
+                        )?;
+                        None
+                    }
                 }
             } else {
                 None
@@ -3638,24 +3699,42 @@ fn handle_filter_not(
                 (None, pattern)
             };
             let re_opt = if actual_pattern.starts_with('/') && actual_pattern.len() > 2 {
-                let end = actual_pattern.rfind('/').unwrap_or(0);
-                if end > 0 {
-                    let inner = &actual_pattern[1..end];
-                    let flags = &actual_pattern[end + 1..];
-                    let flagged = if flags.contains('i') {
-                        format!("(?i){inner}")
-                    } else {
-                        inner.to_string()
-                    };
-                    match regex::Regex::new(&flagged) {
-                        Ok(re) => Some(re),
-                        Err(e) => {
-                            writeln!(out, "{ce}invalid regex: {e}{cr}")?;
-                            return Ok(());
+                let end = actual_pattern[1..].rfind('/').map(|i| i + 1);
+                match end {
+                    Some(end) if end > 0 => {
+                        let inner = &actual_pattern[1..end];
+                        let flags = &actual_pattern[end + 1..];
+                        for c in flags.chars().filter(|c| !matches!(c, 'i')) {
+                            writeln!(
+                                out,
+                                "{cd}note: regex flag {c:?} is not supported (only 'i' is available){cr}"
+                            )?;
+                        }
+                        let flagged = if flags.contains('i') {
+                            format!("(?i){inner}")
+                        } else {
+                            inner.to_string()
+                        };
+                        match regex::Regex::new(&flagged) {
+                            Ok(re) => Some(re),
+                            Err(e) => {
+                                writeln!(out, "{ce}invalid regex: {e}{cr}")?;
+                                return Ok(());
+                            }
                         }
                     }
-                } else {
-                    None
+                    _ => {
+                        writeln!(
+                            out,
+                            "{ce}hint: regex patterns must be enclosed in slashes: /pattern/{cr}"
+                        )?;
+                        writeln!(
+                            out,
+                            "{cd}treating {:?} as a literal substring match{cr}",
+                            actual_pattern
+                        )?;
+                        None
+                    }
                 }
             } else {
                 None
@@ -4124,9 +4203,15 @@ fn handle_stats(
                         let null_count = total - n;
                         let sum: f64 = vals.iter().sum();
                         let mean = sum / n as f64;
-                        let p50 = vals[n * 50 / 100];
-                        let p90 = vals[n * 90 / 100];
-                        let p99 = vals[n * 99 / 100];
+                        // Use nearest-rank formula (same as PERCENTILE() aggregate):
+                        // rank = ceil(p/100 * n), value = vals[rank - 1] (0-indexed).
+                        let percentile = |p: usize| -> f64 {
+                            let rank = ((p as f64 / 100.0) * n as f64).ceil() as usize;
+                            vals[rank.saturating_sub(1).min(n - 1)]
+                        };
+                        let p50 = percentile(50);
+                        let p90 = percentile(90);
+                        let p99 = percentile(99);
                         let col_lower = col_name.to_ascii_lowercase();
                         let is_bytes_col = col_lower.ends_with("bytes")
                             || col_lower.ends_with("_size")
