@@ -36,10 +36,18 @@ public class RecursiveHashMaps implements Runnable {
     @Parameters(defaultValue = "10", index = "1")
     int depth = 10;
 
+    // Keep the constructed tree reachable via a static field (a real GC root).
+    // Without this, `new Node(...)` in run() below has no live reference once
+    // the constructor call returns — the whole tree is unreachable garbage
+    // and a live-heap dump (jcmd GC.heap_dump, which GCs first) legitimately
+    // captures ZERO Node instances, defeating the entire point of this
+    // fixture (testing visibility of a deeply-nested, non-top-level-dominator
+    // class). Was previously a bug in this fixture, not in the analyzer.
+    static Node root;
 
     @Override
     public void run() {
-        new Node(depth, mode.equals("complex"));
+        root = new Node(depth, mode.equals("complex"));
         try {
             Thread.sleep(Integer.MAX_VALUE);
         } catch (InterruptedException e) {
