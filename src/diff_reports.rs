@@ -81,6 +81,19 @@ fn load_report(path: &str) -> io::Result<Report> {
             ),
         ));
     }
+    // Warn on downgrade: an older report's fields will default to 0/empty for
+    // any fields added in later schema versions, silently producing zero-deltas
+    // for those fields in the diff.  We continue (don't error) because older
+    // reports are typically still useful for the shared fields they carry.
+    if report.schema_version < report::SCHEMA_VERSION {
+        eprintln!(
+            "warning: {} uses schema_version {} (current is {}); \
+             fields added after that version will appear as zero in diffs",
+            path,
+            report.schema_version,
+            report::SCHEMA_VERSION
+        );
+    }
     Ok(report)
 }
 
@@ -531,9 +544,16 @@ fn verdict(d: &SeriesDiffResult) -> String {
     };
     let new_suspects = d.grown_suspects.iter().filter(|s| s.is_new).count();
     let mut line = if d.delta_total_shallow > 0 {
+        // Pick the class with the largest positive first→last delta_retained as the
+        // driver. In N≥3 series, growth_leaders are ranked by peak−baseline (to surface
+        // spike patterns), but the verdict should cite the class that is STILL growing
+        // (positive net delta), not one that spiked and reclaimed.
         let driver = d
             .growth_leaders
-            .first()
+            .iter()
+            .filter(|c| c.delta_retained > 0)
+            .max_by_key(|c| c.delta_retained)
+            .or_else(|| d.growth_leaders.first())
             .map(|c| {
                 format!(
                     "; largest driver `{}` ({} retained)",
@@ -758,6 +778,16 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
 /// Thin wrapper: load every report path (version-checked, "-" = stdin), compute
 /// the N-way time-series diff, and render it in the requested format.
 pub fn run(paths: &[String], format: OutputFormat) -> io::Result<String> {
+    if paths.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "compare reports requires at least 2 report JSON files, but {} {} given",
+                paths.len(),
+                if paths.len() == 1 { "was" } else { "were" }
+            ),
+        ));
+    }
     let mut reports: Vec<Report> = Vec::with_capacity(paths.len());
     for p in paths {
         reports.push(load_report(p)?);
