@@ -489,9 +489,17 @@ function NavBreadcrumb() {
   // loading order doesn't drop entries recorded before context was ready.
   const [history, setHistory] = React.useState<string[]>([]);
   const objNodes = React.useContext(ObjGraphCtx);
+  // Prevents the hashchange listener from re-appending the target hash when
+  // the ← Back button triggers a programmatic navigation.
+  const backNavigatingRef = React.useRef(false);
 
   React.useEffect(() => {
     const onHashChange = () => {
+      // Skip re-appending when back-navigation triggered this change.
+      if (backNavigatingRef.current) {
+        backNavigatingRef.current = false;
+        return;
+      }
       const raw = window.location.hash.slice(1);
       const objMatch = raw.match(/^(explore|domtree)\/(\d+)$/);
       if (!objMatch && !SECTION_LABELS[raw]) return;
@@ -538,7 +546,16 @@ function NavBreadcrumb() {
         </React.Fragment>
       ))}
       <a href="#" className="nav-bc-link nav-bc-back"
-        onClick={e => { e.preventDefault(); history.length > 1 && (window.location.hash = history[history.length - 2]); }}>
+        onClick={e => {
+          e.preventDefault();
+          if (history.length <= 1) return;
+          const target = history[history.length - 2];
+          // Signal the hashchange listener to skip re-appending this entry;
+          // then pop the current top of our history stack before navigating.
+          backNavigatingRef.current = true;
+          setHistory(prev => prev.slice(0, -1));
+          window.location.hash = target;
+        }}>
         ← Back
       </a>
     </div>
@@ -1481,6 +1498,23 @@ function ExploreBtn({ denseIdx, label }: { denseIdx: number; label?: string }) {
       aria-label="Open in Inspector"
       style={{ visibility: "visible", opacity: 0.7 }}>
       ⬡↗
+    </button>
+  );
+}
+
+/// Jump to the dominator-subtree view for a specific object in ObjectGraphExplorer.
+/// Only shown when WASM exploration is loaded (same guard as ExploreBtn).
+function DomtreeBtn({ denseIdx, label }: { denseIdx: number; label?: string }) {
+  const nodes = React.useContext(ObjGraphCtx);
+  const wasm = (window as any).__wasmExploration;
+  if (!nodes && !wasm?.get_node_info) return null;
+  return (
+    <button className="copy-btn"
+      onClick={(e) => { e.stopPropagation(); (window as any).__explorerNavigate?.("domtree", denseIdx); navTo(`domtree/${denseIdx}`); }}
+      title={label ? `Show dominator position of "${label}"` : "Show in Dominator Tree"}
+      aria-label="Show in Dominator Tree"
+      style={{ visibility: "visible", opacity: 0.7 }}>
+      ⌞
     </button>
   );
 }
@@ -5777,7 +5811,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
         <p className="subtitle">No objects meet the threshold.</p>
       ) : (() => {
         const dropCols: TableColumn<import("./types").BigDropRow>[] = [
-          { id: "object", name: "Object", grow: 1, maxWidth: "310px", cell: (r) => <span className="copy-cell"><code title={r.display_class}>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ListObjectsBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
+          { id: "object", name: "Object", grow: 1, maxWidth: "310px", cell: (r) => <span className="copy-cell"><code title={r.display_class}>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ListObjectsBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /><DomtreeBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
           { id: "largest_child", name: "Largest Child", grow: 1, maxWidth: "310px", cell: (r) => r.largest_child_class ? <span className="copy-cell"><code title={r.largest_child_class}>{r.largest_child_class}</code><CopyBtn text={r.largest_child_class} /><PivotBtn cls={r.largest_child_class} /><OqlBtn cls={r.largest_child_class} /><ListObjectsBtn cls={r.largest_child_class} /></span> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
           { id: "child_ret", name: useKB ? "Child Retained (KB)" : "Child Retained", right: true, width: useKB ? "160px" : "130px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
