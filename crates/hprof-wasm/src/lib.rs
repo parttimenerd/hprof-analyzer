@@ -344,7 +344,12 @@ impl HprofSession {
     /// are served from the cached array on subsequent `query()` calls.
     /// Also generates and caches the HTML report for instant `get_report_html()`.
     pub fn run_full_analysis(&mut self) -> Result<(), JsValue> {
-        let opts = hprof_analyzer::AnalyzeOptions::default();
+        // Enable collection waste analysis and duplicate detection so the web
+        // UI shows the full picture — including OverCapacityCollections and the
+        // empty-collection showcase for dumps like empty-array-list.hprof.
+        let mut opts = hprof_analyzer::AnalyzeOptions::default();
+        opts.collections = true;
+        opts.find_duplicates = true;
         let (report, retained) =
             hprof_analyzer::analyze_to_report_with_retained(&self.source, &opts)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -538,8 +543,11 @@ impl HprofSession {
     ///
     /// Callback receives `(phase: string, fraction: number)`.  Phases in order:
     ///   "pass1", "pass2", "rpo", "inbound", "dominators", "retained"
+    ///
+    /// Enables collection waste analysis and duplicate detection by default,
+    /// matching `run_full_analysis()` so both paths produce a complete report.
     pub fn run_full_analysis_with_progress(&mut self, cb: js_sys::Function) -> Result<(), JsValue> {
-        self.run_full_analysis_with_options_and_progress(false, false, cb)
+        self.run_full_analysis_with_options_and_progress(true, true, cb)
     }
 
     /// Like `run_full_analysis_with_progress()` but with optional extended passes.

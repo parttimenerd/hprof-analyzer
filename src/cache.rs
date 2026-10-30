@@ -359,7 +359,11 @@ fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Re
     f.flush()
 }
 
-/// Check that a file starts with the HPCA magic bytes.
+/// Check that a file starts with the HPCA magic bytes AND the expected VERSION.
+///
+/// Previously only the 4-byte magic was checked; a VERSION bump (due to a schema
+/// change) would silently serve stale data from the old cache instead of
+/// invalidating it and triggering a fresh analysis run.
 fn check_magic(path: &Path) -> bool {
     if !path.exists() {
         return false;
@@ -367,8 +371,11 @@ fn check_magic(path: &Path) -> bool {
     let Ok(mut f) = File::open(path) else {
         return false;
     };
-    let mut buf = [0u8; 4];
-    f.read_exact(&mut buf).is_ok() && &buf == MAGIC
+    // Read 6 bytes: 4 magic + 2 version LE
+    let mut buf = [0u8; 6];
+    f.read_exact(&mut buf).is_ok()
+        && &buf[..4] == MAGIC
+        && u16::from_le_bytes([buf[4], buf[5]]) == VERSION
 }
 
 /// Read the array index header from an indexed file.
