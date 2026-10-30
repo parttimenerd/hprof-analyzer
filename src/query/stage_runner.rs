@@ -1717,7 +1717,11 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                 AggFunc::Sum => {
                     if val != QueryValue::Null {
                         *acc = match (&*acc, &val) {
-                            (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
+                            // Use wrapping_add to match execute.rs behaviour and avoid
+                            // overflow panics in debug builds on large retained-size sums.
+                            (QueryValue::Int(a), QueryValue::Int(b)) => {
+                                QueryValue::Int(a.wrapping_add(*b))
+                            }
                             (QueryValue::Float(a), QueryValue::Float(b)) => {
                                 QueryValue::Float(*a + *b)
                             }
@@ -1759,7 +1763,9 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                     if val != QueryValue::Null {
                         *count += 1;
                         *acc = match (&*acc, &val) {
-                            (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
+                            (QueryValue::Int(a), QueryValue::Int(b)) => {
+                                QueryValue::Int(a.wrapping_add(*b))
+                            }
                             (QueryValue::Float(a), QueryValue::Float(b)) => {
                                 QueryValue::Float(*a + *b)
                             }
@@ -1933,8 +1939,9 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                     AggFunc::Sum => {
                         if val != QueryValue::Null {
                             *acc = match (&*acc, &val) {
+                                // Use wrapping_add to avoid overflow panics in debug builds.
                                 (QueryValue::Int(a), QueryValue::Int(b)) => {
-                                    QueryValue::Int(*a + *b)
+                                    QueryValue::Int(a.wrapping_add(*b))
                                 }
                                 (QueryValue::Float(a), QueryValue::Float(b)) => {
                                     QueryValue::Float(*a + *b)
@@ -1977,8 +1984,9 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                         if val != QueryValue::Null {
                             *count += 1;
                             *acc = match (&*acc, &val) {
+                                // Use wrapping_add to avoid overflow panics in debug builds.
                                 (QueryValue::Int(a), QueryValue::Int(b)) => {
-                                    QueryValue::Int(*a + *b)
+                                    QueryValue::Int(a.wrapping_add(*b))
                                 }
                                 (QueryValue::Float(a), QueryValue::Float(b)) => {
                                     QueryValue::Float(*a + *b)
