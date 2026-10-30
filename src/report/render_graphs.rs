@@ -946,6 +946,51 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     classes.render(out);
     out.push('\n');
 
+    // BUG-1 fix: render "Who Holds Each Class?" — see the matching comment in
+    // render_md.rs for the full rationale. Delegates to a plain-Markdown table
+    // (no bar() column): holder-breakdown rows compare across DIFFERENT
+    // classes' holder sets, so a shared bar scale per class subsection would
+    // be more noise than signal here.
+    let classes_with_holders: Vec<&crate::report::ClassRow> = t
+        .biggest_classes
+        .iter()
+        .filter(|r| !r.holders.is_empty())
+        .collect();
+    if !classes_with_holders.is_empty() {
+        out.push_str("#### Who Holds Each Class?\n\n");
+        out.push_str(
+            "_For each class above with holder data, the immediate-dominator class \
+breakdown. `(GC Root)` means held directly by a GC root (Java frame, JNI, etc.) \
+with no intervening object holder._\n\n",
+        );
+        for row in &classes_with_holders {
+            out.push_str(&format!("**`{}`**\n\n", row.pretty_class));
+            let ret_max = row.holders.iter().map(|h| h.retained).max().unwrap_or(0);
+            let mut ht = Table::new(
+                &["Holder Class", "Count", "Retained", ""],
+                &[Align::Left, Align::Right, Align::Right, Align::Left],
+            );
+            for h in &row.holders {
+                ht.row([
+                    format!("`{}`", h.holder_class),
+                    fmt_count(h.count),
+                    format_bytes(h.retained),
+                    bar(h.retained, ret_max, GRAPH_BAR_WIDTH),
+                ]);
+                for l2 in &h.level2 {
+                    ht.row([
+                        format!("  ↳ `{}`", l2.holder_class),
+                        fmt_count(l2.count),
+                        format_bytes(l2.retained),
+                        bar(l2.retained, ret_max, GRAPH_BAR_WIDTH),
+                    ]);
+                }
+            }
+            ht.render(out);
+            out.push('\n');
+        }
+    }
+
     // Top-Dominator Size Distribution — sparkline over bucket counts plus a
     // bar()-column bucket table (mirrors the dominator-depth graphs render).
     if t.size_distribution.count > 0 {

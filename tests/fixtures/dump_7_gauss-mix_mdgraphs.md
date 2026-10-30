@@ -530,28 +530,750 @@ _All top-level dominators ranked by retained heap — every object directly held
 
 _Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._
 
-|  # | Class                                                            | Instances | Retained |                  |
-| -: | ---------------------------------------------------------------- | --------: | -------: | ---------------- |
-|  1 | `java.util.zip.ZipFile$Source`                                   |       181 |  12.3 MB | ████████████████ |
-|  2 | `java.lang.Class`                                                |     5,016 |   5.4 MB | ███████          |
-|  3 | `java.net.URLClassLoader`                                        |         2 |   2.7 MB | ███▌             |
-|  4 | `org.apache.spark.storage.memory.MemoryStore`                    |         1 |   2.3 MB | ███              |
-|  5 | `java.lang.String`                                               |    20,520 |   1.5 MB | █▉               |
-|  6 | `java.util.jar.JarFile`                                          |       181 |   1.4 MB | █▊               |
-|  7 | `java.lang.Thread`                                               |       268 | 912.6 KB | █▏               |
-|  8 | `io.netty.buffer.PoolArena$HeapArena`                            |       101 | 695.2 KB | ▉                |
-|  9 | `io.netty.buffer.PoolArena$DirectArena`                          |       101 | 695.2 KB | ▉                |
-| 10 | `java.lang.invoke.MethodType`                                    |     3,989 | 582.6 KB | ▋                |
-| 11 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 | 477.1 KB | ▌                |
-| 12 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |         1 | 432.0 KB | ▌                |
-| 13 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 | 402.4 KB | ▌                |
-| 14 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        28 | 303.0 KB | ▍                |
-| 15 | `org.apache.spark.status.ElementTrackingStore`                   |         1 | 301.7 KB | ▍                |
-| 16 | `com.codahale.metrics.Timer`                                     |         7 | 243.8 KB | ▎                |
-| 17 | `java.lang.invoke.LambdaForm`                                    |       417 | 214.1 KB | ▎                |
-| 18 | `org.apache.hadoop.conf.Configuration`                           |         6 | 193.1 KB | ▏                |
-| 19 | `java.lang.invoke.MethodTypeForm`                                |       477 | 125.6 KB | ▏                |
-| 20 | `io.netty.channel.nio.NioEventLoopGroup`                         |         4 | 114.7 KB | ▏                |
+|  # | Class                                           | Instances | Retained |                  |
+| -: | ----------------------------------------------- | --------: | -------: | ---------------- |
+|  1 | `byte[]`                                        |    58,366 |  14.7 MB | ████████████████ |
+|  2 | `java.util.zip.ZipFile$Source`                  |       181 |  12.3 MB | █████████████▍   |
+|  3 | `java.lang.Class`                               |    12,493 |   7.0 MB | ███████▌         |
+|  4 | `java.lang.Object[]`                            |    11,059 |   6.3 MB | ██████▊          |
+|  5 | `java.lang.String`                              |    56,540 |   4.4 MB | ████▊            |
+|  6 | `java.util.concurrent.ConcurrentHashMap`        |     1,128 |   3.2 MB | ███▍             |
+|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]` |       444 |   3.1 MB | ███▍             |
+|  8 | `java.util.LinkedHashMap`                       |     6,104 |   3.1 MB | ███▎             |
+|  9 | `java.net.URLClassLoader`                       |         2 |   2.7 MB | ██▉              |
+| 10 | `java.util.concurrent.ConcurrentHashMap$Node`   |    42,785 |   2.6 MB | ██▊              |
+| 11 | `java.lang.Object`                              |   154,653 |   2.4 MB | ██▌              |
+| 12 | `org.apache.spark.storage.memory.MemoryStore`   |         1 |   2.3 MB | ██▌              |
+| 13 | `java.util.HashMap`                             |     1,089 |   2.2 MB | ██▍              |
+| 14 | `java.util.HashMap$Node[]`                      |     1,053 |   2.2 MB | ██▎              |
+| 15 | `java.util.ArrayList`                           |       716 |   2.1 MB | ██▎              |
+| 16 | `java.util.HashMap$Node`                        |    16,017 |   2.0 MB | ██▏              |
+| 17 | `int[]`                                         |     9,056 |   2.0 MB | ██▏              |
+| 18 | `java.lang.ref.SoftReference`                   |     1,653 |   1.5 MB | █▋               |
+| 19 | `double[]`                                      |    16,101 |   1.5 MB | █▌               |
+| 20 | `java.util.jar.JarFile`                         |       181 |   1.4 MB | █▌               |
+
+#### Who Holds Each Class?
+
+_For each class above with holder data, the immediate-dominator class breakdown. `(GC Root)` means held directly by a GC root (Java frame, JNI, etc.) with no intervening object holder._
+
+**`byte[]`**
+
+| Holder Class                                                                                     |  Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.util.zip.ZipFile$Source`                                                                   |    181 |  10.9 MB | ████████████████ |
+| `java.lang.String`                                                                               | 56,320 |   3.2 MB | ████▋            |
+|   ↳ `java.util.HashMap$Node`                                                                     |  8,593 | 716.8 KB | █                |
+|   ↳ `java.lang.Object[]`                                                                         |  6,815 | 546.5 KB | ▊                |
+|   ↳ `java.lang.Class`                                                                            |  4,748 | 297.2 KB | ▍                |
+|   ↳ `java.lang.invoke.MethodType`                                                                |  2,375 | 287.7 KB | ▍                |
+|   ↳ `java.util.LinkedHashMap$Entry`                                                              |  1,960 | 234.5 KB | ▎                |
+|   ↳ `java.lang.String[]`                                                                         |  2,559 | 184.8 KB | ▎                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |  2,692 | 175.9 KB | ▎                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  2,349 | 168.1 KB | ▏                |
+|   ↳ `jdk.jfr.internal.jfc.JFC$KnownConfiguration`                                                |      6 |  73.4 KB | ▏                |
+|   ↳ `org.apache.spark.status.api.v1.StageData`                                                   |     35 |  43.2 KB | ▏                |
+| `java.lang.Thread`                                                                               |      1 | 177.5 KB | ▎                |
+|   ↳ `java.lang.Object[]`                                                                         |      2 |    576 B | ▏                |
+| `java.lang.Class`                                                                                |     53 | 132.4 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ██▏              |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▏                |
+|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
+| `byte[][]`                                                                                       |    372 |  94.2 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |      2 |  94.4 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.http.PreEncodedHttpField`                                            |     23 |   1.8 KB | ▏                |
+|   ↳ `org.apache.spark.storage.memory.DeserializedMemoryEntry`                                    |      1 |     24 B | ▏                |
+| `java.nio.HeapByteBuffer`                                                                        |     27 |  63.3 KB | ▏                |
+|   ↳ `java.nio.ByteBuffer[]`                                                                      |      3 |  45.4 KB | ▏                |
+|   ↳ `sun.nio.cs.StreamDecoder`                                                                   |      1 |   8.1 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.appender.OutputStreamManager`                                 |      1 |   8.1 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.http.HttpHeader`                                                     |     78 |   4.3 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.http.HttpMethod`                                                     |     40 |   2.2 KB | ▏                |
+|   ↳ `sun.nio.cs.StreamEncoder`                                                                   |      3 |   1.7 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.http.MimeTypes$Type`                                                 |     19 |   1.0 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.http.HttpHeaderValue`                                                |     12 |    992 B | ▏                |
+|   ↳ `org.sparkproject.jetty.http.HttpScheme`                                                     |      4 |    320 B | ▏                |
+|   ↳ `org.sparkproject.jetty.http.HttpVersion`                                                    |      4 |    224 B | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |    229 |  59.6 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              | 34,752 |   2.9 MB | ████▏            |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  8,033 | 626.6 KB | ▉                |
+| `(GC Root)`                                                                                      |    155 |  35.5 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                                                  |    116 |  33.2 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap`                                                     |    408 |   3.4 MB | ████▉            |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`                                    |     35 |   4.9 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.core.util.InternCache`                                                |      1 |   1.1 KB | ▏                |
+| `com.sun.xml.internal.stream.util.BufferAllocator`                                               |      1 |   8.0 KB | ▏                |
+|   ↳ `java.lang.ref.SoftReference`                                                                |      1 |  24.1 KB | ▏                |
+
+**`java.util.zip.ZipFile$Source`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |   181 |  12.3 MB | ████████████████ |
+
+**`java.lang.Class`**
+
+| Holder Class                                                                                     | Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `(GC Root)`                                                                                      | 5,007 |   5.4 MB | ████████████████ |
+| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB | ████▍            |
+|   ↳ `java.lang.Class`                                                                            | 6,044 |   3.9 MB | ███████████▍     |
+|   ↳ `java.util.ArrayList`                                                                        |   547 |   2.1 MB | ██████▎          |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                        |   165 | 148.6 KB | ▍                |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |    36 | 144.8 KB | ▍                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |   256 | 140.0 KB | ▍                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |     1 |  75.3 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         |   446 |  62.4 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           | 1,665 |  48.1 KB | ▏                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |    60 |  42.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |     1 |  32.0 KB | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         |   995 | 184.8 KB | ▌                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                                              |    41 |   5.8 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                                                     |    11 |   3.2 KB | ▏                |
+|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`                                       |    18 |   2.5 KB | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                                             |     1 |    144 B | ▏                |
+| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB | ▏                |
+| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle`                                                        | 2,334 | 275.4 KB | ▊                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            | 2,137 |  83.5 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm`                                                                |   613 |  58.1 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                                                  |   366 |  19.1 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Special`                                                |    70 |   8.2 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Accessor`                                               |    76 |   3.0 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName[]`                                                              |    23 |   1.3 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Interface`                                              |     8 |    776 B | ▏                |
+|   ↳ `java.lang.invoke.MethodType`                                                                |    10 |    560 B | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |    13 |    520 B | ▏                |
+| `java.lang.Class`                                                                                |    24 |    488 B | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████▍            |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▏                |
+|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
+| `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                               |     1 |    200 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                                               |     1 |    216 B | ▏                |
+| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                       |     1 |    192 B | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     1 |    208 B | ▏                |
+| `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0`     |     1 |     48 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                                               |     1 |     64 B | ▏                |
+| `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0`     |     1 |     48 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                                               |     1 |     64 B | ▏                |
+
+**`java.lang.Object[]`**
+
+| Holder Class                                                                                                | Count | Retained |                  |
+| ----------------------------------------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                                                                           | 6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.lang.Object[]`                                                                                    | 5,148 |   1.5 MB | ██████▏          |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                                       |   847 |  45.3 KB | ▏                |
+|   ↳ `java.net.URLClassLoader`                                                                               |    10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                           |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                                       |    24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                                      |     1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                              |     1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                               |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0`            |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0`            |     1 |     48 B | ▏                |
+| `java.util.ArrayList`                                                                                       |   547 |   2.1 MB | ████████▊        |
+|   ↳ `java.net.URLClassLoader`                                                                               |     2 |   2.0 MB | ████████▏        |
+|   ↳ `java.lang.Class`                                                                                       |     5 |  74.7 KB | ▎                |
+|   ↳ `java.util.Collections$UnmodifiableRandomAccessList`                                                    |   215 |  29.9 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                                                                |    35 |  28.8 KB | ▏                |
+|   ↳ `sun.reflect.generics.tree.ClassTypeSignature`                                                          |    70 |  17.0 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                           |   159 |  15.7 KB | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`                                                       |     1 |   4.1 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.DecoratedObjectFactory`                                                    |    29 |   2.7 KB | ▏                |
+|   ↳ `jdk.internal.loader.URLClassPath`                                                                      |     8 |   2.5 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                                         |    28 |   2.2 KB | ▏                |
+| `java.util.ImmutableCollections$SetN`                                                                       |   165 | 148.6 KB | ▌                |
+|   ↳ `sun.util.cldr.CLDRLocaleProviderAdapter`                                                               |     1 |  60.3 KB | ▏                |
+|   ↳ `java.lang.module.ModuleDescriptor`                                                                     |    92 |  28.1 KB | ▏                |
+|   ↳ `java.lang.module.ModuleDescriptor$Exports`                                                             |    26 |   2.1 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                                                    |    23 |   1.7 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                                       |    10 |   1.1 KB | ▏                |
+|   ↳ `jdk.internal.module.SystemModuleFinders$SystemModuleFinder`                                            |     1 |    536 B | ▏                |
+|   ↳ `java.lang.module.Configuration`                                                                        |     1 |    536 B | ▏                |
+|   ↳ `jdk.net.ExtendedSocketOptions$1`                                                                       |     2 |    160 B | ▏                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                                  |    36 | 144.8 KB | ▌                |
+|   ↳ `io.netty.channel.nio.NioEventLoop`                                                                     |    36 | 165.1 KB | ▋                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                                              |   256 | 140.0 KB | ▌                |
+|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                                                      |   252 | 529.6 KB | ██▏              |
+|   ↳ `java.lang.Class`                                                                                       |     3 |  14.3 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping`                                |     1 |  12.4 KB | ▏                |
+| `(GC Root)`                                                                                                 |     7 |  90.9 KB | ▎                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                                             |     1 |  75.3 KB | ▎                |
+|   ↳ `org.apache.spark.storage.BlockInfoManager`                                                             |     1 |  75.3 KB | ▎                |
+| `java.lang.Object[]`                                                                                        |   446 |  62.4 KB | ▎                |
+|   ↳ `java.lang.Class`                                                                                       | 6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                                                   |   547 |   2.1 MB | ████████▊        |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                                   |   165 | 148.6 KB | ▌                |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                              |    36 | 144.8 KB | ▌                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                                          |   256 | 140.0 KB | ▌                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                                         |     1 |  75.3 KB | ▎                |
+|   ↳ `java.lang.Object[]`                                                                                    |   446 |  62.4 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                                      | 1,665 |  48.1 KB | ▏                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                                      |    60 |  42.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                                        |     1 |  32.0 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name`                                                                          | 1,665 |  48.1 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm$Name[]`                                                                    | 1,885 | 136.0 KB | ▌                |
+|   ↳ `java.lang.invoke.LambdaForm`                                                                           |    27 |   1.1 KB | ▏                |
+| `java.util.concurrent.atomic.AtomicReferenceArray`                                                          |    60 |  42.6 KB | ▏                |
+|   ↳ `org.sparkproject.guava.collect.MapMakerInternalMap$Segment`                                            |    12 |  22.2 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.core.util.BufferRecycler`                                                        |     2 |  16.2 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.util.internal.PrivateMaxEntriesMap`                                     |    13 |   3.7 KB | ▏                |
+|   ↳ `org.sparkproject.guava.cache.LocalCache$Segment`                                                       |    21 |   1000 B | ▏                |
+|   ↳ `org.apache.hadoop.thirdparty.com.google.common.cache.LocalCache$Segment`                               |     8 |    384 B | ▏                |
+|   ↳ `org.apache.hadoop.thirdparty.com.google.common.collect.MapMakerInternalMap$StrongKeyDummyValueSegment` |     4 |    192 B | ▏                |
+
+**`java.lang.String`**
+
+| Holder Class                                                                                     |  Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
+| `(GC Root)`                                                                                      | 20,520 |   1.5 MB | ████████████████ |
+| `java.util.HashMap$Node`                                                                         |  8,593 | 716.8 KB | ███████▍         |
+|   ↳ `java.util.HashMap$Node[]`                                                                   | 12,159 |   2.0 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                                                                     |  3,830 | 659.2 KB | ██████▉          |
+|   ↳ `java.lang.Object[]`                                                                         |     28 |   2.8 KB | ▏                |
+| `java.lang.Object[]`                                                                             |  6,815 | 546.5 KB | █████▋           |
+|   ↳ `java.lang.Class`                                                                            |  6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                                        |    547 |   2.1 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                        |    165 | 148.6 KB | █▌               |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |     36 | 144.8 KB | █▌               |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.0 KB | █▍               |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |      1 |  75.3 KB | ▊                |
+|   ↳ `java.lang.Object[]`                                                                         |    446 |  62.4 KB | ▋                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |  1,665 |  48.1 KB | ▌                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |     60 |  42.6 KB | ▍                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |      1 |  32.0 KB | ▎                |
+| `java.lang.Class`                                                                                |  4,748 | 297.2 KB | ███              |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▍                |
+|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
+| `java.lang.invoke.MethodType`                                                                    |  2,375 | 287.7 KB | ███              |
+|   ↳ `jdk.internal.util.WeakReferenceKey`                                                         |    175 |  10.0 KB | ▏                |
+| `java.util.LinkedHashMap$Entry`                                                                  |  1,960 | 234.5 KB | ██▍              |
+|   ↳ `java.util.LinkedHashMap`                                                                    |  2,718 |   1.3 MB | ██████████████   |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`                                    |     32 |   7.6 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`                                    |     33 |   1.6 KB | ▏                |
+|   ↳ `java.util.LinkedHashMap$LinkedKeyIterator`                                                  |      7 |    280 B | ▏                |
+|   ↳ `java.util.Map$Entry[]`                                                                      |      2 |     80 B | ▏                |
+| `java.lang.String[]`                                                                             |  2,559 | 184.8 KB | █▉               |
+|   ↳ `org.apache.xbean.asm9.ClassReader`                                                          |      1 | 181.0 KB | █▉               |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.4 KB | █▍               |
+|   ↳ `java.lang.Class`                                                                            |    102 |  24.7 KB | ▎                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTrie`                                                      |      9 |  10.2 KB | ▏                |
+|   ↳ `javax.management.ImmutableDescriptor`                                                       |    269 |   7.1 KB | ▏                |
+|   ↳ `org.apache.hadoop.conf.Configuration$DeprecatedKeyInfo`                                     |    211 |   4.9 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                                                     |     80 |   4.4 KB | ▏                |
+|   ↳ `sun.security.util.KnownOIDs`                                                                |    264 |   4.4 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     58 |   2.7 KB | ▏                |
+|   ↳ `java.util.Arrays$ArrayList`                                                                 |      7 |   2.6 KB | ▏                |
+| `java.lang.invoke.MemberName`                                                                    |  2,692 | 175.9 KB | █▊               |
+|   ↳ `java.lang.invoke.DirectMethodHandle`                                                        |  2,334 | 275.4 KB | ██▊              |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |  2,137 |  83.5 KB | ▊                |
+|   ↳ `java.lang.invoke.LambdaForm`                                                                |    613 |  58.1 KB | ▌                |
+|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                                                  |    366 |  19.1 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Special`                                                |     70 |   8.2 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Accessor`                                               |     76 |   3.0 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName[]`                                                              |     23 |   1.3 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Interface`                                              |      8 |    776 B | ▏                |
+|   ↳ `java.lang.invoke.MethodType`                                                                |     10 |    560 B | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |     13 |    520 B | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |  2,349 | 168.1 KB | █▊               |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              | 34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  8,033 | 626.6 KB | ██████▌          |
+| `jdk.jfr.internal.jfc.JFC$KnownConfiguration`                                                    |      6 |  73.4 KB | ▊                |
+|   ↳ `java.lang.Object[]`                                                                         |      2 |  74.0 KB | ▊                |
+
+**`java.util.concurrent.ConcurrentHashMap`**
+
+| Holder Class                                                                                     | Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `java.net.URLClassLoader`                                                                        |     9 | 633.3 KB | ████████████████ |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`                                                |     7 | 417.3 KB | ██████████▌      |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                                           |     7 | 391.2 KB | █████████▉       |
+| `jdk.internal.util.ReferencedKeyMap`                                                             |     1 | 302.4 KB | ███████▋         |
+|   ↳ `jdk.internal.util.ReferencedKeySet`                                                         |     1 | 302.5 KB | ███████▋         |
+| `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`                                      |     1 | 301.0 KB | ███████▌         |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore`                                                |     1 | 301.1 KB | ███████▌         |
+| `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`                                       |    24 | 228.1 KB | █████▊           |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |    12 | 297.3 KB | ███████▌         |
+| `java.lang.Class`                                                                                |    49 | 194.4 KB | ████▉            |
+|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | █▏               |
+|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
+| `sun.util.locale.BaseLocale$Cache`                                                               |     1 | 154.9 KB | ███▉             |
+|   ↳ `java.lang.Class`                                                                            |     1 | 155.0 KB | ███▉             |
+| `java.util.Properties`                                                                           |    27 | 139.1 KB | ███▌             |
+|   ↳ `org.apache.hadoop.conf.Configuration`                                                       |     5 |  77.0 KB | █▉               |
+|   ↳ `org.apache.hadoop.mapred.JobConf`                                                           |     2 |  46.8 KB | █▏               |
+|   ↳ `java.lang.Class`                                                                            |     7 |  11.7 KB | ▎                |
+|   ↳ `java.util.logging.LogManager`                                                               |     1 |   1.6 KB | ▏                |
+|   ↳ `scala.collection.mutable.HashMap$Node`                                                      |     3 |   1000 B | ▏                |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                                                 |     3 |    720 B | ▏                |
+|   ↳ `scala.collection.convert.JavaCollectionWrappers$JPropertiesWrapper`                         |     1 |    496 B | ▏                |
+|   ↳ `org.apache.spark.metrics.sink.MetricsServlet`                                               |     1 |    360 B | ▏                |
+|   ↳ `org.apache.spark.metrics.MetricsConfig`                                                     |     1 |    344 B | ▏                |
+|   ↳ `org.apache.logging.log4j.util.PropertyFilePropertySource`                                   |     2 |    272 B | ▏                |
+| `java.time.zone.TzdbZoneRulesProvider`                                                           |     1 | 115.7 KB | ██▉              |
+|   ↳ `java.lang.Class`                                                                            |     1 | 118.2 KB | ██▉              |
+
+**`java.util.concurrent.ConcurrentHashMap$Node[]`**
+
+| Holder Class                                                    | Count | Retained |                  |
+| --------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap`                        |   408 |   3.4 MB | ████████████████ |
+|   ↳ `java.net.URLClassLoader`                                   |     9 | 633.3 KB | ██▉              |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`           |     7 | 417.3 KB | █▉               |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |     7 | 391.2 KB | █▊               |
+|   ↳ `jdk.internal.util.ReferencedKeyMap`                        |     1 | 302.4 KB | █▍               |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists` |     1 | 301.0 KB | █▍               |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`  |    24 | 228.1 KB | █                |
+|   ↳ `java.lang.Class`                                           |    49 | 194.4 KB | ▉                |
+|   ↳ `sun.util.locale.BaseLocale$Cache`                          |     1 | 154.9 KB | ▋                |
+|   ↳ `java.util.Properties`                                      |    27 | 139.1 KB | ▋                |
+|   ↳ `java.time.zone.TzdbZoneRulesProvider`                      |     1 | 115.7 KB | ▌                |
+| `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`       |    35 |   4.9 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |    35 |   7.0 KB | ▏                |
+| `com.fasterxml.jackson.core.util.InternCache`                   |     1 |   1.1 KB | ▏                |
+|   ↳ `java.lang.Class`                                           |     1 |   1.2 KB | ▏                |
+
+**`java.util.LinkedHashMap`**
+
+| Holder Class                                                                                                                        | Count | Retained |                  |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.apache.spark.storage.memory.MemoryStore`                                                                                       |     1 |   2.3 MB | ████████████████ |
+| `java.util.jar.Attributes`                                                                                                          | 5,841 | 561.6 KB | ███▊             |
+|   ↳ `java.util.HashMap$Node`                                                                                                        | 5,778 | 451.4 KB | ███              |
+|   ↳ `java.util.jar.Manifest`                                                                                                        |    63 | 201.4 KB | █▎               |
+| `java.util.LinkedHashSet`                                                                                                           |    67 | 147.5 KB | ▉                |
+|   ↳ `java.util.HashMap$Node`                                                                                                        |    36 | 144.1 KB | ▉                |
+|   ↳ `java.util.Collections$UnmodifiableSet`                                                                                         |     7 |   1.5 KB | ▏                |
+|   ↳ `io.netty.channel.nio.NioEventLoop`                                                                                             |    18 |   1.4 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.ObjectMapper`                                                                                   |     2 |    576 B | ▏                |
+|   ↳ `java.lang.Class`                                                                                                               |     1 |    328 B | ▏                |
+|   ↳ `sun.security.provider.Sun`                                                                                                     |     1 |    328 B | ▏                |
+|   ↳ `org.sparkproject.jetty.server.ShutdownMonitor`                                                                                 |     1 |    200 B | ▏                |
+|   ↳ `sun.security.jca.ProviderList$1`                                                                                               |     1 |     80 B | ▏                |
+| `sun.reflect.annotation.AnnotationInvocationHandler`                                                                                |   102 |  23.8 KB | ▏                |
+|   ↳ `jdk.proxy3.$Proxy36`                                                                                                           |    70 |  18.7 KB | ▏                |
+|   ↳ `jdk.proxy3.$Proxy35`                                                                                                           |    25 |   3.7 KB | ▏                |
+|   ↳ `jdk.proxy3.$Proxy10`                                                                                                           |     1 |   2.1 KB | ▏                |
+|   ↳ `jdk.proxy1.$Proxy26`                                                                                                           |     4 |    992 B | ▏                |
+|   ↳ `jdk.proxy3.$Proxy38`                                                                                                           |     1 |    376 B | ▏                |
+|   ↳ `jdk.proxy3.$Proxy37`                                                                                                           |     1 |    296 B | ▏                |
+| `java.lang.reflect.Method`                                                                                                          |    71 |  18.1 KB | ▏                |
+|   ↳ `com.sun.jmx.mbeanserver.ConvertingMethod`                                                                                      |   159 |  42.0 KB | ▎                |
+|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo$MethodAccessor`                                                                       |    67 |  33.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Method`                                                                                                      |   385 |  33.1 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                                                               |   247 |  30.0 KB | ▏                |
+|   ↳ `java.lang.reflect.Method[]`                                                                                                    |    77 |  21.2 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                                                                                        |    34 |   7.4 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethod`                                                                     |    16 |   1.4 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$anonfun$$nestedInanonfun$apply$3$1$$Lambda+0x00007b0ac0674cf8` |     2 |   1.0 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.ser.BeanPropertyWriter[]`                                                                       |     3 |    864 B | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.ObjectMapper`                                                                                   |     6 |    528 B | ▏                |
+| `org.apache.logging.log4j.core.pattern.PatternParser`                                                                               |     1 |   8.0 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                                                   |     1 |   8.1 KB | ▏                |
+| `org.apache.logging.log4j.core.config.plugins.util.PluginManager`                                                                   |     1 |   6.2 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.xml.XmlConfiguration`                                                                     |     1 |   6.3 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.NullConfiguration`                                                                        |     1 |     72 B | ▏                |
+| `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`                                                                      |     2 |   3.8 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedClass`                                                                      |     2 |   3.8 KB | ▏                |
+| `java.lang.reflect.Field`                                                                                                           |     3 |   1.1 KB | ▏                |
+|   ↳ `scala.collection.immutable.$colon$colon`                                                                                       |    37 |  24.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Field`                                                                                                       |    41 |   2.9 KB | ▏                |
+|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo$FieldAccessor`                                                                        |     3 |   2.5 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.deser.BeanDeserializer`                                                                         |     3 |    720 B | ▏                |
+|   ↳ `scala.Some`                                                                                                                    |     3 |    216 B | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedField`                                                                      |     3 |    216 B | ▏                |
+|   ↳ `java.lang.Class`                                                                                                               |     1 |    144 B | ▏                |
+| `java.util.Collections$SingletonMap`                                                                                                |     2 |   1.1 KB | ▏                |
+|   ↳ `java.time.format.DateTimeTextProvider$LocaleStore`                                                                             |     2 |   1.2 KB | ▏                |
+
+**`java.net.URLClassLoader`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     2 |   2.7 MB | ████████████████ |
+
+**`java.util.concurrent.ConcurrentHashMap$Node`**
+
+| Holder Class                                                  |  Count | Retained |                  |
+| ------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`               | 34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap`                  |    408 |   3.4 MB | ████████████████ |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys` |     35 |   4.9 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.core.util.InternCache`             |      1 |   1.1 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.6 KB | ███▍             |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`           | 34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.6 KB | ███▍             |
+
+**`java.lang.Object`**
+
+| Holder Class                                                                                     |   Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | ------: | -------: | ---------------- |
+| `java.lang.Object[]`                                                                             | 131,072 |   2.0 MB | ████████████████ |
+|   ↳ `java.lang.Class`                                                                            |   6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                                        |     547 |   2.1 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                        |     165 | 148.6 KB | █▏               |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |      36 | 144.8 KB | █▏               |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |     256 | 140.0 KB | █                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |       1 |  75.3 KB | ▌                |
+|   ↳ `java.lang.Object[]`                                                                         |     446 |  62.4 KB | ▍                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |   1,665 |  48.1 KB | ▍                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |      60 |  42.6 KB | ▎                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |       1 |  32.0 KB | ▎                |
+| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |  21,815 | 340.9 KB | ██▋              |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              |  34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |   8,033 | 626.6 KB | ████▉            |
+| `java.util.concurrent.CopyOnWriteArrayList`                                                      |     861 |  13.5 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     348 |  21.1 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |      71 |   9.3 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |      87 |   8.0 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.server.handler.gzip.GzipHandler`                                     |      84 |   6.1 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`                                 |      36 |   2.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.io.ManagedSelector`                                                  |      36 |   2.3 KB | ▏                |
+|   ↳ `java.util.logging.Logger$ConfigurationData`                                                 |      23 |   2.2 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHolder`                                               |      30 |   1.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.FilterHolder`                                                |      29 |   1.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.server.SymlinkAllowedResourceAliasChecker`                           |      29 |   1.6 KB | ▏                |
+| `java.lang.Thread`                                                                               |     270 |   4.2 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         |       2 |    576 B | ▏                |
+| `java.io.RandomAccessFile`                                                                       |     181 |   2.8 KB | ▏                |
+| `sun.nio.ch.EPollSelectorImpl`                                                                   |      60 |    960 B | ▏                |
+|   ↳ `io.netty.channel.nio.NioEventLoop`                                                          |      16 |   8.0 KB | ▏                |
+| `java.lang.Class`                                                                                |      37 |    592 B | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         |   5,148 |   1.5 MB | ████████████     |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |     847 |  45.3 KB | ▎                |
+|   ↳ `java.net.URLClassLoader`                                                                    |      10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |     472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |      24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |       1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |       1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |       1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |       1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |       1 |     48 B | ▏                |
+| `org.sparkproject.jetty.servlet.ServletHolder`                                                   |      30 |    480 B | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |      30 |  10.6 KB | ▏                |
+| `org.sparkproject.jetty.servlet.FilterHolder`                                                    |      29 |    464 B | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |      29 |   7.0 KB | ▏                |
+| `org.sparkproject.jetty.servlet.ServletContextHandler`                                           |      29 |    464 B | ▏                |
+|   ↳ `org.apache.spark.ui.SparkUI`                                                                |       1 |   4.0 KB | ▏                |
+
+**`org.apache.spark.storage.memory.MemoryStore`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 |   2.3 MB | ████████████████ |
+
+**`java.util.HashMap`**
+
+| Holder Class                                                                                     | Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `java.util.jar.Manifest`                                                                         |    63 |   1.1 MB | ████████████████ |
+|   ↳ `java.lang.ref.SoftReference`                                                                |    63 |   1.3 MB | ████████████████ |
+| `java.util.HashSet`                                                                              |   439 | 150.3 KB | ██               |
+|   ↳ `org.sparkproject.jetty.util.IncludeExclude`                                                 |   112 |  55.1 KB | ▊                |
+|   ↳ `java.util.Collections$UnmodifiableSet`                                                      |    11 |  30.0 KB | ▍                |
+|   ↳ `java.util.HashMap$Node`                                                                     |   140 |  28.3 KB | ▍                |
+|   ↳ `java.lang.Module`                                                                           |    62 |  13.3 KB | ▏                |
+|   ↳ `java.util.concurrent.ThreadPoolExecutor`                                                    |    17 |  10.8 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.RegexSet`                                                       |    56 |   7.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     8 |   6.7 KB | ▏                |
+|   ↳ `java.util.WeakHashMap$Entry`                                                                |     1 |   1.7 KB | ▏                |
+|   ↳ `java.util.concurrent.ScheduledThreadPoolExecutor`                                           |    10 |   1.3 KB | ▏                |
+|   ↳ `java.nio.file.attribute.PosixFilePermissions$1`                                             |     2 |    480 B | ▏                |
+| `org.renaissance.core.ModuleLoader`                                                              |     2 | 147.6 KB | ██               |
+|   ↳ `java.lang.Thread`                                                                           |     1 |  73.8 KB | █                |
+|   ↳ `java.util.Optional`                                                                         |     1 |  73.8 KB | █                |
+| `java.lang.Class`                                                                                |    52 | 145.2 KB | ██               |
+|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▋                |
+|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
+| `java.lang.Thread`                                                                               |     1 | 137.1 KB | █▉               |
+|   ↳ `java.lang.Object[]`                                                                         |     2 |    576 B | ▏                |
+| `scala.runtime.LambdaDeserialize`                                                                |     8 |  77.9 KB | █                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                                              |     4 |  78.1 KB | █                |
+| `com.sun.jmx.mbeanserver.PerInterface`                                                           |    54 |  70.7 KB | ▉                |
+| `java.util.Collections$UnmodifiableMap`                                                          |    10 |  62.5 KB | ▊                |
+|   ↳ `com.sun.management.internal.DiagnosticCommandImpl`                                          |     1 |  56.4 KB | ▊                |
+|   ↳ `jdk.internal.module.ModuleHashes`                                                           |     1 |   2.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     6 |   2.4 KB | ▏                |
+|   ↳ `sun.management.ManagementFactoryHelper$LoggingMXBeanAccess`                                 |     1 |   1.1 KB | ▏                |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                                                 |     2 |    208 B | ▏                |
+| `java.lang.Module`                                                                               |    56 |  48.4 KB | ▋                |
+|   ↳ `java.util.HashMap$Node`                                                                     |     4 |   1.7 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     1 |     48 B | ▏                |
+|   ↳ `java.net.URLClassLoader`                                                                    |     1 |     48 B | ▏                |
+|   ↳ `sun.reflect.misc.MethodUtil`                                                                |     1 |     48 B | ▏                |
+|   ↳ `org.apache.spark.util.MutableURLClassLoader`                                                |     1 |     48 B | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`                                           |     1 |     48 B | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                                       |     1 |     48 B | ▏                |
+| `org.apache.spark.util.kvstore.KVTypeInfo`                                                       |    24 |  36.2 KB | ▌                |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`                                   |    12 |  56.0 KB | ▊                |
+
+**`java.util.HashMap$Node[]`**
+
+| Holder Class                                                          | Count | Retained |                  |
+| --------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.HashMap`                                                   |   716 |   2.2 MB | ████████████████ |
+|   ↳ `java.util.jar.Manifest`                                          |    63 |   1.1 MB | ████████▎        |
+|   ↳ `java.util.HashSet`                                               |   439 | 150.3 KB | █                |
+|   ↳ `org.renaissance.core.ModuleLoader`                               |     2 | 147.6 KB | █                |
+|   ↳ `java.lang.Class`                                                 |    52 | 145.2 KB | █                |
+|   ↳ `java.lang.Thread`                                                |     1 | 137.1 KB | ▉                |
+|   ↳ `scala.runtime.LambdaDeserialize`                                 |     8 |  77.9 KB | ▌                |
+|   ↳ `com.sun.jmx.mbeanserver.PerInterface`                            |    54 |  70.7 KB | ▌                |
+|   ↳ `java.util.Collections$UnmodifiableMap`                           |    10 |  62.5 KB | ▍                |
+|   ↳ `java.lang.Module`                                                |    56 |  48.4 KB | ▎                |
+|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo`                        |    24 |  36.2 KB | ▎                |
+| `java.util.LinkedHashMap`                                             |   302 |  30.7 KB | ▏                |
+|   ↳ `org.apache.spark.storage.memory.MemoryStore`                     |     1 |   2.3 MB | ████████████████ |
+|   ↳ `java.util.jar.Attributes`                                        | 5,841 | 561.6 KB | ████             |
+|   ↳ `java.util.LinkedHashSet`                                         |    67 | 147.5 KB | █                |
+|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`              |   102 |  23.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Method`                                        |    71 |  18.1 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`             |     1 |   8.0 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager` |     1 |   6.2 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`    |     2 |   3.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Field`                                         |     3 |   1.1 KB | ▏                |
+|   ↳ `java.util.Collections$SingletonMap`                              |     2 |   1.1 KB | ▏                |
+| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`             |    32 |   2.5 KB | ▏                |
+|   ↳ `java.util.LinkedHashMap$Entry`                                   |    32 |   6.4 KB | ▏                |
+| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`             |     2 |    352 B | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Info$1`                   |     1 |   7.7 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Tags$1`                   |     1 |    384 B | ▏                |
+| `com.thoughtworks.paranamer.BytecodeReadingParanamer$1`               |     1 |    336 B | ▏                |
+|   ↳ `java.lang.Class`                                                 |     1 |    384 B | ▏                |
+
+**`java.util.ArrayList`**
+
+| Holder Class                                                                                     |  Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.net.URLClassLoader`                                                                        |      2 |   2.0 MB | ████████████████ |
+| `java.lang.Class`                                                                                |      5 |  74.7 KB | ▌                |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████████▏    |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▎                |
+|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
+| `java.util.Collections$UnmodifiableRandomAccessList`                                             |    215 |  29.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |      6 |  16.4 KB | ▏                |
+|   ↳ `io.netty.buffer.PoolArena$HeapArena`                                                        |    101 |   8.7 KB | ▏                |
+|   ↳ `io.netty.buffer.PoolArena$DirectArena`                                                      |    101 |   8.7 KB | ▏                |
+|   ↳ `io.netty.buffer.PooledByteBufAllocator`                                                     |      6 |   1.2 KB | ▏                |
+|   ↳ `javax.management.openmbean.TabularType`                                                     |      2 |    144 B | ▏                |
+|   ↳ `sun.management.VMManagementImpl`                                                            |      1 |     72 B | ▏                |
+|   ↳ `org.sparkproject.jetty.server.HttpConnectionFactory`                                        |      1 |     72 B | ▏                |
+| `java.util.HashMap$Node`                                                                         |     35 |  28.8 KB | ▏                |
+|   ↳ `java.util.HashMap$Node[]`                                                                   | 12,159 |   2.0 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                                                                     |  3,830 | 659.2 KB | █████▏           |
+|   ↳ `java.lang.Object[]`                                                                         |     28 |   2.8 KB | ▏                |
+| `sun.reflect.generics.tree.ClassTypeSignature`                                                   |     70 |  17.0 KB | ▏                |
+|   ↳ `sun.reflect.generics.tree.MethodTypeSignature`                                              |     16 |   7.0 KB | ▏                |
+|   ↳ `sun.reflect.generics.tree.TypeArgument[]`                                                   |     32 |   5.7 KB | ▏                |
+|   ↳ `sun.reflect.generics.tree.TypeSignature[]`                                                  |      9 |   3.0 KB | ▏                |
+|   ↳ `sun.reflect.generics.tree.FieldTypeSignature[]`                                             |     11 |   1.9 KB | ▏                |
+|   ↳ `sun.reflect.generics.repository.FieldRepository`                                            |      1 |    384 B | ▏                |
+|   ↳ `sun.reflect.generics.tree.ClassSignature`                                                   |      1 |    176 B | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |    159 |  15.7 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              | 34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  8,033 | 626.6 KB | ████▉            |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`                                                |      1 |   4.1 KB | ▏                |
+| `org.sparkproject.jetty.util.DecoratedObjectFactory`                                             |     29 |   2.7 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     29 |   3.2 KB | ▏                |
+| `jdk.internal.loader.URLClassPath`                                                               |      8 |   2.5 KB | ▏                |
+|   ↳ `java.net.URLClassLoader`                                                                    |      2 |  87.8 KB | ▋                |
+|   ↳ `org.apache.spark.util.MutableURLClassLoader`                                                |      1 |    184 B | ▏                |
+| `org.sparkproject.jetty.servlet.ServletHandler`                                                  |     28 |   2.2 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     29 | 251.2 KB | █▉               |
+
+**`java.util.HashMap$Node`**
+
+| Holder Class                                                                   |  Count | Retained |                  |
+| ------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`                                                     | 12,159 |   2.0 MB | ████████████████ |
+|   ↳ `java.util.HashMap`                                                        |    716 |   2.2 MB | ████████████████ |
+|   ↳ `java.util.LinkedHashMap`                                                  |    302 |  30.7 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`                  |     32 |   2.5 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`                  |      2 |    352 B | ▏                |
+|   ↳ `com.thoughtworks.paranamer.BytecodeReadingParanamer$1`                    |      1 |    336 B | ▏                |
+| `java.util.HashMap$Node`                                                       |  3,830 | 659.2 KB | █████            |
+|   ↳ `java.util.HashMap$Node[]`                                                 | 12,159 |   2.0 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                                                   |  3,830 | 659.2 KB | █████            |
+|   ↳ `java.lang.Object[]`                                                       |     28 |   2.8 KB | ▏                |
+| `java.lang.Object[]`                                                           |     28 |   2.8 KB | ▏                |
+|   ↳ `java.lang.Class`                                                          |  6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                      |    547 |   2.1 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | █▏               |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | █                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | █                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |      1 |  75.3 KB | ▌                |
+|   ↳ `java.lang.Object[]`                                                       |    446 |  62.4 KB | ▍                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                         |  1,665 |  48.1 KB | ▎                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |     60 |  42.6 KB | ▎                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |      1 |  32.0 KB | ▏                |
+
+**`int[]`**
+
+| Holder Class                                                                                     | Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `java.util.zip.ZipFile$Source`                                                                   |   382 |   1.4 MB | ████████████████ |
+| `io.netty.buffer.PoolArena$DirectArena`                                                          |   303 | 145.2 KB | █▌               |
+| `io.netty.buffer.PoolArena$HeapArena`                                                            |   303 | 145.2 KB | █▌               |
+| `int[][]`                                                                                        | 4,397 | 139.2 KB | █▌               |
+|   ↳ `java.lang.Class`                                                                            |   176 | 159.4 KB | █▊               |
+| `java.lang.Class`                                                                                | 2,882 |  69.6 KB | ▊                |
+|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▍                |
+|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
+| `jdk.internal.math.FDBigInteger`                                                                 |   341 |  24.2 KB | ▎                |
+|   ↳ `jdk.internal.math.FDBigInteger[]`                                                           |   340 |  34.8 KB | ▍                |
+|   ↳ `java.lang.Object[]`                                                                         |     1 |     48 B | ▏                |
+| `org.apache.xbean.asm9.ClassReader`                                                              |     2 |  19.4 KB | ▏                |
+|   ↳ `java.lang.Thread`                                                                           |     1 | 200.4 KB | ██▏              |
+| `com.fasterxml.jackson.core.sym.ByteQuadsCanonicalizer$TableInfo`                                |     2 |   4.0 KB | ▏                |
+|   ↳ `java.util.concurrent.atomic.AtomicReference`                                                |     2 |   5.1 KB | ▏                |
+| `java.util.regex.Pattern$BnM`                                                                    |    12 |   3.4 KB | ▏                |
+|   ↳ `java.util.regex.Pattern`                                                                    |     6 |   3.6 KB | ▏                |
+| `java.lang.Object[]`                                                                             |    14 |   3.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            | 6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                                        |   547 |   2.1 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                        |   165 | 148.6 KB | █▋               |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |    36 | 144.8 KB | █▌               |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |   256 | 140.0 KB | █▌               |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |     1 |  75.3 KB | ▊                |
+|   ↳ `java.lang.Object[]`                                                                         |   446 |  62.4 KB | ▋                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           | 1,665 |  48.1 KB | ▌                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |    60 |  42.6 KB | ▍                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |     1 |  32.0 KB | ▎                |
+
+**`java.lang.ref.SoftReference`**
+
+| Holder Class                                           |  Count | Retained |                  |
+| ------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.util.jar.JarFile`                                |     63 |   1.3 MB | ████████████████ |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`           |      4 |  66.0 KB | ▊                |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`     |    559 |  97.5 KB | █▏               |
+| `java.lang.ref.SoftReference[]`                        |    535 |  60.7 KB | ▋                |
+|   ↳ `java.lang.invoke.MethodTypeForm`                  |  1,038 | 137.7 KB | █▌               |
+| `sun.util.locale.BaseLocale$Key`                       |  1,044 |  40.8 KB | ▍                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |  1,044 |  73.4 KB | ▊                |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`     |      1 |  10.3 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |      1 |  10.3 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |      1 |  10.3 KB | ▏                |
+| `sun.security.util.CryptoAlgorithmConstraints`         |      1 |    664 B | ▏                |
+|   ↳ `java.lang.Class`                                  |      1 |    688 B | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`          |      1 |    224 B | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`    | 34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |  8,033 | 626.6 KB | ███████▎         |
+| `org.apache.spark.broadcast.TorrentBroadcast`          |      2 |     80 B | ▏                |
+
+**`double[]`**
+
+| Holder Class                                                                                     |  Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.util.LinkedHashMap`                                                                        | 15,000 |   1.4 MB | ████████████████ |
+|   ↳ `org.apache.spark.storage.memory.MemoryStore`                                                |      1 |   2.3 MB | ████████████████ |
+|   ↳ `java.util.jar.Attributes`                                                                   |  5,841 | 561.6 KB | ██████▍          |
+|   ↳ `java.util.LinkedHashSet`                                                                    |     67 | 147.5 KB | █▋               |
+|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`                                         |    102 |  23.8 KB | ▎                |
+|   ↳ `java.lang.reflect.Method`                                                                   |     71 |  18.1 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`                                        |      1 |   8.0 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager`                            |      1 |   6.2 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`                               |      2 |   3.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Field`                                                                    |      3 |   1.1 KB | ▏                |
+|   ↳ `java.util.Collections$SingletonMap`                                                         |      2 |   1.1 KB | ▏                |
+| `java.lang.Class`                                                                                |     21 |  41.4 KB | ▍                |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▌                |
+|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
+| `java.lang.Object[]`                                                                             |  1,024 |  32.0 KB | ▎                |
+|   ↳ `java.lang.Class`                                                                            |  6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                                        |    547 |   2.1 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                        |    165 | 148.6 KB | █▋               |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |     36 | 144.8 KB | █▋               |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.0 KB | █▌               |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |      1 |  75.3 KB | ▊                |
+|   ↳ `java.lang.Object[]`                                                                         |    446 |  62.4 KB | ▋                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |  1,665 |  48.1 KB | ▌                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |     60 |  42.6 KB | ▍                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |      1 |  32.0 KB | ▎                |
+| `org.apache.spark.mllib.linalg.DenseMatrix`                                                      |     12 |   9.6 KB | ▏                |
+|   ↳ `org.apache.spark.mllib.stat.distribution.MultivariateGaussian`                              |     12 |   9.9 KB | ▏                |
+| `breeze.linalg.DenseMatrix$mcD$sp`                                                               |      6 |   4.8 KB | ▏                |
+|   ↳ `breeze.linalg.DenseMatrix[]`                                                                |      6 |   5.0 KB | ▏                |
+| `org.apache.spark.mllib.linalg.DenseVector`                                                      |     12 |   1.1 KB | ▏                |
+|   ↳ `org.apache.spark.mllib.linalg.Vector[]`                                                     | 15,000 | 234.4 KB | ██▋              |
+|   ↳ `org.apache.spark.mllib.stat.distribution.MultivariateGaussian`                              |     12 |   1.3 KB | ▏                |
+| `breeze.linalg.DenseVector$mcD$sp`                                                               |      6 |    576 B | ▏                |
+|   ↳ `breeze.linalg.Vector[]`                                                                     | 15,000 | 585.9 KB | ██████▋          |
+|   ↳ `breeze.linalg.DenseVector[]`                                                                |      6 |    816 B | ▏                |
+| `double[][]`                                                                                     |     15 |    480 B | ▏                |
+|   ↳ `java.lang.Class`                                                                            |      4 |   8.6 KB | ▏                |
+| `(GC Root)`                                                                                      |      1 |     64 B | ▏                |
+| `org.apache.spark.mllib.clustering.ExpectationSum`                                               |      1 |     64 B | ▏                |
+|   ↳ `java.lang.Thread`                                                                           |      1 |   6.0 KB | ▏                |
+
+**`java.util.jar.JarFile`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |   181 |   1.4 MB | ████████████████ |
 
 ### Retained Size Distribution
 
@@ -671,6 +1393,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `java.lang.Object[]`                                                       |        1,558 |     152,842 |          748.8 KB |            2.6 MB | ███▍             |
 | `java.lang.Class`                                                          |        8,886 |      19,244 |          131.4 KB |            1.6 MB | ██               |
 | `java.util.LinkedHashMap`                                                  |          302 |      18,039 |           18.9 KB |            1.5 MB | █▉               |
+| `(GC Root)`                                                                |            0 |      39,316 |               0 B |            1.2 MB | █▍               |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                            |          431 |      35,015 |          411.5 KB |            1.1 MB | █▍               |
 | `java.util.concurrent.ConcurrentHashMap$Node`                              |       33,138 |      41,685 |            1.0 MB |            1.0 MB | █▎               |
 | `breeze.linalg.Vector[]`                                                   |            2 |      15,000 |           58.6 KB |          585.9 KB | ▋                |
@@ -695,8 +1418,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`                  |            7 |           7 |             224 B |          117.3 KB | ▏                |
 | `java.lang.invoke.MemberName`                                              |        3,477 |       6,301 |          135.8 KB |          115.9 KB | ▏                |
 | `java.lang.invoke.DirectMethodHandle$Constructor`                          |        1,071 |       4,064 |           50.2 KB |          106.8 KB | ▏                |
-| `byte[][]`                                                                 |           25 |         372 |            1.9 KB |           94.2 KB | ▏                |
-| **Total**                                                                  |  **146,791** | **450,094** |        **5.5 MB** |       **29.1 MB** |                  |
+| **Total**                                                                  |  **146,766** | **489,038** |        **5.5 MB** |       **30.2 MB** |                  |
 
 ## Threads
 

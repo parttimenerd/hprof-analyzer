@@ -1,6 +1,6 @@
 {
   "schema_version": 11,
-  "generated": "2026-09-01T23:14:57.515148000Z",
+  "generated": "2026-10-30T22:40:46.130370000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -68550,10 +68550,359 @@
     ],
     "biggest_classes": [
       {
-        "pretty_class": "java.lang.Class",
-        "instances": 1697,
-        "retained": 3593040,
+        "pretty_class": "java.lang.Object[]",
+        "instances": 2237,
+        "retained": 3891600,
         "holders": [
+          {
+            "holder_class": "java.lang.Class",
+            "count": 1288,
+            "retained": 2855112,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+            "count": 129,
+            "retained": 599312,
+            "level2": [
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+                "count": 34,
+                "retained": 1009392
+              },
+              {
+                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
+                "count": 1,
+                "retained": 29688
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.ArrayList",
+            "count": 102,
+            "retained": 151928,
+            "level2": [
+              {
+                "holder_class": "java.net.URLClassLoader",
+                "count": 2,
+                "retained": 143680
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+                "count": 1,
+                "retained": 3080
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 31,
+                "retained": 2864
+              },
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 22,
+                "retained": 1768
+              },
+              {
+                "holder_class": "java.security.Provider$Service",
+                "count": 30,
+                "retained": 1568
+              },
+              {
+                "holder_class": "jdk.internal.loader.URLClassPath",
+                "count": 6,
+                "retained": 504
+              },
+              {
+                "holder_class": "java.util.logging.LogManager$RootLogger",
+                "count": 1,
+                "retained": 208
+              },
+              {
+                "holder_class": "scala.collection.convert.JavaCollectionWrappers$JListWrapper",
+                "count": 1,
+                "retained": 176
+              },
+              {
+                "holder_class": "java.lang.module.ModuleDescriptor$Version",
+                "count": 3,
+                "retained": 152
+              },
+              {
+                "holder_class": "java.util.logging.Logger",
+                "count": 1,
+                "retained": 128
+              }
+            ]
+          },
+          {
+            "holder_class": "scala.collection.mutable.ArrayBuffer",
+            "count": 1,
+            "retained": 128792,
+            "level2": [
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
+                "count": 1,
+                "retained": 128816
+              }
+            ]
+          },
+          {
+            "holder_class": "(GC Root)",
+            "count": 4,
+            "retained": 109120
+          },
+          {
+            "holder_class": "java.util.ImmutableCollections$SetN",
+            "count": 149,
+            "retained": 92256,
+            "level2": [
+              {
+                "holder_class": "sun.util.cldr.CLDRLocaleProviderAdapter",
+                "count": 1,
+                "retained": 61736
+              },
+              {
+                "holder_class": "java.lang.module.ModuleDescriptor",
+                "count": 92,
+                "retained": 28800
+              },
+              {
+                "holder_class": "java.lang.module.ModuleDescriptor$Exports",
+                "count": 26,
+                "retained": 2136
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 23,
+                "retained": 1736
+              },
+              {
+                "holder_class": "jdk.internal.module.SystemModuleFinders$SystemModuleFinder",
+                "count": 1,
+                "retained": 536
+              },
+              {
+                "holder_class": "java.lang.module.Configuration",
+                "count": 1,
+                "retained": 536
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 4,
+                "retained": 312
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 137,
+            "retained": 55648,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+            "count": 2,
+            "retained": 13152,
+            "level2": [
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.TxnSlotManager",
+                "count": 1,
+                "retained": 8456
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.WakeupManager",
+                "count": 1,
+                "retained": 4728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.invoke.LambdaForm$Name",
+            "count": 277,
+            "retained": 7840,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name[]",
+                "count": 330,
+                "retained": 24760
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm",
+                "count": 4,
+                "retained": 128
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+            "count": 77,
+            "retained": 7696,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 71,
+                "retained": 9488
+              },
+              {
+                "holder_class": "java.util.logging.Logger$ConfigurationData",
+                "count": 4,
+                "retained": 1168
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 64
+              },
+              {
+                "holder_class": "java.util.logging.LogManager",
+                "count": 1,
+                "retained": 56
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+        "instances": 129,
+        "retained": 3830504,
+        "holders": [
+          {
+            "holder_class": "(GC Root)",
+            "count": 94,
+            "retained": 2791424
+          },
+          {
+            "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+            "count": 34,
+            "retained": 1009392
+          },
+          {
+            "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
+            "count": 1,
+            "retained": 29688,
+            "level2": [
+              {
+                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry[]",
+                "count": 261,
+                "retained": 42368
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.lang.Class",
+        "instances": 2793,
+        "retained": 3725888,
+        "holders": [
+          {
+            "holder_class": "(GC Root)",
+            "count": 1688,
+            "retained": 3592392
+          },
           {
             "holder_class": "java.lang.Object[]",
             "count": 806,
@@ -68755,28 +69104,6 @@
             ]
           },
           {
-            "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
-            "count": 1,
-            "retained": 48,
-            "level2": [
-              {
-                "holder_class": "java.lang.Object[]",
-                "count": 1,
-                "retained": 64
-              }
-            ]
-          },
-          {
-            "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
-            "count": 1,
-            "retained": 48
-          },
-          {
-            "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
-            "count": 1,
-            "retained": 48
-          },
-          {
             "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
             "count": 1,
             "retained": 48,
@@ -68787,6 +69114,16 @@
                 "retained": 64
               }
             ]
+          },
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+            "count": 1,
+            "retained": 48
+          },
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+            "count": 1,
+            "retained": 48
           },
           {
             "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
@@ -68803,49 +69140,430 @@
         ]
       },
       {
-        "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl",
-        "instances": 94,
-        "retained": 2791424,
+        "pretty_class": "byte[]",
+        "instances": 24078,
+        "retained": 2674632,
         "holders": [
           {
-            "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
-            "count": 34,
-            "retained": 1009392
-          },
-          {
-            "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
-            "count": 1,
-            "retained": 29688,
+            "holder_class": "java.lang.String",
+            "count": 23215,
+            "retained": 1296536,
             "level2": [
               {
-                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry[]",
-                "count": 261,
-                "retained": 42368
+                "holder_class": "java.util.HashMap$Node",
+                "count": 7097,
+                "retained": 585920
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 1695,
+                "retained": 250968
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1721,
+                "retained": 109336
+              },
+              {
+                "holder_class": "java.util.LinkedHashMap$Entry",
+                "count": 1139,
+                "retained": 107784
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 909,
+                "retained": 61512
+              },
+              {
+                "holder_class": "java.lang.invoke.MethodType",
+                "count": 286,
+                "retained": 31688
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 283,
+                "retained": 18472
+              },
+              {
+                "holder_class": "java.lang.String[]",
+                "count": 252,
+                "retained": 14808
+              },
+              {
+                "holder_class": "java.net.URI",
+                "count": 129,
+                "retained": 7672
+              },
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+                "count": 128,
+                "retained": 7168
               }
             ]
+          },
+          {
+            "holder_class": "java.util.zip.ZipFile$Source",
+            "count": 19,
+            "retained": 1170272
+          },
+          {
+            "holder_class": "byte[][]",
+            "count": 345,
+            "retained": 94976,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 96376
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+            "count": 229,
+            "retained": 61016,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+                "count": 5713,
+                "retained": 477040
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 1447,
+                "retained": 107440
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+            "count": 116,
+            "retained": 33960,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap",
+                "count": 93,
+                "retained": 623256
+              }
+            ]
+          },
+          {
+            "holder_class": "java.nio.HeapByteBuffer",
+            "count": 5,
+            "retained": 9808,
+            "level2": [
+              {
+                "holder_class": "sun.nio.cs.StreamDecoder",
+                "count": 1,
+                "retained": 8264
+              },
+              {
+                "holder_class": "sun.nio.cs.StreamEncoder",
+                "count": 3,
+                "retained": 1752
+              }
+            ]
+          },
+          {
+            "holder_class": "(GC Root)",
+            "count": 76,
+            "retained": 3992
+          },
+          {
+            "holder_class": "java.lang.Class",
+            "count": 17,
+            "retained": 1368,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "sun.security.provider.NativePRNG$RandomIO",
+            "count": 3,
+            "retained": 816,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 3,
+                "retained": 1984
+              }
+            ]
+          },
+          {
+            "holder_class": "java.io.RandomAccessFile",
+            "count": 19,
+            "retained": 456
           }
         ]
       },
       {
-        "pretty_class": "java.util.zip.ZipFile$Source",
-        "instances": 19,
-        "retained": 1353616
-      },
-      {
-        "pretty_class": "java.util.jar.JarFile",
-        "instances": 19,
-        "retained": 1144560
-      },
-      {
-        "pretty_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
-        "instances": 128,
-        "retained": 1090432
+        "pretty_class": "java.lang.Object",
+        "instances": 134275,
+        "retained": 2148400,
+        "holders": [
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 131072,
+            "retained": 2097152,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+            "count": 2906,
+            "retained": 46496,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+                "count": 5713,
+                "retained": 477040
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 1447,
+                "retained": 107440
+              }
+            ]
+          },
+          {
+            "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+            "count": 128,
+            "retained": 2048
+          },
+          {
+            "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+            "count": 77,
+            "retained": 1232,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 71,
+                "retained": 9488
+              },
+              {
+                "holder_class": "java.util.logging.Logger$ConfigurationData",
+                "count": 4,
+                "retained": 1168
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 64
+              },
+              {
+                "holder_class": "java.util.logging.LogManager",
+                "count": 1,
+                "retained": 56
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Thread",
+            "count": 27,
+            "retained": 432,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 2,
+                "retained": 576
+              }
+            ]
+          },
+          {
+            "holder_class": "java.io.RandomAccessFile",
+            "count": 19,
+            "retained": 304
+          },
+          {
+            "holder_class": "java.lang.Class",
+            "count": 14,
+            "retained": 224,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "sun.security.provider.NativePRNG$RandomIO",
+            "count": 9,
+            "retained": 144,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 3,
+                "retained": 1984
+              }
+            ]
+          },
+          {
+            "holder_class": "(GC Root)",
+            "count": 3,
+            "retained": 48
+          },
+          {
+            "holder_class": "java.io.FileInputStream",
+            "count": 3,
+            "retained": 48
+          }
+        ]
       },
       {
         "pretty_class": "java.lang.String",
-        "instances": 9412,
-        "retained": 641944,
+        "instances": 23331,
+        "retained": 1856480,
         "holders": [
+          {
+            "holder_class": "(GC Root)",
+            "count": 9412,
+            "retained": 641944
+          },
           {
             "holder_class": "java.util.HashMap$Node",
             "count": 7097,
@@ -69148,97 +69866,128 @@
                 "retained": 200
               }
             ]
-          },
-          {
-            "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
-            "count": 128,
-            "retained": 7168
           }
         ]
       },
       {
-        "pretty_class": "java.lang.Thread",
-        "instances": 25,
-        "retained": 315936,
+        "pretty_class": "java.util.HashMap",
+        "instances": 361,
+        "retained": 1612352,
         "holders": [
           {
-            "holder_class": "java.lang.Object[]",
-            "count": 2,
-            "retained": 576,
+            "holder_class": "java.util.jar.Manifest",
+            "count": 8,
+            "retained": 1117400,
             "level2": [
               {
-                "holder_class": "java.lang.Class",
-                "count": 1288,
-                "retained": 2855112
-              },
-              {
-                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
-                "count": 129,
-                "retained": 599312
-              },
-              {
-                "holder_class": "java.util.ArrayList",
-                "count": 102,
-                "retained": 151928
-              },
-              {
-                "holder_class": "scala.collection.mutable.ArrayBuffer",
-                "count": 1,
-                "retained": 128792
-              },
-              {
-                "holder_class": "java.util.ImmutableCollections$SetN",
-                "count": 149,
-                "retained": 92256
-              },
-              {
-                "holder_class": "java.lang.Object[]",
-                "count": 137,
-                "retained": 55648
-              },
-              {
-                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
-                "count": 2,
-                "retained": 13152
-              },
-              {
-                "holder_class": "java.lang.invoke.LambdaForm$Name",
-                "count": 277,
-                "retained": 7840
-              },
-              {
-                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
-                "count": 77,
-                "retained": 7696
-              },
-              {
-                "holder_class": "java.util.ImmutableCollections$MapN",
-                "count": 6,
-                "retained": 6728
+                "holder_class": "java.lang.ref.SoftReference",
+                "count": 8,
+                "retained": 1138784
               }
             ]
-          }
-        ]
-      },
-      {
-        "pretty_class": "java.net.URLClassLoader",
-        "instances": 2,
-        "retained": 249328
-      },
-      {
-        "pretty_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
-        "instances": 1,
-        "retained": 159016
-      },
-      {
-        "pretty_class": "java.lang.Object[]",
-        "instances": 4,
-        "retained": 109120,
-        "holders": [
+          },
+          {
+            "holder_class": "org.renaissance.core.ModuleLoader",
+            "count": 2,
+            "retained": 151136,
+            "level2": [
+              {
+                "holder_class": "java.util.Optional",
+                "count": 1,
+                "retained": 75592
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 75592
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Thread",
+            "count": 1,
+            "retained": 140424,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 2,
+                "retained": 576
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.HashSet",
+            "count": 212,
+            "retained": 64896,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 140,
+                "retained": 28960
+              },
+              {
+                "holder_class": "java.util.Collections$UnmodifiableSet",
+                "count": 5,
+                "retained": 24528
+              },
+              {
+                "holder_class": "java.lang.Module",
+                "count": 62,
+                "retained": 13648
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 2,
+                "retained": 496
+              },
+              {
+                "holder_class": "java.nio.file.attribute.PosixFilePermissions$1",
+                "count": 2,
+                "retained": 480
+              },
+              {
+                "holder_class": "jdk.internal.jimage.ImageReader$SharedImageReader",
+                "count": 1,
+                "retained": 176
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Module",
+            "count": 56,
+            "retained": 49568,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 4,
+                "retained": 1696
+              },
+              {
+                "holder_class": "java.net.URLClassLoader",
+                "count": 2,
+                "retained": 96
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$BootClassLoader",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
           {
             "holder_class": "java.lang.Class",
-            "count": 1288,
-            "retained": 2855112,
+            "count": 21,
+            "retained": 38376,
             "level2": [
               {
                 "holder_class": "java.lang.Object[]",
@@ -69293,9 +70042,264 @@
             ]
           },
           {
+            "holder_class": "sun.text.resources.cldr.FormatData",
+            "count": 1,
+            "retained": 28952,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+                "count": 1,
+                "retained": 28992
+              }
+            ]
+          },
+          {
+            "holder_class": "sun.text.resources.cldr.FormatData_en",
+            "count": 1,
+            "retained": 20392,
+            "level2": [
+              {
+                "holder_class": "sun.util.resources.Bundles$BundleReference",
+                "count": 1,
+                "retained": 20432
+              }
+            ]
+          },
+          {
+            "holder_class": "java.security.Provider$Service",
+            "count": 42,
+            "retained": 13664,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+                "count": 30,
+                "retained": 13960
+              },
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 25,
+                "retained": 5136
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.ModuleLayer",
+            "count": 1,
+            "retained": 4272
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.util.HashMap$Node[]",
+        "instances": 395,
+        "retained": 1602800,
+        "holders": [
+          {
+            "holder_class": "java.util.HashMap",
+            "count": 348,
+            "retained": 1622992,
+            "level2": [
+              {
+                "holder_class": "java.util.jar.Manifest",
+                "count": 8,
+                "retained": 1117400
+              },
+              {
+                "holder_class": "org.renaissance.core.ModuleLoader",
+                "count": 2,
+                "retained": 151136
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 140424
+              },
+              {
+                "holder_class": "java.util.HashSet",
+                "count": 212,
+                "retained": 64896
+              },
+              {
+                "holder_class": "java.lang.Module",
+                "count": 56,
+                "retained": 49568
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 21,
+                "retained": 38376
+              },
+              {
+                "holder_class": "sun.text.resources.cldr.FormatData",
+                "count": 1,
+                "retained": 28952
+              },
+              {
+                "holder_class": "sun.text.resources.cldr.FormatData_en",
+                "count": 1,
+                "retained": 20392
+              },
+              {
+                "holder_class": "java.security.Provider$Service",
+                "count": 42,
+                "retained": 13664
+              },
+              {
+                "holder_class": "java.lang.ModuleLayer",
+                "count": 1,
+                "retained": 4272
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.LinkedHashMap",
+            "count": 47,
+            "retained": 10000,
+            "level2": [
+              {
+                "holder_class": "java.util.jar.Attributes",
+                "count": 5477,
+                "retained": 371080
+              },
+              {
+                "holder_class": "java.util.LinkedHashSet",
+                "count": 38,
+                "retained": 147400
+              },
+              {
+                "holder_class": "java.util.Collections$SingletonMap",
+                "count": 2,
+                "retained": 1096
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.util.HashMap$Node",
+        "instances": 9876,
+        "retained": 1521992,
+        "holders": [
+          {
+            "holder_class": "java.util.HashMap$Node[]",
+            "count": 7466,
+            "retained": 1531400,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap",
+                "count": 348,
+                "retained": 1622992
+              },
+              {
+                "holder_class": "java.util.LinkedHashMap",
+                "count": 47,
+                "retained": 10000
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.HashMap$Node",
+            "count": 2410,
+            "retained": 501696,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node[]",
+                "count": 7466,
+                "retained": 1531400
+              },
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 2410,
+                "retained": 501696
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.util.zip.ZipFile$Source",
+        "instances": 19,
+        "retained": 1353616,
+        "holders": [
+          {
+            "holder_class": "(GC Root)",
+            "count": 19,
+            "retained": 1353616
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.lang.ref.SoftReference",
+        "instances": 151,
+        "retained": 1158168,
+        "holders": [
+          {
+            "holder_class": "java.util.jar.JarFile",
+            "count": 8,
+            "retained": 1139104
+          },
+          {
+            "holder_class": "java.lang.ref.SoftReference[]",
+            "count": 129,
+            "retained": 15432,
+            "level2": [
+              {
+                "holder_class": "java.lang.invoke.MethodTypeForm",
+                "count": 250,
+                "retained": 34432
+              }
+            ]
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$BootClassLoader",
+            "count": 1,
+            "retained": 984
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+            "count": 1,
+            "retained": 984
+          },
+          {
+            "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+            "count": 1,
+            "retained": 984
+          },
+          {
+            "holder_class": "sun.util.locale.BaseLocale$Key",
+            "count": 10,
+            "retained": 400,
+            "level2": [
+              {
+                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
+                "count": 10,
+                "retained": 720
+              }
+            ]
+          },
+          {
+            "holder_class": "sun.security.util.CryptoAlgorithmConstraints",
+            "count": 1,
+            "retained": 280,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 304
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "long[]",
+        "instances": 173,
+        "retained": 1146072,
+        "holders": [
+          {
             "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
             "count": 129,
-            "retained": 599312,
+            "retained": 1058832,
             "level2": [
               {
                 "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
@@ -69310,323 +70314,14 @@
             ]
           },
           {
-            "holder_class": "java.util.ArrayList",
-            "count": 102,
-            "retained": 151928,
-            "level2": [
-              {
-                "holder_class": "java.net.URLClassLoader",
-                "count": 2,
-                "retained": 143680
-              },
-              {
-                "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
-                "count": 1,
-                "retained": 3080
-              },
-              {
-                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
-                "count": 31,
-                "retained": 2864
-              },
-              {
-                "holder_class": "java.util.HashMap$Node",
-                "count": 22,
-                "retained": 1768
-              },
-              {
-                "holder_class": "java.security.Provider$Service",
-                "count": 30,
-                "retained": 1568
-              },
-              {
-                "holder_class": "jdk.internal.loader.URLClassPath",
-                "count": 6,
-                "retained": 504
-              },
-              {
-                "holder_class": "java.util.logging.LogManager$RootLogger",
-                "count": 1,
-                "retained": 208
-              },
-              {
-                "holder_class": "scala.collection.convert.JavaCollectionWrappers$JListWrapper",
-                "count": 1,
-                "retained": 176
-              },
-              {
-                "holder_class": "java.lang.module.ModuleDescriptor$Version",
-                "count": 3,
-                "retained": 152
-              },
-              {
-                "holder_class": "java.util.logging.Logger",
-                "count": 1,
-                "retained": 128
-              }
-            ]
-          },
-          {
-            "holder_class": "scala.collection.mutable.ArrayBuffer",
+            "holder_class": "scala.concurrent.stm.skel.SimpleRandom$",
             "count": 1,
-            "retained": 128792,
-            "level2": [
-              {
-                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
-                "count": 1,
-                "retained": 128816
-              }
-            ]
-          },
-          {
-            "holder_class": "java.util.ImmutableCollections$SetN",
-            "count": 149,
-            "retained": 92256,
-            "level2": [
-              {
-                "holder_class": "sun.util.cldr.CLDRLocaleProviderAdapter",
-                "count": 1,
-                "retained": 61736
-              },
-              {
-                "holder_class": "java.lang.module.ModuleDescriptor",
-                "count": 92,
-                "retained": 28800
-              },
-              {
-                "holder_class": "java.lang.module.ModuleDescriptor$Exports",
-                "count": 26,
-                "retained": 2136
-              },
-              {
-                "holder_class": "java.lang.Object[]",
-                "count": 23,
-                "retained": 1736
-              },
-              {
-                "holder_class": "jdk.internal.module.SystemModuleFinders$SystemModuleFinder",
-                "count": 1,
-                "retained": 536
-              },
-              {
-                "holder_class": "java.lang.module.Configuration",
-                "count": 1,
-                "retained": 536
-              },
-              {
-                "holder_class": "java.lang.Class",
-                "count": 4,
-                "retained": 312
-              }
-            ]
-          },
-          {
-            "holder_class": "java.lang.Object[]",
-            "count": 137,
-            "retained": 55648,
-            "level2": [
-              {
-                "holder_class": "java.lang.Class",
-                "count": 1288,
-                "retained": 2855112
-              },
-              {
-                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
-                "count": 129,
-                "retained": 599312
-              },
-              {
-                "holder_class": "java.util.ArrayList",
-                "count": 102,
-                "retained": 151928
-              },
-              {
-                "holder_class": "scala.collection.mutable.ArrayBuffer",
-                "count": 1,
-                "retained": 128792
-              },
-              {
-                "holder_class": "java.util.ImmutableCollections$SetN",
-                "count": 149,
-                "retained": 92256
-              },
-              {
-                "holder_class": "java.lang.Object[]",
-                "count": 137,
-                "retained": 55648
-              },
-              {
-                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
-                "count": 2,
-                "retained": 13152
-              },
-              {
-                "holder_class": "java.lang.invoke.LambdaForm$Name",
-                "count": 277,
-                "retained": 7840
-              },
-              {
-                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
-                "count": 77,
-                "retained": 7696
-              },
-              {
-                "holder_class": "java.util.ImmutableCollections$MapN",
-                "count": 6,
-                "retained": 6728
-              }
-            ]
-          },
-          {
-            "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
-            "count": 2,
-            "retained": 13152,
-            "level2": [
-              {
-                "holder_class": "scala.concurrent.stm.ccstm.TxnSlotManager",
-                "count": 1,
-                "retained": 8456
-              },
-              {
-                "holder_class": "scala.concurrent.stm.ccstm.WakeupManager",
-                "count": 1,
-                "retained": 4728
-              }
-            ]
-          },
-          {
-            "holder_class": "java.lang.invoke.LambdaForm$Name",
-            "count": 277,
-            "retained": 7840,
-            "level2": [
-              {
-                "holder_class": "java.lang.invoke.LambdaForm$Name[]",
-                "count": 330,
-                "retained": 24760
-              },
-              {
-                "holder_class": "java.lang.invoke.LambdaForm",
-                "count": 4,
-                "retained": 128
-              }
-            ]
-          },
-          {
-            "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
-            "count": 77,
-            "retained": 7696,
-            "level2": [
-              {
-                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
-                "count": 71,
-                "retained": 9488
-              },
-              {
-                "holder_class": "java.util.logging.Logger$ConfigurationData",
-                "count": 4,
-                "retained": 1168
-              },
-              {
-                "holder_class": "java.lang.Class",
-                "count": 1,
-                "retained": 64
-              },
-              {
-                "holder_class": "java.util.logging.LogManager",
-                "count": 1,
-                "retained": 56
-              }
-            ]
-          },
-          {
-            "holder_class": "java.util.ImmutableCollections$MapN",
-            "count": 6,
-            "retained": 6728,
-            "level2": [
-              {
-                "holder_class": "java.lang.module.Configuration",
-                "count": 2,
-                "retained": 4688
-              },
-              {
-                "holder_class": "java.lang.Class",
-                "count": 2,
-                "retained": 1144
-              },
-              {
-                "holder_class": "jdk.internal.module.SystemModuleFinders$SystemModuleFinder",
-                "count": 1,
-                "retained": 1040
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "pretty_class": "java.lang.invoke.MethodType",
-        "instances": 660,
-        "retained": 86000,
-        "holders": [
-          {
-            "holder_class": "jdk.internal.util.WeakReferenceKey",
-            "count": 6,
-            "retained": 240,
-            "level2": [
-              {
-                "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
-                "count": 666,
-                "retained": 21552
-              },
-              {
-                "holder_class": "jdk.internal.util.ReferencedKeyMap",
-                "count": 3,
-                "retained": 96
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "pretty_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
-        "instances": 1,
-        "retained": 67504
-      },
-      {
-        "pretty_class": "scala.concurrent.stm.skel.SimpleRandom$",
-        "instances": 1,
-        "retained": 65576
-      },
-      {
-        "pretty_class": "java.lang.Module",
-        "instances": 61,
-        "retained": 64640,
-        "holders": [
-          {
-            "holder_class": "java.util.HashMap$Node",
-            "count": 4,
-            "retained": 1696,
-            "level2": [
-              {
-                "holder_class": "java.util.HashMap$Node[]",
-                "count": 7466,
-                "retained": 1531400
-              },
-              {
-                "holder_class": "java.util.HashMap$Node",
-                "count": 2410,
-                "retained": 501696
-              }
-            ]
-          },
-          {
-            "holder_class": "java.net.URLClassLoader",
-            "count": 2,
-            "retained": 96
+            "retained": 65552
           },
           {
             "holder_class": "java.lang.Class",
-            "count": 1,
-            "retained": 48,
+            "count": 7,
+            "retained": 10512,
             "level2": [
               {
                 "holder_class": "java.lang.Object[]",
@@ -69681,41 +70376,124 @@
             ]
           },
           {
-            "holder_class": "jdk.internal.loader.ClassLoaders$BootClassLoader",
+            "holder_class": "java.util.concurrent.atomic.AtomicLongArray",
             "count": 1,
-            "retained": 48
+            "retained": 4112,
+            "level2": [
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.WakeupManager",
+                "count": 1,
+                "retained": 4128
+              }
+            ]
           },
           {
-            "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+            "holder_class": "scala.concurrent.stm.ccstm.RetrySet",
+            "count": 25,
+            "retained": 3000,
+            "level2": [
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+                "count": 25,
+                "retained": 5400
+              }
+            ]
+          },
+          {
+            "holder_class": "(GC Root)",
             "count": 1,
-            "retained": 48
+            "retained": 2168
+          },
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 6,
+            "retained": 1336,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "java.time.zone.ZoneRules",
+            "count": 2,
+            "retained": 544
+          },
+          {
+            "holder_class": "sun.invoke.util.Wrapper",
+            "count": 1,
+            "retained": 16
           }
         ]
       },
       {
-        "pretty_class": "sun.security.provider.Sun",
-        "instances": 1,
-        "retained": 54968
+        "pretty_class": "java.util.jar.JarFile",
+        "instances": 19,
+        "retained": 1144560,
+        "holders": [
+          {
+            "holder_class": "(GC Root)",
+            "count": 19,
+            "retained": 1144560
+          }
+        ]
       },
       {
-        "pretty_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
-        "instances": 1,
-        "retained": 52592
-      },
-      {
-        "pretty_class": "java.lang.module.ModuleDescriptor",
-        "instances": 62,
-        "retained": 41000
-      },
-      {
-        "pretty_class": "java.lang.invoke.LambdaForm",
-        "instances": 93,
-        "retained": 35992,
+        "pretty_class": "java.util.jar.Manifest",
+        "instances": 8,
+        "retained": 1138784,
         "holders": [
           {
             "holder_class": "java.lang.ref.SoftReference",
-            "count": 26,
-            "retained": 10272,
+            "count": 8,
+            "retained": 1138784,
             "level2": [
               {
                 "holder_class": "java.util.jar.JarFile",
@@ -69753,131 +70531,309 @@
                 "retained": 280
               }
             ]
-          },
+          }
+        ]
+      },
+      {
+        "pretty_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+        "instances": 128,
+        "retained": 1090432,
+        "holders": [
           {
-            "holder_class": "java.lang.invoke.LambdaFormEditor$Transform",
-            "count": 6,
-            "retained": 2488,
+            "holder_class": "(GC Root)",
+            "count": 128,
+            "retained": 1090432
+          }
+        ]
+      },
+      {
+        "pretty_class": "scala.concurrent.stm.ccstm.Handle[]",
+        "instances": 283,
+        "retained": 1062696,
+        "holders": [
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+            "count": 258,
+            "retained": 1060896,
             "level2": [
               {
-                "holder_class": "java.lang.invoke.LambdaForm",
-                "count": 8,
-                "retained": 2080
-              },
-              {
-                "holder_class": "java.lang.invoke.LambdaFormEditor$Transform[]",
-                "count": 4,
-                "retained": 984
-              }
-            ]
-          },
-          {
-            "holder_class": "java.lang.invoke.LambdaForm[]",
-            "count": 1,
-            "retained": 480,
-            "level2": [
-              {
-                "holder_class": "java.lang.Class",
-                "count": 3,
-                "retained": 1104
-              }
-            ]
-          },
-          {
-            "holder_class": "java.lang.invoke.DirectMethodHandle",
-            "count": 1,
-            "retained": 200,
-            "level2": [
-              {
-                "holder_class": "java.lang.Object[]",
-                "count": 118,
-                "retained": 20200
-              },
-              {
-                "holder_class": "java.lang.invoke.MethodHandleImpl$AsVarargsCollector",
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
                 "count": 34,
-                "retained": 4656
+                "retained": 1009392
               },
               {
-                "holder_class": "java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle",
-                "count": 3,
-                "retained": 336
-              },
-              {
-                "holder_class": "java.lang.Class",
+                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
                 "count": 1,
-                "retained": 296
-              },
-              {
-                "holder_class": "java.util.ImmutableCollections$List12",
-                "count": 2,
-                "retained": 192
-              },
-              {
-                "holder_class": "java.lang.invoke.BoundMethodHandle$Species_LL",
-                "count": 1,
-                "retained": 96
-              },
-              {
-                "holder_class": "java.lang.invoke.BoundMethodHandle$SpeciesData",
-                "count": 1,
-                "retained": 96
-              },
-              {
-                "holder_class": "java.lang.invoke.MethodType",
-                "count": 1,
-                "retained": 40
-              },
-              {
-                "holder_class": "java.lang.Thread",
-                "count": 1,
-                "retained": 40
+                "retained": 29688
               }
             ]
           },
           {
-            "holder_class": "java.lang.invoke.BoundMethodHandle$Species_LL",
-            "count": 1,
-            "retained": 192,
+            "holder_class": "scala.concurrent.stm.ccstm.RetrySet",
+            "count": 25,
+            "retained": 1800,
             "level2": [
               {
-                "holder_class": "java.lang.Object[]",
-                "count": 8,
-                "retained": 744
-              },
-              {
-                "holder_class": "jdk.internal.reflect.DirectMethodHandleAccessor",
-                "count": 1,
-                "retained": 368
-              },
-              {
-                "holder_class": "java.lang.invoke.DirectMethodHandle",
-                "count": 1,
-                "retained": 80
-              },
-              {
-                "holder_class": "java.lang.Thread",
-                "count": 2,
-                "retained": 80
-              },
-              {
-                "holder_class": "java.lang.invoke.BoundMethodHandle$Species_LL",
-                "count": 2,
-                "retained": 80
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+                "count": 25,
+                "retained": 5400
               }
             ]
           }
         ]
       },
       {
-        "pretty_class": "java.io.PrintStream",
-        "instances": 2,
-        "retained": 35416
+        "pretty_class": "int[]",
+        "instances": 1346,
+        "retained": 896960,
+        "holders": [
+          {
+            "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+            "count": 258,
+            "retained": 665640,
+            "level2": [
+              {
+                "holder_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+                "count": 34,
+                "retained": 1009392
+              },
+              {
+                "holder_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
+                "count": 1,
+                "retained": 29688
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.zip.ZipFile$Source",
+            "count": 38,
+            "retained": 181824
+          },
+          {
+            "holder_class": "jdk.internal.math.FDBigInteger",
+            "count": 341,
+            "retained": 24800,
+            "level2": [
+              {
+                "holder_class": "jdk.internal.math.FDBigInteger[]",
+                "count": 340,
+                "retained": 35664
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Class",
+            "count": 616,
+            "retained": 21160,
+            "level2": [
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 806,
+                "retained": 130640
+              },
+              {
+                "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+                "count": 70,
+                "retained": 4608
+              },
+              {
+                "holder_class": "java.lang.invoke.MemberName",
+                "count": 61,
+                "retained": 976
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 18,
+                "retained": 432
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628",
+                "count": 1,
+                "retained": 48
+              },
+              {
+                "holder_class": "scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000",
+                "count": 1,
+                "retained": 48
+              }
+            ]
+          },
+          {
+            "holder_class": "java.math.BigInteger",
+            "count": 59,
+            "retained": 1408,
+            "level2": [
+              {
+                "holder_class": "java.math.BigInteger[]",
+                "count": 70,
+                "retained": 4120
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 20,
+                "retained": 888
+              }
+            ]
+          },
+          {
+            "holder_class": "java.lang.Object[]",
+            "count": 6,
+            "retained": 664,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1288,
+                "retained": 2855112
+              },
+              {
+                "holder_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+                "count": 129,
+                "retained": 599312
+              },
+              {
+                "holder_class": "java.util.ArrayList",
+                "count": 102,
+                "retained": 151928
+              },
+              {
+                "holder_class": "scala.collection.mutable.ArrayBuffer",
+                "count": 1,
+                "retained": 128792
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$SetN",
+                "count": 149,
+                "retained": 92256
+              },
+              {
+                "holder_class": "java.lang.Object[]",
+                "count": 137,
+                "retained": 55648
+              },
+              {
+                "holder_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+                "count": 2,
+                "retained": 13152
+              },
+              {
+                "holder_class": "java.lang.invoke.LambdaForm$Name",
+                "count": 277,
+                "retained": 7840
+              },
+              {
+                "holder_class": "java.util.concurrent.CopyOnWriteArrayList",
+                "count": 77,
+                "retained": 7696
+              },
+              {
+                "holder_class": "java.util.ImmutableCollections$MapN",
+                "count": 6,
+                "retained": 6728
+              }
+            ]
+          },
+          {
+            "holder_class": "int[][]",
+            "count": 10,
+            "retained": 560,
+            "level2": [
+              {
+                "holder_class": "java.lang.Class",
+                "count": 1,
+                "retained": 616
+              }
+            ]
+          },
+          {
+            "holder_class": "sun.security.provider.SHA",
+            "count": 2,
+            "retained": 376,
+            "level2": [
+              {
+                "holder_class": "java.security.MessageDigest$Delegate$CloneableDelegate",
+                "count": 1,
+                "retained": 512
+              }
+            ]
+          },
+          {
+            "holder_class": "sun.nio.fs.UnixPath",
+            "count": 10,
+            "retained": 360,
+            "level2": [
+              {
+                "holder_class": "java.io.FilePermission",
+                "count": 7,
+                "retained": 504
+              },
+              {
+                "holder_class": "org.renaissance.core.BenchmarkSuite$SuiteBenchmarkContext",
+                "count": 1,
+                "retained": 248
+              },
+              {
+                "holder_class": "java.lang.Class",
+                "count": 5,
+                "retained": 160
+              },
+              {
+                "holder_class": "java.lang.Thread",
+                "count": 1,
+                "retained": 32
+              },
+              {
+                "holder_class": "sun.nio.fs.LinuxFileSystem",
+                "count": 1,
+                "retained": 32
+              },
+              {
+                "holder_class": "sun.nio.fs.NativeBuffer",
+                "count": 1,
+                "retained": 32
+              },
+              {
+                "holder_class": "org.renaissance.harness.Config",
+                "count": 1,
+                "retained": 32
+              }
+            ]
+          },
+          {
+            "holder_class": "(GC Root)",
+            "count": 4,
+            "retained": 128
+          }
+        ]
       },
       {
         "pretty_class": "java.util.concurrent.ConcurrentHashMap",
-        "instances": 1,
-        "retained": 34864,
+        "instances": 117,
+        "retained": 625920,
         "holders": [
           {
             "holder_class": "java.lang.Class",
@@ -69981,6 +70937,11 @@
             "retained": 51136
           },
           {
+            "holder_class": "(GC Root)",
+            "count": 1,
+            "retained": 34864
+          },
+          {
             "holder_class": "jdk.internal.module.ServicesCatalog",
             "count": 4,
             "retained": 12736,
@@ -70008,21 +70969,126 @@
                 "retained": 1688
               }
             ]
-          },
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+        "instances": 93,
+        "retained": 619216,
+        "holders": [
           {
-            "holder_class": "java.security.Permissions",
-            "count": 9,
-            "retained": 3888,
+            "holder_class": "java.util.concurrent.ConcurrentHashMap",
+            "count": 93,
+            "retained": 623256,
             "level2": [
               {
-                "holder_class": "java.security.ProtectionDomain",
-                "count": 7,
-                "retained": 3640
+                "holder_class": "java.lang.Class",
+                "count": 27,
+                "retained": 120016
               },
               {
-                "holder_class": "sun.security.util.LazyCodeSourcePermissionCollection",
+                "holder_class": "java.time.zone.TzdbZoneRulesProvider",
+                "count": 1,
+                "retained": 118480
+              },
+              {
+                "holder_class": "java.net.URLClassLoader",
+                "count": 8,
+                "retained": 94720
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+                "count": 7,
+                "retained": 62376
+              },
+              {
+                "holder_class": "sun.security.provider.Sun",
+                "count": 3,
+                "retained": 54440
+              },
+              {
+                "holder_class": "jdk.internal.util.ReferencedKeyMap",
+                "count": 1,
+                "retained": 51328
+              },
+              {
+                "holder_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+                "count": 7,
+                "retained": 51136
+              },
+              {
+                "holder_class": "jdk.internal.module.ServicesCatalog",
+                "count": 4,
+                "retained": 12736
+              },
+              {
+                "holder_class": "java.util.Properties",
+                "count": 4,
+                "retained": 8576
+              },
+              {
+                "holder_class": "java.security.Permissions",
+                "count": 9,
+                "retained": 3888
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "java.util.LinkedHashMap",
+        "instances": 5517,
+        "retained": 519576,
+        "holders": [
+          {
+            "holder_class": "java.util.jar.Attributes",
+            "count": 5477,
+            "retained": 371080,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 5469,
+                "retained": 437520
+              },
+              {
+                "holder_class": "java.util.jar.Manifest",
+                "count": 8,
+                "retained": 21192
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.LinkedHashSet",
+            "count": 38,
+            "retained": 147400,
+            "level2": [
+              {
+                "holder_class": "java.util.HashMap$Node",
+                "count": 36,
+                "retained": 147600
+              },
+              {
+                "holder_class": "sun.security.provider.Sun",
+                "count": 1,
+                "retained": 328
+              },
+              {
+                "holder_class": "sun.security.jca.ProviderList$1",
+                "count": 1,
+                "retained": 80
+              }
+            ]
+          },
+          {
+            "holder_class": "java.util.Collections$SingletonMap",
+            "count": 2,
+            "retained": 1096,
+            "level2": [
+              {
+                "holder_class": "java.time.format.DateTimeTextProvider$LocaleStore",
                 "count": 2,
-                "retained": 536
+                "retained": 1256
               }
             ]
           }
@@ -94382,6 +95448,13 @@
           "dominated_shallow": 776472
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominator_count": 0,
+          "dominated_count": 13945,
+          "dominator_shallow": 0,
+          "dominated_shallow": 434208
+        },
+        {
           "dominator_class": "scala.concurrent.stm.skel.CallbackList",
           "dominator_count": 774,
           "dominated_count": 774,
@@ -94548,22 +95621,29 @@
           "dominated_count": 341,
           "dominator_shallow": 1376,
           "dominated_shallow": 10880
-        },
-        {
-          "dominator_class": "java.lang.invoke.LambdaForm$Name[]",
-          "dominator_count": 126,
-          "dominated_count": 330,
-          "dominator_shallow": 5408,
-          "dominated_shallow": 10560
         }
       ],
       "pairs": [
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Class",
+          "pair_count": 1697,
+          "dominated_retained": 3593040,
+          "dominated_shallow": 26448
+        },
         {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.lang.Object[]",
           "pair_count": 1288,
           "dominated_retained": 2855112,
           "dominated_shallow": 624696
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+          "pair_count": 94,
+          "dominated_retained": 2791424,
+          "dominated_shallow": 13536
         },
         {
           "dominator_class": "java.lang.Object[]",
@@ -94587,6 +95667,13 @@
           "dominated_shallow": 238912
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.ZipFile$Source",
+          "pair_count": 19,
+          "dominated_retained": 1353616,
+          "dominated_shallow": 1520
+        },
+        {
           "dominator_class": "java.lang.String",
           "dominated_class": "byte[]",
           "pair_count": 23215,
@@ -94599,6 +95686,13 @@
           "pair_count": 19,
           "dominated_retained": 1170272,
           "dominated_shallow": 1170272
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.jar.JarFile",
+          "pair_count": 19,
+          "dominated_retained": 1144560,
+          "dominated_shallow": 1216
         },
         {
           "dominator_class": "java.util.jar.JarFile",
@@ -94620,6 +95714,13 @@
           "pair_count": 8,
           "dominated_retained": 1117400,
           "dominated_shallow": 384
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+          "pair_count": 128,
+          "dominated_retained": 1090432,
+          "dominated_shallow": 16384
         },
         {
           "dominator_class": "scala.concurrent.stm.ccstm.InTxnImpl",
@@ -94648,6 +95749,13 @@
           "pair_count": 258,
           "dominated_retained": 665640,
           "dominated_shallow": 665640
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.String",
+          "pair_count": 9412,
+          "dominated_retained": 641944,
+          "dominated_shallow": 225888
         },
         {
           "dominator_class": "java.util.concurrent.ConcurrentHashMap",
@@ -94713,6 +95821,13 @@
           "dominated_shallow": 350528
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Thread",
+          "pair_count": 25,
+          "dominated_retained": 315936,
+          "dominated_shallow": 2600
+        },
+        {
           "dominator_class": "java.lang.Object[]",
           "dominated_class": "java.lang.String",
           "pair_count": 1695,
@@ -94720,11 +95835,25 @@
           "dominated_shallow": 40680
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.net.URLClassLoader",
+          "pair_count": 2,
+          "dominated_retained": 249328,
+          "dominated_shallow": 176
+        },
+        {
           "dominator_class": "java.util.zip.ZipFile$Source",
           "dominated_class": "int[]",
           "pair_count": 38,
           "dominated_retained": 181824,
           "dominated_shallow": 181824
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
+          "pair_count": 1,
+          "dominated_retained": 159016,
+          "dominated_shallow": 120
         },
         {
           "dominator_class": "java.util.LinkedHashMap",
@@ -94825,6 +95954,13 @@
           "dominated_shallow": 41304
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Object[]",
+          "pair_count": 4,
+          "dominated_retained": 109120,
+          "dominated_shallow": 40960
+        },
+        {
           "dominator_class": "java.util.LinkedHashMap$Entry",
           "dominated_class": "java.lang.String",
           "pair_count": 1139,
@@ -94867,6 +96003,13 @@
           "dominated_shallow": 23888
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MethodType",
+          "pair_count": 660,
+          "dominated_retained": 86000,
+          "dominated_shallow": 26400
+        },
+        {
           "dominator_class": "java.lang.Thread",
           "dominated_class": "org.renaissance.core.BenchmarkSuite",
           "pair_count": 1,
@@ -94895,6 +96038,20 @@
           "dominated_shallow": 24
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+          "pair_count": 1,
+          "dominated_retained": 67504,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.skel.SimpleRandom$",
+          "pair_count": 1,
+          "dominated_retained": 65576,
+          "dominated_shallow": 24
+        },
+        {
           "dominator_class": "scala.concurrent.stm.skel.SimpleRandom$",
           "dominated_class": "long[]",
           "pair_count": 1,
@@ -94907,6 +96064,13 @@
           "pair_count": 212,
           "dominated_retained": 64896,
           "dominated_shallow": 10176
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Module",
+          "pair_count": 61,
+          "dominated_retained": 64640,
+          "dominated_shallow": 2928
         },
         {
           "dominator_class": "java.lang.Class",
@@ -94951,6 +96115,13 @@
           "dominated_shallow": 18256
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.security.provider.Sun",
+          "pair_count": 1,
+          "dominated_retained": 54968,
+          "dominated_shallow": 104
+        },
+        {
           "dominator_class": "scala.collection.immutable.$colon$colon",
           "dominated_class": "scala.collection.immutable.$colon$colon",
           "pair_count": 21,
@@ -94970,6 +96141,13 @@
           "pair_count": 130,
           "dominated_retained": 52768,
           "dominated_shallow": 10400
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
+          "pair_count": 1,
+          "dominated_retained": 52592,
+          "dominated_shallow": 96
         },
         {
           "dominator_class": "java.lang.Class",
@@ -95021,6 +96199,13 @@
           "dominated_shallow": 8352
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.module.ModuleDescriptor",
+          "pair_count": 62,
+          "dominated_retained": 41000,
+          "dominated_shallow": 3968
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.util.HashMap",
           "pair_count": 21,
@@ -95035,11 +96220,32 @@
           "dominated_shallow": 1376
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.LambdaForm",
+          "pair_count": 93,
+          "dominated_retained": 35992,
+          "dominated_shallow": 4464
+        },
+        {
           "dominator_class": "jdk.internal.math.FDBigInteger[]",
           "dominated_class": "jdk.internal.math.FDBigInteger",
           "pair_count": 340,
           "dominated_retained": 35664,
           "dominated_shallow": 10880
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.PrintStream",
+          "pair_count": 2,
+          "dominated_retained": 35416,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.ConcurrentHashMap",
+          "pair_count": 1,
+          "dominated_retained": 34864,
+          "dominated_shallow": 64
         },
         {
           "dominator_class": "java.lang.invoke.MethodTypeForm",
@@ -95075,6 +96281,13 @@
           "pair_count": 286,
           "dominated_retained": 31688,
           "dominated_shallow": 6864
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MethodTypeForm",
+          "pair_count": 101,
+          "dominated_retained": 30080,
+          "dominated_shallow": 3232
         },
         {
           "dominator_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
@@ -95336,6 +96549,27 @@
           "dominated_shallow": 12472
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.net.URI",
+          "pair_count": 61,
+          "dominated_retained": 12096,
+          "dominated_shallow": 4880
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ModuleLayer",
+          "pair_count": 2,
+          "dominated_retained": 12032,
+          "dominated_shallow": 80
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.TxnLevelImpl",
+          "pair_count": 95,
+          "dominated_retained": 11208,
+          "dominated_shallow": 10640
+        },
+        {
           "dominator_class": "java.lang.invoke.LambdaForm",
           "dominated_class": "java.lang.invoke.MemberName",
           "pair_count": 128,
@@ -95420,11 +96654,32 @@
           "dominated_shallow": 80
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.module.ModuleReferenceImpl",
+          "pair_count": 62,
+          "dominated_retained": 9088,
+          "dominated_shallow": 3472
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.WakeupManager",
+          "pair_count": 1,
+          "dominated_retained": 8888,
+          "dominated_shallow": 32
+        },
+        {
           "dominator_class": "java.util.Properties",
           "dominated_class": "java.util.concurrent.ConcurrentHashMap",
           "pair_count": 4,
           "dominated_retained": 8576,
           "dominated_shallow": 256
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.TxnSlotManager",
+          "pair_count": 1,
+          "dominated_retained": 8480,
+          "dominated_shallow": 24
         },
         {
           "dominator_class": "scala.concurrent.stm.ccstm.TxnSlotManager",
@@ -95446,6 +96701,13 @@
           "pair_count": 1,
           "dominated_retained": 8416,
           "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.ZipFile$CleanableResource",
+          "pair_count": 20,
+          "dominated_retained": 8320,
+          "dominated_shallow": 640
         },
         {
           "dominator_class": "sun.nio.cs.StreamDecoder",
@@ -95567,6 +96829,13 @@
           "dominated_shallow": 6864
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.module.Configuration",
+          "pair_count": 2,
+          "dominated_retained": 6816,
+          "dominated_shallow": 80
+        },
+        {
           "dominator_class": "java.lang.invoke.LambdaForm$Name",
           "dominated_class": "java.lang.invoke.LambdaForm$NamedFunction",
           "pair_count": 112,
@@ -95586,6 +96855,13 @@
           "pair_count": 27,
           "dominated_retained": 6712,
           "dominated_shallow": 872
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.zone.ZoneRules",
+          "pair_count": 1,
+          "dominated_retained": 6640,
+          "dominated_shallow": 40
         },
         {
           "dominator_class": "java.lang.Object[]",
@@ -95691,6 +96967,13 @@
           "pair_count": 3,
           "dominated_retained": 5232,
           "dominated_shallow": 264
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.module.ServicesCatalog",
+          "pair_count": 3,
+          "dominated_retained": 5144,
+          "dominated_shallow": 48
         },
         {
           "dominator_class": "java.lang.Object[]",
@@ -95868,6 +97151,20 @@
           "dominated_shallow": 48
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.loader.ClassLoaders$BootClassLoader",
+          "pair_count": 1,
+          "dominated_retained": 4240,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.logging.LogManager",
+          "pair_count": 1,
+          "dominated_retained": 4144,
+          "dominated_shallow": 56
+        },
+        {
           "dominator_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
           "dominated_class": "sun.nio.ch.Util$BufferCache",
           "pair_count": 1,
@@ -95917,6 +97214,20 @@
           "dominated_shallow": 4096
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "byte[]",
+          "pair_count": 76,
+          "dominated_retained": 3992,
+          "dominated_shallow": 3992
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.ZipFile$Source$Key",
+          "pair_count": 19,
+          "dominated_retained": 3984,
+          "dominated_shallow": 456
+        },
+        {
           "dominator_class": "java.lang.Integer[]",
           "dominated_class": "java.lang.Integer",
           "pair_count": 246,
@@ -95945,6 +97256,13 @@
           "dominated_shallow": 1632
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.OutOfMemoryError[]",
+          "pair_count": 2,
+          "dominated_retained": 3768,
+          "dominated_shallow": 80
+        },
+        {
           "dominator_class": "jdk.internal.loader.URLClassPath",
           "dominated_class": "java.util.HashMap",
           "pair_count": 3,
@@ -95964,6 +97282,20 @@
           "pair_count": 7,
           "dominated_retained": 3640,
           "dominated_shallow": 224
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef",
+          "pair_count": 115,
+          "dominated_retained": 3576,
+          "dominated_shallow": 2760
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.security.ProtectionDomain",
+          "pair_count": 6,
+          "dominated_retained": 3504,
+          "dominated_shallow": 240
         },
         {
           "dominator_class": "java.lang.Thread",
@@ -96085,6 +97417,20 @@
           "dominated_shallow": 128
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MemberName",
+          "pair_count": 37,
+          "dominated_retained": 2672,
+          "dominated_shallow": 1480
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Class[]",
+          "pair_count": 95,
+          "dominated_retained": 2648,
+          "dominated_shallow": 2648
+        },
+        {
           "dominator_class": "java.net.URL",
           "dominated_class": "java.lang.String",
           "pair_count": 19,
@@ -96118,6 +97464,13 @@
           "pair_count": 24,
           "dominated_retained": 2520,
           "dominated_shallow": 1920
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$Fork",
+          "pair_count": 128,
+          "dominated_retained": 2504,
+          "dominated_shallow": 2048
         },
         {
           "dominator_class": "java.time.format.DateTimeFormatterBuilder$TextPrinterParser",
@@ -96209,6 +97562,27 @@
           "pair_count": 7,
           "dominated_retained": 2184,
           "dominated_shallow": 168
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.VarForm",
+          "pair_count": 8,
+          "dominated_retained": 2176,
+          "dominated_shallow": 256
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "long[]",
+          "pair_count": 1,
+          "dominated_retained": 2168,
+          "dominated_shallow": 2168
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.ref.CleanerImpl$PhantomCleanableRef",
+          "pair_count": 44,
+          "dominated_retained": 2136,
+          "dominated_shallow": 2112
         },
         {
           "dominator_class": "java.lang.module.ModuleDescriptor$Exports",
@@ -96344,6 +97718,13 @@
           "dominated_shallow": 1800
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.DirectMethodHandle",
+          "pair_count": 34,
+          "dominated_retained": 1776,
+          "dominated_shallow": 1360
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "sun.util.locale.BaseLocale$Cache",
           "pair_count": 1,
@@ -96391,6 +97772,13 @@
           "pair_count": 40,
           "dominated_retained": 1736,
           "dominated_shallow": 1736
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.ChronoField",
+          "pair_count": 18,
+          "dominated_retained": 1728,
+          "dominated_shallow": 864
         },
         {
           "dominator_class": "java.lang.Class",
@@ -96491,11 +97879,32 @@
           "dominated_shallow": 720
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.LambdaForm$NamedFunction",
+          "pair_count": 21,
+          "dominated_retained": 1536,
+          "dominated_shallow": 504
+        },
+        {
           "dominator_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
           "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0",
           "pair_count": 96,
           "dominated_retained": 1536,
           "dominated_shallow": 1536
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.logging.Logger",
+          "pair_count": 3,
+          "dominated_retained": 1528,
+          "dominated_shallow": 168
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.RandomAccessFile",
+          "pair_count": 19,
+          "dominated_retained": 1520,
+          "dominated_shallow": 760
         },
         {
           "dominator_class": "java.lang.Character[]",
@@ -96568,11 +97977,25 @@
           "dominated_shallow": 1352
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.LambdaForm$Name",
+          "pair_count": 33,
+          "dominated_retained": 1424,
+          "dominated_shallow": 1056
+        },
+        {
           "dominator_class": "java.util.jar.JarFile",
           "dominated_class": "java.lang.String",
           "pair_count": 19,
           "dominated_retained": 1424,
           "dominated_shallow": 456
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.Inflater",
+          "pair_count": 22,
+          "dominated_retained": 1408,
+          "dominated_shallow": 1408
         },
         {
           "dominator_class": "java.math.BigInteger",
@@ -96680,6 +98103,13 @@
           "dominated_shallow": 120
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.util.locale.BaseLocale",
+          "pair_count": 29,
+          "dominated_retained": 1216,
+          "dominated_shallow": 928
+        },
+        {
           "dominator_class": "java.lang.ref.ReferenceQueue",
           "dominated_class": "java.util.concurrent.locks.ReentrantLock$NonfairSync",
           "pair_count": 38,
@@ -96699,6 +98129,20 @@
           "pair_count": 50,
           "dominated_retained": 1200,
           "dominated_shallow": 1200
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.invoke.util.Wrapper",
+          "pair_count": 10,
+          "dominated_retained": 1184,
+          "dominated_shallow": 560
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.FileCleanable",
+          "pair_count": 21,
+          "dominated_retained": 1176,
+          "dominated_shallow": 1176
         },
         {
           "dominator_class": "java.security.CodeSource",
@@ -96820,6 +98264,13 @@
           "dominated_shallow": 24
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.security.CodeSource",
+          "pair_count": 6,
+          "dominated_retained": 1048,
+          "dominated_shallow": 240
+        },
+        {
           "dominator_class": "java.lang.invoke.LambdaForm",
           "dominated_class": "java.lang.invoke.LambdaFormEditor$Transform[]",
           "pair_count": 2,
@@ -96890,6 +98341,13 @@
           "dominated_shallow": 496
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.FileDescriptor",
+          "pair_count": 24,
+          "dominated_retained": 960,
+          "dominated_shallow": 960
+        },
+        {
           "dominator_class": "jdk.internal.module.ModuleReferenceImpl",
           "dominated_class": "jdk.internal.module.SystemModuleFinders$3",
           "pair_count": 60,
@@ -96953,11 +98411,25 @@
           "dominated_shallow": 384
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.BoundMethodHandle$SpeciesData",
+          "pair_count": 3,
+          "dominated_retained": 888,
+          "dominated_shallow": 144
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.math.BigInteger",
           "pair_count": 20,
           "dominated_retained": 888,
           "dominated_shallow": 800
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.jimage.ImageReader$SharedImageReader",
+          "pair_count": 1,
+          "dominated_retained": 848,
+          "dominated_shallow": 96
         },
         {
           "dominator_class": "java.util.logging.LogManager$LogNode",
@@ -96979,6 +98451,13 @@
           "pair_count": 3,
           "dominated_retained": 816,
           "dominated_shallow": 816
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.BoundMethodHandle$Specializer",
+          "pair_count": 1,
+          "dominated_retained": 808,
+          "dominated_shallow": 56
         },
         {
           "dominator_class": "java.lang.Class",
@@ -97049,6 +98528,13 @@
           "pair_count": 8,
           "dominated_retained": 744,
           "dominated_shallow": 320
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.ChronoUnit",
+          "pair_count": 13,
+          "dominated_retained": 728,
+          "dominated_shallow": 416
         },
         {
           "dominator_class": "java.lang.Class",
@@ -97233,6 +98719,13 @@
           "dominated_shallow": 48
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.CCSTMRefs$IntRef",
+          "pair_count": 24,
+          "dominated_retained": 576,
+          "dominated_shallow": 576
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.net.URI",
           "pair_count": 3,
@@ -97296,6 +98789,13 @@
           "dominated_shallow": 336
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.LambdaForm$Kind",
+          "pair_count": 17,
+          "dominated_retained": 544,
+          "dominated_shallow": 544
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "sun.security.jca.ProviderList",
           "pair_count": 2,
@@ -97338,6 +98838,34 @@
           "dominated_shallow": 64
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Character",
+          "pair_count": 33,
+          "dominated_retained": 528,
+          "dominated_shallow": 528
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.Inflater$InflaterZStreamRef",
+          "pair_count": 22,
+          "dominated_retained": 528,
+          "dominated_shallow": 528
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$Fork[]",
+          "pair_count": 1,
+          "dominated_retained": 528,
+          "dominated_shallow": 528
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread[]",
+          "pair_count": 1,
+          "dominated_retained": 528,
+          "dominated_shallow": 528
+        },
+        {
           "dominator_class": "java.io.PrintStream",
           "dominated_class": "java.io.BufferedOutputStream",
           "pair_count": 2,
@@ -97350,6 +98878,13 @@
           "pair_count": 1,
           "dominated_retained": 520,
           "dominated_shallow": 112
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.Locale",
+          "pair_count": 13,
+          "dominated_retained": 512,
+          "dominated_shallow": 416
         },
         {
           "dominator_class": "java.lang.Class",
@@ -97434,6 +98969,13 @@
           "pair_count": 1,
           "dominated_retained": 488,
           "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.ResolvedMethodName",
+          "pair_count": 30,
+          "dominated_retained": 480,
+          "dominated_shallow": 480
         },
         {
           "dominator_class": "java.lang.Object[]",
@@ -97548,6 +99090,13 @@
           "dominated_shallow": 312
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.net.URL",
+          "pair_count": 7,
+          "dominated_retained": 448,
+          "dominated_shallow": 448
+        },
+        {
           "dominator_class": "java.lang.invoke.MemberName[]",
           "dominated_class": "java.lang.invoke.MemberName",
           "pair_count": 8,
@@ -97567,6 +99116,13 @@
           "pair_count": 1,
           "dominated_retained": 448,
           "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ImmutableCollections$ListN",
+          "pair_count": 2,
+          "dominated_retained": 440,
+          "dominated_shallow": 48
         },
         {
           "dominator_class": "java.lang.Package",
@@ -97611,6 +99167,13 @@
           "dominated_shallow": 128
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.PolicyType$",
+          "pair_count": 1,
+          "dominated_retained": 408,
+          "dominated_shallow": 56
+        },
+        {
           "dominator_class": "java.lang.invoke.BoundMethodHandle$SpeciesData",
           "dominated_class": "java.util.ImmutableCollections$List12",
           "pair_count": 9,
@@ -97630,6 +99193,13 @@
           "pair_count": 17,
           "dominated_retained": 408,
           "dominated_shallow": 408
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.reflect.DirectMethodHandleAccessor",
+          "pair_count": 1,
+          "dominated_retained": 400,
+          "dominated_shallow": 32
         },
         {
           "dominator_class": "java.lang.Class",
@@ -97716,6 +99286,13 @@
           "dominated_shallow": 376
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.logging.LogManager$RootLogger",
+          "pair_count": 1,
+          "dominated_retained": 368,
+          "dominated_shallow": 64
+        },
+        {
           "dominator_class": "java.lang.Object[]",
           "dominated_class": "scala.Some",
           "pair_count": 23,
@@ -97786,6 +99363,20 @@
           "dominated_shallow": 360
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+          "pair_count": 4,
+          "dominated_retained": 352,
+          "dominated_shallow": 192
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.net.www.protocol.jar.URLJarFile",
+          "pair_count": 1,
+          "dominated_retained": 352,
+          "dominated_shallow": 80
+        },
+        {
           "dominator_class": "org.renaissance.harness.PolicyType$",
           "dominated_class": "scala.collection.mutable.HashMap",
           "pair_count": 2,
@@ -97805,6 +99396,20 @@
           "pair_count": 3,
           "dominated_retained": 344,
           "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.security.Provider$EngineDescription",
+          "pair_count": 14,
+          "dominated_retained": 336,
+          "dominated_shallow": 336
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ImmutableCollections$Set12",
+          "pair_count": 14,
+          "dominated_retained": 336,
+          "dominated_shallow": 336
         },
         {
           "dominator_class": "java.lang.Class",
@@ -97861,6 +99466,13 @@
           "pair_count": 1,
           "dominated_retained": 328,
           "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.fs.UnixPath",
+          "pair_count": 3,
+          "dominated_retained": 320,
+          "dominated_shallow": 96
         },
         {
           "dominator_class": "java.lang.invoke.VarForm",
@@ -97959,6 +99571,41 @@
           "pair_count": 1,
           "dominated_retained": 296,
           "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Long",
+          "pair_count": 12,
+          "dominated_retained": 288,
+          "dominated_shallow": 288
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ThreadGroup",
+          "pair_count": 3,
+          "dominated_retained": 288,
+          "dominated_shallow": 144
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.JulianFields$Field",
+          "pair_count": 3,
+          "dominated_retained": 288,
+          "dominated_shallow": 144
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.jar.Attributes$Name",
+          "pair_count": 12,
+          "dominated_retained": 288,
+          "dominated_shallow": 288
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.logging.Level",
+          "pair_count": 9,
+          "dominated_retained": 288,
+          "dominated_shallow": 288
         },
         {
           "dominator_class": "java.io.BufferedOutputStream",
@@ -98094,6 +99741,13 @@
           "dominated_shallow": 16
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.ReferenceQueue",
+          "pair_count": 3,
+          "dominated_retained": 256,
+          "dominated_shallow": 96
+        },
+        {
           "dominator_class": "com.sun.management.internal.PlatformMBeanProviderImpl$1",
           "dominated_class": "java.util.Collections$UnmodifiableSet",
           "pair_count": 1,
@@ -98148,6 +99802,13 @@
           "pair_count": 1,
           "dominated_retained": 248,
           "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.LambdaForm$BasicType",
+          "pair_count": 6,
+          "dominated_retained": 240,
+          "dominated_shallow": 240
         },
         {
           "dominator_class": "java.lang.Class",
@@ -98255,6 +99916,20 @@
           "dominated_shallow": 64
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.System$Logger$Level",
+          "pair_count": 7,
+          "dominated_retained": 224,
+          "dominated_shallow": 224
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.util.logging.PlatformLogger$Level",
+          "pair_count": 7,
+          "dominated_retained": 224,
+          "dominated_shallow": 224
+        },
+        {
           "dominator_class": "com.sun.management.internal.PlatformMBeanProviderImpl$2",
           "dominated_class": "java.util.Collections$UnmodifiableSet",
           "pair_count": 1,
@@ -98311,6 +99986,13 @@
           "dominated_shallow": 144
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.Finalizer$FinalizerThread",
+          "pair_count": 1,
+          "dominated_retained": 208,
+          "dominated_shallow": 112
+        },
+        {
           "dominator_class": "java.lang.Object[]",
           "dominated_class": "java.util.logging.LogManager$Cleaner",
           "pair_count": 1,
@@ -98346,6 +100028,20 @@
           "dominated_shallow": 64
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.Reference$ReferenceHandler",
+          "pair_count": 1,
+          "dominated_retained": 200,
+          "dominated_shallow": 104
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.WakeupManager$EventImpl",
+          "pair_count": 5,
+          "dominated_retained": 200,
+          "dominated_shallow": 200
+        },
+        {
           "dominator_class": "java.lang.invoke.DirectMethodHandle",
           "dominated_class": "java.lang.invoke.LambdaForm",
           "pair_count": 1,
@@ -98379,6 +100075,13 @@
           "pair_count": 5,
           "dominated_retained": 200,
           "dominated_shallow": 120
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.DirectMethodHandle$Interface",
+          "pair_count": 4,
+          "dominated_retained": 192,
+          "dominated_shallow": 192
         },
         {
           "dominator_class": "java.lang.Class",
@@ -98465,6 +100168,13 @@
           "dominated_shallow": 48
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.module.ModuleDescriptor$Version",
+          "pair_count": 1,
+          "dominated_retained": 184,
+          "dominated_shallow": 32
+        },
+        {
           "dominator_class": "java.util.concurrent.ConcurrentHashMap$Node",
           "dominated_class": "java.time.zone.ZoneOffsetTransition[]",
           "pair_count": 1,
@@ -98507,6 +100217,20 @@
           "dominated_shallow": 24
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.LocalTime",
+          "pair_count": 7,
+          "dominated_retained": 168,
+          "dominated_shallow": 168
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.misc.InnocuousThread",
+          "pair_count": 1,
+          "dominated_retained": 168,
+          "dominated_shallow": 112
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.time.temporal.ChronoUnit",
           "pair_count": 3,
@@ -98533,6 +100257,27 @@
           "pair_count": 1,
           "dominated_retained": 168,
           "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Integer",
+          "pair_count": 10,
+          "dominated_retained": 160,
+          "dominated_shallow": 160
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.VarHandle$AccessType",
+          "pair_count": 5,
+          "dominated_retained": 160,
+          "dominated_shallow": 160
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.TimeUnit",
+          "pair_count": 2,
+          "dominated_retained": 160,
+          "dominated_shallow": 160
         },
         {
           "dominator_class": "java.lang.Class",
@@ -98609,6 +100354,34 @@
           "dominated_class": "java.io.File",
           "pair_count": 3,
           "dominated_retained": 152,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.FileInputStream",
+          "pair_count": 3,
+          "dominated_retained": 144,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.String[]",
+          "pair_count": 2,
+          "dominated_retained": 144,
+          "dominated_shallow": 144
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.DirectMethodHandle$Accessor",
+          "pair_count": 3,
+          "dominated_retained": 144,
+          "dominated_shallow": 144
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.util.ClassFileDumper",
+          "pair_count": 3,
+          "dominated_retained": 144,
           "dominated_shallow": 96
         },
         {
@@ -98710,6 +100483,13 @@
           "dominated_shallow": 144
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.security.AccessControlContext",
+          "pair_count": 1,
+          "dominated_retained": 136,
+          "dominated_shallow": 40
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.net.SocketPermission",
           "pair_count": 1,
@@ -98736,6 +100516,34 @@
           "pair_count": 2,
           "dominated_retained": 136,
           "dominated_shallow": 80
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "int[]",
+          "pair_count": 4,
+          "dominated_retained": 128,
+          "dominated_shallow": 128
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ExclusiveNode",
+          "pair_count": 4,
+          "dominated_retained": 128,
+          "dominated_shallow": 128
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$SharedNode",
+          "pair_count": 4,
+          "dominated_retained": 128,
+          "dominated_shallow": 128
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.Enumeration$Val",
+          "pair_count": 4,
+          "dominated_retained": 128,
+          "dominated_shallow": 128
         },
         {
           "dominator_class": "java.io.BufferedOutputStream",
@@ -98820,6 +100628,27 @@
           "pair_count": 4,
           "dominated_retained": 128,
           "dominated_shallow": 128
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MethodHandleImpl$Intrinsic",
+          "pair_count": 5,
+          "dominated_retained": 120,
+          "dominated_shallow": 120
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.stream.StreamOpFlag$Type",
+          "pair_count": 5,
+          "dominated_retained": 120,
+          "dominated_shallow": 120
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.Read$$anon$3",
+          "pair_count": 3,
+          "dominated_retained": 120,
+          "dominated_shallow": 72
         },
         {
           "dominator_class": "java.lang.Class",
@@ -98925,6 +100754,27 @@
           "pair_count": 1,
           "dominated_retained": 120,
           "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.BufferedInputStream",
+          "pair_count": 1,
+          "dominated_retained": 112,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Runtime$Version",
+          "pair_count": 2,
+          "dominated_retained": 112,
+          "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.IsoFields$Unit",
+          "pair_count": 2,
+          "dominated_retained": 112,
+          "dominated_shallow": 64
         },
         {
           "dominator_class": "java.lang.Class",
@@ -99092,6 +100942,55 @@
           "dominated_class": "java.lang.ref.ReferenceQueue",
           "pair_count": 1,
           "dominated_retained": 104,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.FileOutputStream",
+          "pair_count": 2,
+          "dominated_retained": 96,
+          "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ArithmeticException",
+          "pair_count": 1,
+          "dominated_retained": 96,
+          "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.file.StandardOpenOption",
+          "pair_count": 4,
+          "dominated_retained": 96,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.ZoneOffset",
+          "pair_count": 4,
+          "dominated_retained": 96,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.DateTimeFormatterBuilder$SettingsParser",
+          "pair_count": 4,
+          "dominated_retained": 96,
+          "dominated_shallow": 96
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.CCSTM$",
+          "pair_count": 1,
+          "dominated_retained": 96,
+          "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.fs.LinuxFileSystem",
+          "pair_count": 1,
+          "dominated_retained": 96,
           "dominated_shallow": 32
         },
         {
@@ -99326,6 +101225,13 @@
           "dominated_shallow": 24
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle",
+          "pair_count": 1,
+          "dominated_retained": 88,
+          "dominated_shallow": 48
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.text.DecimalFormatSymbols",
           "pair_count": 1,
@@ -99359,6 +101265,20 @@
           "pair_count": 1,
           "dominated_retained": 88,
           "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.Symbol",
+          "pair_count": 5,
+          "dominated_retained": 80,
+          "dominated_shallow": 80
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.util.locale.provider.LocaleProviderAdapter$Type",
+          "pair_count": 2,
+          "dominated_retained": 80,
+          "dominated_shallow": 80
         },
         {
           "dominator_class": "java.lang.Class",
@@ -99506,6 +101426,55 @@
           "pair_count": 1,
           "dominated_retained": 80,
           "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Package",
+          "pair_count": 1,
+          "dominated_retained": 72,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.DirectByteBuffer",
+          "pair_count": 1,
+          "dominated_retained": 72,
+          "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.HeapByteBuffer",
+          "pair_count": 1,
+          "dominated_retained": 72,
+          "dominated_shallow": 56
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.file.attribute.PosixFilePermission",
+          "pair_count": 3,
+          "dominated_retained": 72,
+          "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ImmutableCollections$List12",
+          "pair_count": 3,
+          "dominated_retained": 72,
+          "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.stream.Collector$Characteristics",
+          "pair_count": 3,
+          "dominated_retained": 72,
+          "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.ref.Cleaner",
+          "pair_count": 1,
+          "dominated_retained": 72,
+          "dominated_shallow": 40
         },
         {
           "dominator_class": "java.lang.Class",
@@ -99688,6 +101657,223 @@
           "pair_count": 3,
           "dominated_retained": 72,
           "dominated_shallow": 72
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ClassValue$Entry",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.module.ModuleDescriptor$Requires$Modifier",
+          "pair_count": 2,
+          "dominated_retained": 64,
+          "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.ReferenceQueue$Null",
+          "pair_count": 2,
+          "dominated_retained": 64,
+          "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.math.RoundingMode",
+          "pair_count": 2,
+          "dominated_retained": 64,
+          "dominated_shallow": 64
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.locks.ReentrantLock$NonfairSync",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00def38",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00df4e0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e0000",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e05a8",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e0b50",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e10f8",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e16a0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e1c48",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e21f0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e2798",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e2d40",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e32e8",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e3890",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e3e38",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e43e0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00e4c30",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$$$Lambda+0x00007e41c01c5608",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.OptionDef$$Lambda+0x00007e41c00d2a28",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.Read$$anon$2$$Lambda+0x00007e41c00d7750",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.fs.NativeBuffer",
+          "pair_count": 1,
+          "dominated_retained": 64,
+          "dominated_shallow": 32
         },
         {
           "dominator_class": "java.io.BufferedInputStream",
@@ -99984,6 +102170,13 @@
           "dominated_shallow": 64
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "com.sun.management.internal.DiagnosticCommandImpl",
+          "pair_count": 1,
+          "dominated_retained": 56,
+          "dominated_shallow": 40
+        },
+        {
           "dominator_class": "java.io.File",
           "dominated_class": "java.lang.String",
           "pair_count": 1,
@@ -100226,6 +102419,62 @@
           "dominated_class": "java.lang.ClassValue$Version",
           "pair_count": 1,
           "dominated_retained": 56,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.NullPointerException",
+          "pair_count": 1,
+          "dominated_retained": 48,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Object",
+          "pair_count": 3,
+          "dominated_retained": 48,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.LocalDate",
+          "pair_count": 2,
+          "dominated_retained": 48,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.Month",
+          "pair_count": 2,
+          "dominated_retained": 48,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.ResolverStyle",
+          "pair_count": 2,
+          "dominated_retained": 48,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.SignStyle",
+          "pair_count": 2,
+          "dominated_retained": 48,
+          "dominated_shallow": 48
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ImmutableCollections$MapN",
+          "pair_count": 1,
+          "dominated_retained": 48,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.cs.UTF_8",
+          "pair_count": 1,
+          "dominated_retained": 48,
           "dominated_shallow": 24
         },
         {
@@ -100859,6 +103108,55 @@
           "dominated_shallow": 48
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Package$VersionInfo",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.VirtualMachineError",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.NativeReferenceQueue",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.math.BigInteger",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ImmutableCollections$SetN",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.ref.CleanerImpl$CleanerCleanable",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.skel.RollbackError$",
+          "pair_count": 1,
+          "dominated_retained": 40,
+          "dominated_shallow": 40
+        },
+        {
           "dominator_class": "java.lang.Class",
           "dominated_class": "java.lang.Thread$State[]",
           "pair_count": 1,
@@ -101151,6 +103449,48 @@
           "pair_count": 1,
           "dominated_retained": 40,
           "dominated_shallow": 40
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.TextStyle",
+          "pair_count": 1,
+          "dominated_retained": 32,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionNode",
+          "pair_count": 1,
+          "dominated_retained": 32,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.ZipCoder$UTF8ZipCoder",
+          "pair_count": 1,
+          "dominated_retained": 32,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.loader.ClassLoaderValue",
+          "pair_count": 2,
+          "dominated_retained": 32,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.logger.BootstrapLogger$LoggingBackend",
+          "pair_count": 1,
+          "dominated_retained": 32,
+          "dominated_shallow": 32
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.security.provider.FileInputStreamPool$UnclosableInputStream",
+          "pair_count": 2,
+          "dominated_retained": 32,
+          "dominated_shallow": 32
         },
         {
           "dominator_class": "java.io.BufferedOutputStream",
@@ -101720,6 +104060,167 @@
           "dominated_shallow": 32
         },
         {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.File$PathStatus",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.math.MathContext",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.net.URL[]",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.security.ProtectionDomain[]",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.DayOfWeek",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.DateTimeFormatterBuilder$OffsetIdPrinterParser",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.DecimalStyle",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.IsoFields$Field$1",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.IsoFields$Field$2",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.IsoFields$Field$3",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.temporal.IsoFields$Field$4",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.zone.ZoneOffsetTransitionRule$TimeDefinition",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.Collections$EmptyMap",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.jar.Manifest[]",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.logging.Logger$LoggerBundle",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.regex.Pattern$Qtype",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.stream.StreamShape",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.jimage.ImageReader",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.ref.CleanerImpl",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.CCSTM",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.Read$$anon$2",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.management.VMManagementImpl",
+          "pair_count": 1,
+          "dominated_retained": 24,
+          "dominated_shallow": 24
+        },
+        {
           "dominator_class": "java.io.PrintStream",
           "dominated_class": "java.util.Formatter",
           "pair_count": 1,
@@ -102236,6 +104737,440 @@
           "pair_count": 1,
           "dominated_retained": 24,
           "dominated_shallow": 24
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.io.FileDescriptor$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Boolean",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Runtime",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.StackTraceElement[]",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.System$2",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.Terminator$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ThreadLocal",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MemberName$Factory",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.invoke.MethodHandleImpl$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.module.ModuleDescriptor$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.Cleaner",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.ref.NativeReferenceQueue$Lock",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.lang.reflect.ReflectAccess",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.net.URL$3",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.Buffer$2",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.ByteOrder",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.nio.charset.CodingErrorAction",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.security.cert.Certificate[]",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.chrono.IsoChronology",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.time.format.DateTimeFormatterBuilder$$Lambda+0x80000000e",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.Collections$EmptyList",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.Collections$EmptySet",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.Optional",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ResourceBundle$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.ResourceBundle$Control",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.jar.JavaUtilJarAccessImpl",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.logging.LogManager$LoggingProviderAccess",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.regex.CharPredicates$$Lambda+0x800000024",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.regex.Pattern$LastNode",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.regex.Pattern$Node",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "java.util.zip.ZipFile$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.misc.ScopedMemoryAccess",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.misc.TerminatingThreadLocal$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.misc.Unsafe",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.perf.Perf",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "jdk.internal.reflect.ReflectionFactory",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.harness.RenaissanceSuite$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "org.renaissance.scala.stm.RealityShowPhilosophers$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.None$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.None$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.collection.immutable.LazyList$State$Empty$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.collection.immutable.Map$EmptyMap$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.collection.immutable.Nil$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.collection.immutable.Nil$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.Txn$Committed$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.Txn$Committing$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.Txn$Preparing$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.concurrent.stm.ccstm.InTxnImpl$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scala.runtime.BoxedUnit",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.OptionDefKind$Arg$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.OptionDefKind$Head$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.OptionDefKind$Opt$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.OptionDefKind$OptHelp$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "scopt.Read$",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.misc.Unsafe",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.net.www.protocol.file.Handler",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.net.www.protocol.jar.Handler",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.net.www.protocol.jar.JarFileFactory",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.net.www.protocol.jrt.Handler",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.ch.Util$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.fs.LinuxFileSystemProvider",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
+        },
+        {
+          "dominator_class": "(GC Root)",
+          "dominated_class": "sun.nio.fs.NativeBuffers$1",
+          "pair_count": 1,
+          "dominated_retained": 16,
+          "dominated_shallow": 16
         },
         {
           "dominator_class": "com.sun.management.internal.DiagnosticCommandImpl",

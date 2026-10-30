@@ -1635,6 +1635,53 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     classes.render(out);
     out.push('\n');
 
+    // BUG-1 fix: render "Who Holds Each Class?" — the per-class holder
+    // breakdown (ClassRow.holders) was already computed and present in the
+    // JSON model, but never rendered in CLI/Markdown output — only the web
+    // UI's Sankey consumed it. Without this, a user running the CLI had no
+    // way to see "what holds instances of class X", even though the data
+    // existed. `(GC Root)` means the instance is held directly by a GC root
+    // (a Java stack frame, JNI reference, thread object, etc.) with no
+    // intervening object holder.
+    let classes_with_holders: Vec<&crate::report::ClassRow> = t
+        .biggest_classes
+        .iter()
+        .filter(|r| !r.holders.is_empty())
+        .collect();
+    if !classes_with_holders.is_empty() {
+        out.push_str("#### Who Holds Each Class?\n\n");
+        out.push_str(
+            "_For each class above with holder data, the immediate-dominator class \
+breakdown: which other class's instances most commonly dominate instances of this \
+class in the dominator tree. `(GC Root)` means the instance is held directly by a \
+GC root (e.g. a Java stack frame or JNI reference) with no intervening object \
+holder._\n\n",
+        );
+        for row in &classes_with_holders {
+            out.push_str(&format!("**`{}`**\n\n", row.pretty_class));
+            let mut ht = Table::new(
+                &["Holder Class", "Count", "Retained"],
+                &[Align::Left, Align::Right, Align::Right],
+            );
+            for h in &row.holders {
+                ht.row([
+                    format!("`{}`", h.holder_class),
+                    fmt_count(h.count),
+                    format_bytes(h.retained),
+                ]);
+                for l2 in &h.level2 {
+                    ht.row([
+                        format!("  ↳ `{}`", l2.holder_class),
+                        fmt_count(l2.count),
+                        format_bytes(l2.retained),
+                    ]);
+                }
+            }
+            ht.render(out);
+            out.push('\n');
+        }
+    }
+
     // Top-Dominator Size Distribution (basic stats + compact bucket table; the
     // md-graphs variant adds a sparkline and bar column).
     if t.size_distribution.count > 0 {

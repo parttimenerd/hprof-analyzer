@@ -1850,6 +1850,49 @@ fn build_dominator_analysis(
         threshold,
         rows: drops,
     };
+
+    // ── "(GC Root)" synthetic dominator (BUG-3) ───────────────────────────────
+    // The fused pass above only visits nodes with idom != undef (i.e. every
+    // REAL reachable object), and for each one looks at ITS dominator children
+    // — it never treats vroot itself as a dominator with children. That means
+    // top-level dominators (objects whose idom IS vroot — held directly by a
+    // GC root with no real intervening object) never appeared as the
+    // "dominated" side of any (dominator, dominated) relationship: the
+    // Immediate Dominators table had no row for whatever notionally "holds"
+    // them, and the two-sided Sankey's LEFT side was blank when centered on
+    // such a class (e.g. a Thread object that's itself a GC root).
+    //
+    // Fix: treat vroot (index n) as one more dominator, using class_count as
+    // an out-of-range sentinel class index — rendered as the literal label
+    // "(GC Root)" instead of a real class name, both in the ImmediateDominators
+    // row and in any ImmDomPair whose dominator side is this sentinel.
+    const GC_ROOT_LABEL: &str = "(GC Root)";
+    let gc_root_sentinel = class_count; // always out of range for a real class_names index
+    let mut gc_root_dom = DomEntry::default();
+    {
+        let vroot_kids = dom_children(n);
+        for &kid in vroot_kids {
+            let ku = kid as usize;
+            if ku >= n {
+                continue;
+            }
+            let cci_raw = g.class_idx[ku] as usize;
+            if cci_raw >= class_count {
+                continue;
+            }
+            let cci = remap[cci_raw] as usize;
+            let cu_sh = g.shallow[ku] as u64;
+            let cu_ret = g.retained[ku];
+            gc_root_dom.domd_count += 1;
+            gc_root_dom.domd_shallow += cu_sh;
+            let key = ((gc_root_sentinel as u64) << 32) | (cci as u64);
+            let e = pair_map.entry(key).or_insert((0, 0, 0));
+            e.0 += 1;
+            e.1 += cu_sh;
+            e.2 += cu_ret;
+        }
+    }
+
     let mut order: Vec<usize> = (0..class_count)
         .filter(|&ci| remap[ci] as usize == ci && dom_entries[ci].dom_count > 0)
         .collect();
@@ -1861,7 +1904,7 @@ fn build_dominator_analysis(
             .then(a.cmp(&b))
     });
     order.truncate(IMMEDIATE_DOMINATORS_CAP);
-    let rows: Vec<ImmediateDominatorRow> = order
+    let mut rows: Vec<ImmediateDominatorRow> = order
         .into_iter()
         .map(|ci| ImmediateDominatorRow {
             dominator_class: pretty_class_name(&g.class_names[ci]),
@@ -1871,6 +1914,26 @@ fn build_dominator_analysis(
             dominated_shallow: dom_entries[ci].domd_shallow,
         })
         .collect();
+    // Insert the "(GC Root)" row (if it has any dominated objects) at its
+    // correctly sorted position by dominated_shallow desc, then re-truncate —
+    // this can only ever displace the current last row, never grow the cap.
+    if gc_root_dom.domd_count > 0 {
+        let gc_row = ImmediateDominatorRow {
+            dominator_class: GC_ROOT_LABEL.to_string(),
+            // The GC-root "system" has no shallow heap of its own — it is not
+            // a real object, so dominator_count/dominator_shallow stay 0.
+            dominator_count: 0,
+            dominated_count: gc_root_dom.domd_count,
+            dominator_shallow: 0,
+            dominated_shallow: gc_root_dom.domd_shallow,
+        };
+        let pos = rows
+            .iter()
+            .position(|r| r.dominated_shallow <= gc_root_dom.domd_shallow)
+            .unwrap_or(rows.len());
+        rows.insert(pos.min(rows.len()), gc_row);
+        rows.truncate(IMMEDIATE_DOMINATORS_CAP);
+    }
     // Sort pairs by dominated_retained desc, cap.
     let mut pairs_vec: Vec<ImmDomPair> = pair_map
         .into_iter()
@@ -1878,7 +1941,13 @@ fn build_dominator_analysis(
             let pci = (key >> 32) as usize;
             let cci = (key & 0xFFFF_FFFF) as usize;
             ImmDomPair {
-                dominator_class: pretty_class_name(&g.class_names[pci]),
+                // pci == gc_root_sentinel (== class_count, out of range for a
+                // real class_names index) marks the synthetic "(GC Root)" side.
+                dominator_class: if pci == gc_root_sentinel {
+                    GC_ROOT_LABEL.to_string()
+                } else {
+                    pretty_class_name(&g.class_names[pci])
+                },
                 dominated_class: pretty_class_name(&g.class_names[cci]),
                 pair_count: cnt,
                 dominated_shallow: shl,
@@ -4216,6 +4285,41 @@ fn build_top_consumers(
     // `class_row_remap`) so the by-type count matches the histogram + MAT.
     let remap = class_row_remap(g);
 
+    // ── BUG-4 fix: count/retain ALL reachable objects, not just top-level
+    // dominators ──────────────────────────────────────────────────────────────
+    // The loop below (over `top_level`, i.e. objects with idom == vroot) only
+    // ever sees objects that are DIRECT GC roots. A class like `Node` in a
+    // self-referential tree, or `java.util.HashMap` in general, is almost
+    // never itself a direct GC root — it's held by some other object — so it
+    // was entirely invisible in `biggest_classes` no matter how much heap its
+    // instances collectively retained. This dedicated O(n) pass fixes that by
+    // walking every reachable object once, matching the semantics already
+    // used by the System-Overview histogram (`build_system_overview`, same
+    // `hist[ci].retained += ret_i` guarded by `!has_same_class_ancestor`) so
+    // the two views report the same retained total per class rather than
+    // silently disagreeing: a `retained` figure that double/triple-counts a
+    // deeply self-referential subtree is actively misleading (e.g. a 10,000-
+    // deep Node chain would otherwise sum to ~10,000x a single node's shallow
+    // size instead of the correct total). `instances` DOES count every
+    // reachable instance regardless of ancestry — "how many Node objects
+    // exist" is a different, still-correct question from "how many bytes does
+    // the Node class retain", and callers (e.g. BUG-4's classes_loaded check)
+    // expect the former.
+    for i in 0..n {
+        if g.idom[i] == undef {
+            continue; // unreachable
+        }
+        let ci_raw = g.class_idx[i] as usize;
+        if ci_raw >= class_count {
+            continue;
+        }
+        let ci = remap[ci_raw] as usize;
+        class_count_map[ci] += 1;
+        if !g.has_same_class_ancestor.get(i) {
+            class_retained[ci] += g.retained[i];
+        }
+    }
+
     // Biggest Packages: build a pruned package TREE (MAT PackageTreeResult
     // parity). Accumulate cumulative retained/shallow/count into a tree keyed by
     // an INTERNED segment id (u32), not the segment String. Each distinct package
@@ -4296,13 +4400,10 @@ fn build_top_consumers(
         let retained = g.retained[idx];
         let shallow = g.shallow[idx] as u64;
 
-        // Biggest Classes accumulation (fused with package_tree_build to avoid a
-        // duplicate pass over top_level with the same random retained/class_idx reads).
-        if ci_raw < class_count {
-            let ci = remap[ci_raw] as usize;
-            class_retained[ci] += retained;
-            class_count_map[ci] += 1;
-        }
+        // (class_retained / class_count_map are now computed in the dedicated
+        // all-reachable-objects pass above — see the BUG-4 fix comment — so no
+        // accumulation is needed here. The duplicate-row remap `ci`/`ci_raw`
+        // reads below still need `ci_raw`, kept as-is.)
 
         // Use the class the object represents (for class objects), else own class.
         // Inline the jlc_idx fast-filter from class_obj_repr using the already-loaded
@@ -4436,6 +4537,18 @@ fn build_top_consumers(
     // level1_accum[rank] = HashMap<holder_ci, (count, retained_sum)>
     let mut level1_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
         vec![std::collections::HashMap::new(); top_class_n];
+    // BUG-2 fix: instances whose idom IS vroot are held directly by a GC root
+    // (a Java stack frame, JNI global, thread object, etc.) with no real
+    // intervening object. Pass 1 below used to `continue` on `par == vroot`,
+    // which silently dropped these instances from the holder breakdown
+    // entirely — a class made ENTIRELY of GC-root-held instances (e.g.
+    // PhilosopherThread, whose instances are thread objects) ended up with an
+    // empty `holders` array and no explanation of who/what holds it. Track
+    // them separately here and synthesize a "(GC Root)" HolderRow for any
+    // class that has at least one such instance, matching the synthetic
+    // "(GC Root)" dominator already added to the Dominator Analysis section
+    // (BUG-3, above) so both views use the same label for the same concept.
+    let mut gc_root_accum: Vec<(u64, u64)> = vec![(0, 0); top_class_n]; // (count, retained_sum)
 
     if !g.idom.is_empty() && !g.class_idx.is_empty() {
         // Pass 1
@@ -4449,7 +4562,21 @@ fn build_top_consumers(
                 continue;
             }
             let par = g.idom[obj];
-            if par == undef || par == vroot || par as usize >= n {
+            if par == undef {
+                continue;
+            }
+            // `par == vroot` must be checked BEFORE the `par as usize >= n`
+            // bounds guard below: vroot's numeric value IS n (the virtual
+            // root is index n, one past the last real object), so that guard
+            // would otherwise `continue` past every GC-root-held instance
+            // before the GC-root branch ever ran.
+            if par == vroot {
+                let e = &mut gc_root_accum[rank];
+                e.0 += 1;
+                e.1 += g.retained[obj];
+                continue;
+            }
+            if par as usize >= n {
                 continue;
             }
             let par_ci = g.class_idx[par as usize] as usize;
@@ -4472,6 +4599,12 @@ fn build_top_consumers(
         }
 
         // level2_accum[holder_ci] = HashMap<idom2_ci, (count, retained_sum)>
+        // Note: unlike Pass 1 (above), this does NOT synthesize a "(GC Root)"
+        // entry for `par == vroot` — a level-1 holder whose own instances are
+        // direct GC roots just gets an empty `level2` (no second-level
+        // breakdown), which already renders sensibly (nothing to show) rather
+        // than needing a sentinel. Scope kept to what BUG-2 actually requires
+        // (the level-1 `ClassRow.holders` breakdown).
         let mut level2_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
             vec![std::collections::HashMap::new(); class_count];
 
@@ -4542,6 +4675,25 @@ fn build_top_consumers(
                         }
                     })
                     .collect();
+                // BUG-2 fix: append the synthetic "(GC Root)" holder (if this
+                // class has any directly-GC-root-held instances), then
+                // re-sort by retained desc and re-cap so it lands in its
+                // correct relative position rather than always trailing.
+                let (gc_cnt, gc_ret) = gc_root_accum[rank];
+                if gc_cnt > 0 {
+                    row.push(crate::report::HolderRow {
+                        holder_class: "(GC Root)".to_string(),
+                        count: gc_cnt,
+                        retained: gc_ret,
+                        level2: vec![],
+                    });
+                    row.sort_unstable_by(|a, b| {
+                        b.retained
+                            .cmp(&a.retained)
+                            .then(a.holder_class.cmp(&b.holder_class))
+                    });
+                    row.truncate(HOLDER_CAP);
+                }
             }
         }
     }
