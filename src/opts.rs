@@ -199,7 +199,27 @@ impl DetailLevel {
             find_duplicates: false,
             collections: false,
             collection_config: None,
-            coll_descs: Vec::new(),
+            // BUGFIX: this used to be `Vec::new()`, which meant every entry
+            // point EXCEPT the top-level `analyze` CLI command (the only call
+            // site that explicitly calls `collection_config::load_collection_descs`,
+            // see main.rs) silently got zero collection-class recognition —
+            // `heap report`/`heap summary`/the MCP server/the WASM browser
+            // explorer/the HTTP `server` subcommand all built `AnalyzeOptions`
+            // via `::default()` or a bare `DetailLevel::options()`, so
+            // `ArrayList`/`HashMap`/etc. were never classified as
+            // `ClassRole::Collection` (see `pass2::fielddecode::classify`),
+            // regardless of flags passed. Concretely this made the always-on
+            // `EmptyCollectionCemetery` triage rule (and `collections_by_size`,
+            // `kind_summary`, `map_collision_ratio`, `OverCapacityCollections`)
+            // silently empty through every path but `analyze`. Seeding the
+            // built-in list here (no file I/O — just the static JDK/Trove/
+            // Eclipse descriptor table) fixes every call site uniformly. The
+            // `analyze` CLI path still separately calls
+            // `load_collection_descs(explicit_path)` to additionally merge in
+            // a user's `.hprof-analyzer.toml`/`--collection-config` entries,
+            // which this default intentionally does not attempt (no path to
+            // search from library code with no CLI context).
+            coll_descs: crate::pass2::builtin_coll_descs(),
             queries: Vec::new(),
             query_file: None,
             query_path_depth: DEFAULT_QUERY_PATH_DEPTH,
