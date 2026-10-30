@@ -1410,23 +1410,31 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                 );
             } else {
                 println!("## Top Leak Suspects\n");
-                for (i, s) in r.leaks.suspects.iter().take(5).enumerate() {
-                    println!(
-                        "{}. {} — {} MB retained",
-                        i + 1,
-                        s.pretty_class,
-                        s.retained / 1_000_000
-                    );
+                if r.leaks.suspects.is_empty() {
+                    println!("_(No single class dominates heap retention.)_");
+                } else {
+                    for (i, s) in r.leaks.suspects.iter().take(5).enumerate() {
+                        println!(
+                            "{}. {} — {} retained",
+                            i + 1,
+                            s.pretty_class,
+                            hprof_analyzer::report::format_bytes(s.retained),
+                        );
+                    }
                 }
                 println!("\n## Top Classes by Retained Size\n");
-                for (i, c) in r.top.biggest_classes.iter().take(5).enumerate() {
-                    println!(
-                        "{}. {} — {} instances, {} MB retained",
-                        i + 1,
-                        c.pretty_class,
-                        c.instances,
-                        c.retained / 1_000_000
-                    );
+                if r.top.biggest_classes.is_empty() {
+                    println!("_(No class data available.)_");
+                } else {
+                    for (i, c) in r.top.biggest_classes.iter().take(5).enumerate() {
+                        println!(
+                            "{}. {} — {} instances, {} retained",
+                            i + 1,
+                            c.pretty_class,
+                            c.instances,
+                            hprof_analyzer::report::format_bytes(c.retained),
+                        );
+                    }
                 }
             }
         }
@@ -1455,7 +1463,7 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                     "alloc_sites" => serde_json::to_value(&r.alloc_sites)?,
                     "thread_locals" => serde_json::to_value(&r.thread_local_analysis)?,
                     "framework" => serde_json::to_value(&r.framework_analysis)?,
-                    "field_stats" => serde_json::to_value(&r.field_stats)?,
+                    "field_stats" => serde_json::to_value(&r.fields_by_size)?,
                     _ => serde_json::to_value(r)?,
                 };
                 println!("{}", serde_json::to_string_pretty(&val)?);
@@ -1483,17 +1491,14 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
-                println!(
-                    "{:<60} {:>12} {:>16}",
-                    "Class", "Instances", "Retained (MB)"
-                );
-                println!("{}", "-".repeat(92));
+                println!("{:<60} {:>12} {:>16}", "Class", "Instances", "Retained");
+                println!("{}", "-".repeat(90));
                 for c in sess.report.top.biggest_classes.iter().take(limit) {
                     println!(
-                        "{:<60} {:>12} {:>16.1}",
+                        "{:<60} {:>12} {:>16}",
                         c.pretty_class,
                         c.instances,
-                        c.retained as f64 / 1_000_000.0
+                        hprof_analyzer::report::format_bytes(c.retained),
                     );
                 }
             }
@@ -1723,9 +1728,9 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                 println!("  Class:    {class_name}");
                 println!("  Shallow:  {} bytes", shallow[idx]);
                 println!(
-                    "  Retained: {} bytes ({:.1} MB)",
+                    "  Retained: {} ({} bytes)",
+                    hprof_analyzer::report::format_bytes(retained[idx]),
                     retained[idx],
-                    retained[idx] as f64 / 1_000_000.0
                 );
                 if let Some(fields) = &fields_result {
                     if !fields.is_empty() {
@@ -1873,7 +1878,9 @@ fn qval_to_json(v: &hprof_analyzer::query::model::QueryValue) -> serde_json::Val
         QueryValue::Float(f) => serde_json::json!(f),
         QueryValue::Str(s) => serde_json::Value::String(s.clone()),
         QueryValue::ObjRef { index, class, .. } => {
-            serde_json::Value::String(format!("{class}@{index}"))
+            // Emit a structured object so callers can extract class and index
+            // without parsing the opaque "ClassName@N" string.
+            serde_json::json!({"class": class, "index": index})
         }
     }
 }
@@ -1884,8 +1891,8 @@ fn print_dom_tree(node: &serde_json::Value, indent: usize) {
     let retained = node["retained_bytes"].as_u64().unwrap_or(0);
     let index = node["index"].as_u64().unwrap_or(0);
     println!(
-        "{pad}{class} (#{index}) — {:.1} MB retained",
-        retained as f64 / 1_000_000.0
+        "{pad}{class} (#{index}) — {} retained",
+        hprof_analyzer::report::format_bytes(retained)
     );
     if let Some(children) = node["children"].as_array() {
         for child in children {
