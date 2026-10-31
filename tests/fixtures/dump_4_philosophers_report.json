@@ -1,6 +1,6 @@
 {
-  "schema_version": 11,
-  "generated": "2026-10-30T22:40:46.130370000Z",
+  "schema_version": 12,
+  "generated": "2026-10-30T23:58:59.620589000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",

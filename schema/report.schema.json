@@ -178,6 +178,13 @@
     "overview": {
       "$ref": "#/$defs/SystemOverview"
     },
+    "primary_culprits": {
+      "description": "Ranked, resolved \"who's actually responsible\" answer(s) — computed once\nfrom `leaks.suspects` (see `CulpritRef` docs) and consumed by the\nheadline triage rules instead of each re-deriving their own notion of\n\"the culprit\" from scratch. Capped at a small handful of entries;\nempty when no suspect's retained share crosses the dominance floor\n(a genuinely diffuse/healthy heap — the correct answer is \"no single\nculprit\", not a forced guess). Additive; `#[serde(default)]` keeps\nolder JSON loadable.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CulpritRef"
+      }
+    },
     "queries": {
       "description": "Custom OQL query results (empty unless --query/--query-file was given).",
       "type": "array",
@@ -1146,6 +1153,58 @@
       "required": [
         "rows",
         "truncated"
+      ]
+    },
+    "CulpritBasis": {
+      "description": "Why a `CulpritRef` was resolved the way it was — lets a consumer (or a\ntest) distinguish \"there's a single standout retainer\" from \"there are\nseveral comparable ones\" from \"nothing stands out\" without re-deriving the\nranking logic.",
+      "oneOf": [
+        {
+          "description": "One suspect's retained share crosses the dominant-culprit threshold —\nunambiguously the headline story.",
+          "type": "string",
+          "const": "single_object"
+        },
+        {
+          "description": "Multiple suspects are independently significant (a compound/multi-leak\ndump) — each gets its own `CulpritRef`, none individually dominant.",
+          "type": "string",
+          "const": "compound"
+        }
+      ]
+    },
+    "CulpritRef": {
+      "description": "A resolved \"who's actually responsible\" answer, distinct from the raw\n`Suspect` list: where `Suspect.pretty_class` is always the TOP-LEVEL\ndominator (often a GC-root holder like `Thread` or a static-field owner\nthat merely transits the real structure), `class_name` here is the\nrefined pick from that suspect's `path` — the deepest step that is still\n\"basically the whole problem\" (>= `CULPRIT_PATH_RETAINED_PCT` of the\nsuspect's own retained size) and is not a bare JDK collection-internal\nbacking structure (`Object[]`, `HashMap$Node[]`, etc.), so the headline\nnames the actionable application-level class instead of an implementation\ndetail. Computed once in `build.rs` (see `resolve_primary_culprits`) and\nread by the `HeadlineRetainer`/`Concentration`/`DominantGcRootType` triage\nrules instead of each re-deriving their own notion of \"the culprit\".",
+      "type": "object",
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/CulpritBasis"
+        },
+        "class_name": {
+          "description": "The refined class name (see struct docs) — what the headline should\nactually name, not necessarily the suspect's own top-level class.",
+          "type": "string"
+        },
+        "retained": {
+          "description": "Raw retained bytes at the resolved path step (may be smaller than the\nsuspect's own `retained` if resolution descended past the top-level\ndominator into a more specific class).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained_pct": {
+          "description": "Percentage (0-100) of total reachable heap this culprit's retained\nsize accounts for.",
+          "type": "number",
+          "format": "double"
+        },
+        "suspect_index": {
+          "description": "`Report.leaks.suspects` index this culprit was resolved from.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "class_name",
+        "suspect_index",
+        "retained_pct",
+        "retained",
+        "basis"
       ]
     },
     "DepthBucket": {

@@ -57,7 +57,6 @@ _Automated signals pointing to where memory concentrates and what to investigate
 
 - **Headline Retainer:** `java.lang.Thread` (a single object) retains 22.9 MB (76.7% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** highly concentrated — `java.lang.Thread` (a single object) holds 76.7% of the heap; freeing this object would reclaim most of the heap. See [Leak Suspects](#leak-suspects).
-- **Dominant GC-Root Type:** 76.7% of the heap is held by "Thread" roots — the GC Roots by Type table shows the per-class breakdown. See [System Overview](#system-overview).
 - **Heap Shape:** deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects — 90% of objects within depth 11273, max depth 41355. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.lang.Thread`, retains 76.7% and the top 10 retain 92.6% of the heap; 4 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Class-Loader Reload (Low Count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (8.6 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#duplicate-classes).

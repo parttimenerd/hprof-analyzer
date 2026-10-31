@@ -747,7 +747,13 @@ pub fn build_model(
         thread_local_analysis,
         framework_analysis,
         field_stats,
+        primary_culprits: Vec::new(),
     };
+    // Resolve the ranked "who's actually responsible" answer from the
+    // already-built leak suspects, before evaluating triage so the headline
+    // rules can read it instead of each re-deriving their own notion of "the
+    // culprit" (see CulpritRef docs in model.rs).
+    report.primary_culprits = resolve_primary_culprits(&report.leaks);
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);
     // Evaluate the OOM-triage rule framework once over the finished report.
@@ -4020,6 +4026,194 @@ pub(crate) fn build_leak_suspects(
         total_shallow,
         suspects: out,
     }
+}
+
+// ── Primary culprit resolution ───────────────────────────────────────────────
+
+/// Floor (percent of total reachable heap) a suspect's retained size must
+/// cross to be considered THE dominant culprit at all. This is the ONLY
+/// place this threshold lives — `triage.rs`'s `HeadlineRetainer`/
+/// `Concentration`/`DominantGcRootType` rules no longer check their own copy;
+/// they defer entirely to `Report.primary_culprits` (empty means "no suspect
+/// crossed this floor"), so there is exactly one "is this dominant" bar
+/// across the whole report instead of several independently-maintained ones.
+const CULPRIT_DOMINANT_PCT: f64 = 50.0;
+/// Within a dominant suspect's `path`, how much of the suspect's OWN retained
+/// size a deeper step must still account for to be considered "basically the
+/// whole problem" and therefore a candidate refinement of the headline class.
+/// High on purpose: this is not "is this step significant" (most are, since
+/// retained size only shrinks descending the tree) but "is this step still
+/// the whole story", so the resolver doesn't stop short at some intermediate
+/// container that only holds e.g. 60% of the total.
+const CULPRIT_PATH_RETAINED_PCT: f64 = 95.0;
+/// Second, independent suspect must retain at least this percent of total
+/// heap to be reported as a SECOND, co-equal culprit (a compound/multi-leak
+/// dump) rather than silently folded into/hidden behind the first.
+const CULPRIT_SECONDARY_PCT: f64 = 10.0;
+/// Cap on the number of culprits returned — a handful at most; beyond this
+/// the report should point at Leak Suspects/Top Consumers for the full list
+/// rather than trying to headline everything.
+const CULPRIT_CAP: usize = 3;
+
+/// Reuses `builtin_coll_descs()` (the same collection-recognition table
+/// `--collections` analysis is built on) as the container-class list, so
+/// there is exactly one place that knows "which classes are generic JDK/
+/// framework collections" rather than a second, independently-maintained
+/// copy. Computed once per `resolve_primary_culprits` call (not per path
+/// step) and passed down, since `builtin_coll_descs()` allocates a ~30-entry
+/// Vec each call.
+fn jdk_container_class_names() -> std::collections::HashSet<String> {
+    crate::pass2::builtin_coll_descs()
+        .iter()
+        .map(|d| pretty_class_name(&d.class_name))
+        .collect()
+}
+
+/// Is `display_class` a "low signal" class for headline-naming purposes —
+/// either a bare JDK collection-internal backing structure (`Object[]`,
+/// `HashMap$Node[]`, a primitive array, ...) or a generic JDK/Scala/Guava/
+/// Eclipse-Collections/Trove CONTAINER class itself (`ArrayList`, `HashMap`,
+/// ...)? These are all real objects and genuinely where MAT's big-drop
+/// descent says the bytes concretely sit, but naming one of them as THE
+/// culprit in a headline is actionable to nobody — "your `java.util.ArrayList`
+/// retains 4.5 MB" or "your `java.lang.Object[]` retains 4.5 MB" tells a
+/// reader nothing about what to fix, since every application uses these
+/// everywhere. The resolver prefers to stop one step earlier, at the
+/// application-level class that actually OWNS that container/array (e.g.
+/// `RecursiveHashMaps$Node`, whose `children: List<Node>` field happens to be
+/// implemented as an ArrayList backed by an Object[] — neither of which is
+/// itself the thing a developer needs to go fix).
+fn is_jdk_collection_internal(
+    display_class: &str,
+    container_classes: &std::collections::HashSet<String>,
+) -> bool {
+    if is_prim_array_desc_display(display_class) {
+        return true;
+    }
+    if matches!(display_class, "java.lang.Object" | "java.lang.Object[]") {
+        return true;
+    }
+    // Internal bucket/entry types for maps/sets that aren't themselves
+    // modeled as a named CollDesc container (they're the thing INSIDE one).
+    if matches!(
+        display_class,
+        "java.util.HashMap$Node"
+            | "java.util.HashMap$Node[]"
+            | "java.util.LinkedHashMap$Entry"
+            | "java.util.concurrent.ConcurrentHashMap$Node"
+            | "java.util.concurrent.ConcurrentHashMap$Node[]"
+            | "java.util.Hashtable$Entry"
+            | "java.util.Hashtable$Entry[]"
+            | "java.util.TreeMap$Entry"
+            | "java.util.WeakHashMap$Entry"
+            | "java.util.ArrayDeque$Node"
+    ) {
+        return true;
+    }
+    // The generic container classes themselves (ArrayList, HashMap, Vector,
+    // Guava Immutable*, Eclipse Collections Unified*, Trove T*HashMap, ...).
+    container_classes.contains(display_class)
+}
+
+/// `is_prim_array_desc` (format.rs) matches raw binary-name descriptors
+/// (`[I`, `[B`, ...); `PathStep.display_class` is already pretty-printed
+/// (`int[]`, `byte[]`, ...), so check the printed form directly instead of
+/// un-prettifying it.
+fn is_prim_array_desc_display(display_class: &str) -> bool {
+    matches!(
+        display_class,
+        "byte[]" | "char[]" | "int[]" | "long[]" | "short[]" | "float[]" | "double[]" | "boolean[]"
+    )
+}
+
+/// Resolve `Report.primary_culprits` from the already-computed
+/// `leaks.suspects` list (no new heap pass — this only walks each suspect's
+/// small `path` Vec, already bounded by `MAX_ACCUM_DEPTH`). See `CulpritRef`
+/// and `CulpritBasis` docs in model.rs for the full rationale.
+pub(crate) fn resolve_primary_culprits(leaks: &LeakSuspects) -> Vec<crate::report::CulpritRef> {
+    use crate::report::{CulpritBasis, CulpritRef};
+
+    let total = leaks.total_shallow;
+    if total == 0 {
+        return Vec::new();
+    }
+    let container_classes = jdk_container_class_names();
+
+    // Resolve ONE suspect's refined headline class + the retained bytes at
+    // that refined step (not necessarily the suspect's own top-level
+    // `retained`, since resolution may descend past it).
+    let resolve_one = |idx: usize, s: &Suspect| -> CulpritRef {
+        let suspect_ret = s.retained;
+        // Walk the path (already root-to-accumulation order, depth ascending)
+        // picking the DEEPEST step that (a) still retains >= the "basically
+        // the whole problem" floor relative to the suspect's own retained
+        // size, and (b) is not a bare JDK collection-internal. Falls back to
+        // the suspect's own top-level class (depth 0) if the path is empty
+        // or every deeper step fails one of the two conditions.
+        let mut best = (s.pretty_class.clone(), suspect_ret);
+        for step in &s.path {
+            if suspect_ret == 0 {
+                break;
+            }
+            let step_pct = step.retained as f64 / suspect_ret as f64 * 100.0;
+            if step_pct < CULPRIT_PATH_RETAINED_PCT {
+                // Retained size only shrinks descending the tree, so once a
+                // step drops below the floor, no deeper step can recover —
+                // stop walking rather than checking the rest of the path.
+                break;
+            }
+            if !is_jdk_collection_internal(&step.display_class, &container_classes) {
+                best = (step.display_class.clone(), step.retained);
+            }
+            // If this step IS a JDK-internal, deliberately keep the
+            // previous `best` (don't overwrite with the internal) and keep
+            // walking — a later, deeper step might still be meaningful if it
+            // retains enough (e.g. a Node inside a List inside a Node).
+        }
+        CulpritRef {
+            class_name: best.0,
+            suspect_index: idx,
+            retained_pct: suspect_ret as f64 / total as f64 * 100.0,
+            retained: best.1,
+            basis: CulpritBasis::SingleObject,
+        }
+    };
+
+    let Some((first_idx, first)) = leaks
+        .suspects
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.retained as f64 / total as f64 * 100.0 >= CULPRIT_DOMINANT_PCT)
+    else {
+        // No single suspect crosses the dominance floor: a genuinely
+        // diffuse/healthy heap. Correctly report NO culprit rather than
+        // forcing a confident-sounding answer onto whatever ranks #1 by a
+        // thin margin — see CulpritBasis docs.
+        return Vec::new();
+    };
+
+    let mut out = vec![resolve_one(first_idx, first)];
+
+    // Compound-dump support: a second, independently significant suspect
+    // (not the same underlying object/class) is reported alongside the
+    // first with CulpritBasis::Compound, rather than silently disappearing
+    // behind the dominant one — see CulpritBasis docs.
+    for (idx, s) in leaks.suspects.iter().enumerate().skip(first_idx + 1) {
+        if out.len() >= CULPRIT_CAP {
+            break;
+        }
+        let pct = s.retained as f64 / total as f64 * 100.0;
+        if pct < CULPRIT_SECONDARY_PCT {
+            break; // suspects are retained-desc sorted; nothing further qualifies
+        }
+        let mut c = resolve_one(idx, s);
+        c.basis = CulpritBasis::Compound;
+        if c.class_name != out[0].class_name {
+            out.push(c);
+        }
+    }
+
+    out
 }
 
 /// Bucket a DESC-sorted slice of retained sizes into a power-of-two size

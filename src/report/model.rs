@@ -728,6 +728,63 @@ pub struct LeakSuspects {
     pub suspects: Vec<Suspect>,
 }
 
+/// Why a `CulpritRef` was resolved the way it was — lets a consumer (or a
+/// test) distinguish "there's a single standout retainer" from "there are
+/// several comparable ones" from "nothing stands out" without re-deriving the
+/// ranking logic.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CulpritBasis {
+    /// One suspect's retained share crosses the dominant-culprit threshold —
+    /// unambiguously the headline story.
+    #[default]
+    SingleObject,
+    /// Multiple suspects are independently significant (a compound/multi-leak
+    /// dump) — each gets its own `CulpritRef`, none individually dominant.
+    Compound,
+}
+
+/// A resolved "who's actually responsible" answer, distinct from the raw
+/// `Suspect` list: where `Suspect.pretty_class` is always the TOP-LEVEL
+/// dominator (often a GC-root holder like `Thread` or a static-field owner
+/// that merely transits the real structure), `class_name` here is the
+/// refined pick from that suspect's `path` — the deepest step that is still
+/// "basically the whole problem" (>= `CULPRIT_PATH_RETAINED_PCT` of the
+/// suspect's own retained size) and is not a bare JDK collection-internal
+/// backing structure (`Object[]`, `HashMap$Node[]`, etc.), so the headline
+/// names the actionable application-level class instead of an implementation
+/// detail. Computed once in `build.rs` (see `resolve_primary_culprits`) and
+/// read by the `HeadlineRetainer`/`Concentration`/`DominantGcRootType` triage
+/// rules instead of each re-deriving their own notion of "the culprit".
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CulpritRef {
+    /// The refined class name (see struct docs) — what the headline should
+    /// actually name, not necessarily the suspect's own top-level class.
+    pub class_name: String,
+    /// `Report.leaks.suspects` index this culprit was resolved from.
+    pub suspect_index: usize,
+    /// Percentage (0-100) of total reachable heap this culprit's retained
+    /// size accounts for.
+    pub retained_pct: f64,
+    /// Raw retained bytes at the resolved path step (may be smaller than the
+    /// suspect's own `retained` if resolution descended past the top-level
+    /// dominator into a more specific class).
+    pub retained: u64,
+    pub basis: CulpritBasis,
+}
+
 /// One row of "Biggest Objects".
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -1568,7 +1625,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// One detected framework's aggregate statistics.
 #[derive(
@@ -1756,6 +1813,16 @@ pub struct Report {
     /// of pointees). Present only when `--field-stats` was passed; `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_stats: Option<FieldStats>,
+    /// Ranked, resolved "who's actually responsible" answer(s) — computed once
+    /// from `leaks.suspects` (see `CulpritRef` docs) and consumed by the
+    /// headline triage rules instead of each re-deriving their own notion of
+    /// "the culprit" from scratch. Capped at a small handful of entries;
+    /// empty when no suspect's retained share crosses the dominance floor
+    /// (a genuinely diffuse/healthy heap — the correct answer is "no single
+    /// culprit", not a forced guess). Additive; `#[serde(default)]` keeps
+    /// older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primary_culprits: Vec<CulpritRef>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

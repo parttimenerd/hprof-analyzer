@@ -15,11 +15,9 @@ use crate::report::model::{Report, TriageSeverity, TriageSignal};
 // Each rule fires only when its signal crosses one of these. Kept together so
 // the whole triage policy is visible in one place.
 
-/// If the single largest suspect retains at least this share of the reachable
-/// heap, the heap is called "highly concentrated".
-const CONCENTRATION_PCT: f64 = 50.0;
 /// DirectByteBuffer capacity floor (bytes) before the off-heap rule fires.
 const DBB_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Unreachable-shallow share of total heap at which the GC-waste rule fires.
 const GC_WASTE_RATIO: f64 = 0.10;
 /// A single thread retaining at least this share of the heap flags pinning.
@@ -337,12 +335,37 @@ fn signal_cls(
 
 // ── Rules (ported from the former render_md.rs hand-written logic) ─────────────
 
-/// Headline retainer. Reads `leaks.suspects` / `top.biggest_objects`. Always
-/// fires (the fallback variant names no offender).
+/// Headline retainer. Reads `primary_culprits` (preferred — the refined,
+/// resolved culprit class, not necessarily the same as the raw top-level
+/// suspect) with `leaks.suspects` / `top.biggest_objects` as fallbacks for
+/// when no suspect crosses the dominance floor. Always fires (the fallback
+/// variant names no offender).
 struct HeadlineRetainer;
 impl Rule for HeadlineRetainer {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let total = r.leaks.total_shallow;
+        if let Some(c) = r.primary_culprits.first() {
+            let s = &r.leaks.suspects[c.suspect_index];
+            let kind = if s.is_single {
+                "a single object"
+            } else {
+                "a class group"
+            };
+            return Some(signal_cls(
+                "headline-retainer",
+                TriageSeverity::Critical,
+                "Headline Retainer",
+                format!(
+                    "`{}` ({}) retains {} ({:.1}% of reachable heap).",
+                    c.class_name,
+                    kind,
+                    format_bytes(c.retained),
+                    c.retained_pct,
+                ),
+                Some(("leak-suspects", "Leak Suspects")),
+                &c.class_name,
+            ));
+        }
         if let Some(s) = r.leaks.suspects.first() {
             let kind = if s.is_single {
                 "a single object"
@@ -389,49 +412,50 @@ impl Rule for HeadlineRetainer {
     }
 }
 
-/// Concentration. Reads `leaks.suspects` and (for the owner join) the biggest
-/// object's `owner`. Always fires (concentrated vs. diffuse variants).
+/// Concentration. Reads `primary_culprits` (preferred) with `leaks.suspects`
+/// as a fallback. Always fires (concentrated vs. diffuse variants). Note this
+/// now structurally cannot restate `HeadlineRetainer`'s own class pick with
+/// different wording for a different class — both read the SAME resolved
+/// `primary_culprits[0]`, so "Concentration" only ever adds the owner-join
+/// detail HeadlineRetainer doesn't carry.
 struct Concentration;
 impl Rule for Concentration {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
-        let total = r.leaks.total_shallow;
+        if let Some(c) = r.primary_culprits.first() {
+            let s = &r.leaks.suspects[c.suspect_index];
+            let kind = if s.is_single {
+                "a single object".to_string()
+            } else {
+                format!("a class group of {} instances", s.instance_count)
+            };
+            let owner = if s.is_single {
+                r.top.biggest_objects.first().and_then(|o| {
+                    if o.display_class == s.pretty_class {
+                        o.owner.as_deref()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+            let held_by = match owner {
+                Some(o) => format!(" held by `{o}`"),
+                None => String::new(),
+            };
+            return Some(signal_cls(
+                "concentration",
+                TriageSeverity::Critical,
+                "Concentration",
+                format!(
+                    "highly concentrated — `{}` ({}){} holds {:.1}% of the heap; freeing this object would reclaim most of the heap.",
+                    c.class_name, kind, held_by, c.retained_pct,
+                ),
+                Some(("leak-suspects", "Leak Suspects")),
+                &c.class_name,
+            ));
+        }
         let sig = match r.leaks.suspects.first() {
-            Some(s) if pct_of(s.retained, total) >= CONCENTRATION_PCT => {
-                let kind = if s.is_single {
-                    "a single object".to_string()
-                } else {
-                    format!("a class group of {} instances", s.instance_count)
-                };
-                let owner = if s.is_single {
-                    r.top.biggest_objects.first().and_then(|o| {
-                        if o.display_class == s.pretty_class {
-                            o.owner.as_deref()
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                };
-                let held_by = match owner {
-                    Some(o) => format!(" held by `{o}`"),
-                    None => String::new(),
-                };
-                signal_cls(
-                    "concentration",
-                    TriageSeverity::Critical,
-                    "Concentration",
-                    format!(
-                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap; freeing this object would reclaim most of the heap.",
-                        s.pretty_class,
-                        kind,
-                        held_by,
-                        pct_of(s.retained, total),
-                    ),
-                    Some(("leak-suspects", "Leak Suspects")),
-                    &s.pretty_class,
-                )
-            }
             Some(_) => signal(
                 "concentration",
                 TriageSeverity::Info,
@@ -451,7 +475,8 @@ impl Rule for Concentration {
     }
 }
 
-/// Dominant GC-root type. Reads `overview.gc_roots_retained_by_type`.
+/// Dominant GC-root type. Reads `overview.gc_roots_retained_by_type` and
+/// `primary_culprits` (to suppress redundancy with `HeadlineRetainer`).
 struct DominantGcRootType;
 impl Rule for DominantGcRootType {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
@@ -460,6 +485,34 @@ impl Rule for DominantGcRootType {
         let pct = pct_of(top.retained, total);
         if pct < GC_ROOT_DOMINANT_PCT {
             return None;
+        }
+        // Suppress when the dominant root-type name already matches the
+        // resolved primary culprit's class — HeadlineRetainer/Concentration
+        // already named this exact object with more specific data (and, as
+        // of the primary_culprits refinement, may name a MORE specific class
+        // further down the path than the GC-root-held object itself); a
+        // third bullet repeating the same percentage adds nothing.
+        if let Some(c) = r.primary_culprits.first() {
+            let rt = top.root_type.to_ascii_lowercase();
+            let sc = c.class_name.to_ascii_lowercase();
+            if !rt.is_empty() && (sc.contains(&rt) || rt.contains(&sc)) {
+                return None;
+            }
+            // Also suppress when the culprit's path started at (or passed
+            // through) an object of the root-type's own class — e.g. the
+            // dominant root type is "Thread" and the culprit resolution's
+            // underlying suspect IS a java.lang.Thread, even though the
+            // refined headline class is something deeper/different.
+            let suspect_class = r
+                .leaks
+                .suspects
+                .get(c.suspect_index)
+                .map(|s| s.pretty_class.to_ascii_lowercase());
+            if let Some(sus) = suspect_class {
+                if sus.contains(&rt) || rt.contains(&sus) {
+                    return None;
+                }
+            }
         }
         Some(signal(
             "gc-root-type",
@@ -2963,6 +3016,7 @@ mod tests {
             thread_local_analysis: Vec::new(),
             framework_analysis: Vec::new(),
             field_stats: None,
+            primary_culprits: Vec::new(),
         }
     }
 
@@ -3064,6 +3118,17 @@ mod tests {
             retained: 800,
             owner: Some("com.example.Holder#field".into()),
             ..Default::default()
+        }];
+        // Concentration now reads primary_culprits (resolved once in build.rs
+        // from leaks.suspects) instead of re-deriving its own dominance check —
+        // populate it here the same way build.rs would for this suspect
+        // (80% retained share, no deeper path to refine into).
+        r.primary_culprits = vec![CulpritRef {
+            class_name: "com.example.Big".into(),
+            suspect_index: 0,
+            retained_pct: 80.0,
+            retained: 800,
+            basis: CulpritBasis::SingleObject,
         }];
         let s = Concentration.eval(&r).expect("always fires");
         assert!(s.detail.contains("highly concentrated"));
