@@ -785,6 +785,44 @@ pub struct CulpritRef {
     pub basis: CulpritBasis,
 }
 
+/// One class whose instances form a self-referential/recursive structure in
+/// the dominator tree — a meaningful fraction of its own instances have an
+/// ancestor (in the dominator tree) that is ALSO an instance of this same
+/// class (e.g. a `Node` class holding a `List<Node> children` field, so
+/// descending from a root `Node` eventually reaches another `Node`).
+///
+/// Built from the `has_same_class_ancestor` bitset (already computed by
+/// `retained.rs` for the histogram's double-counting guard) — this is the
+/// first place that bitset is exposed as an explicit, per-class, named
+/// signal rather than only being used internally to adjust a sum. See the
+/// `SelfReferentialClassAccumulation` triage rule in triage.rs.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SelfReferentialClassRow {
+    pub pretty_class: String,
+    /// Total reachable instances of this class.
+    pub instances: u64,
+    /// How many of those instances have a dominator-tree ancestor that is
+    /// also an instance of this same class (or the class-object representing
+    /// it) — i.e. are NOT the "root" of their own same-class subtree.
+    pub nested_instances: u64,
+    /// `nested_instances / instances * 100`. High (e.g. >90%) means almost
+    /// every instance is nested inside another instance of the same class —
+    /// a tree/chain shape, not independent siblings.
+    pub nested_pct: f64,
+    /// This class's retained heap — the SAME number the System-Overview
+    /// histogram's `retained` column and `biggest_classes` show (both
+    /// already exclude nested same-class-ancestor instances from the sum,
+    /// so a deeply self-referential subtree is not double/triple-counted;
+    /// see `has_same_class_ancestor` docs in retained.rs). This is why the
+    /// floor/ranking here is on RETAINED, not shallow: a `Node` class with
+    /// tiny per-instance shallow size (just a couple of reference fields)
+    /// but a huge recursively-held payload is exactly the pattern this rule
+    /// exists to catch — shallow size alone would miss it entirely.
+    pub retained: u64,
+}
+
 /// One row of "Biggest Objects".
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -1625,7 +1663,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// One detected framework's aggregate statistics.
 #[derive(
@@ -1823,6 +1861,15 @@ pub struct Report {
     /// older JSON loadable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub primary_culprits: Vec<CulpritRef>,
+    /// Classes detected as self-referential/recursive (a meaningful share of
+    /// instances are nested inside another instance of the same class) —
+    /// see `SelfReferentialClassRow` docs. Sorted by `total_shallow`
+    /// descending, capped at a small handful of entries. Consumed by the
+    /// `SelfReferentialClassAccumulation` triage rule; also independently
+    /// useful as a direct "which classes form recursive structures" view.
+    /// Additive; `#[serde(default)]` keeps older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub self_referential_classes: Vec<SelfReferentialClassRow>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

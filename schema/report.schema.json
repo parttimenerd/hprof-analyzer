@@ -210,6 +210,13 @@
       "format": "uint32",
       "minimum": 0
     },
+    "self_referential_classes": {
+      "description": "Classes detected as self-referential/recursive (a meaningful share of\ninstances are nested inside another instance of the same class) —\nsee `SelfReferentialClassRow` docs. Sorted by `total_shallow`\ndescending, capped at a small handful of entries. Consumed by the\n`SelfReferentialClassAccumulation` triage rule; also independently\nuseful as a direct \"which classes form recursive structures\" view.\nAdditive; `#[serde(default)]` keeps older JSON loadable.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SelfReferentialClassRow"
+      }
+    },
     "thread_local_analysis": {
       "description": "ThreadLocal Leak Analyzer: per-value-class breakdown of\n`ThreadLocalMap$Entry` objects — entry counts, stale counts (null key),\nand total retained heap. Populated only when `--find-duplicates` (or\n`--full-analysis`) is passed; empty otherwise. Additive; not\nparity-compared. `#[serde(default)]` keeps older JSON loadable.",
       "type": "array",
@@ -3341,6 +3348,45 @@
       "required": [
         "obj_index_1based",
         "display_class",
+        "retained"
+      ]
+    },
+    "SelfReferentialClassRow": {
+      "description": "One class whose instances form a self-referential/recursive structure in\nthe dominator tree — a meaningful fraction of its own instances have an\nancestor (in the dominator tree) that is ALSO an instance of this same\nclass (e.g. a `Node` class holding a `List<Node> children` field, so\ndescending from a root `Node` eventually reaches another `Node`).\n\nBuilt from the `has_same_class_ancestor` bitset (already computed by\n`retained.rs` for the histogram's double-counting guard) — this is the\nfirst place that bitset is exposed as an explicit, per-class, named\nsignal rather than only being used internally to adjust a sum. See the\n`SelfReferentialClassAccumulation` triage rule in triage.rs.",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "description": "Total reachable instances of this class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nested_instances": {
+          "description": "How many of those instances have a dominator-tree ancestor that is\nalso an instance of this same class (or the class-object representing\nit) — i.e. are NOT the \"root\" of their own same-class subtree.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nested_pct": {
+          "description": "`nested_instances / instances * 100`. High (e.g. >90%) means almost\nevery instance is nested inside another instance of the same class —\na tree/chain shape, not independent siblings.",
+          "type": "number",
+          "format": "double"
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "description": "This class's retained heap — the SAME number the System-Overview\nhistogram's `retained` column and `biggest_classes` show (both\nalready exclude nested same-class-ancestor instances from the sum,\nso a deeply self-referential subtree is not double/triple-counted;\nsee `has_same_class_ancestor` docs in retained.rs). This is why the\nfloor/ranking here is on RETAINED, not shallow: a `Node` class with\ntiny per-instance shallow size (just a couple of reference fields)\nbut a huge recursively-held payload is exactly the pattern this rule\nexists to catch — shallow size alone would miss it entirely.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "nested_instances",
+        "nested_pct",
         "retained"
       ]
     },

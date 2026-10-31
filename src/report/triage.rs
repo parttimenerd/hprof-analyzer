@@ -249,6 +249,7 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(OversizedPrimArray),
         Box::new(DuplicatePrimArrays),
         Box::new(DeepRetentionChain),
+        Box::new(SelfReferentialClassAccumulation),
         Box::new(FrameworkLeak),
         Box::new(BlockedThreadConcentration),
         Box::new(TinyCollectionOverhead),
@@ -1817,6 +1818,57 @@ impl Rule for DeepRetentionChain {
     }
 }
 
+/// Self-referential/recursive class accumulation. Reads
+/// `self_referential_classes` (built in build.rs from the
+/// `has_same_class_ancestor` bitset — the same signal the histogram already
+/// uses internally to avoid double-counting nested same-class retained
+/// heap, now exposed explicitly per-class). Fires on the single
+/// biggest-by-bytes self-referential class, if any.
+///
+/// This is the class-naming counterpart to `DeepRetentionChain`: that rule
+/// is class-agnostic and only fires on a very long chain (>= 10,000 hops —
+/// tuned for genuinely pathological linked-list-shaped heaps), so a
+/// smaller-but-real recursive tree (e.g. a 5-level, few-hundred-instance
+/// `Node` structure with `depth=4`-style fan-out, chain depth in the tens,
+/// not thousands) never fires it and never gets named. This rule catches
+/// exactly that gap: it fires on the SHAPE (a high share of a class's own
+/// instances nested inside each other), not the raw chain length, and names
+/// the specific class responsible.
+struct SelfReferentialClassAccumulation;
+impl Rule for SelfReferentialClassAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let row = r.self_referential_classes.first()?;
+        let total = r.leaks.total_shallow;
+        let pct = pct_of(row.retained, total);
+        Some(signal_cls(
+            "self-referential-class-accumulation",
+            TriageSeverity::Warning,
+            "Self-Referential Class Accumulation",
+            format!(
+                "`{}` is self-referential — {} of its {} instances ({:.1}%) are nested inside \
+                 another `{}` instance, forming a recursive tree/chain shape that totals {} \
+                 ({:.1}% of reachable heap). This is a common OOM pattern for tree/graph data \
+                 structures that grow without a size bound (e.g. a cache keyed by node, a \
+                 session tree that never prunes). Check whether `{}` has an unbounded \
+                 self-referential field (a `List<{}>`/`Map<K,{}>` child collection, or a parent/\
+                 sibling back-reference) and whether instances are ever removed once added.",
+                row.pretty_class,
+                fmt_count(row.nested_instances),
+                fmt_count(row.instances),
+                row.nested_pct,
+                row.pretty_class,
+                format_bytes(row.retained),
+                pct,
+                row.pretty_class,
+                row.pretty_class,
+                row.pretty_class,
+            ),
+            Some(("system-overview", "System Overview")),
+            &row.pretty_class,
+        ))
+    }
+}
+
 /// Framework-retained-heap leak. Reads `framework_analysis`. Fires when any
 /// detected framework retains at least FRAMEWORK_RETAINED_FLOOR bytes AND
 /// at least FRAMEWORK_RETAINED_PCT of the heap. A sentinel class holding far
@@ -3017,6 +3069,7 @@ mod tests {
             framework_analysis: Vec::new(),
             field_stats: None,
             primary_culprits: Vec::new(),
+            self_referential_classes: Vec::new(),
         }
     }
 
@@ -3030,6 +3083,37 @@ mod tests {
         let s = OffHeap.eval(&r).expect("128 MiB must fire off-heap");
         assert_eq!(s.id, "off-heap");
         assert_eq!(s.anchor.as_deref(), Some("off-heap-nio"));
+    }
+
+    #[test]
+    fn self_referential_fires_on_first_row_and_names_class() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 10_000_000;
+        r.self_referential_classes = vec![SelfReferentialClassRow {
+            pretty_class: "com.example.Node".into(),
+            instances: 341,
+            nested_instances: 340,
+            nested_pct: 99.7,
+            retained: 4_750_792,
+        }];
+        let s = SelfReferentialClassAccumulation
+            .eval(&r)
+            .expect("non-empty self_referential_classes must fire");
+        assert_eq!(s.id, "self-referential-class-accumulation");
+        assert_eq!(s.nav_class.as_deref(), Some("com.example.Node"));
+        assert!(s.detail.contains("com.example.Node"));
+        assert!(s.detail.contains("340"));
+        assert!(s.detail.contains("341"));
+        assert!(s.detail.contains("99.7%"));
+    }
+
+    #[test]
+    fn self_referential_silent_when_empty() {
+        let r = base_report();
+        assert!(
+            SelfReferentialClassAccumulation.eval(&r).is_none(),
+            "empty self_referential_classes must not fire"
+        );
     }
 
     #[test]

@@ -53,6 +53,29 @@ const PACKAGE_THRESHOLD_BP: u32 = 100;
 /// Cap on the number of rows in the per-class unreachable-objects histogram
 /// (top classes by shallow). Additive section; not parity-gated.
 pub(crate) const UNREACHABLE_HISTOGRAM_CAP: usize = 30;
+/// Minimum reachable-instance count before a class is even considered for
+/// `self_referential_classes` — avoids noise from classes with only a
+/// handful of instances, where "90% of 3 instances are nested" is not a
+/// meaningful signal.
+const SELF_REF_MIN_INSTANCES: u64 = 10;
+/// Minimum share (0-100) of a class's instances that must have a
+/// same-class dominator-tree ancestor to flag it as self-referential —
+/// high on purpose: this isn't "does this class ever nest itself" (a
+/// `Node.parent` back-pointer field alone wouldn't cause this; only actual
+/// dominator-tree nesting does), it's "is this class's shape FUNDAMENTALLY
+/// a tree/chain of itself".
+const SELF_REF_MIN_NESTED_PCT: f64 = 50.0;
+/// Minimum RETAINED bytes (the same histogram/`biggest_classes` metric,
+/// which already excludes nested same-class-ancestor instances — see
+/// `has_same_class_ancestor` docs in retained.rs) before a self-referential
+/// class is worth surfacing. Deliberately RETAINED, not shallow: a `Node`
+/// class typically has a tiny per-instance shallow size (a couple of
+/// reference fields) but the recursive structure's real cost is in what
+/// those instances collectively retain — shallow-byte floors would miss
+/// exactly the pattern this rule exists to catch.
+const SELF_REF_MIN_RETAINED: u64 = 64 * 1024;
+/// Cap on the number of rows in `self_referential_classes`.
+const SELF_REF_CAP: usize = 10;
 /// Cap on the number of rows in the "Big Drops" dominator view.
 const BIG_DROPS_CAP: usize = 25;
 /// Cap on the number of rows in the "Immediate Dominators" class rollup.
@@ -631,7 +654,7 @@ pub fn build_model(
     crate::trace::trim();
     crate::trace::probe("build_model: after drop(dc) — before system_overview");
     crate::trace::probe("build_model: before system_overview aggregates");
-    let (overview, top_level_list) =
+    let (overview, top_level_list, self_referential_classes) =
         build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
     t_bm!("system_overview");
     crate::trace::probe("build_model: after system_overview aggregates");
@@ -748,6 +771,7 @@ pub fn build_model(
         framework_analysis,
         field_stats,
         primary_culprits: Vec::new(),
+        self_referential_classes,
     };
     // Resolve the ranked "who's actually responsible" answer from the
     // already-built leak suspects, before evaluating triage so the headline
@@ -799,6 +823,34 @@ fn is_anonymous_class(name: &str) -> bool {
     }
     // Lambda, cglib anon, and reflection proxy patterns
     name.contains("$$Lambda$") || name.contains("$$Anon") || name.contains("$Proxy")
+}
+
+/// Is `pretty_class` (dotted, display form — e.g. `java.util.HashMap`,
+/// `scala.collection.immutable.$colon$colon`) part of a standard-library
+/// namespace a user cannot meaningfully "fix", as opposed to their own
+/// application code? Used by signals where naming a stdlib-internal class as
+/// THE thing to investigate would be actionable to nobody — e.g.
+/// `self_referential_classes`, where `scala.collection.immutable.$colon$colon`
+/// (Scala's own singly-linked-list `List` implementation — every `List` in
+/// every Scala program is "self-referential" by construction) or
+/// `java.lang.Object[]` (any nested array structure) would otherwise
+/// constantly out-rank the one application-level recursive class that's
+/// actually worth a developer's attention.
+///
+/// Deliberately broad (whole well-known namespaces, not a hand-picked list
+/// of specific internal class names) since the alternative — enumerating
+/// every JDK/Scala/Kotlin standard-library class that happens to be
+/// self-referential — doesn't scale and will always be one release behind
+/// whatever the JDK/stdlib authors change internally. This is intentionally
+/// a narrower, more conservative version of the general JDK/Framework/App
+/// classification work (package-based `--category` classifier) — this
+/// helper only needs a binary "stdlib or not" answer, not a full taxonomy.
+fn is_stdlib_class(pretty_class: &str) -> bool {
+    const STDLIB_PREFIXES: &[&str] = &[
+        "java.", "javax.", "jdk.", "sun.", "com.sun.", "scala.", "kotlin.",
+    ];
+    STDLIB_PREFIXES.iter().any(|p| pretty_class.starts_with(p))
+        || is_prim_array_desc_display(pretty_class)
 }
 
 /// Fold every quantifiable waste source into one headline "reclaimable N bytes"
@@ -2375,7 +2427,11 @@ fn build_system_overview(
     depth_counts: &[u64],
     top_n: usize,
     hist_root_path_top: usize,
-) -> (SystemOverview, Vec<u32>) {
+) -> (
+    SystemOverview,
+    Vec<u32>,
+    Vec<crate::report::SelfReferentialClassRow>,
+) {
     let n = g.n;
 
     // Count reachable objects and total shallow; track unreachable in the same loop.
@@ -2458,6 +2514,13 @@ fn build_system_overview(
         retained: u64,
         max_shallow: u64,
         incoming_ref: u64,
+        // How many instances of this class have a dominator-tree ancestor
+        // that is ALSO an instance of this same class (has_same_class_ancestor
+        // == true). Tallied for free in the same fused loop that already
+        // reads this bit to exclude nested instances from `retained` (see
+        // SelfReferentialClassAccumulation in triage.rs, which reads this via
+        // the derived `SelfReferentialClassRow` list built after the loop).
+        same_class_ancestor_count: u64,
     }
     let mut hist: Vec<ClassHistEntry> = vec![
         ClassHistEntry {
@@ -2466,6 +2529,7 @@ fn build_system_overview(
             retained: 0,
             max_shallow: 0,
             incoming_ref: 0,
+            same_class_ancestor_count: 0,
         };
         class_count
     ];
@@ -2541,8 +2605,12 @@ fn build_system_overview(
                     h.max_shallow = sh;
                 }
                 let ret_i = g.retained[i];
-                if !g.has_same_class_ancestor.get(i) {
+                let has_same = g.has_same_class_ancestor.get(i);
+                if !has_same {
                     h.retained += ret_i;
+                }
+                if has_same {
+                    h.same_class_ancestor_count += 1;
                 }
                 // Track highest-retained object per raw class (for root_path).
                 if ret_i > best_obj_per_ci[ci_raw].1 {
@@ -2887,6 +2955,57 @@ fn build_system_overview(
             }
         }
     }
+
+    // ── Self-referential class detection ──────────────────────────────────────
+    // `hist[ci].same_class_ancestor_count` was tallied for free in the fused
+    // loop above (same bit read already used to exclude nested instances from
+    // the histogram's `retained` column). Surface it here as an explicit,
+    // named per-class signal: a class is "self-referential" when a high share
+    // of its own instances are nested inside another instance of the same
+    // class — a tree/chain-shaped recursive data structure, not independent
+    // objects that merely happen to share a class.
+    //
+    // Stdlib classes are excluded (is_stdlib_class): java.lang.Object[] (any
+    // nested array), scala.collection.immutable.$colon$colon (Scala's own
+    // linked-list List — every List in every Scala program is
+    // "self-referential" by construction), sun.security.util.KnownOIDs (an
+    // enum whose constants happen to reference each other in the dominator
+    // tree) all trivially satisfy the shape check on almost any dump and
+    // would otherwise permanently out-rank the one application-level
+    // recursive class a developer can actually act on. Confirmed empirically
+    // on dump_2_scala-doku.hprof: without this filter, java.lang.Object[]
+    // (11.4 MB, 92% nested) wins over the genuinely-interesting
+    // cafesat.asts.core.Trees$ConnectiveApplication (4.1 MB, 80% nested) —
+    // an AST, which actually IS a recursive structure worth naming.
+    let self_referential_classes: Vec<crate::report::SelfReferentialClassRow> = {
+        let mut rows: Vec<crate::report::SelfReferentialClassRow> = order
+            .iter()
+            .filter_map(|&ci| {
+                let h = &hist[ci];
+                if h.count < SELF_REF_MIN_INSTANCES || h.retained < SELF_REF_MIN_RETAINED {
+                    return None;
+                }
+                let nested_pct = h.same_class_ancestor_count as f64 / h.count as f64 * 100.0;
+                if nested_pct < SELF_REF_MIN_NESTED_PCT {
+                    return None;
+                }
+                let pretty_class = pretty_class_name(&g.class_names[ci]);
+                if is_stdlib_class(&pretty_class) {
+                    return None;
+                }
+                Some(crate::report::SelfReferentialClassRow {
+                    pretty_class,
+                    instances: h.count,
+                    nested_instances: h.same_class_ancestor_count,
+                    nested_pct,
+                    retained: h.retained,
+                })
+            })
+            .collect();
+        rows.sort_unstable_by_key(|b| std::cmp::Reverse(b.retained));
+        rows.truncate(SELF_REF_CAP);
+        rows
+    };
 
     // ── Boxed Numbers: filter histogram for Java boxed types ─────────────────
     const BOXED_TYPES: &[&str] = &[
@@ -3242,7 +3361,7 @@ fn build_system_overview(
         top_class_concentration_bp,
         gc_roots_retained_by_type,
     };
-    (overview, top_level_list)
+    (overview, top_level_list, self_referential_classes)
 }
 
 /// Build the FULL multi-level dominator subtree rooted at `root`, walking the
@@ -4083,6 +4202,11 @@ fn jdk_container_class_names() -> std::collections::HashSet<String> {
 /// `RecursiveHashMaps$Node`, whose `children: List<Node>` field happens to be
 /// implemented as an ArrayList backed by an Object[] — neither of which is
 /// itself the thing a developer needs to go fix).
+///
+/// Deliberately NARROWER than `is_stdlib_class`: a `java.lang.Thread` is a
+/// perfectly valid culprit to NAME here (confirmed on the empty-array-list
+/// fixture — "investigate this Thread's locals" IS actionable), it's only
+/// the bare containers/arrays/internal node types that are excluded.
 fn is_jdk_collection_internal(
     display_class: &str,
     container_classes: &std::collections::HashSet<String>,
@@ -5722,5 +5846,62 @@ mod leak_indicator_tests {
         // These should NOT match:
         assert!(!is_anonymous_class("com/example/Foo$Bar")); // named inner
         assert!(!is_anonymous_class("java/lang/String")); // plain class
+    }
+}
+
+#[cfg(test)]
+mod culprit_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn stdlib_class_prefixes() {
+        // Should match (stdlib — not actionable to name as "the" culprit):
+        assert!(is_stdlib_class("java.lang.Object[]"));
+        assert!(is_stdlib_class("java.util.HashMap"));
+        assert!(is_stdlib_class("javax.swing.JPanel"));
+        assert!(is_stdlib_class(
+            "jdk.internal.loader.ClassLoaders$AppClassLoader"
+        ));
+        assert!(is_stdlib_class("sun.security.util.KnownOIDs"));
+        assert!(is_stdlib_class("com.sun.proxy.Proxy"));
+        assert!(is_stdlib_class("scala.collection.immutable.$colon$colon"));
+        assert!(is_stdlib_class("kotlin.collections.ArrayDeque"));
+        assert!(is_stdlib_class("byte[]"));
+        assert!(is_stdlib_class("int[]"));
+        // Should NOT match (application/third-party code):
+        assert!(!is_stdlib_class("com.example.Node"));
+        assert!(!is_stdlib_class("org.apache.commons.lang3.StringUtils"));
+        assert!(!is_stdlib_class(
+            "cafesat.asts.core.Trees$ConnectiveApplication"
+        ));
+        // A class merely CONTAINING "java." mid-string must not match the prefix check.
+        assert!(!is_stdlib_class("com.example.javatools.Helper"));
+    }
+
+    #[test]
+    fn jdk_collection_internal_excludes_containers_and_backing_structures() {
+        let containers = jdk_container_class_names();
+        // Generic containers themselves.
+        assert!(is_jdk_collection_internal(
+            "java.util.ArrayList",
+            &containers
+        ));
+        assert!(is_jdk_collection_internal("java.util.HashMap", &containers));
+        // Backing arrays / internal node types.
+        assert!(is_jdk_collection_internal(
+            "java.lang.Object[]",
+            &containers
+        ));
+        assert!(is_jdk_collection_internal("java.lang.Object", &containers));
+        assert!(is_jdk_collection_internal(
+            "java.util.HashMap$Node",
+            &containers
+        ));
+        assert!(is_jdk_collection_internal("byte[]", &containers));
+        // A real GC-root-held class (e.g. Thread) is NOT excluded — naming
+        // it as a culprit IS actionable ("investigate this thread's locals").
+        assert!(!is_jdk_collection_internal("java.lang.Thread", &containers));
+        // Application classes are never excluded.
+        assert!(!is_jdk_collection_internal("com.example.Node", &containers));
     }
 }

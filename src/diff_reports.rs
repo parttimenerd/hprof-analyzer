@@ -935,6 +935,7 @@ mod tests {
             framework_analysis: Vec::new(),
             field_stats: None,
             primary_culprits: Vec::new(),
+            self_referential_classes: Vec::new(),
         }
     }
 
