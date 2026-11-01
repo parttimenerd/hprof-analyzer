@@ -3289,6 +3289,14 @@ function TopConsumersSection({ report }: { report: Report }) {
   ];
 
   const [topView, setTopView] = React.useState<"tables" | "treemap">("tables");
+  const [clsKindFilter, setClsKindFilter] = React.useState<"all" | "app" | "jdk">("all");
+
+  const filteredClasses = React.useMemo(() => {
+    if (clsKindFilter === "all") return t.biggest_classes;
+    const isJdk = (name: string) =>
+      /^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/.test(name);
+    return t.biggest_classes.filter(c => clsKindFilter === "jdk" ? isJdk(c.pretty_class) : !isJdk(c.pretty_class));
+  }, [t.biggest_classes, clsKindFilter]);
 
   return (
     <section id="top-consumers">
@@ -3314,8 +3322,19 @@ function TopConsumersSection({ report }: { report: Report }) {
 
       <h3>Biggest Classes by Retained Heap</h3>
       <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis.</p>
-      <StdTable columns={clsTableCols} data={t.biggest_classes} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
-        extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...t.biggest_classes.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.5rem", alignItems: "center" }}>
+        <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Show:</span>
+        {(["all", "app", "jdk"] as const).map(v => (
+          <button key={v} onClick={() => setClsKindFilter(v)} style={{
+            padding: "0.15rem 0.6rem", fontSize: "0.82rem",
+            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+            background: clsKindFilter === v ? "var(--accent)" : "transparent",
+            color: clsKindFilter === v ? "#fff" : "var(--fg)",
+          }}>{v === "all" ? "All" : v === "app" ? "App" : "JDK"}</button>
+        ))}
+      </div>
+      <StdTable columns={clsTableCols} data={filteredClasses} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
+        extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...filteredClasses.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
       />
       {t.biggest_classes.some(c => c.holders && c.holders.length > 0) && (
         <BiggestClassHolders rows={t.biggest_classes} total={total} />
