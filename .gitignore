@@ -77,3 +77,6 @@ dist/*.json
 dist/*.zip
 # Experimental wasm64 build artifacts (opt-in; built via scripts/build-browser-wasm64.sh)
 dist/wasm64/
+
+# Heap dumps + caches generated locally by leak-demos/capture_all.sh.
+leak-demos/dumps/
