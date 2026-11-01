@@ -76,7 +76,7 @@ public class _37_ThreadLocalPooledThread {
 
         ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
             Thread t = new Thread(r);
-            t.setName("pool-worker-" + t.getId());
+            t.setName("pool-worker");
             t.setDaemon(false);
             return t;
         });

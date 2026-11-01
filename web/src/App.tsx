@@ -318,6 +318,8 @@ function Nav({ report }: { report: Report }) {
   const threadCount = report.threads?.threads?.length ?? 0;
   items.push(["leak-suspects",       "Leak Suspects",    "Analysis", suspectCount > 0 ? String(suspectCount) : undefined]);
   items.push(["top-consumers",       "Top Consumers"]);
+  // App Classes: shortcut to Top Consumers pre-filtered to non-JDK classes
+  items.push(["app-classes",         "App Classes"]);
   items.push(["dominator-analysis", "Dominator Analysis"]);
   items.push(["threads",            "Threads", undefined, threadCount > 0 ? String(threadCount) : undefined]);
   if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
@@ -416,7 +418,14 @@ function Nav({ report }: { report: Report }) {
       {items.map(([id, label, group, badge]) => (
         <React.Fragment key={id}>
           {group && <span className="toc-group">{group}</span>}
-          <a href={`#${id}`} className={id === active ? "active" : ""}>
+          <a href={`#${id === "app-classes" ? "top-consumers" : id}`}
+            className={id === active ? "active" : ""}
+            onClick={id === "app-classes" ? (e) => {
+              e.preventDefault();
+              window.dispatchEvent(new CustomEvent("set-cls-kind-filter", { detail: "app" }));
+              navTo("top-consumers");
+              setTimeout(() => document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+            } : undefined}>
             {label}
             {badge && <span className="toc-badge">{badge}</span>}
           </a>
@@ -897,6 +906,15 @@ function OomTriage({ report }: { report: Report }) {
               <span style={{ color: sevColor, marginRight: "0.35rem", fontSize: "0.78rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", verticalAlign: "middle" }}>{sevLabel}</span>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
               {s.nav_class && <>{" "}<PivotBtn cls={s.nav_class} /><OqlBtn cls={s.nav_class} /><ListObjectsBtn cls={s.nav_class} /></>}
+              {s.id === "headline-retainer" && s.nav_class && (
+                <>{" "}<a href="#top-consumers" style={{ fontSize: "0.82rem" }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.dispatchEvent(new CustomEvent("set-cls-kind-filter", { detail: "all" }));
+                    navTo("top-consumers");
+                    setTimeout(() => document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+                  }}>▼ Find in Biggest Classes</a></>
+              )}
               {s.anchor && s.anchor_label ? (
                 <>
                   {" "}
@@ -3297,6 +3315,12 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const [topView, setTopView] = React.useState<"tables" | "treemap">("tables");
   const [clsKindFilter, setClsKindFilter] = React.useState<"all" | "app" | "jdk">("all");
+
+  React.useEffect(() => {
+    const handler = (e: Event) => setClsKindFilter((e as CustomEvent<"all" | "app" | "jdk">).detail);
+    window.addEventListener("set-cls-kind-filter", handler);
+    return () => window.removeEventListener("set-cls-kind-filter", handler);
+  }, []);
 
   const filteredClasses = React.useMemo(() => {
     if (clsKindFilter === "all") return t.biggest_classes;
