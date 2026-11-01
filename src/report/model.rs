@@ -1381,6 +1381,32 @@ pub struct WasteSummary {
     pub sources: Vec<WasteSource>,
 }
 
+/// One row of the unified "Where Is My Memory Going?" waste breakdown
+/// (`Report.waste_breakdown`) — derived directly from the triage `Rule`
+/// registry (`triage::build_waste_breakdown`), one row per fired rule that
+/// declares a `WasteCategory` and a nonzero `recoverable_bytes` figure for
+/// this report. Unlike `WasteSummary` (a small, fixed, hand-picked set of
+/// sources assembled directly in `build_waste_summary`), this list grows
+/// automatically as new waste-category rules are added to the registry —
+/// no second hand-maintained list to keep in sync. Additive; not part of
+/// MAT parity comparison.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct WasteBreakdownRow {
+    /// Coarse category label (e.g. "Collection Capacity") — see
+    /// `triage::WasteCategory::label`.
+    pub category: String,
+    /// The underlying triage signal's stable id (e.g. "over-capacity-collections"),
+    /// for cross-referencing against `Report.triage`.
+    pub rule_id: String,
+    /// The underlying triage signal's title (e.g. "Over-Capacity Collections").
+    pub title: String,
+    /// Approximate reclaimable bytes this row quantifies.
+    pub bytes: u64,
+    /// Section anchor to drill into, when the underlying signal has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+}
+
 /// One collection-kind's aggregate stats. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -1708,7 +1734,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// One detected framework's aggregate statistics.
 #[derive(
@@ -1858,6 +1884,13 @@ pub struct Report {
     /// `#[serde(default)]` keeps older JSON (which lacks the field) loadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waste_summary: Option<WasteSummary>,
+    /// Unified "Where Is My Memory Going?" breakdown, derived directly from
+    /// the triage `Rule` registry (`triage::build_waste_breakdown`) — see
+    /// `WasteBreakdownRow` docs. Sorted bytes-desc. Empty when no
+    /// waste-category rule fired with a nonzero figure. Additive;
+    /// `#[serde(default)]` keeps older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waste_breakdown: Vec<WasteBreakdownRow>,
     /// Fired OOM-triage signals, evaluated once over the finished report by the
     /// rule framework in `triage.rs`. Order is the registry order (render order).
     /// `#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.

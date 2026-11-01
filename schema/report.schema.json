@@ -270,6 +270,13 @@
         "$ref": "#/$defs/TypeEdge"
       }
     },
+    "waste_breakdown": {
+      "description": "Unified \"Where Is My Memory Going?\" breakdown, derived directly from\nthe triage `Rule` registry (`triage::build_waste_breakdown`) — see\n`WasteBreakdownRow` docs. Sorted bytes-desc. Empty when no\nwaste-category rule fired with a nonzero figure. Additive;\n`#[serde(default)]` keeps older JSON loadable.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/WasteBreakdownRow"
+      }
+    },
     "waste_summary": {
       "description": "One headline \"reclaimable N bytes\" figure folding every quantifiable\nwaste source. Present only when at least one source is nonzero. Additive;\n`#[serde(default)]` keeps older JSON (which lacks the field) loadable.",
       "anyOf": [
@@ -4725,6 +4732,43 @@
       },
       "required": [
         "kind"
+      ]
+    },
+    "WasteBreakdownRow": {
+      "description": "One row of the unified \"Where Is My Memory Going?\" waste breakdown\n(`Report.waste_breakdown`) — derived directly from the triage `Rule`\nregistry (`triage::build_waste_breakdown`), one row per fired rule that\ndeclares a `WasteCategory` and a nonzero `recoverable_bytes` figure for\nthis report. Unlike `WasteSummary` (a small, fixed, hand-picked set of\nsources assembled directly in `build_waste_summary`), this list grows\nautomatically as new waste-category rules are added to the registry —\nno second hand-maintained list to keep in sync. Additive; not part of\nMAT parity comparison.",
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "description": "Section anchor to drill into, when the underlying signal has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "description": "Approximate reclaimable bytes this row quantifies.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "category": {
+          "description": "Coarse category label (e.g. \"Collection Capacity\") — see\n`triage::WasteCategory::label`.",
+          "type": "string"
+        },
+        "rule_id": {
+          "description": "The underlying triage signal's stable id (e.g. \"over-capacity-collections\"),\nfor cross-referencing against `Report.triage`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "The underlying triage signal's title (e.g. \"Over-Capacity Collections\").",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "rule_id",
+        "title",
+        "bytes"
       ]
     },
     "WasteSource": {

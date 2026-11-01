@@ -55,6 +55,20 @@ All notable changes to hprof-analyzer are documented here.
   not just "doesn't crash." Runs under plain `cargo test`; see the file's
   doc comment for how to add a new scenario.
 
+- **`Report.waste_breakdown`** — a unified "Where Is My Memory Going?"
+  breakdown derived automatically from the triage `Rule` registry, one row
+  per fired waste-source rule with a nonzero `recoverable_bytes` figure.
+  Unlike `waste_summary` (a fixed, hand-assembled list), `waste_breakdown`
+  grows automatically as new waste-category rules are added; no second
+  hand-maintained list to keep in sync. Each row carries a `category`
+  (`"Collection Capacity"` / `"Duplication"` / `"Per-Object Overhead"`),
+  `rule_id`, `title`, `bytes`, and optional `anchor`. Nine triage rules
+  now implement `waste_category`/`recoverable_bytes`:
+  `OverCapacityCollections`, `ConstantValueArrays`, `BoxedPrimitiveBloat`,
+  `DuplicateStrings`, `CharArraySlack`, `SparseObjectArrays`,
+  `FixedPerObjectOverhead`, `DuplicatePrimArrays`, `TinyCollectionOverhead`.
+  Schema v15; `cache::VERSION` bumped to 3.
+
 ### Fixed
 
 - **`Node`/`Simple`-style classes invisible in Biggest Classes and "Who

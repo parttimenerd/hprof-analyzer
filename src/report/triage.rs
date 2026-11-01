@@ -221,6 +221,62 @@ const DAEMON_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
 /// signal fires, `None` when it does not.
 pub trait Rule {
     fn eval(&self, r: &Report) -> Option<TriageSignal>;
+
+    /// Which `WasteCategory` this rule's signal belongs to, when it
+    /// represents genuinely reclaimable memory (as opposed to an
+    /// orientation/diagnostic signal like `HeadlineRetainer` or
+    /// `ThreadPinning` that names a problem without quantifying "bytes you
+    /// get back if you fix this"). Default: `None` (not a waste source) —
+    /// most rules are diagnostic, not reclaimable-waste sources, so this
+    /// keeps every existing `impl Rule` compiling unchanged.
+    fn waste_category(&self) -> Option<WasteCategory> {
+        None
+    }
+
+    /// Approximate reclaimable bytes for the signal just produced by `eval`,
+    /// given the SAME `Report` (called only when `eval` returned `Some` and
+    /// `waste_category` returned `Some`). Returning `None` here (the
+    /// default) means "this category applies but the rule doesn't have a
+    /// clean standalone byte figure for THIS call" — distinct from
+    /// `waste_category() == None`, which means "not a waste source at all."
+    /// Deliberately a SEPARATE call from `eval` (rather than folding into
+    /// `TriageSignal.bytes`) so existing signal text/golden fixtures are
+    /// completely unaffected by this — see `build_waste_breakdown` in
+    /// build.rs, the sole consumer.
+    fn recoverable_bytes(&self, _r: &Report) -> Option<u64> {
+        None
+    }
+}
+
+/// Coarse grouping for the unified "Where Is My Memory Going?" waste
+/// breakdown (`Report.waste_breakdown`) — which broad REMEDY applies, not a
+/// fine-grained taxonomy. Deliberately small and closed: a new rule should
+/// fit one of these, and if it genuinely doesn't, that's a sign it's a
+/// diagnostic signal (no `waste_category`), not a new waste source.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WasteCategory {
+    /// Right-size or trim a collection's backing store (under-filled,
+    /// over-capacity, sparse arrays, tiny/empty wrapper overhead).
+    CollectionCapacity,
+    /// Deduplicate repeated content (duplicate Strings, duplicate primitive
+    /// arrays, constant-value arrays).
+    Duplication,
+    /// Fixed per-instance cost multiplied across many instances (object
+    /// header overhead, boxed-primitive bloat).
+    PerObjectOverhead,
+}
+
+impl WasteCategory {
+    pub const fn label(self) -> &'static str {
+        match self {
+            WasteCategory::CollectionCapacity => "Collection Capacity",
+            WasteCategory::Duplication => "Duplication",
+            WasteCategory::PerObjectOverhead => "Per-Object Overhead",
+        }
+    }
 }
 
 /// Ordered rule registry. **Order here is the render order** (show-all-that-fire).
@@ -304,6 +360,49 @@ pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
         ));
     }
     signals
+}
+
+/// Derive the unified "Where Is My Memory Going?" waste breakdown from the
+/// SAME triage rule registry `evaluate_triage` uses — not a separately
+/// hand-assembled list (see `WasteCategory`/`Rule::recoverable_bytes` docs).
+/// For every rule that (a) fired in `eval` AND (b) declares a
+/// `waste_category`, calls `recoverable_bytes` and, if it returns a nonzero
+/// figure, adds one row. A rule firing without a usable byte figure (e.g. a
+/// waste-category rule whose `recoverable_bytes` returned `None` for this
+/// particular report) is simply omitted from the breakdown — it still shows
+/// up in the regular "OOM Triage" signal list via `evaluate_triage`.
+///
+/// Deliberately a second, independent call to `eval` per rule (triage rules
+/// are cheap — reading only already-computed `Report` aggregates, no new
+/// heap pass) rather than threading state through `evaluate_triage`, so this
+/// function has no effect whatsoever on `Report.triage`'s existing output or
+/// the golden fixtures that pin it.
+pub fn build_waste_breakdown(r: &Report) -> Vec<crate::report::model::WasteBreakdownRow> {
+    use crate::report::model::WasteBreakdownRow;
+    let mut rows: Vec<WasteBreakdownRow> = rules()
+        .iter()
+        .filter_map(|rule| {
+            let signal = rule.eval(r)?;
+            let category = rule.waste_category()?;
+            let bytes = rule.recoverable_bytes(r)?;
+            if bytes == 0 {
+                return None;
+            }
+            Some(WasteBreakdownRow {
+                category: category.label().to_string(),
+                rule_id: signal.id,
+                title: signal.title,
+                bytes,
+                anchor: signal.anchor,
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.bytes
+            .cmp(&a.bytes)
+            .then_with(|| a.rule_id.cmp(&b.rule_id))
+    });
+    rows
 }
 
 /// Percentage of total reachable shallow heap. Basis matches the report tables.
@@ -955,6 +1054,22 @@ impl Rule for OverCapacityCollections {
             Some(("collections", "Collections")),
         ))
     }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::CollectionCapacity)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let wasted: u64 = r
+            .collections
+            .collection_fill_ratio
+            .buckets
+            .iter()
+            .filter(|b| b.upper_ratio_bp <= OVERCAP_FILL_BP)
+            .map(|b| b.wasted)
+            .sum();
+        (wasted > 0).then_some(wasted)
+    }
 }
 
 /// Constant-value arrays (--collections only). Reads
@@ -985,9 +1100,22 @@ impl Rule for ConstantValueArrays {
             &big.array_class,
         ))
     }
-}
 
-// ── New rules (batch 2) ───────────────────────────────────────────────────────
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::Duplication)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let sum: u64 = r
+            .collections
+            .constant_primitive_arrays
+            .rows
+            .iter()
+            .map(|row| row.shallow)
+            .sum();
+        (sum > 0).then_some(sum)
+    }
+}
 
 /// Object swarm. Reads `overview.histogram`. Fires when a single non-array class
 /// has >= SWARM_FLOOR_INSTANCES live instances that are individually tiny but
@@ -1073,6 +1201,31 @@ impl Rule for BoxedPrimitiveBloat {
             Some(("boxed-numbers", "Boxed Numbers")),
         ))
     }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::PerObjectOverhead)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        const BOXED: &[&str] = &[
+            "java.lang.Integer",
+            "java.lang.Long",
+            "java.lang.Double",
+            "java.lang.Float",
+            "java.lang.Short",
+            "java.lang.Byte",
+            "java.lang.Character",
+            "java.lang.Boolean",
+        ];
+        let shallow: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| BOXED.iter().any(|b| h.pretty_class == *b))
+            .map(|h| h.shallow)
+            .sum();
+        (shallow > 0).then_some(shallow)
+    }
 }
 
 /// Classloader explosion. Reads `overview.classloaders_loaded`. Fires when the
@@ -1157,6 +1310,15 @@ impl Rule for DuplicateStrings {
             Some(("duplicate-strings", "Duplicate Strings")),
         ))
     }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::Duplication)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let b = r.overview.duplicate_strings.as_ref()?.approx_wasted_bytes;
+        (b > 0).then_some(b)
+    }
 }
 
 /// Char-array slack (--find-duplicates only). Reads
@@ -1186,6 +1348,20 @@ impl Rule for CharArraySlack {
             ),
             Some(("duplicate-strings", "Duplicate Strings")),
         ))
+    }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::CollectionCapacity)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let b = r
+            .overview
+            .duplicate_strings
+            .as_ref()
+            .and_then(|ds| ds.char_array_waste.as_ref())?
+            .total_wasted_bytes;
+        (b > 0).then_some(b)
     }
 }
 
@@ -1658,6 +1834,22 @@ impl Rule for SparseObjectArrays {
             Some(("collections", "Collections")),
         ))
     }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::CollectionCapacity)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let wasted: u64 = r
+            .collections
+            .array_fill_ratio
+            .buckets
+            .iter()
+            .filter(|b| b.upper_ratio_bp <= SPARSE_ARRAY_FILL_BP)
+            .map(|b| b.wasted)
+            .sum();
+        (wasted > 0).then_some(wasted)
+    }
 }
 
 // ── Batch 4: JXRay-inspired + queued rules ────────────────────────────────────
@@ -1735,6 +1927,22 @@ impl Rule for FixedPerObjectOverhead {
             ),
             Some(("object-header-overhead", "Object Header Overhead")),
         ))
+    }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::PerObjectOverhead)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let header_bytes: u64 = if r.overview.identifier_size_bits == 32
+            || r.overview.compressed_oops.unwrap_or(true)
+        {
+            12
+        } else {
+            16
+        };
+        let overhead = r.overview.total_objects.saturating_mul(header_bytes);
+        (overhead > 0).then_some(overhead)
     }
 }
 
@@ -1879,6 +2087,19 @@ impl Rule for DuplicatePrimArrays {
             ),
             Some(("duplicate-prim-arrays", "Duplicate Primitive Arrays")),
         ))
+    }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::Duplication)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let b = r
+            .overview
+            .duplicate_prim_arrays
+            .as_ref()?
+            .total_wasted_bytes;
+        (b > 0).then_some(b)
     }
 }
 
@@ -2102,6 +2323,21 @@ impl Rule for TinyCollectionOverhead {
             ),
             Some(("collections", "Collections")),
         ))
+    }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::CollectionCapacity)
+    }
+
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let total_overhead: u64 = r
+            .collection_attribution
+            .as_ref()?
+            .tiny_overhead
+            .iter()
+            .map(|t| t.overhead_bytes)
+            .sum();
+        (total_overhead > 0).then_some(total_overhead)
     }
 }
 
@@ -3153,6 +3389,7 @@ mod tests {
             leak_indicators: LeakIndicators::default(),
             triage: Vec::new(),
             waste_summary: None,
+            waste_breakdown: Vec::new(),
             top_retainers: Vec::new(),
             queries: Vec::new(),
             analysis_flags: Default::default(),

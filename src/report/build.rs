@@ -763,6 +763,7 @@ pub fn build_model(
         collection_contents,
         leak_indicators: build_leak_indicators(g),
         waste_summary: None,
+        waste_breakdown: Vec::new(),
         triage: Vec::new(),
         top_retainers,
         queries: Vec::new(),
@@ -790,6 +791,9 @@ pub fn build_model(
     report.waste_summary = build_waste_summary(&report);
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);
+    // Unified "Where Is My Memory Going?" breakdown, derived from the SAME
+    // rule registry evaluate_triage just ran — see build_waste_breakdown docs.
+    report.waste_breakdown = crate::report::build_waste_breakdown(&report);
     if redacted {
         report.triage.insert(
             0,

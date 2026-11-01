@@ -129,6 +129,7 @@ mod tests {
             collection_contents: None,
             leak_indicators: Default::default(),
             waste_summary: None,
+            waste_breakdown: Vec::new(),
             triage: Vec::new(),
             top_retainers: Vec::new(),
             queries: Vec::new(),
