@@ -1002,6 +1002,41 @@ pub fn build_single_object_static_owner(b: &mut HeapBuilder) {
     b.root_sticky_class(holder);
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 17: LinkedList accumulation — deep-retention-chain
+//              A chain of 1,200 nodes that crosses the 1,000-hop threshold.
+// ---------------------------------------------------------------------------
+
+/// Build a singly-linked chain of 1,200 `QueueNode` objects, each holding a
+/// small 512-byte payload. The chain is anchored by a static field on
+/// `UnboundedQueue`. The dominator tree's longest chain will be >= 1,200 —
+/// well above the `DEEP_CHAIN_DEPTH` threshold of 1,000.
+///
+/// Shape:
+///   UnboundedQueue [Sticky Class] --static--> node1 --> node2 --> ... --> node1200
+pub fn build_linked_list_chain(b: &mut HeapBuilder) {
+    // QueueNode has one Object field for the next pointer.
+    let node_class = b.class("scenarios/QueueNode", &[("next", T_OBJECT)]);
+
+    // Build leaf-to-root so each parent can point at the already-created child.
+    let mut prev_id: u64 = 0;
+    let mut head_id: u64 = 0;
+    for i in 0..1_200usize {
+        let obj_id = b.fresh_id();
+        let mut data = Vec::new();
+        obj_field(&mut data, prev_id); // next = previous (so root is built last)
+        b.instance_at(obj_id, node_class, &data);
+        prev_id = obj_id;
+        if i == 1_199 {
+            head_id = obj_id;
+        }
+    }
+
+    // Anchor the head via a static field.
+    let holder = b.class_with_static_root("scenarios/UnboundedQueue", "head", head_id, &[]);
+    b.root_sticky_class(holder);
+}
+
 /// Build a heap consisting almost entirely of zero-filled `byte[]` arrays large
 /// enough to clear CONSTARR_FLOOR (8 MiB total shallow). The
 /// `constant-value-arrays` rule fires when constant-valued primitive arrays

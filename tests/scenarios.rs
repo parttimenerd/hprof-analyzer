@@ -508,6 +508,32 @@ fn check_single_object_static_owner(report: &Report) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 17: LinkedList chain — deep-retention-chain
+//              1,200-node chain must fire deep-retention-chain (threshold 1,000)
+// ---------------------------------------------------------------------------
+
+fn build_linked_list_chain() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_linked_list_chain(&mut b);
+    b.build()
+}
+
+fn check_linked_list_chain(report: &Report) {
+    assert_signal_fires(report, "deep-retention-chain");
+    let sig = report
+        .triage
+        .iter()
+        .find(|s| s.id == "deep-retention-chain")
+        .expect("deep-retention-chain must fire for a 1200-node chain");
+    // Signal must mention the depth number.
+    assert!(
+        sig.detail.contains("1,"),
+        "deep-retention-chain detail must name the chain depth, got: {}",
+        sig.detail
+    );
+}
+
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
 }
@@ -609,6 +635,12 @@ const SCENARIOS: &[Scenario] = &[
         build: build_single_object_static_owner,
         check: check_single_object_static_owner,
     },
+    Scenario {
+        name: "linked_list_chain",
+        opts: default_opts,
+        build: build_linked_list_chain,
+        check: check_linked_list_chain,
+    },
 ];
 
 #[test]
@@ -696,6 +728,11 @@ fn scenario_single_object_static_owner() {
     run_scenario(&SCENARIOS[15]);
 }
 
+#[test]
+fn scenario_linked_list_chain() {
+    run_scenario(&SCENARIOS[16]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -704,7 +741,7 @@ fn scenario_single_object_static_owner() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        16,
+        17,
         "update this test when adding scenarios"
     );
 }
