@@ -33,6 +33,8 @@ All `cargo build` and `cargo test` must run on the ThinkStation (Mac disk is ful
 
 **Disk cache gotcha:** `heap report`/`heap summary`/MCP `load_dump` all read from a per-dump on-disk cache (`<dump>.hprof-cache/`), and `Report.triage` is computed ONCE and cached as part of the serialized report — it is NOT re-evaluated on every read. If you change triage-rule logic, a new report-model field's population, or anything else that alters what `build_model`/`evaluate_triage` produce WITHOUT changing the raw array format, you must bump `VERSION` in `src/cache.rs` (it's the only thing that invalidates a stale cached report under these circumstances — `report.json.zst`'s own staleness check is just `.exists()`, never content-based). Forgetting this makes a correct code change silently appear to do nothing when tested against an already-cached dump. When in doubt, `hprof-analyzer heap cache-clear <dump>` or delete `<dump>.hprof-cache/` before testing.
 
+**Synthetic scenario tests (`tests/scenarios.rs`):** fast, in-process, no-JVM regression tests for "does the report correctly name the culprit" (not just "doesn't crash"), built on a minimal synthetic-HPROF builder (`tests/common/heap_builder.rs`). Add a new leak/waste scenario by appending one `Scenario` table row — see the doc comment at the top of `tests/scenarios.rs` for the exact steps. These run as part of plain `cargo test` (no opt-in flag, no dump files needed); the JVM-captured `leak-demos/`/`test-projects/` suites remain the slower, opt-in "realism" check.
+
 ## Conventions
 
 - No `git push` or `gh pr create` without explicit instruction
