@@ -242,6 +242,99 @@ fn check_joint_node_thread(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 4: Off-heap DirectByteBuffer (fires "off-heap" triage signal)
+// ---------------------------------------------------------------------------
+
+fn build_off_heap_direct_byte_buffer() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_off_heap_direct_byte_buffer(&mut b);
+    b.build()
+}
+
+fn check_off_heap_direct_byte_buffer(report: &Report) {
+    assert_signal_fires(report, "off-heap");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5: ThreadLocal null-key leak (fires "threadlocal-leak" signal)
+// ---------------------------------------------------------------------------
+
+fn build_threadlocal_null_key_leak() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_threadlocal_null_key_leak(&mut b);
+    b.build()
+}
+
+fn check_threadlocal_null_key_leak(report: &Report) {
+    assert_signal_fires(report, "threadlocal-leak");
+    assert!(
+        report.leak_indicators.thread_local_null_key_count > 0,
+        "expected thread_local_null_key_count > 0"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 6: Boxed-primitive bloat (fires "boxed-primitive-bloat" signal)
+// ---------------------------------------------------------------------------
+
+fn build_boxed_primitive_bloat() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_boxed_primitive_bloat(&mut b);
+    b.build()
+}
+
+fn check_boxed_primitive_bloat(report: &Report) {
+    assert_signal_fires(report, "boxed-primitive-bloat");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 7: Duplicate strings (fires "duplicate-strings" signal)
+// ---------------------------------------------------------------------------
+
+fn build_duplicate_strings() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_duplicate_strings(&mut b);
+    b.build()
+}
+
+fn opts_with_find_duplicates() -> AnalyzeOptions {
+    let mut o = AnalyzeOptions::default();
+    o.find_duplicates = true;
+    o
+}
+
+fn check_duplicate_strings(report: &Report) {
+    assert_signal_fires(report, "duplicate-strings");
+    let ds = report
+        .overview
+        .duplicate_strings
+        .as_ref()
+        .expect("duplicate_strings should be populated with find_duplicates=true");
+    assert!(
+        ds.duplicated_values > 0,
+        "expected at least one duplicated string value"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 8: Over-capacity HashMap (fires "over-capacity-collections" signal)
+// ---------------------------------------------------------------------------
+
+fn build_over_capacity_hashmap() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_over_capacity_hashmap(&mut b);
+    b.build()
+}
+
+fn check_over_capacity_hashmap(report: &Report) {
+    assert_signal_fires(report, "over-capacity-collections");
+    assert!(
+        report.collections.collection_fill_ratio.tracked > 0,
+        "expected at least one tracked collection"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario table
 // ---------------------------------------------------------------------------
 
@@ -268,6 +361,36 @@ const SCENARIOS: &[Scenario] = &[
         build: build_joint_node_thread,
         check: check_joint_node_thread,
     },
+    Scenario {
+        name: "off_heap_direct_byte_buffer",
+        opts: default_opts,
+        build: build_off_heap_direct_byte_buffer,
+        check: check_off_heap_direct_byte_buffer,
+    },
+    Scenario {
+        name: "threadlocal_null_key_leak",
+        opts: default_opts,
+        build: build_threadlocal_null_key_leak,
+        check: check_threadlocal_null_key_leak,
+    },
+    Scenario {
+        name: "boxed_primitive_bloat",
+        opts: default_opts,
+        build: build_boxed_primitive_bloat,
+        check: check_boxed_primitive_bloat,
+    },
+    Scenario {
+        name: "duplicate_strings",
+        opts: opts_with_find_duplicates,
+        build: build_duplicate_strings,
+        check: check_duplicate_strings,
+    },
+    Scenario {
+        name: "over_capacity_hashmap",
+        opts: opts_with_collections,
+        build: build_over_capacity_hashmap,
+        check: check_over_capacity_hashmap,
+    },
 ];
 
 #[test]
@@ -290,11 +413,36 @@ fn scenario_joint_node_thread_headline_bug() {
     run_scenario(&SCENARIOS[2]);
 }
 
+#[test]
+fn scenario_off_heap_direct_byte_buffer() {
+    run_scenario(&SCENARIOS[3]);
+}
+
+#[test]
+fn scenario_threadlocal_null_key_leak() {
+    run_scenario(&SCENARIOS[4]);
+}
+
+#[test]
+fn scenario_boxed_primitive_bloat() {
+    run_scenario(&SCENARIOS[5]);
+}
+
+#[test]
+fn scenario_duplicate_strings() {
+    run_scenario(&SCENARIOS[6]);
+}
+
+#[test]
+fn scenario_over_capacity_hashmap() {
+    run_scenario(&SCENARIOS[7]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
 /// running the new scenario.
 #[test]
 fn all_scenarios_have_a_dedicated_test() {
-    assert_eq!(SCENARIOS.len(), 3, "update this test when adding scenarios");
+    assert_eq!(SCENARIOS.len(), 8, "update this test when adding scenarios");
 }

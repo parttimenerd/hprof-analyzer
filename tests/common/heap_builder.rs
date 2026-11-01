@@ -71,6 +71,7 @@ fn make_load_class(serial: u32, class_id: u64, name_id: u64) -> Vec<u8> {
 /// One declared instance field: `(name_id, hprof_type_code)`. Type codes:
 /// 2=Object, 4=Boolean, 5=Char, 6=Float, 7=Double, 8=Byte, 9=Short, 10=Int, 11=Long.
 pub const T_OBJECT: u8 = 2;
+pub const T_BYTE: u8 = 8;
 pub const T_INT: u8 = 10;
 
 fn make_class_dump(class_id: u64, super_id: u64, fields: &[(u64, u8)]) -> Vec<u8> {
@@ -282,6 +283,29 @@ impl HeapBuilder {
         class_id
     }
 
+    /// Declare a class with an explicit super_id rather than defaulting to
+    /// `java/lang/Object`. This is necessary for scenarios that need a real
+    /// inheritance chain (e.g. Object → Buffer → DirectByteBuffer, or
+    /// Object → Reference → WeakReference → ThreadLocalMap$Entry).
+    ///
+    /// Unlike `class()`, this method does NOT special-case `"java/lang/Object"`.
+    /// The caller is responsible for choosing the right super_id (use
+    /// `b.class("java/lang/Object", &[])` or `b.object_class()` for the root).
+    pub fn class_with_super(&mut self, name: &str, super_id: u64, fields: &[(&str, u8)]) -> u64 {
+        let class_id = self.alloc();
+        let name_id = self.intern(name);
+        self.load_classes.extend_from_slice(&make_load_class(
+            self.next_class_serial,
+            class_id,
+            name_id,
+        ));
+        self.next_class_serial += 1;
+        let field_ids: Vec<(u64, u8)> = fields.iter().map(|&(n, t)| (self.intern(n), t)).collect();
+        self.class_dumps
+            .extend_from_slice(&make_class_dump(class_id, super_id, &field_ids));
+        class_id
+    }
+
     /// Declare a class with one `Object`-typed static field pointing at
     /// `static_val` — the primary way scenarios anchor a graph without an
     /// explicit thread/JNI root. See `make_class_dump_with_static` docs.
@@ -350,6 +374,36 @@ impl HeapBuilder {
         let obj_id = self.alloc();
         self.heap_subrecords
             .extend_from_slice(&make_obj_array(obj_id, elem_class_id, elem_ids));
+        obj_id
+    }
+
+    /// Create a primitive array (PRIM_ARRAY_DUMP) with the given element type
+    /// code and raw bytes. The `type_code` and `elems` must be consistent:
+    ///   - 5 = char (2 bytes/element)
+    ///   - 8 = byte (1 byte/element)
+    ///   - 9 = short (2 bytes/element)
+    ///   - 10 = int (4 bytes/element)
+    ///   - 11 = long (8 bytes/element)
+    ///
+    ///   Returns the array's object id.
+    pub fn prim_array(&mut self, type_code: u8, elems: &[u8]) -> u64 {
+        let obj_id = self.alloc();
+        let count: u32 = match type_code {
+            5 | 9 => (elems.len() / 2) as u32, // char, short
+            8 => elems.len() as u32,           // byte
+            10 => (elems.len() / 4) as u32,    // int
+            11 => (elems.len() / 8) as u32,    // long
+            _ => elems.len() as u32,
+        };
+        let mut body = Vec::new();
+        write_id(&mut body, obj_id);
+        body.extend_from_slice(&0u32.to_be_bytes()); // serial
+        body.extend_from_slice(&count.to_be_bytes());
+        body.push(type_code);
+        body.extend_from_slice(elems);
+        let mut rec = vec![0x23u8]; // PRIM_ARRAY_DUMP
+        rec.extend_from_slice(&body);
+        self.heap_subrecords.extend_from_slice(&rec);
         obj_id
     }
 
@@ -513,4 +567,202 @@ pub fn build_joint_node_thread_scenario(
     b.thread_root(thread_obj);
 
     ("Thread".to_string(), tree_class_name.replace('/', "."))
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 4: Off-heap DirectByteBuffer (fires "off-heap" triage signal)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with many `java/nio/DirectByteBuffer` instances whose
+/// `capacity` fields sum to well above the 64 MiB floor.
+///
+/// Inheritance chain: `java/lang/Object` → `java/nio/Buffer` (capacity:int)
+/// → `java/nio/DirectByteBuffer` (no own fields — capacity is inherited).
+///
+/// The `capacity` field belongs to `Buffer`, so `field_offset` walking from
+/// DirectByteBuffer to the owner class `"java/nio/Buffer"` finds it at byte
+/// offset 0 (no DBB-own fields precede it).
+///
+/// 100 DBB instances × capacity 2_000_000 = 200 MB > 64 MiB threshold.
+pub fn build_off_heap_direct_byte_buffer(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+    // Buffer declares `capacity` as an int field.
+    let buffer_class = b.class_with_super("java/nio/Buffer", object_class, &[("capacity", T_INT)]);
+    // DirectByteBuffer extends Buffer; no own instance fields here.
+    let dbb_class = b.class_with_super("java/nio/DirectByteBuffer", buffer_class, &[]);
+
+    // 100 instances, each with capacity = 2_000_000.
+    let capacity_bytes = 2_000_000i32;
+    let mut first_id: u64 = 0;
+    for i in 0..100u64 {
+        let mut data = Vec::new();
+        int_field(&mut data, capacity_bytes);
+        let id = b.instance(dbb_class, &data);
+        if i == 0 {
+            first_id = id;
+        }
+    }
+
+    // Anchor via a static root so these instances are reachable.
+    b.class_with_static_root("DbbHolder", "buffers", first_id, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5: ThreadLocal null-key leak (fires "threadlocal-leak" signal)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with one `ThreadLocal$ThreadLocalMap$Entry` instance whose
+/// weak-reference `referent` key is null (stale entry after the ThreadLocal
+/// was GC'd).
+///
+/// Inheritance chain:
+///   `java/lang/Object`
+///     → `java/lang/ref/Reference`  (referent: Object)
+///       → `java/lang/ref/WeakReference`  (no own fields)
+///         → `java/lang/ThreadLocal$ThreadLocalMap$Entry`  (value: Object)
+///
+/// Instance data layout (subclass fields first):
+///   bytes 0–7: `value` Object ref (from Entry's own field)
+///   bytes 8–15: `referent` Object ref (inherited from Reference)
+///
+/// Wait — `field_offset` walks subclass-first. So in the instance blob:
+///   Entry's own field `value` comes at offset 0 (8 bytes),
+///   then WeakReference's fields (none),
+///   then Reference's field `referent` at offset 8.
+///
+/// For a null-key stale entry: referent = 0, value = some non-null object.
+pub fn build_threadlocal_null_key_leak(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+
+    // Reference class declares the `referent` Object field.
+    let reference_class = b.class_with_super(
+        "java/lang/ref/Reference",
+        object_class,
+        &[("referent", T_OBJECT)],
+    );
+    // WeakReference extends Reference (no own fields).
+    let weak_ref_class = b.class_with_super("java/lang/ref/WeakReference", reference_class, &[]);
+    // ThreadLocalMap$Entry extends WeakReference; has a `value` Object field.
+    let entry_class = b.class_with_super(
+        "java/lang/ThreadLocal$ThreadLocalMap$Entry",
+        weak_ref_class,
+        &[("value", T_OBJECT)],
+    );
+
+    // Create a simple "value" object for the stale entry to point at.
+    let value_class = b.class("scenarios/TlValue", &[]);
+    let value_obj = b.instance(value_class, &[]);
+
+    // Create a stale entry:
+    //   own field `value` at offset 0 (8 bytes, non-null → the value object)
+    //   inherited `referent` at offset 8 (8 bytes, null = stale key)
+    let mut data = Vec::new();
+    obj_field(&mut data, value_obj); // value (offset 0)
+    obj_field(&mut data, 0); // referent = null (offset 8, stale)
+    let entry_id = b.instance(entry_class, &data);
+
+    b.class_with_static_root("TlEntryHolder", "entry", entry_id, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 6: Boxed-primitive bloat (fires "boxed-primitive-bloat" signal)
+// ---------------------------------------------------------------------------
+
+/// Build a heap consisting almost entirely of `java/lang/Integer` instances.
+/// The rule fires when boxed primitives represent >= 5% of total_shallow,
+/// so with only Integer instances and a minimal holder the ratio is near 100%.
+///
+/// Each Integer carries one `int` field (value). Instance size: 24 bytes
+/// (16-byte Object base + 4-byte int + 4-byte alignment padding).
+pub fn build_boxed_primitive_bloat(b: &mut HeapBuilder) {
+    let integer_class = b.class("java/lang/Integer", &[("value", T_INT)]);
+
+    // 500 Integer instances covering essentially the whole heap.
+    let mut first_id: u64 = 0;
+    for i in 0..500u64 {
+        let mut data = Vec::new();
+        int_field(&mut data, i as i32);
+        let id = b.instance(integer_class, &data);
+        if i == 0 {
+            first_id = id;
+        }
+    }
+
+    b.class_with_static_root("IntegerHolder", "ints", first_id, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 7: Duplicate strings (fires "duplicate-strings" signal)
+//             Requires AnalyzeOptions { find_duplicates: true }
+// ---------------------------------------------------------------------------
+
+/// Build a heap where many `java/lang/String` instances back the same content
+/// via distinct (but content-identical) `char[]` arrays.
+///
+/// Java 9+ layout: String has `value: byte[]` (coder=0=LATIN1, or coder=1=UTF16)
+/// and `coder: byte`. Here we use old Java-8 layout (no coder field) with
+/// `value` pointing to a `char[]` (type code 5).
+///
+/// The duplicate-strings rule fires when `approx_wasted_bytes` exceeds the 16 MiB
+/// floor OR when wasted / total_shallow >= 5%. We use the percentage path by
+/// making the heap very small: 200 strings sharing identical 500-char content.
+///   approx_wasted_bytes = (200 - 1) × 500 = 99,500 chars ≈ 99,500 bytes
+///   prim_array shallow ≈ 24 + 500*2 = 1024 bytes per array
+///   String shallow ≈ 24 bytes each
+///   total_shallow ≈ 200 * (24 + 1024) ≈ 209,600 bytes
+///   wasted% ≈ 99500 / 209600 ≈ 47% > 5% → fires.
+pub fn build_duplicate_strings(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+
+    // java/lang/String with a single `value` Object ref field (old layout).
+    let string_class = b.class_with_super("java/lang/String", object_class, &[("value", T_OBJECT)]);
+
+    // 200 char[] arrays, each containing the same 500 chars (A = 0x0041).
+    // char is type code 5, 2 bytes/element.
+    let char_content: Vec<u8> = (0..500u32)
+        .flat_map(|_| [0x00u8, 0x41u8]) // 'A' in UTF-16 BE
+        .collect();
+
+    let mut first_string_id: u64 = 0;
+    for i in 0..200u64 {
+        // Each string gets its OWN backing array with identical content.
+        let arr_id = b.prim_array(5, &char_content); // type 5 = char
+
+        // String instance: value field points to this array.
+        let mut data = Vec::new();
+        obj_field(&mut data, arr_id);
+        let str_id = b.instance(string_class, &data);
+        if i == 0 {
+            first_string_id = str_id;
+        }
+    }
+
+    b.class_with_static_root("StringHolder", "strings", first_string_id, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 8: Over-capacity HashMap (fires "over-capacity-collections" signal)
+//             Requires AnalyzeOptions { collections: true }
+// ---------------------------------------------------------------------------
+
+/// Build a heap with a single `java/util/HashMap` pre-sized with a 200,000-slot
+/// table and zero live entries — exactly the "pre-sized but empty" shape that
+/// triggers `OverCapacityCollections`.
+///
+/// HashMap layout (from `builtin_coll_descs()`):
+///   `size` (int, field in java/util/HashMap)
+///   `table` (Object ref → the backing Object[] array, field in java/util/HashMap)
+pub fn build_over_capacity_hashmap(b: &mut HeapBuilder) -> u64 {
+    let object_class = b.class("java/lang/Object", &[]);
+    let elem_ids = vec![0u64; 200_000];
+    let backing_array = b.obj_array(object_class, &elem_ids);
+
+    let map_class = b.class("java/util/HashMap", &[("size", T_INT), ("table", T_OBJECT)]);
+    let mut data = Vec::new();
+    int_field(&mut data, 0); // size = 0 (empty)
+    obj_field(&mut data, backing_array); // table → the backing array
+    let map_id = b.instance(map_class, &data);
+
+    b.class_with_static_root("HashMapHolder", "map", map_id, &[]);
+    map_id
 }
