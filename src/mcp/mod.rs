@@ -486,7 +486,10 @@ impl HprofMcpServer {
             }
             "overview" => serde_json::to_string_pretty(&r.overview),
             "triage" => serde_json::to_string_pretty(&r.triage),
-            "waste" => serde_json::to_string_pretty(&r.waste_summary),
+            "waste" => serde_json::to_string_pretty(&serde_json::json!({
+                "waste_summary": r.waste_summary,
+                "waste_breakdown": r.waste_breakdown,
+            })),
             "indicators" => serde_json::to_string_pretty(&r.leak_indicators),
             "retainers" => serde_json::to_string_pretty(&r.top_retainers),
             "arrays" => serde_json::to_string_pretty(&r.arrays_by_size),

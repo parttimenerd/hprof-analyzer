@@ -695,7 +695,7 @@ fn format_signal_md(s: &crate::report::TriageSignal) -> String {
 
 /// Whether the report has a nonzero Waste Summary to render.
 pub(crate) fn waste_summary_present(r: &Report) -> bool {
-    r.waste_summary.as_ref().is_some_and(|w| w.total_bytes > 0)
+    r.waste_summary.as_ref().is_some_and(|w| w.total_bytes > 0) || !r.waste_breakdown.is_empty()
 }
 
 /// Waste Summary (§24): one headline "reclaimable N" figure folding every
@@ -728,6 +728,34 @@ approximate; sources may overlap.\n\n",
             None => s.label.clone(),
         };
         t.row([label, format_bytes(s.bytes)]);
+    }
+    t.render(out);
+    out.push('\n');
+    render_waste_breakdown(r, out);
+}
+
+/// Waste Breakdown: per-rule reclaimable bytes, grouped by WasteCategory,
+/// derived from the triage registry. Rendered only when non-empty.
+pub(crate) fn render_waste_breakdown(r: &Report, out: &mut String) {
+    if r.waste_breakdown.is_empty() {
+        return;
+    }
+    out.push_str("\n### Waste by Source\n\n");
+    out.push_str("Reclaimable bytes broken down by waste category and rule:\n\n");
+    let mut t = crate::md::Table::new(
+        &["Category", "Rule", "Reclaimable"],
+        &[
+            crate::md::Align::Left,
+            crate::md::Align::Left,
+            crate::md::Align::Right,
+        ],
+    );
+    for row in &r.waste_breakdown {
+        let rule_label = match &row.anchor {
+            Some(a) => format!("[{}](#{})", row.title, a),
+            None => row.title.clone(),
+        };
+        t.row([row.category.clone(), rule_label, format_bytes(row.bytes)]);
     }
     t.render(out);
     out.push('\n');

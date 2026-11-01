@@ -1505,7 +1505,10 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                     "threads" => serde_json::to_value(&r.threads)?,
                     "overview" => serde_json::to_value(&r.overview)?,
                     "triage" => serde_json::to_value(&r.triage)?,
-                    "waste" => serde_json::to_value(&r.waste_summary)?,
+                    "waste" => serde_json::to_value(serde_json::json!({
+                        "waste_summary": r.waste_summary,
+                        "waste_breakdown": r.waste_breakdown,
+                    }))?,
                     "indicators" => serde_json::to_value(&r.leak_indicators)?,
                     "retainers" => serde_json::to_value(&r.top_retainers)?,
                     "arrays" => serde_json::to_value(&r.arrays_by_size)?,
