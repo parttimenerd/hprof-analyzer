@@ -4,6 +4,78 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`Report.primary_culprits`** — the "who's actually responsible" answer,
+  resolved once from `leaks.suspects` and shared by `Headline
+  Retainer`/`Concentration`/`Dominant GC-Root Type` instead of each
+  independently (and sometimes inconsistently) re-deriving it. Fixes the
+  "Thread retains 79%, three redundant headlines" pattern: a nearby GC-root
+  holder (e.g. a `Thread` whose stack frame merely transits a deeper
+  structure) no longer out-ranks the real, deeper culprit, and the
+  redundant `Dominant GC-Root Type` bullet is suppressed once the other two
+  already name the same object. Schema v12.
+
+- **`SelfReferentialClassAccumulation` triage rule** — names the specific
+  class forming a recursive tree/chain (e.g. a `Node` type whose instances
+  nest inside each other) once a meaningful share of its own instances and
+  retained bytes are involved; `Report.self_referential_classes` exposes
+  the same data directly. Unlike the existing class-agnostic
+  `DeepRetentionChain` rule (gated on a 10,000-hop floor tuned for
+  pathological cases), this fires on moderate-depth recursive structures
+  and names the class. Schema v13.
+
+- **User-extensible class categories** (`src/classify.rs`) — an ordered,
+  first-match-wins classifier generalizing "JDK vs. non-JDK" into an
+  open-ended registry. Built-ins: `jdk`
+  (`java./javax./jdk./sun./com.sun./scala./kotlin.`) and `framework`
+  (Hibernate/Spring/Netty/HikariCP/...). Users add their own via
+  `.hprof-analyzer.toml`'s new `[[category]]` section or the repeatable
+  `--category NAME=PREFIX` CLI flag; both evaluate before the built-ins.
+  New "Classes by Category" table in System Overview, a "Biggest Non-JDK
+  Classes" view, and a standalone `heap report --section categories` / MCP
+  `categories` section. Schema v14.
+
+- **`ThreadLocalPoolAccumulation` triage rule** — detects a `ThreadLocal`
+  leak spread evenly across a worker pool (N pooled threads each
+  accumulating their own copy of a never-cleared value), a pattern
+  `ThreadPinning` structurally cannot catch since it only ever inspects the
+  single worst thread.
+
+- **MCP `load_dump` gains `collections`/`find_duplicates`/`full_analysis`/
+  `categories` parameters** — these opt-in analysis flags were previously
+  CLI-only; an MCP-driven session could never enable collection-waste
+  analysis, duplicate detection, or custom categories. Found via an
+  MCP/CLI flag-parity audit.
+
+- **Synthetic-HPROF scenario test suite** (`tests/scenarios.rs` +
+  `tests/common/heap_builder.rs`) — fast, in-process, no-JVM regression
+  tests asserting the report *correctly names the responsible class*
+  (via `primary_culprits`/`self_referential_classes`/triage signal ids),
+  not just "doesn't crash." Runs under plain `cargo test`; see the file's
+  doc comment for how to add a new scenario.
+
+### Fixed
+
+- **`Node`/`Simple`-style classes invisible in Biggest Classes and "Who
+  Holds This Class?"** — six holder/dominator-visibility bugs (BUG-1
+  through BUG-6) meant a class whose instances are always held by some
+  other object (rather than directly by a GC root) was invisible in
+  `biggest_classes` no matter how much heap it collectively retained, and
+  had no holder breakdown. Regression-tested in `tests/bug_reproducers.rs`.
+
+- **`jsonify`'s HPCA cache-file version check was hardcoded and drifted
+  from `cache::VERSION`** — bumping the on-disk cache format version broke
+  `offsets.bin` reads silently (empty result, not an error) against any
+  freshly-written cache. Now references `cache::VERSION` directly.
+
+- **`cache::VERSION` had never been bumped since the disk-cache mechanism
+  was introduced**, despite multiple report-model/triage changes landing
+  since — meant a correct code change could silently appear to have no
+  effect when tested against an already-cached dump. Bumped to 2 to cover
+  this session's cumulative changes; see the new "Disk cache gotcha" note
+  in `CLAUDE.md`.
+
 ## [0.3.2] — 2026-10-19
 
 Several items in this release were cherry-picked from
