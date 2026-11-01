@@ -741,9 +741,44 @@ pub fn build_duplicate_strings(b: &mut HeapBuilder) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 8: Over-capacity HashMap (fires "over-capacity-collections" signal)
-//             Requires AnalyzeOptions { collections: true }
+// Scenario 9: Single culprit SimpleValue class with holder data
+//             Verifies that biggest_classes[0].holders is non-empty when the
+//             dominant class is held by a named container class.
 // ---------------------------------------------------------------------------
+
+/// Build a heap where `scenarios/SimpleValue` is the biggest class by retained
+/// size, held by a `scenarios/SimpleContainer`. A static GC-root anchors the
+/// container so it is reachable.
+///
+/// The scenario verifies that `biggest_classes[0].holders` is populated after
+/// the holder-computation window change (P0-2 fix).
+pub fn build_single_culprit_simple_class(b: &mut HeapBuilder) {
+    let simple_class = b.class(
+        "scenarios/SimpleValue",
+        &[("x", T_INT), ("y", T_INT), ("z", T_INT)],
+    );
+
+    // Create 50 SimpleValue instances (each has 3 int fields → meaningful shallow size)
+    let mut refs: Vec<u64> = Vec::new();
+    for _ in 0..50 {
+        let mut data = Vec::new();
+        int_field(&mut data, 0x1234);
+        int_field(&mut data, 0x5678);
+        int_field(&mut data, 0x9ABC);
+        refs.push(b.instance(simple_class, &data));
+    }
+
+    // Container holds an Object[] of all SimpleValues
+    let obj_class = b.class("java/lang/Object", &[]);
+    let arr = b.obj_array(obj_class, &refs);
+    let container_class = b.class("scenarios/SimpleContainer", &[("values", T_OBJECT)]);
+    let mut cdata = Vec::new();
+    obj_field(&mut cdata, arr);
+    let container = b.instance(container_class, &cdata);
+
+    // Static GC root anchors the container
+    b.class_with_static_root("scenarios/Root", "container", container, &[]);
+}
 
 /// Build a heap with a single `java/util/HashMap` pre-sized with a 200,000-slot
 /// table and zero live entries — exactly the "pre-sized but empty" shape that

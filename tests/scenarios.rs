@@ -335,6 +335,33 @@ fn check_over_capacity_hashmap(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 9: single_culprit_simple_class (P0-2: holder window fix)
+// ---------------------------------------------------------------------------
+
+fn build_single_culprit_simple_class() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_single_culprit_simple_class(&mut b);
+    b.build()
+}
+
+fn check_single_culprit_simple_class(report: &Report) {
+    // SimpleValue must appear in biggest_classes (it has 50 instances with payload).
+    let cls = report
+        .top
+        .biggest_classes
+        .iter()
+        .find(|c| c.pretty_class.contains("SimpleValue"))
+        .expect("SimpleValue must appear in biggest_classes");
+
+    // The holder-computation window fix (P0-2): SimpleValue must have non-empty
+    // holders even if it's not ranked in the first top_n classes.
+    assert!(
+        !cls.holders.is_empty(),
+        "SimpleValue must have non-empty holders (P0-2: holder window fix)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario table
 // ---------------------------------------------------------------------------
 
@@ -391,6 +418,12 @@ const SCENARIOS: &[Scenario] = &[
         build: build_over_capacity_hashmap,
         check: check_over_capacity_hashmap,
     },
+    Scenario {
+        name: "single_culprit_simple_class",
+        opts: default_opts,
+        build: build_single_culprit_simple_class,
+        check: check_single_culprit_simple_class,
+    },
 ];
 
 #[test]
@@ -438,11 +471,16 @@ fn scenario_over_capacity_hashmap() {
     run_scenario(&SCENARIOS[7]);
 }
 
+#[test]
+fn scenario_single_culprit_simple_class() {
+    run_scenario(&SCENARIOS[8]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
 /// running the new scenario.
 #[test]
 fn all_scenarios_have_a_dedicated_test() {
-    assert_eq!(SCENARIOS.len(), 8, "update this test when adding scenarios");
+    assert_eq!(SCENARIOS.len(), 9, "update this test when adding scenarios");
 }

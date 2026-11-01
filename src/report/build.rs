@@ -4912,19 +4912,24 @@ fn build_top_consumers(
     //   level2[holder_ci][idom2_ci] += (count=1, retained)
     const HOLDER_CAP: usize = 10;
 
-    // top_class_flag[ci] = index in top-N (usize::MAX = not in top-N)
+    // Compute holders for the top 3× window so that classes ranked just
+    // outside top_n (e.g. a culprit at rank 25 when top_n=20) still get
+    // holder data. The holder pass is an O(n) linear scan — widening is cheap.
+    let holder_window = (top_n * 3).min(class_order.len());
+
+    // top_class_flag[ci] = rank in holder window (usize::MAX = not in window)
     let mut top_class_flag: Vec<usize> = vec![usize::MAX; class_count];
-    for (rank, &ci) in class_order.iter().take(top_n).enumerate() {
+    for (rank, &ci) in class_order.iter().take(holder_window).enumerate() {
         top_class_flag[ci] = rank;
     }
 
     // biggest_classes_holders[rank] = Vec<HolderRow> (populated below)
-    let top_class_n = top_n.min(class_order.len());
-    let mut biggest_classes_holders: Vec<Vec<crate::report::HolderRow>> = vec![vec![]; top_class_n];
+    let mut biggest_classes_holders: Vec<Vec<crate::report::HolderRow>> =
+        vec![vec![]; holder_window];
 
     // level1_accum[rank] = HashMap<holder_ci, (count, retained_sum)>
     let mut level1_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
-        vec![std::collections::HashMap::new(); top_class_n];
+        vec![std::collections::HashMap::new(); holder_window];
     // BUG-2 fix: instances whose idom IS vroot are held directly by a GC root
     // (a Java stack frame, JNI global, thread object, etc.) with no real
     // intervening object. Pass 1 below used to `continue` on `par == vroot`,
@@ -4936,7 +4941,7 @@ fn build_top_consumers(
     // class that has at least one such instance, matching the synthetic
     // "(GC Root)" dominator already added to the Dominator Analysis section
     // (BUG-3, above) so both views use the same label for the same concept.
-    let mut gc_root_accum: Vec<(u64, u64)> = vec![(0, 0); top_class_n]; // (count, retained_sum)
+    let mut gc_root_accum: Vec<(u64, u64)> = vec![(0, 0); holder_window]; // (count, retained_sum)
 
     if !g.idom.is_empty() && !g.class_idx.is_empty() {
         // Pass 1
@@ -5088,7 +5093,7 @@ fn build_top_consumers(
 
     let biggest_classes: Vec<ClassRow> = class_order
         .iter()
-        .take(top_n)
+        .take(holder_window)
         .enumerate()
         .map(|(rank, &ci)| ClassRow {
             pretty_class: pretty_class_name(&g.class_names[ci]),
