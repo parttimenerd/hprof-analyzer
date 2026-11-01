@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SelfReferentialClassRow, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -504,6 +504,13 @@ function NavBreadcrumb() {
       const objMatch = raw.match(/^(explore|domtree)\/(\d+)$/);
       if (!objMatch && !SECTION_LABELS[raw]) return;
       setHistory(prev => {
+        // If the new hash already exists earlier in our stack, treat this as
+        // a browser Back navigation: pop to that position rather than pushing.
+        // This keeps browser Back and the in-app ← Back button consistent.
+        const priorIdx = prev.indexOf(raw);
+        if (priorIdx >= 0 && priorIdx < prev.length - 1) {
+          return prev.slice(0, priorIdx + 1);
+        }
         const last = prev[prev.length - 1];
         if (last === raw) return prev;
         return [...prev.slice(-7), raw];
@@ -5742,7 +5749,64 @@ function RetentionHeatmapView({ pairs }: { pairs: import("./types").ImmDomPair[]
   );
 }
 
-function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
+// ── Self-Referential Clusters ────────────────────────────────────────────────
+// Shows classes that form recursive chains (e.g. Node→Node→Node). Surfaces
+// patterns that the class-idom graph buries by filtering self-referential edges.
+function SelfReferentialClustersSubsection({ rows }: { rows: SelfReferentialClassRow[] }) {
+  const [fmtB] = useFmtBytes();
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ marginTop: "1.5rem" }}>
+      <h3>Self-Referential Clusters</h3>
+      <p className="subtitle">
+        Classes that form recursive chains or trees (an instance of the class dominates other instances of the same class).
+        A high <strong>Nested %</strong> means almost every instance is nested inside another — a tree/chain structure, not independent objects.
+        These patterns are often the root cause of deep memory retention that the class dominator graph filters out.
+      </p>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "0.9em" }}>
+        <thead>
+          <tr style={{ borderBottom: "2px solid var(--border)" }}>
+            <th style={{ textAlign: "left", padding: "0.3rem 0.5rem" }}>Class</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>Instances</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>Nested</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>Nested %</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>Retained</th>
+            <th style={{ textAlign: "left", padding: "0.3rem 0.5rem" }}>Chain Depth Indicator</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.pretty_class} style={{ borderBottom: "1px solid var(--border)" }}>
+              <td style={{ padding: "0.3rem 0.5rem" }}>
+                <code>{r.pretty_class}</code>
+                <PivotBtn cls={r.pretty_class} />
+                <OqlBtn cls={r.pretty_class} />
+              </td>
+              <td style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontVariantNumeric: "tabular-nums" }}>{fmtCount(r.instances)}</td>
+              <td style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontVariantNumeric: "tabular-nums" }}>{fmtCount(r.nested_instances)}</td>
+              <td style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontVariantNumeric: "tabular-nums" }}>{r.nested_pct.toFixed(1)}%</td>
+              <td style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontVariantNumeric: "tabular-nums" }}>{fmtB(r.retained)}</td>
+              <td style={{ padding: "0.3rem 0.5rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <div style={{
+                    height: 12, width: `${Math.min(r.nested_pct, 100)}%`, maxWidth: 200, minWidth: 2,
+                    background: r.nested_pct > 80 ? "var(--danger, #dc3545)" : r.nested_pct > 50 ? "var(--warn, #fd7e14)" : "var(--accent, #0d6efd)",
+                    borderRadius: 2,
+                  }} title={`${r.nested_pct.toFixed(1)}% nested`} />
+                  <span style={{ fontSize: "0.8em", color: "var(--muted)" }}>
+                    {r.nested_pct > 80 ? "deep chain" : r.nested_pct > 50 ? "partial chain" : "shallow"}
+                  </span>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: DominatorAnalysis; selfReferentialClasses?: SelfReferentialClassRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
   const threshold = data?.big_drops?.threshold ?? 0;
@@ -5919,6 +5983,10 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 
       {domView === "heatmap" && (
         <RetentionHeatmapView pairs={pairs} />
+      )}
+
+      {selfReferentialClasses && selfReferentialClasses.length > 0 && (
+        <SelfReferentialClustersSubsection rows={selfReferentialClasses} />
       )}
     </section>
   );
@@ -12191,7 +12259,7 @@ export default function App({ report }: { report: Report }) {
       <DuplicatePrimArraysSection report={report} />
       <BoxedNumbersSection report={report} />
       <HeaderOverheadSection report={report} />
-      <DominatorAnalysisSection data={report.dominator_analysis} />
+      <DominatorAnalysisSection data={report.dominator_analysis} selfReferentialClasses={report.self_referential_classes} />
       <ThreadsSection report={report} />
       <FrameworkAnalysisSection items={report.framework_analysis} />
       {report.top_components?.components?.length ? (

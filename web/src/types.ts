@@ -804,6 +804,14 @@ export interface FieldStats {
   classes: ClassFieldStats[];
 }
 
+export interface SelfReferentialClassRow {
+  pretty_class: string;
+  instances: number;
+  nested_instances: number;
+  nested_pct: number;
+  retained: number;
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -856,6 +864,8 @@ export interface Report {
   framework_analysis?: FrameworkAnalysis[];
   // Per-class reference-field statistics. Present only when --field-stats was passed.
   field_stats?: FieldStats;
+  // Recursive class structures (e.g. Node→Node chains). Always-on; omitted when empty.
+  self_referential_classes?: SelfReferentialClassRow[];
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.
