@@ -3547,6 +3547,110 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
   );
 }
 
+// ── Thread State Summary + Pool Group Analysis ────────────────────────────────
+function ThreadStateSummary({ threads }: { threads: ThreadInfo[] }) {
+  if (threads.length === 0) return null;
+
+  // Aggregate by normalised state
+  const stateOrder = ["runnable", "waiting", "timed_waiting", "blocked", "other"];
+  const stateLabels: Record<string, string> = {
+    runnable: "Runnable",
+    waiting: "Waiting",
+    timed_waiting: "Timed Waiting",
+    blocked: "Blocked",
+    other: "Other / Unknown",
+  };
+  const stateColors: Record<string, string> = {
+    runnable: "var(--ok, #27ae60)",
+    waiting: "var(--warn-border, #e67e22)",
+    timed_waiting: "var(--warn-border, #e67e22)",
+    blocked: "var(--crit, #c0392b)",
+    other: "var(--muted, #888)",
+  };
+
+  function normaliseState(raw: string): string {
+    const s = raw.toLowerCase().replace(/[\[\]]/g, "");
+    if (s.includes("blocked")) return "blocked";
+    if (s.includes("timed_waiting") || s.includes("timed waiting")) return "timed_waiting";
+    if (s.includes("waiting")) return "waiting";
+    if (s.includes("runnable")) return "runnable";
+    return "other";
+  }
+
+  const counts: Record<string, number> = { runnable: 0, waiting: 0, timed_waiting: 0, blocked: 0, other: 0 };
+  for (const t of threads) {
+    counts[normaliseState(t.thread_state)]++;
+  }
+
+  const blockedOrWaiting = counts.blocked + counts.waiting + counts.timed_waiting;
+  const showWarning = blockedOrWaiting > 0 && blockedOrWaiting / threads.length >= 0.5;
+
+  // Pool group analysis: group by name prefix (strip trailing digits / "-thread-N")
+  function poolKey(name: string): string {
+    return name
+      .replace(/-\d+$/, "")
+      .replace(/-thread-\d+$/, "")
+      .replace(/-\d+-thread$/, "")
+      .replace(/\s*#\d+$/, "")
+      .trim();
+  }
+  const poolMap = new Map<string, { total: number; waiting: number; blocked: number }>();
+  for (const t of threads) {
+    if (!t.name) continue;
+    const key = poolKey(t.name.trim());
+    if (!poolMap.has(key)) poolMap.set(key, { total: 0, waiting: 0, blocked: 0 });
+    const entry = poolMap.get(key)!;
+    entry.total++;
+    const ns = normaliseState(t.thread_state);
+    if (ns === "waiting" || ns === "timed_waiting") entry.waiting++;
+    if (ns === "blocked") entry.blocked++;
+  }
+  // Only show pools with ≥2 threads where name diverged into a group
+  const pools = [...poolMap.entries()]
+    .filter(([, v]) => v.total >= 2)
+    .sort((a, b) => b[1].total - a[1].total)
+    .slice(0, 12);
+
+  return (
+    <div style={{ marginBottom: "1rem" }}>
+      <h3 style={{ marginBottom: "0.4rem" }}>Thread State Overview</h3>
+      {showWarning && (
+        <p style={{ color: "var(--crit, #c0392b)", fontWeight: 600, margin: "0.3rem 0" }}>
+          ⚠ {blockedOrWaiting} of {threads.length} threads are stuck (WAITING/BLOCKED) — possible deadlock, lock contention, or thread pool starvation.
+        </p>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+        {stateOrder.filter(s => counts[s] > 0).map(s => (
+          <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", padding: "0.2rem 0.6rem", borderRadius: "4px", border: `1px solid ${stateColors[s]}`, color: stateColors[s], fontWeight: 600, fontSize: "0.85em" }}>
+            <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: stateColors[s], display: "inline-block" }} />
+            {stateLabels[s]}: {counts[s]}
+          </span>
+        ))}
+        <span style={{ color: "var(--muted)", fontSize: "0.85em", alignSelf: "center" }}>({threads.length} total)</span>
+      </div>
+      {pools.length >= 2 && (
+        <>
+          <p style={{ color: "var(--muted)", fontSize: "0.85em", margin: "0 0 0.4rem" }}>Thread pools detected — threads grouped by name prefix:</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+            {pools.map(([key, v]) => {
+              const stuck = v.waiting + v.blocked;
+              const allStuck = stuck === v.total;
+              const color = allStuck ? "var(--crit, #c0392b)" : stuck > 0 ? "var(--warn-border, #e67e22)" : "var(--muted, #888)";
+              return (
+                <span key={key} style={{ fontSize: "0.82em", padding: "0.15rem 0.5rem", border: `1px solid ${color}`, borderRadius: "3px", color }}>
+                  <code style={{ fontSize: "inherit" }}>{key}…</code>
+                  {" "}{v.total} thread{v.total > 1 ? "s" : ""}
+                  {stuck > 0 && <span style={{ fontWeight: 700 }}> · {stuck} stuck</span>}
+                </span>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Threads by Retained Heap table ────────────────────────────────────────────
 function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
@@ -3732,6 +3836,7 @@ function ThreadsSection({ report }: { report: Report }) {
         <p className="subtitle">No thread call stacks were recorded in this dump.</p>
       ) : (
         <>
+          <ThreadStateSummary threads={threads} />
           <ThreadsByRetainedTable threads={threads} />
           <ThreadOverviewTable threads={threads} />
           <div className="tools">
