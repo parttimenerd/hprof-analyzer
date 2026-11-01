@@ -50,6 +50,22 @@ struct ConfigFile {
     collection: Vec<RawEntry>,
     #[serde(default)]
     query: Vec<RawQuery>,
+    #[serde(default)]
+    category: Vec<RawCategory>,
+}
+
+/// A `[[category]]` entry from the config file: a name plus one or more
+/// `prefix`/`regex` matchers. Checked in FILE ORDER, before the two
+/// built-in categories (`framework`, `jdk`) — see `classify.rs` module
+/// docs for the full "first match wins" / "list specific before general"
+/// semantics.
+#[derive(serde::Deserialize)]
+struct RawCategory {
+    name: String,
+    #[serde(default)]
+    prefix: Vec<String>,
+    #[serde(default)]
+    regex: Vec<String>,
 }
 
 /// A `[[query]]` entry from the config file: an OQL string with an optional
@@ -136,6 +152,76 @@ pub(crate) fn load_config_queries(explicit_path: Option<&Path>) -> Vec<ConfigQue
         .and_then(|src| {
             parse_query_entries(&src)
                 .map_err(|e| eprintln!("warning: query config parse error: {e}"))
+                .ok()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse the `[[category]]` entries from a TOML config string, in file
+/// order. An entry with neither `prefix` nor `regex` set is a hard error
+/// naming it (a category with no matchers can never classify anything —
+/// almost certainly a typo). Dotted class-name prefixes are accepted as-is
+/// (categories classify against `pretty_class`, the dotted display form,
+/// unlike `[[collection]]` entries which classify against the slash-form
+/// internal name).
+pub(crate) fn parse_category_entries(
+    src: &str,
+) -> Result<Vec<crate::classify::CategoryDef>, String> {
+    let cfg: ConfigFile = toml::from_str(src).map_err(|e| e.to_string())?;
+    cfg.category
+        .into_iter()
+        .map(|c| {
+            if c.prefix.is_empty() && c.regex.is_empty() {
+                return Err(format!(
+                    "config [[category]] entry {:?} has neither `prefix` nor `regex` — \
+                     it can never match any class",
+                    c.name
+                ));
+            }
+            let mut matchers: Vec<crate::classify::Matcher> = c
+                .prefix
+                .into_iter()
+                .map(crate::classify::Matcher::Prefix)
+                .collect();
+            for pattern in c.regex {
+                let re = regex::Regex::new(&pattern).map_err(|e| {
+                    format!(
+                        "config [[category]] entry {:?} has an invalid regex {:?}: {e}",
+                        c.name, pattern
+                    )
+                })?;
+                matchers.push(crate::classify::Matcher::Regex(re));
+            }
+            Ok(crate::classify::CategoryDef {
+                name: c.name,
+                matchers,
+            })
+        })
+        .collect()
+}
+
+/// Load `[[category]]` entries from the config file (same search order as
+/// [`load_collection_descs`]). A parse error is surfaced as a warning and
+/// the entries are dropped, matching the collection/query config failure
+/// mode — a malformed config degrades to "no user categories", not a hard
+/// failure of the whole analysis.
+pub(crate) fn load_config_categories(
+    explicit_path: Option<&Path>,
+) -> Vec<crate::classify::CategoryDef> {
+    find_config(explicit_path)
+        .and_then(|p| {
+            std::fs::read_to_string(&p)
+                .map_err(|e| {
+                    eprintln!(
+                        "warning: could not read category config {}: {e}",
+                        p.display()
+                    )
+                })
+                .ok()
+        })
+        .and_then(|src| {
+            parse_category_entries(&src)
+                .map_err(|e| eprintln!("warning: category config parse error: {e}"))
                 .ok()
         })
         .unwrap_or_default()

@@ -17,6 +17,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_system_overview_graphs(
         &r.overview,
         r.leak_indicators.direct_byte_buffer_capacity_sum,
+        &r.category_rollup,
         &mut out,
     );
     render_leak_suspects_graphs(&r.leaks, &mut out);
@@ -144,7 +145,12 @@ pub(crate) const GRAPH_BAR_WIDTH: usize = 16;
 
 /// System Overview with bar columns on GC Roots / Heap Composition, a sparkline
 /// for the dominator-depth distribution, and a share bar on the class histogram.
-fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mut String) {
+fn render_system_overview_graphs(
+    o: &SystemOverview,
+    off_heap_cap: u64,
+    category_rollup: &[crate::report::CategoryRollup],
+    out: &mut String,
+) {
     use crate::md::{Align, Table, bar};
     out.push_str("## System Overview\n\n");
     out.push_str("_JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and system properties._\n\n");
@@ -446,6 +452,112 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
         ));
     }
     out.push('\n');
+
+    // Classes by Category — see render_md.rs's matching plain-table section
+    // for the full rationale comment; this adds a proportional shallow-heap
+    // bar, consistent with the rest of this renderer's style.
+    if category_rollup.len() > 1
+        || (category_rollup.len() == 1 && !category_rollup[0].category.is_empty())
+    {
+        out.push_str("### Classes by Category\n\n");
+        out.push_str(
+            "_Classes grouped into JDK/framework/other (or your own `[[category]]`/`--category` \
+definitions — see the README) categories. `other` is classes matching no configured or \
+built-in category — not the same as `application`; define a category to claim them \
+explicitly. Percentages are of SHALLOW heap (mutually exclusive per-object, unlike \
+retained, which can legitimately sum to well over 100% across categories since a \
+class's retained total already includes its own children's)._\n\n",
+        );
+        let cat_max = category_rollup.iter().map(|r| r.shallow).max().unwrap_or(0);
+        let mut t = Table::new(
+            &[
+                "Category",
+                "Classes",
+                "Instances",
+                "Shallow",
+                "% Heap",
+                "Retained",
+                "",
+            ],
+            &[
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Left,
+            ],
+        );
+        for r in category_rollup {
+            t.row([
+                format!("`{}`", r.category),
+                fmt_count(r.class_count),
+                fmt_count(r.instances),
+                format_bytes(r.shallow),
+                fmt_pct(r.shallow_pct),
+                format_bytes(r.retained),
+                bar(r.shallow, cat_max, GRAPH_BAR_WIDTH),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // Biggest Non-JDK Classes — see render_md.rs's matching section for the
+    // full rationale comment.
+    let non_jdk: Vec<&HistRow> = o
+        .histogram
+        .iter()
+        .filter(|r| r.category != crate::classify::JDK_CATEGORY)
+        .take(30)
+        .collect();
+    if !non_jdk.is_empty() {
+        out.push_str("### Biggest Non-JDK Classes\n\n");
+        out.push_str(
+            "_The same class histogram, filtered to exclude built-in JDK/platform classes — \
+surfaces application, framework, and uncategorized classes that ubiquitous JDK container/array \
+classes (`java.util.HashMap`, `java.lang.Object[]`, ...) would otherwise crowd out of the \
+plain histogram above. Top 30 shown._\n\n",
+        );
+        let non_jdk_max = non_jdk.iter().map(|r| r.retained).max().unwrap_or(0);
+        let mut t = Table::new(
+            &[
+                "#",
+                "Class",
+                "Category",
+                "Instances",
+                "Shallow",
+                "Retained",
+                "% Heap",
+                "",
+            ],
+            &[
+                Align::Right,
+                Align::Left,
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Left,
+            ],
+        );
+        for (rank, row) in non_jdk.iter().enumerate() {
+            t.row([
+                (rank + 1).to_string(),
+                format!("`{}`", row.pretty_class),
+                format!("`{}`", row.category),
+                fmt_count(row.instances),
+                format_bytes(row.shallow),
+                format_bytes(row.retained),
+                fmt_pct(pct_of_heap(row.retained, o.total_shallow)),
+                bar(row.retained, non_jdk_max, GRAPH_BAR_WIDTH),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
 
     // Class Loaders (F2) — with a proportional retained-heap bar.
     if !o.loader_rollup.is_empty() {

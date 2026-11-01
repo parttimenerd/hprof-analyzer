@@ -654,8 +654,15 @@ pub fn build_model(
     crate::trace::trim();
     crate::trace::probe("build_model: after drop(dc) — before system_overview");
     crate::trace::probe("build_model: before system_overview aggregates");
-    let (overview, top_level_list, self_referential_classes) =
-        build_system_overview(g, depth_counts, opts.top_consumers, opts.hist_root_path_top);
+    let classifier = crate::classify::build_classifier(opts.categories.clone());
+    let (overview, top_level_list, self_referential_classes, category_rollup) =
+        build_system_overview(
+            g,
+            depth_counts,
+            opts.top_consumers,
+            opts.hist_root_path_top,
+            &classifier,
+        );
     t_bm!("system_overview");
     crate::trace::probe("build_model: after system_overview aggregates");
     let stack_held_via = build_stack_held_via(g);
@@ -772,6 +779,7 @@ pub fn build_model(
         field_stats,
         primary_culprits: Vec::new(),
         self_referential_classes,
+        category_rollup,
     };
     // Resolve the ranked "who's actually responsible" answer from the
     // already-built leak suspects, before evaluating triage so the headline
@@ -2427,10 +2435,12 @@ fn build_system_overview(
     depth_counts: &[u64],
     top_n: usize,
     hist_root_path_top: usize,
+    classifier: &crate::classify::Classifier,
 ) -> (
     SystemOverview,
     Vec<u32>,
     Vec<crate::report::SelfReferentialClassRow>,
+    Vec<crate::report::CategoryRollup>,
 ) {
     let n = g.n;
 
@@ -2862,24 +2872,29 @@ fn build_system_overview(
     let mut histogram: Vec<HistRow> = order
         .iter()
         .copied()
-        .map(|ci| HistRow {
-            pretty_class: pretty_class_name(&g.class_names[ci]),
-            instances: hist[ci].count,
-            shallow: hist[ci].shallow,
-            retained: hist[ci].retained,
-            max_instance_shallow: hist[ci].max_shallow,
-            incoming_ref_count: hist[ci].incoming_ref,
-            loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
-            loader_label: {
-                // `ci` is the histogram row index, aligned with class_loader_id.
-                let lid = g.class_loader_id.get(ci).copied().unwrap_or(0);
-                if lid == 0 {
-                    Some("<boot>".to_string())
-                } else {
-                    g.loader_labels.get(&lid).cloned()
-                }
-            },
-            root_path: None,
+        .map(|ci| {
+            let pretty_class = pretty_class_name(&g.class_names[ci]);
+            let category = classifier.classify(&pretty_class).to_string();
+            HistRow {
+                pretty_class,
+                instances: hist[ci].count,
+                shallow: hist[ci].shallow,
+                retained: hist[ci].retained,
+                max_instance_shallow: hist[ci].max_shallow,
+                incoming_ref_count: hist[ci].incoming_ref,
+                loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
+                loader_label: {
+                    // `ci` is the histogram row index, aligned with class_loader_id.
+                    let lid = g.class_loader_id.get(ci).copied().unwrap_or(0);
+                    if lid == 0 {
+                        Some("<boot>".to_string())
+                    } else {
+                        g.loader_labels.get(&lid).cloned()
+                    }
+                },
+                root_path: None,
+                category,
+            }
         })
         .collect();
 
@@ -3004,6 +3019,48 @@ fn build_system_overview(
             .collect();
         rows.sort_unstable_by_key(|b| std::cmp::Reverse(b.retained));
         rows.truncate(SELF_REF_CAP);
+        rows
+    };
+
+    // ── Classes-by-Category rollup ────────────────────────────────────────────
+    // Aggregates the (already-classified) histogram rows by `category` —
+    // a bounded reduction (one row per distinct category, typically 2-6),
+    // not a new heap pass: `histogram` is already fully built above.
+    let category_rollup: Vec<crate::report::CategoryRollup> = {
+        let mut by_cat: std::collections::HashMap<&str, (u64, u64, u64, u64)> =
+            std::collections::HashMap::new();
+        for row in &histogram {
+            let e = by_cat.entry(row.category.as_str()).or_insert((0, 0, 0, 0));
+            e.0 += 1; // class_count
+            e.1 += row.instances;
+            e.2 += row.shallow;
+            e.3 += row.retained;
+        }
+        let mut rows: Vec<crate::report::CategoryRollup> = by_cat
+            .into_iter()
+            .map(|(cat, (class_count, instances, shallow, retained))| {
+                crate::report::CategoryRollup {
+                    category: cat.to_string(),
+                    class_count,
+                    instances,
+                    shallow,
+                    retained,
+                    // shallow_pct, not a retained-based percentage — see
+                    // CategoryRollup::shallow_pct docs for why: shallow bytes
+                    // are mutually exclusive per-object, so they correctly
+                    // sum to ~100% across categories; summing `retained`
+                    // across many classes does NOT (a class's retained total
+                    // already includes its own backing arrays'/children's
+                    // retained totals, so it is not a disjoint partition).
+                    shallow_pct: if total_shallow > 0 {
+                        shallow as f64 / total_shallow as f64 * 100.0
+                    } else {
+                        0.0
+                    },
+                }
+            })
+            .collect();
+        rows.sort_unstable_by_key(|r| std::cmp::Reverse(r.shallow));
         rows
     };
 
@@ -3361,7 +3418,12 @@ fn build_system_overview(
         top_class_concentration_bp,
         gc_roots_retained_by_type,
     };
-    (overview, top_level_list, self_referential_classes)
+    (
+        overview,
+        top_level_list,
+        self_referential_classes,
+        category_rollup,
+    )
 }
 
 /// Build the FULL multi-level dominator subtree rooted at `root`, walking the
@@ -3981,6 +4043,10 @@ pub(crate) fn build_leak_suspects(
                             }
                         },
                         root_path: None,
+                        // Not classified: this is a per-suspect "accumulated
+                        // objects" breakdown, not the global class rollup —
+                        // category grouping isn't meaningful at this scope.
+                        category: String::new(),
                     });
                 }
             }

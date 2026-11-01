@@ -210,6 +210,52 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 50 | `java.lang.invoke.MemberName`                                         |       763 |  29.8 KB |     40 B |  55.7 KB |   0.5% | ▏                |
 _… 3,021 more classes, 450.5 KB shallow / 2.2 MB retained (see HTML report for full list)._
 
+### Classes by Category
+
+_Classes grouped into JDK/framework/other (or your own `[[category]]`/`--category` definitions — see the README) categories. `other` is classes matching no configured or built-in category — not the same as `application`; define a category to claim them explicitly. Percentages are of SHALLOW heap (mutually exclusive per-object, unlike retained, which can legitimately sum to well over 100% across categories since a class's retained total already includes its own children's)._
+
+| Category | Classes | Instances | Shallow | % Heap | Retained |                  |
+| -------- | ------: | --------: | ------: | -----: | -------: | ---------------- |
+| `jdk`    |   2,751 |   209,757 |  7.0 MB |  60.4% |  35.2 MB | ████████████████ |
+| `other`  |     320 |    26,700 |  4.6 MB |  39.6% |   6.2 MB | ██████████▌      |
+
+### Biggest Non-JDK Classes
+
+_The same class histogram, filtered to exclude built-in JDK/platform classes — surfaces application, framework, and uncategorized classes that ubiquitous JDK container/array classes (`java.util.HashMap`, `java.lang.Object[]`, ...) would otherwise crowd out of the plain histogram above. Top 30 shown._
+
+|  # | Class                                                                                            | Category | Instances |  Shallow | Retained | % Heap |                  |
+| -: | ------------------------------------------------------------------------------------------------ | -------- | --------: | -------: | -------: | -----: | ---------------- |
+|  1 | `byte[]`                                                                                         | `other`  |    24,078 |   2.6 MB |   2.6 MB |  21.9% | ████████████████ |
+|  2 | `long[]`                                                                                         | `other`  |       173 |   1.1 MB |   1.1 MB |   9.4% | ██████▊          |
+|  3 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`                            | `other`  |       128 |  16.0 KB |   1.0 MB |   9.0% | ██████▌          |
+|  4 | `int[]`                                                                                          | `other`  |     1,346 | 875.9 KB | 875.9 KB |   7.4% | █████▎           |
+|  5 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`                                 | `other`  |         1 |    120 B | 157.5 KB |   1.3% | ▉                |
+|  6 | `org.renaissance.core.ModuleLoader`                                                              | `other`  |         2 |     48 B | 149.8 KB |   1.3% | ▉                |
+|  7 | `byte[][]`                                                                                       | `other`  |         1 |   1.4 KB |  94.1 KB |   0.8% | ▌                |
+|  8 | `org.renaissance.core.BenchmarkSuite`                                                            | `other`  |         1 |     32 B |  77.0 KB |   0.6% | ▍                |
+|  9 | `char[]`                                                                                         | `other`  |       225 |  71.8 KB |  71.8 KB |   0.6% | ▍                |
+| 10 | `org.renaissance.harness.ConfigParser$$anon$1`                                                   | `other`  |         1 |     40 B |  13.0 KB |   0.1% | ▏                |
+| 11 | `scopt.ORunner$`                                                                                 | `other`  |         1 |     16 B |   8.1 KB |   0.1% | ▏                |
+| 12 | `char[][][]`                                                                                     | `other`  |         1 |    432 B |   7.7 KB |   0.1% | ▏                |
+| 13 | `char[][]`                                                                                       | `other`  |       103 |   2.4 KB |   7.2 KB |   0.1% | ▏                |
+| 14 | `scopt.OptionDef`                                                                                | `other`  |        42 |   3.9 KB |   6.9 KB |   0.1% | ▏                |
+| 15 | `org.renaissance.harness.RenaissanceSuite$`                                                      | `other`  |         1 |     16 B |   6.5 KB |   0.1% | ▏                |
+| 16 | `org.renaissance.harness.ConfigParser`                                                           | `other`  |         1 |     16 B |   5.8 KB |  <0.1% | ▏                |
+| 17 | `scopt.Read$`                                                                                    | `other`  |         1 |     16 B |   5.3 KB |  <0.1% | ▏                |
+| 18 | `org.renaissance.scala.stm.RealityShowPhilosophers$Fork`                                         | `other`  |       128 |   2.0 KB |   2.4 KB |  <0.1% | ▏                |
+| 19 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210` | `other`  |       128 |   2.0 KB |   2.4 KB |  <0.1% | ▏                |
+| 20 | `scopt.OptionDef$$Lambda+0x00007e41c00dcd20`                                                     | `other`  |        20 |    480 B |   2.4 KB |  <0.1% | ▏                |
+| 21 | `org.renaissance.core.BenchmarkDescriptor`                                                       | `other`  |        31 |    744 B |   2.3 KB |  <0.1% | ▏                |
+| 22 | `scopt.platform$PlatformReadInstances`                                                           | `other`  |         0 |      0 B |   2.1 KB |  <0.1% | ▏                |
+| 23 | `boolean[]`                                                                                      | `other`  |        10 |   1.9 KB |   1.9 KB |  <0.1% | ▏                |
+| 24 | `org.renaissance.scala.stm.RealityShowPhilosophers$`                                             | `other`  |         1 |     16 B |   1.7 KB |  <0.1% | ▏                |
+| 25 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b7be0` | `other`  |        96 |   1.5 KB |   1.6 KB |  <0.1% | ▏                |
+| 26 | `org.renaissance.core.Launcher`                                                                  | `other`  |         0 |      0 B |   1.6 KB |  <0.1% | ▏                |
+| 27 | `org.renaissance.core.ResourceUtils`                                                             | `other`  |         0 |      0 B |   1.2 KB |  <0.1% | ▏                |
+| 28 | `org.renaissance.harness.Config`                                                                 | `other`  |         1 |     72 B |   1.2 KB |  <0.1% | ▏                |
+| 29 | `org.renaissance.harness.ExecutionDriver`                                                        | `other`  |         1 |     56 B |   1.1 KB |  <0.1% | ▏                |
+| 30 | `scopt.Validation$`                                                                              | `other`  |         1 |     16 B |    992 B |  <0.1% | ▏                |
+
 ### Class Loaders
 
 _Classes grouped by the loader that defined them. Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common source of metaspace and heap leaks. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak._

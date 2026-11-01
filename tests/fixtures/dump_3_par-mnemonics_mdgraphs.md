@@ -212,6 +212,52 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 50 | `java.lang.module.ModuleDescriptor`               |        62 |   3.9 KB |     64 B |  40.1 KB |   0.2% | ▏                |
 _… 2,394 more classes, 388.8 KB shallow / 1.5 MB retained (see HTML report for full list)._
 
+### Classes by Category
+
+_Classes grouped into JDK/framework/other (or your own `[[category]]`/`--category` definitions — see the README) categories. `other` is classes matching no configured or built-in category — not the same as `application`; define a category to claim them explicitly. Percentages are of SHALLOW heap (mutually exclusive per-object, unlike retained, which can legitimately sum to well over 100% across categories since a class's retained total already includes its own children's)._
+
+| Category | Classes | Instances | Shallow | % Heap | Retained |                  |
+| -------- | ------: | --------: | ------: | -----: | -------: | ---------------- |
+| `jdk`    |   2,174 |   394,947 | 10.7 MB |  55.7% | 109.7 MB | ████████████████ |
+| `other`  |     270 |   122,844 |  8.5 MB |  44.3% |   8.9 MB | ████████████▋    |
+
+### Biggest Non-JDK Classes
+
+_The same class histogram, filtered to exclude built-in JDK/platform classes — surfaces application, framework, and uncategorized classes that ubiquitous JDK container/array classes (`java.util.HashMap`, `java.lang.Object[]`, ...) would otherwise crowd out of the plain histogram above. Top 30 shown._
+
+|  # | Class                                                                             | Category | Instances |  Shallow | Retained | % Heap |                  |
+| -: | --------------------------------------------------------------------------------- | -------- | --------: | -------: | -------: | -----: | ---------------- |
+|  1 | `byte[]`                                                                          | `other`  |   121,297 |   8.3 MB |   8.3 MB |  43.3% | ████████████████ |
+|  2 | `org.renaissance.core.ModuleLoader`                                               | `other`  |         2 |     48 B | 149.8 KB |   0.8% | ▎                |
+|  3 | `int[]`                                                                           | `other`  |       899 | 106.8 KB | 106.8 KB |   0.5% | ▏                |
+|  4 | `byte[][]`                                                                        | `other`  |         1 |   1.4 KB |  94.1 KB |   0.5% | ▏                |
+|  5 | `org.renaissance.core.BenchmarkSuite`                                             | `other`  |         1 |     32 B |  77.0 KB |   0.4% | ▏                |
+|  6 | `char[]`                                                                          | `other`  |       223 |  55.7 KB |  55.7 KB |   0.3% | ▏                |
+|  7 | `long[]`                                                                          | `other`  |        16 |  14.2 KB |  14.2 KB |   0.1% | ▏                |
+|  8 | `org.renaissance.harness.ConfigParser$$anon$1`                                    | `other`  |         1 |     40 B |  13.0 KB |   0.1% | ▏                |
+|  9 | `org.renaissance.jdk.streams.MnemonicsCoderWithStream`                            | `other`  |         1 |     24 B |   8.9 KB |  <0.1% | ▏                |
+| 10 | `scopt.ORunner$`                                                                  | `other`  |         1 |     16 B |   8.1 KB |  <0.1% | ▏                |
+| 11 | `char[][][]`                                                                      | `other`  |         1 |    432 B |   7.7 KB |  <0.1% | ▏                |
+| 12 | `char[][]`                                                                        | `other`  |       103 |   2.4 KB |   7.2 KB |  <0.1% | ▏                |
+| 13 | `scopt.OptionDef`                                                                 | `other`  |        42 |   3.9 KB |   6.9 KB |  <0.1% | ▏                |
+| 14 | `org.renaissance.harness.RenaissanceSuite$`                                       | `other`  |         1 |     16 B |   6.5 KB |  <0.1% | ▏                |
+| 15 | `org.renaissance.harness.ConfigParser`                                            | `other`  |         1 |     16 B |   5.8 KB |  <0.1% | ▏                |
+| 16 | `scopt.Read$`                                                                     | `other`  |         1 |     16 B |   5.3 KB |  <0.1% | ▏                |
+| 17 | `org.renaissance.BenchmarkResult$Validators`                                      | `other`  |         0 |      0 B |   2.5 KB |  <0.1% | ▏                |
+| 18 | `scopt.OptionDef$$Lambda+0x00007c84940dcd20`                                      | `other`  |        20 |    480 B |   2.4 KB |  <0.1% | ▏                |
+| 19 | `org.renaissance.core.BenchmarkDescriptor`                                        | `other`  |        31 |    744 B |   2.3 KB |  <0.1% | ▏                |
+| 20 | `scopt.platform$PlatformReadInstances`                                            | `other`  |         0 |      0 B |   2.1 KB |  <0.1% | ▏                |
+| 21 | `boolean[]`                                                                       | `other`  |         9 |   1.9 KB |   1.9 KB |  <0.1% | ▏                |
+| 22 | `org.renaissance.core.Launcher`                                                   | `other`  |         0 |      0 B |   1.6 KB |  <0.1% | ▏                |
+| 23 | `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007c8494128dc0` | `other`  |        18 |    432 B |   1.5 KB |  <0.1% | ▏                |
+| 24 | `org.renaissance.core.ResourceUtils`                                              | `other`  |         0 |      0 B |   1.2 KB |  <0.1% | ▏                |
+| 25 | `org.renaissance.harness.Config`                                                  | `other`  |         1 |     72 B |   1.2 KB |  <0.1% | ▏                |
+| 26 | `org.renaissance.harness.ExecutionDriver`                                         | `other`  |         1 |     56 B |   1.2 KB |  <0.1% | ▏                |
+| 27 | `scopt.Validation$`                                                               | `other`  |         1 |     16 B |    992 B |  <0.1% | ▏                |
+| 28 | `org.renaissance.core.BenchmarkDescriptor$Configuration`                          | `other`  |         1 |     24 B |    792 B |  <0.1% | ▏                |
+| 29 | `double[]`                                                                        | `other`  |         7 |    672 B |    672 B |  <0.1% | ▏                |
+| 30 | `scopt.Read$$anon$3`                                                              | `other`  |        17 |    408 B |    672 B |  <0.1% | ▏                |
+
 ### Class Loaders
 
 _Classes grouped by the loader that defined them. Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common source of metaspace and heap leaks. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak._

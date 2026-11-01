@@ -4,6 +4,7 @@ mod bitset;
 #[cfg(feature = "native")]
 pub mod cache;
 mod chunkvec;
+pub mod classify;
 mod collection_config;
 pub mod cvec;
 mod dominator;
@@ -639,7 +640,9 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
         "leaks" => render_md::render_leak_suspects(&r.leaks, &mut out),
         "top" => render_md::render_top_consumers(&r.top, r.overview.total_shallow, &mut out),
         "threads" => render_md::render_threads(&r.threads, false, &mut out),
-        "overview" => render_md::render_system_overview(&r.overview, 0, &mut out),
+        "overview" => {
+            render_md::render_system_overview(&r.overview, 0, &r.category_rollup, &mut out)
+        }
         "triage" => render_md::render_oom_triage(r, &mut out),
         "waste" => render_md::render_waste_summary(r, &mut out),
         "indicators" => render_md::render_leak_indicators(&r.leak_indicators, &mut out),
@@ -673,6 +676,7 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
         }
         "framework" => render_md::render_framework_analysis(&r.framework_analysis, &mut out),
         "field_stats" => render_md::render_fields_by_size(&r.fields_by_size, false, &mut out),
+        "categories" => render_md::render_category_rollup(&r.category_rollup, "##", &mut out),
         _ => return render_md::render_markdown(r),
     }
     out

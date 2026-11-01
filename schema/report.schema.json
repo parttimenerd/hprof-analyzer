@@ -44,6 +44,13 @@
         }
       ]
     },
+    "category_rollup": {
+      "description": "\"Classes by Category\" rollup — one row per distinct category\nactually present in the dump (see `CategoryRollup` docs), sorted\nretained-desc. Always at least `[\"jdk\", \"other\"]`-worth of rows\nunless the dump is empty; grows with user-defined `[[category]]`/\n`--category` entries. Additive; `#[serde(default)]` keeps older\nJSON loadable.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CategoryRollup"
+      }
+    },
     "collection_attribution": {
       "description": "Container attribution by holder `Class#field`, present only when\n`--collections` was passed; `None` otherwise. Additive; not parity-compared.",
       "anyOf": [
@@ -653,6 +660,50 @@
       "required": [
         "edge_cap",
         "size_tier"
+      ]
+    },
+    "CategoryRollup": {
+      "description": "One rollup row in the \"Classes by Category\" view: a single\nclassification category (`\"jdk\"`, `\"framework\"`, `\"other\"`, or any\nuser-defined category name — see `classify.rs`) aggregated over the\nclass histogram. A bounded reduction (row count <= #distinct categories\nactually present in the dump — typically 2-6), so RSS-safe. Sorted by\n`shallow` descending (NOT `retained` — see `shallow_pct` doc below for\nwhy). Answers \"how much of my heap is actually MY code vs. everything\nelse\" at a glance, and is the basis for per-category histogram/\nbiggest-classes table splits in the renderers.",
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "class_count": {
+          "description": "Number of distinct classes classified into this category.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "description": "Sum of this category's classes' `retained` (histogram column). NOT a\nmeaningful \"share of heap\" basis on its own: unlike `shallow`,\n`retained` is NOT mutually exclusive across classes (a `HashMap`'s\nretained total already includes its backing `Node[]`'s retained\ntotal, so summing retained across many classes legitimately exceeds\ntotal heap size many times over — confirmed empirically: summing\nacross just 2 categories exceeded total_shallow by 5.6x on a real\ndump). Still useful to show as a raw \"retained heap classes in this\ncategory are AT LEAST as big as\" figure, just not as a percentage.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow_pct": {
+          "description": "This category's SHALLOW share of total reachable heap, in percent\n(0-100). Unlike a `retained`-based percentage, shallow bytes are\nmutually exclusive across every object, so these percentages\ncorrectly sum to ~100% across all categories — this is the right\nbasis for \"how much of my heap is X\" precisely because of that\nproperty. Precomputed so renderers don't need `overview.total_shallow`\nin scope just to show a percentage column.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "category",
+        "class_count",
+        "instances",
+        "shallow",
+        "retained",
+        "shallow_pct"
       ]
     },
     "CharArrayWaste": {
@@ -2044,6 +2095,11 @@
       "description": "One row of the System-Overview class histogram (full, one row per class).",
       "type": "object",
       "properties": {
+        "category": {
+          "description": "Classification category this class falls into (`\"jdk\"`, `\"framework\"`,\n`\"other\"`, or any user-defined category name from `.hprof-analyzer.toml`'s\n`[[category]]` entries / `--category` flags). See `classify.rs`. Always\npresent; defaults to `\"other\"` for synthetic rows the classifier never\nsaw. `#[serde(default)]` so pre-v14 JSON (which lacks the field) still\ndeserializes as `\"\"` — renderers should treat an empty string the same\nas `\"other\"`.",
+          "type": "string",
+          "default": ""
+        },
         "incoming_ref_count": {
           "description": "Total number of inbound references (edges) pointing at instances of this\nclass across all captured objects. Answers \"how many objects hold a ref to\nan instance of this class?\" Same semantics as JProfiler's incoming-ref count\nin the histogram. Always present; `0` for synthetic rows (no backing objects).",
           "type": "integer",

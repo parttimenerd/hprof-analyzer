@@ -58,7 +58,7 @@ pub struct GetReportParams {
     /// ANALYSIS SECTIONS:
     ///   "triage", "waste", "indicators", "retainers", "arrays", "collections",
     ///   "references", "dominators", "components", "alloc_sites", "thread_locals",
-    ///   "framework", "field_stats"
+    ///   "framework", "field_stats", "categories"
     ///
     /// Default "all" (everything — very large, avoid in LLM workflows).
     pub section: Option<String>,
@@ -333,7 +333,7 @@ impl HprofMcpServer {
                           \n  \"collections\"  — fill ratios, map load factors\
                           \n  \"references\"   — Soft/Weak/Phantom reference counts\
                           \n  \"components\"   — retained heap per class loader\
-                          \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\"\
+                          \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\", \"categories\"\
                           \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
                           \n  \"all\"          — everything merged (very large — avoid in LLM workflows)")]
     async fn get_report(
@@ -422,6 +422,7 @@ impl HprofMcpServer {
             "thread_locals" => serde_json::to_string_pretty(&r.thread_local_analysis),
             "framework" => serde_json::to_string_pretty(&r.framework_analysis),
             "field_stats" => serde_json::to_string_pretty(&r.fields_by_size),
+            "categories" => serde_json::to_string_pretty(&r.category_rollup),
             section => {
                 if section != "all" {
                     return Err(McpError::invalid_params(
@@ -429,7 +430,7 @@ impl HprofMcpServer {
                             "Unknown section {:?}. Valid sections: top-objects, top-classes, \
                              leaks, top, threads, overview, triage, waste, indicators, retainers, \
                              arrays, collections, references, dominators, components, alloc_sites, \
-                             thread_locals, framework, field_stats, all",
+                             thread_locals, framework, field_stats, categories, all",
                             section
                         ),
                         None,

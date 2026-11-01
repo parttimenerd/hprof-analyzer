@@ -50,3 +50,9 @@ Include also things like:
 
 
 
+
+
+
+
+
+add class based flamegraphs (dominator related)

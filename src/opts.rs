@@ -160,6 +160,16 @@ pub struct AnalyzeOptions {
     /// the pass is skipped on dumps where unreachable objects exceed 500K, falling
     /// back to a shallow-by-class aggregate to keep wall time bounded.
     pub force_unreachable_dominator: bool,
+    /// User-defined categories, already resolved at CLI-parse time (file
+    /// `[[category]]` entries merged with any `--category name=prefix` CLI
+    /// entries, user entries first — see `resolve_categories` in main.rs and
+    /// `classify.rs` module docs). Unlike `collection_config`, there is no
+    /// later-stage need to re-read the source config path (nothing re-derives
+    /// categories after this point), so only the resolved list is carried,
+    /// not the path it came from. Library callers (WASM, MCP, tests) can also
+    /// populate this directly without a config file. Empty means "built-ins
+    /// only" (`framework`, `jdk`, else `other`).
+    pub(crate) categories: Vec<crate::classify::CategoryDef>,
 }
 
 impl Default for AnalyzeOptions {
@@ -232,6 +242,7 @@ impl DetailLevel {
             skip_report: false,
             field_stats: false,
             force_unreachable_dominator: false,
+            categories: Vec::new(),
         }
     }
 }

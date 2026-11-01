@@ -15,6 +15,7 @@
 mod bitset;
 mod cache;
 mod chunkvec;
+mod classify;
 mod collection_config;
 mod cvec;
 mod diff;
@@ -170,6 +171,22 @@ struct Cli {
     /// Auto-discovers .hprof-analyzer.toml (CWD) or $HOME/.config/hprof-analyzer/collections.toml.
     #[arg(long, value_name = "PATH")]
     collection_config: Option<std::path::PathBuf>,
+
+    /// Define an ad hoc class category without a config file, e.g.
+    /// --category application=com.mycompany. (repeatable). Classes are
+    /// classified by first-matching prefix, checked in the order these
+    /// flags are given, BEFORE any [[category]] entries from
+    /// --category-config and before the built-in `framework`/`jdk`
+    /// categories. A class matching nothing is reported under `other`.
+    #[arg(long = "category", value_name = "NAME=PREFIX")]
+    category: Vec<String>,
+
+    /// Path to a TOML file with [[category]] entries (same
+    /// .hprof-analyzer.toml file [[collection]]/[[query]] entries live in;
+    /// auto-discovered the same way when this flag is omitted). See
+    /// --category for the ad hoc single-flag alternative.
+    #[arg(long, value_name = "PATH")]
+    category_config: Option<std::path::PathBuf>,
 
     /// Run an OQL query against the heap and include results in the report.
     /// May be repeated. Example: --query "SELECT * FROM java.lang.String".
@@ -559,7 +576,7 @@ enum HeapCmd {
         dump: String,
         /// Section to print: leaks, top, threads, overview, triage, waste, indicators,
         /// retainers, arrays, collections, references, dominators, components, alloc_sites,
-        /// thread_locals, framework, field_stats, or all (default).
+        /// thread_locals, framework, field_stats, categories, or all (default).
         #[arg(long, value_name = "SECTION", value_parser = [
             PossibleValue::new("triage").help("Severity-tagged signals; best first call for diagnosis"),
             PossibleValue::new("leaks").help("Leak suspects with root paths and dominator tree"),
@@ -578,6 +595,7 @@ enum HeapCmd {
             PossibleValue::new("thread_locals").help("Thread-local variable analysis"),
             PossibleValue::new("framework").help("Framework-specific analysis"),
             PossibleValue::new("field_stats").help("Field statistics"),
+            PossibleValue::new("categories").help("JDK/framework/application (or custom) class category rollup"),
             PossibleValue::new("all").help("All sections (default)"),
         ])]
         section: Option<String>,
@@ -807,6 +825,41 @@ impl From<FormatArg> for OutputFormat {
 /// infer from the output path's extension; otherwise fall back to Markdown
 /// (the stdout default). `md-graphs` is never inferred — it shares the `.md`
 /// extension with plain Markdown, so it stays opt-in via `-f md-graphs`.
+/// Parse `--category NAME=PREFIX` flags (in flag order) and merge them,
+/// prepended, with `[[category]]` entries from the config file (same
+/// search/precedence as `--collection-config`). User-supplied categories
+/// (both the ad hoc `--category` flags AND the file's `[[category]]`
+/// entries) always evaluate before the two built-ins — see
+/// `classify.rs` module docs. A malformed `--category` value (missing
+/// `=`) is a hard CLI usage error (unlike a malformed config FILE entry,
+/// which only warns and is dropped — a typo'd command-line flag the user
+/// is actively looking at right now should fail loudly, not silently
+/// no-op).
+fn resolve_categories(
+    category_flags: &[String],
+    category_config: Option<&std::path::Path>,
+) -> Vec<crate::classify::CategoryDef> {
+    let mut out: Vec<crate::classify::CategoryDef> = Vec::new();
+    for spec in category_flags {
+        let Some((name, prefix)) = spec.split_once('=') else {
+            fail(format!(
+                "invalid --category {spec:?}: expected NAME=PREFIX (e.g. --category application=com.mycompany.)"
+            ));
+        };
+        if name.is_empty() || prefix.is_empty() {
+            fail(format!(
+                "invalid --category {spec:?}: NAME and PREFIX must both be non-empty"
+            ));
+        }
+        out.push(crate::classify::CategoryDef::prefix(name, &[prefix]));
+    }
+    out.extend(crate::collection_config::load_config_categories(
+        category_config,
+    ));
+    crate::classify::lint_category_order(&out);
+    out
+}
+
 fn resolve_format(explicit: Option<FormatArg>, out: Option<&str>) -> OutputFormat {
     if let Some(f) = explicit {
         return f.into();
@@ -1464,6 +1517,7 @@ fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
                     "thread_locals" => serde_json::to_value(&r.thread_local_analysis)?,
                     "framework" => serde_json::to_value(&r.framework_analysis)?,
                     "field_stats" => serde_json::to_value(&r.fields_by_size)?,
+                    "categories" => serde_json::to_value(&r.category_rollup)?,
                     _ => serde_json::to_value(r)?,
                 };
                 println!("{}", serde_json::to_string_pretty(&val)?);
@@ -2179,6 +2233,7 @@ fn run_default(cli: Cli) {
             resolve_format(cli.format, cli.output.as_deref())
         };
         let opts = cli.detail.options();
+        let user_categories = resolve_categories(&cli.category, cli.category_config.as_deref());
         let mut opts = AnalyzeOptions {
             find_duplicates: cli.find_duplicates || cli.full_analysis,
             collections: cli.collections || cli.full_analysis,
@@ -2197,6 +2252,7 @@ fn run_default(cli: Cli) {
             force_unreachable_dominator: cli.full_analysis,
             dev_report: cli.dev || cli.bundle_path.is_some(),
             bundle_path: cli.bundle_path.clone(),
+            categories: user_categories,
             ..opts
         };
         if let Some(n) = cli.hist_root_path_top {

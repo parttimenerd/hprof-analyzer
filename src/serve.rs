@@ -202,8 +202,14 @@ impl ServeState {
                         }
                         "/report/overview" => {
                             let off_heap_cap = report.leak_indicators.direct_byte_buffer_capacity_sum;
+                            let category_rollup = report.category_rollup.clone();
                             section_response(&report.overview, want_md, move |r, out| {
-                                crate::report::render_system_overview(r, off_heap_cap, out);
+                                crate::report::render_system_overview(
+                                    r,
+                                    off_heap_cap,
+                                    &category_rollup,
+                                    out,
+                                );
                             })
                         }
                         "/report/leaks" => {

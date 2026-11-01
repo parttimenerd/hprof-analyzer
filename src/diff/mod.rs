@@ -49,6 +49,7 @@ mod tests {
             loader_id: 0,
             loader_label: None,
             root_path: None,
+            category: String::new(),
         }
     }
 
@@ -139,6 +140,7 @@ mod tests {
             field_stats: None,
             primary_culprits: Vec::new(),
             self_referential_classes: Vec::new(),
+            category_rollup: Vec::new(),
         }
     }
 

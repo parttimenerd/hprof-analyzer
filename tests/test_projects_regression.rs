@@ -514,6 +514,101 @@ fn rec_normal_node_in_biggest_classes() {
     );
 }
 
+/// RecursiveHashMaps/RecursiveHashMaps$Node must classify as "other" by
+/// default (not "jdk"), and category_rollup's shallow_pct values must sum
+/// to ~100% (regression guard: an earlier version summed `retained` instead
+/// of `shallow` for the percentage basis, which is NOT mutually exclusive
+/// across classes — a class's retained total already includes its own
+/// children's — and produced percentages like 566% on this exact dump).
+#[test]
+fn rec_normal_category_rollup_percentages_sum_to_100() {
+    let p = dump_path("rec-normal");
+    let Some(dump) = real_dump(&p) else { return };
+    let r = run(&[
+        dump.to_str().unwrap(),
+        "--format",
+        "json",
+        "--progress",
+        "never",
+    ]);
+    assert!(r.success, "rec-normal json failed\nstderr: {}", r.stderr);
+    let v = parse_json(&r.stdout, "rec-normal");
+
+    let hist = v["overview"]["histogram"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let node_row = hist
+        .iter()
+        .find(|row| row["pretty_class"].as_str() == Some("RecursiveHashMaps$Node"));
+    assert_eq!(
+        node_row.and_then(|r| r["category"].as_str()),
+        Some("other"),
+        "RecursiveHashMaps$Node should classify as 'other' by default (it is \
+         not a JDK/framework class)"
+    );
+
+    let rollup = v["category_rollup"].as_array().cloned().unwrap_or_default();
+    assert!(!rollup.is_empty(), "category_rollup must be non-empty");
+    let pct_sum: f64 = rollup
+        .iter()
+        .map(|r| r["shallow_pct"].as_f64().unwrap_or(0.0))
+        .sum();
+    assert!(
+        (pct_sum - 100.0).abs() < 0.5,
+        "category_rollup shallow_pct values must sum to ~100%, got {pct_sum}: {:#?}",
+        rollup
+    );
+}
+
+/// `--category application=RecursiveHashMaps` must reclassify both
+/// RecursiveHashMaps and RecursiveHashMaps$Node from "other" to
+/// "application", and the resulting category_rollup must contain an
+/// "application" row whose retained total reflects both classes combined.
+#[test]
+fn rec_normal_category_flag_reclassifies_node() {
+    let p = dump_path("rec-normal");
+    let Some(dump) = real_dump(&p) else { return };
+    let r = run(&[
+        dump.to_str().unwrap(),
+        "--format",
+        "json",
+        "--progress",
+        "never",
+        "--category",
+        "application=RecursiveHashMaps",
+    ]);
+    assert!(
+        r.success,
+        "rec-normal --category json failed\nstderr: {}",
+        r.stderr
+    );
+    let v = parse_json(&r.stdout, "rec-normal --category");
+
+    let hist = v["overview"]["histogram"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let node_row = hist
+        .iter()
+        .find(|row| row["pretty_class"].as_str() == Some("RecursiveHashMaps$Node"));
+    assert_eq!(
+        node_row.and_then(|r| r["category"].as_str()),
+        Some("application"),
+        "--category application=RecursiveHashMaps should reclassify Node"
+    );
+
+    let rollup = v["category_rollup"].as_array().cloned().unwrap_or_default();
+    let app_row = rollup
+        .iter()
+        .find(|r| r["category"].as_str() == Some("application"));
+    assert!(
+        app_row.is_some(),
+        "expected an 'application' row in category_rollup, got: {:#?}",
+        rollup
+    );
+}
+
 // ---------------------------------------------------------------------------
 // rec-complex.hprof.gz
 //

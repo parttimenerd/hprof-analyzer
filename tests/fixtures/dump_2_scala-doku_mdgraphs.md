@@ -213,6 +213,52 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 50 | `org.renaissance.core.BenchmarkSuite`             |         1 |     32 B |     32 B |  77.0 KB |   0.3% | ▏                |
 _… 2,917 more classes, 639.6 KB shallow / 2.9 MB retained (see HTML report for full list)._
 
+### Classes by Category
+
+_Classes grouped into JDK/framework/other (or your own `[[category]]`/`--category` definitions — see the README) categories. `other` is classes matching no configured or built-in category — not the same as `application`; define a category to claim them explicitly. Percentages are of SHALLOW heap (mutually exclusive per-object, unlike retained, which can legitimately sum to well over 100% across categories since a class's retained total already includes its own children's)._
+
+| Category | Classes | Instances | Shallow | % Heap | Retained |                  |
+| -------- | ------: | --------: | ------: | -----: | -------: | ---------------- |
+| `other`  |     404 |   488,120 | 18.4 MB |  61.7% |  35.6 MB | ████████████████ |
+| `jdk`    |   2,563 |   464,546 | 11.4 MB |  38.3% |  91.2 MB | █████████▉       |
+
+### Biggest Non-JDK Classes
+
+_The same class histogram, filtered to exclude built-in JDK/platform classes — surfaces application, framework, and uncategorized classes that ubiquitous JDK container/array classes (`java.util.HashMap`, `java.lang.Object[]`, ...) would otherwise crowd out of the plain histogram above. Top 30 shown._
+
+|  # | Class                                           | Category | Instances |  Shallow | Retained | % Heap |                  |
+| -: | ----------------------------------------------- | -------- | --------: | -------: | -------: | -----: | ---------------- |
+|  1 | `cafesat.sat.Literal`                           | `other`  |   125,219 |   4.8 MB |   4.8 MB |  16.0% | ████████████████ |
+|  2 | `cafesat.sat.Solver`                            | `other`  |         1 |    168 B |   4.6 MB |  15.6% | ███████████████▌ |
+|  3 | `cafesat.sat.Vector[]`                          | `other`  |         1 | 143.0 KB |   4.3 MB |  14.5% | ██████████████▌  |
+|  4 | `cafesat.sat.Vector`                            | `other`  |    36,614 | 858.1 KB |   4.2 MB |  14.1% | ██████████████   |
+|  5 | `cafesat.asts.core.Trees$ConnectiveApplication` | `other`  |    43,982 |   1.0 MB |   3.9 MB |  13.0% | ████████████▉    |
+|  6 | `cafesat.sat.Solver$Clause`                     | `other`  |    65,565 |   2.0 MB |   3.6 MB |  12.1% | ████████████▏    |
+|  7 | `cafesat.sat.Solver$Clause[]`                   | `other`  |    36,615 |   3.4 MB |   3.4 MB |  11.5% | ███████████▍     |
+|  8 | `int[]`                                         | `other`  |    89,265 |   2.6 MB |   2.6 MB |   8.8% | ████████▊        |
+|  9 | `byte[]`                                        | `other`  |    24,721 |   2.0 MB |   2.0 MB |   6.7% | ██████▋          |
+| 10 | `cafesat.asts.core.Trees$ConnectiveSymbol`      | `other`  |    35,234 | 825.8 KB | 825.9 KB |   2.7% | ██▋              |
+| 11 | `cafesat.asts.core.Trees$PredicateApplication`  | `other`  |    19,761 | 463.1 KB | 463.3 KB |   1.5% | █▌               |
+| 12 | `org.renaissance.core.ModuleLoader`             | `other`  |         2 |     48 B | 149.8 KB |   0.5% | ▍                |
+| 13 | `cafesat.api.Formulas$Formula`                  | `other`  |     8,908 | 139.2 KB | 139.2 KB |   0.5% | ▍                |
+| 14 | `byte[][]`                                      | `other`  |         1 |   1.4 KB |  94.1 KB |   0.3% | ▎                |
+| 15 | `org.renaissance.core.BenchmarkSuite`           | `other`  |         1 |     32 B |  77.0 KB |   0.3% | ▎                |
+| 16 | `cafesat.common.FixedIntStack`                  | `other`  |         1 |     24 B |  71.6 KB |   0.2% | ▏                |
+| 17 | `char[]`                                        | `other`  |       224 |  55.8 KB |  55.8 KB |   0.2% | ▏                |
+| 18 | `cafesat.asts.core.Trees$PredicateSymbol`       | `other`  |       729 |  17.1 KB |  51.4 KB |   0.2% | ▏                |
+| 19 | `cafesat.api.Formulas$Formula[]`                | `other`  |         2 |  35.1 KB |  35.1 KB |   0.1% | ▏                |
+| 20 | `boolean[]`                                     | `other`  |        11 |  19.8 KB |  19.8 KB |   0.1% | ▏                |
+| 21 | `cafesat.api.Formulas$PropVar[][][]`            | `other`  |         1 |     56 B |  16.4 KB |   0.1% | ▏                |
+| 22 | `cafesat.api.Formulas$PropVar[][]`              | `other`  |         9 |    504 B |  16.3 KB |   0.1% | ▏                |
+| 23 | `cafesat.api.Formulas$PropVar[]`                | `other`  |        81 |   4.4 KB |  15.8 KB |   0.1% | ▏                |
+| 24 | `long[]`                                        | `other`  |        17 |  14.2 KB |  14.2 KB |  <0.1% | ▏                |
+| 25 | `org.renaissance.scala.sat.Solver$`             | `other`  |         1 |     16 B |  13.3 KB |  <0.1% | ▏                |
+| 26 | `org.renaissance.harness.ConfigParser$$anon$1`  | `other`  |         1 |     40 B |  13.0 KB |  <0.1% | ▏                |
+| 27 | `cafesat.api.Formulas$PropVar`                  | `other`  |       729 |  11.4 KB |  11.4 KB |  <0.1% | ▏                |
+| 28 | `scopt.ORunner$`                                | `other`  |         1 |     16 B |   8.1 KB |  <0.1% | ▏                |
+| 29 | `char[][][]`                                    | `other`  |         1 |    432 B |   7.7 KB |  <0.1% | ▏                |
+| 30 | `char[][]`                                      | `other`  |       103 |   2.4 KB |   7.2 KB |  <0.1% | ▏                |
+
 ### Class Loaders
 
 _Classes grouped by the loader that defined them. Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common source of metaspace and heap leaks. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak._

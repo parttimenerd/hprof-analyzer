@@ -285,6 +285,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_system_overview(
         &r.overview,
         r.leak_indicators.direct_byte_buffer_capacity_sum,
+        &r.category_rollup,
         &mut out,
     );
     render_leak_suspects(&r.leaks, &mut out);
@@ -967,7 +968,12 @@ _Definitions for the heap analysis terms used throughout this report._
 
 /// Render the "System Overview" section (plain Markdown): scalars, GC-roots and
 /// heap-composition breakdowns, and the full class histogram. Byte-exact-tested.
-pub(crate) fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out: &mut String) {
+pub(crate) fn render_system_overview(
+    o: &SystemOverview,
+    off_heap_cap: u64,
+    category_rollup: &[crate::report::CategoryRollup],
+    out: &mut String,
+) {
     use crate::md::{Align, Table};
     out.push_str("## System Overview\n\n");
     out.push_str("_JVM and dump metadata, heap totals, GC root breakdown, class loader sizes, and system properties._\n\n");
@@ -1283,6 +1289,77 @@ registering JNI globals without a matching `DeleteGlobalRef`._\n\n",
     }
     out.push('\n');
 
+    // Classes by Category: the JDK/Framework/Application (or user-defined)
+    // split over the same histogram data — answers "how much of my heap is
+    // actually MY code vs. everything else" at a glance. One row per
+    // distinct category actually present (not a fixed list), so a dump
+    // with no detected framework sentinels simply has no "framework" row.
+    // Skipped entirely when there's nothing but a single unclassified
+    // "" row (the pre-classification legacy case / older cached reports).
+    if category_rollup.len() > 1
+        || (category_rollup.len() == 1 && !category_rollup[0].category.is_empty())
+    {
+        render_category_rollup(category_rollup, "###", out);
+    }
+
+    // Biggest Non-JDK Classes: the same histogram, filtered to exclude the
+    // built-in "jdk" category — surfaces application/framework/other classes
+    // that would otherwise be crowded out of the plain top-50 histogram by
+    // ubiquitous JDK container/array classes. "Biggest classes outside
+    // {jdk}" generalizes automatically to whatever user categories exist:
+    // if the user has also defined "legacy", legacy classes still show here
+    // (only "jdk" itself is excluded), matching the original ask of
+    // surfacing non-JDK classes specifically, not re-deriving the complement
+    // of whatever the user happens to have categorized as "application".
+    let non_jdk: Vec<&HistRow> = o
+        .histogram
+        .iter()
+        .filter(|r| r.category != crate::classify::JDK_CATEGORY)
+        .take(30)
+        .collect();
+    if !non_jdk.is_empty() {
+        out.push_str("### Biggest Non-JDK Classes\n\n");
+        out.push_str(
+            "_The same class histogram, filtered to exclude built-in JDK/platform classes — \
+surfaces application, framework, and uncategorized classes that ubiquitous JDK container/array \
+classes (`java.util.HashMap`, `java.lang.Object[]`, ...) would otherwise crowd out of the \
+plain histogram above. Top 30 shown._\n\n",
+        );
+        let mut t = Table::new(
+            &[
+                "#",
+                "Class",
+                "Category",
+                "Instances",
+                "Shallow",
+                "Retained",
+                "% Heap",
+            ],
+            &[
+                Align::Right,
+                Align::Left,
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+            ],
+        );
+        for (rank, row) in non_jdk.iter().enumerate() {
+            t.row([
+                (rank + 1).to_string(),
+                format!("`{}`", row.pretty_class),
+                format!("`{}`", row.category),
+                fmt_count(row.instances),
+                format_bytes(row.shallow),
+                format_bytes(row.retained),
+                fmt_pct(pct_of_heap(row.retained, o.total_shallow)),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
     // Class Loaders (F2): per-loader rollup, top-N by retained heap.
     if !o.loader_rollup.is_empty() {
         out.push_str("### Class Loaders\n\n");
@@ -1399,6 +1476,62 @@ the others are likely leaked copies._\n\n",
             out.push('\n');
         }
     }
+}
+
+/// "Classes by Category" table, shared by the embedded subsection in
+/// `render_system_overview` (heading level 3, skipped when there is nothing
+/// to say) and the standalone `heap report --section categories` view
+/// (heading level 2, always shown even when empty). `heading` is the
+/// Markdown ATX prefix to use (`"###"` or `"##"`).
+pub(crate) fn render_category_rollup(
+    rollup: &[crate::report::CategoryRollup],
+    heading: &str,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    out.push_str(&format!("{heading} Classes by Category\n\n"));
+    out.push_str(
+        "_Classes grouped into JDK/framework/other (or your own `[[category]]`/`--category` \
+definitions — see the README) categories. `other` is classes matching no configured or \
+built-in category — not the same as `application`; define a category to claim them \
+explicitly. Percentages are of SHALLOW heap (mutually exclusive per-object, unlike \
+retained, which can legitimately sum to well over 100% across categories since a \
+class's retained total already includes its own children's)._\n\n",
+    );
+    if rollup.is_empty() {
+        out.push_str("_No class data available._\n");
+        return;
+    }
+    let mut t = Table::new(
+        &[
+            "Category",
+            "Classes",
+            "Instances",
+            "Shallow",
+            "% Heap",
+            "Retained",
+        ],
+        &[
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
+    for r in rollup {
+        t.row([
+            format!("`{}`", r.category),
+            fmt_count(r.class_count),
+            fmt_count(r.instances),
+            format_bytes(r.shallow),
+            fmt_pct(r.shallow_pct),
+            format_bytes(r.retained),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
 }
 
 /// Render the "Leak Suspects" section (plain Markdown): per-suspect footprint,

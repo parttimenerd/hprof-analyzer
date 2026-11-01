@@ -41,6 +41,15 @@ pub struct HistRow {
     /// deserializes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_path: Option<Vec<RootPathStep>>,
+    /// Classification category this class falls into (`"jdk"`, `"framework"`,
+    /// `"other"`, or any user-defined category name from `.hprof-analyzer.toml`'s
+    /// `[[category]]` entries / `--category` flags). See `classify.rs`. Always
+    /// present; defaults to `"other"` for synthetic rows the classifier never
+    /// saw. `#[serde(default)]` so pre-v14 JSON (which lacks the field) still
+    /// deserializes as `""` — renderers should treat an empty string the same
+    /// as `"other"`.
+    #[serde(default)]
+    pub category: String,
 }
 
 /// One row of the unreachable-objects histogram: objects that are not
@@ -1162,6 +1171,42 @@ pub struct FillRatioBucket {
     pub wasted: u64,
 }
 
+/// One rollup row in the "Classes by Category" view: a single
+/// classification category (`"jdk"`, `"framework"`, `"other"`, or any
+/// user-defined category name — see `classify.rs`) aggregated over the
+/// class histogram. A bounded reduction (row count <= #distinct categories
+/// actually present in the dump — typically 2-6), so RSS-safe. Sorted by
+/// `shallow` descending (NOT `retained` — see `shallow_pct` doc below for
+/// why). Answers "how much of my heap is actually MY code vs. everything
+/// else" at a glance, and is the basis for per-category histogram/
+/// biggest-classes table splits in the renderers.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CategoryRollup {
+    pub category: String,
+    /// Number of distinct classes classified into this category.
+    pub class_count: u64,
+    pub instances: u64,
+    pub shallow: u64,
+    /// Sum of this category's classes' `retained` (histogram column). NOT a
+    /// meaningful "share of heap" basis on its own: unlike `shallow`,
+    /// `retained` is NOT mutually exclusive across classes (a `HashMap`'s
+    /// retained total already includes its backing `Node[]`'s retained
+    /// total, so summing retained across many classes legitimately exceeds
+    /// total heap size many times over — confirmed empirically: summing
+    /// across just 2 categories exceeded total_shallow by 5.6x on a real
+    /// dump). Still useful to show as a raw "retained heap classes in this
+    /// category are AT LEAST as big as" figure, just not as a percentage.
+    pub retained: u64,
+    /// This category's SHALLOW share of total reachable heap, in percent
+    /// (0-100). Unlike a `retained`-based percentage, shallow bytes are
+    /// mutually exclusive across every object, so these percentages
+    /// correctly sum to ~100% across all categories — this is the right
+    /// basis for "how much of my heap is X" precisely because of that
+    /// property. Precomputed so renderers don't need `overview.total_shallow`
+    /// in scope just to show a percentage column.
+    pub shallow_pct: f64,
+}
+
 /// How full collections are (size vs backing-array capacity). `tracked` =
 /// collections actually sampled; `total` = all collections seen (tracked <=
 /// total when a cap was hit). Additive.
@@ -1663,7 +1708,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// One detected framework's aggregate statistics.
 #[derive(
@@ -1870,6 +1915,14 @@ pub struct Report {
     /// Additive; `#[serde(default)]` keeps older JSON loadable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub self_referential_classes: Vec<SelfReferentialClassRow>,
+    /// "Classes by Category" rollup — one row per distinct category
+    /// actually present in the dump (see `CategoryRollup` docs), sorted
+    /// retained-desc. Always at least `["jdk", "other"]`-worth of rows
+    /// unless the dump is empty; grows with user-defined `[[category]]`/
+    /// `--category` entries. Additive; `#[serde(default)]` keeps older
+    /// JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub category_rollup: Vec<CategoryRollup>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

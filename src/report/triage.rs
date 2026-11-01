@@ -3070,6 +3070,7 @@ mod tests {
             field_stats: None,
             primary_culprits: Vec::new(),
             self_referential_classes: Vec::new(),
+            category_rollup: Vec::new(),
         }
     }
 
@@ -3264,6 +3265,7 @@ mod tests {
             loader_id: 0,
             loader_label: None,
             root_path: None,
+            category: String::new(),
         }];
         let s = ObjectSwarm
             .eval(&r)
@@ -3289,6 +3291,7 @@ mod tests {
             loader_id: 0,
             loader_label: None,
             root_path: None,
+            category: String::new(),
         }];
         let s = BoxedPrimitiveBloat
             .eval(&r)
@@ -3426,6 +3429,7 @@ mod tests {
             loader_id: 0,
             loader_label: None,
             root_path: None,
+            category: String::new(),
         }
     }
 

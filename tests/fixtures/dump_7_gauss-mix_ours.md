@@ -266,6 +266,53 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 50 | `jdk.internal.util.ReferencedKeySet`                             |         1 |     16 B |     16 B | 302.5 KB |   0.9% |
 _… 12,886 more classes, 3.7 MB shallow / 20.7 MB retained (see HTML report for full list)._
 
+### Classes by Category
+
+_Classes grouped into JDK/framework/other (or your own `[[category]]`/`--category` definitions — see the README) categories. `other` is classes matching no configured or built-in category — not the same as `application`; define a category to claim them explicitly. Percentages are of SHALLOW heap (mutually exclusive per-object, unlike retained, which can legitimately sum to well over 100% across categories since a class's retained total already includes its own children's)._
+
+| Category    | Classes | Instances |  Shallow | % Heap | Retained |
+| ----------- | ------: | --------: | -------: | -----: | -------: |
+| `other`     |   7,430 |   134,305 |  20.4 MB |  61.6% |  35.7 MB |
+| `jdk`       |   5,122 |   417,154 |  12.0 MB |  36.2% |  79.6 MB |
+| `framework` |     384 |    10,926 | 745.5 KB |   2.2% |   4.2 MB |
+
+### Biggest Non-JDK Classes
+
+_The same class histogram, filtered to exclude built-in JDK/platform classes — surfaces application, framework, and uncategorized classes that ubiquitous JDK container/array classes (`java.util.HashMap`, `java.lang.Object[]`, ...) would otherwise crowd out of the plain histogram above. Top 30 shown._
+
+|  # | Class                                                            | Category    | Instances |  Shallow | Retained | % Heap |
+| -: | ---------------------------------------------------------------- | ----------- | --------: | -------: | -------: | -----: |
+|  1 | `byte[]`                                                         | `other`     |    58,366 |  14.7 MB |  14.7 MB |  44.4% |
+|  2 | `org.apache.spark.storage.memory.MemoryStore`                    | `other`     |         1 |     56 B |   2.3 MB |   7.1% |
+|  3 | `int[]`                                                          | `other`     |     9,056 |   2.0 MB |   2.0 MB |   6.0% |
+|  4 | `double[]`                                                       | `other`     |    16,101 |   1.5 MB |   1.5 MB |   4.4% |
+|  5 | `io.netty.buffer.PoolSubpage[]`                                  | `framework` |       202 |  34.7 KB | 957.9 KB |   2.8% |
+|  6 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`        | `other`     |         7 |    224 B | 937.9 KB |   2.8% |
+|  7 | `io.netty.buffer.PoolSubpage`                                    | `framework` |     7,878 | 553.9 KB | 923.8 KB |   2.7% |
+|  8 | `io.netty.buffer.PoolArena$HeapArena`                            | `framework` |       101 |  15.0 KB | 695.2 KB |   2.1% |
+|  9 | `io.netty.buffer.PoolArena$DirectArena`                          | `framework` |       101 |  15.0 KB | 695.2 KB |   2.1% |
+| 10 | `breeze.linalg.Vector[]`                                         | `other`     |         2 |  58.6 KB | 644.6 KB |   1.9% |
+| 11 | `char[]`                                                         | `other`     |       733 | 636.3 KB | 636.3 KB |   1.9% |
+| 12 | `breeze.linalg.DenseVector$mcD$sp`                               | `other`     |    15,006 | 586.2 KB | 586.8 KB |   1.7% |
+| 13 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   | `other`     |       256 |   8.0 KB | 556.5 KB |   1.6% |
+| 14 | `org.sparkproject.jetty.http.pathmap.PathMappings`               | `other`     |        84 |   2.6 KB | 546.7 KB |   1.6% |
+| 15 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | `other`     |         1 |     64 B | 477.1 KB |   1.4% |
+| 16 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         | `other`     |        28 |   2.8 KB | 463.2 KB |   1.4% |
+| 17 | `org.sparkproject.jetty.util.IncludeExclude`                     | `other`     |       112 |   3.5 KB | 446.7 KB |   1.3% |
+| 18 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                | `other`     |        56 |    896 B | 364.4 KB |   1.1% |
+| 19 | `org.sparkproject.jetty.servlet.ServletContextHandler`           | `other`     |        29 |   6.3 KB | 307.1 KB |   0.9% |
+| 20 | `org.apache.spark.status.ElementTrackingStore`                   | `other`     |         1 |     40 B | 303.3 KB |   0.9% |
+| 21 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`      | `other`     |         1 |     16 B | 301.3 KB |   0.9% |
+| 22 | `org.apache.spark.util.kvstore.InMemoryStore`                    | `other`     |         1 |     24 B | 301.1 KB |   0.9% |
+| 23 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`       | `other`     |        12 |    480 B | 297.5 KB |   0.9% |
+| 24 | `org.apache.spark.mllib.linalg.Vector[]`                         | `other`     |         2 |  58.6 KB | 293.0 KB |   0.9% |
+| 25 | `org.sparkproject.jetty.servlet.ServletHandler`                  | `other`     |        29 |   4.1 KB | 251.9 KB |   0.7% |
+| 26 | `io.netty.channel.nio.NioEventLoop`                              | `framework` |        18 |   2.7 KB | 245.8 KB |   0.7% |
+| 27 | `com.codahale.metrics.Timer`                                     | `other`     |         7 |    168 B | 243.8 KB |   0.7% |
+| 28 | `com.codahale.metrics.Histogram`                                 | `other`     |        11 |    264 B | 242.4 KB |   0.7% |
+| 29 | `com.codahale.metrics.ExponentiallyDecayingReservoir`            | `other`     |        11 |    616 B | 241.9 KB |   0.7% |
+| 30 | `org.sparkproject.jetty.util.ArrayTrie`                          | `other`     |         9 |    360 B | 238.4 KB |   0.7% |
+
 ### Class Loaders
 
 _Classes grouped by the loader that defined them. Growing loaders (e.g. web-app or plugin loaders redeployed multiple times) are a common source of metaspace and heap leaks. The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), not an instance name — the hprof format does not record loader names. Multiple rows with the same loader class are distinct loader instances; many such instances each holding significant heap can signal a class-loader leak. The **Address** column distinguishes them._
