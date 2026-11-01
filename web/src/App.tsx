@@ -2326,10 +2326,17 @@ function SystemOverviewSection({ report }: { report: Report }) {
 
       {o.duplicate_classes.length > 0 && (
         <>
-          <h3 id="duplicate-classes">Duplicate Classes</h3>
+          <h3 id="duplicate-classes">Duplicate Classes (ClassLoader Leak Signal)</h3>
           <p className="subtitle">
             Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — a typical symptom of class-loader leaks (e.g. each web-app reload or plugin load creates a new loader that never gets GC&apos;d). Check the per-loader breakdown: if one loader holds almost all the instances, the others are likely leaked copies.
           </p>
+          {o.duplicate_classes.length >= 5 && (
+            <div className="card" style={{ borderColor: "var(--warn-border, #e67e22)", marginBottom: "0.75rem" }}>
+              <strong>⚠ {fmtCount(o.duplicate_classes.length)} duplicate class{o.duplicate_classes.length === 1 ? "" : "es"} detected.</strong>
+              {" "}Likely cause: <code>URLClassLoader</code> created per request/plugin and never GC'd, or hot-reload (Tomcat, OSGi, JRebel) creating new loaders without releasing old ones.
+              <br />Fix: ensure old loaders are dereferenced and that no static field, ThreadLocal, or shutdown hook holds a reference to the old loader's classes. Use <code>-XX:+TraceClassLoading</code> to watch loader churn at runtime.
+            </div>
+          )}
           <DuplicateClassesTable rows={o.duplicate_classes} />
         </>
       )}
@@ -6303,6 +6310,9 @@ function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
             ⚠ Over 256 MB of off-heap NIO memory detected — invisible to GC and pressures OS memory.
           </p>
         )}
+        <p className="subtitle" style={{ marginTop: "0.5rem" }}>
+          <strong>Fragmentation risk:</strong> if RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause — allocating and freeing many differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with <code>jcmd &lt;pid&gt; VM.native_memory detail</code>, NativeMemoryTracking (add <code>-XX:NativeMemoryTracking=detail</code>), or jemalloc heap profiling (<code>MALLOC_CONF=prof:true</code>).
+        </p>
       </div>
     </section>
   );

@@ -4080,6 +4080,10 @@
             "null"
           ]
         },
+        "dominant_retained_class": {
+          "description": "The class that dominates the most retained heap for this thread — the\nsingle most expensive type reachable from this thread's locals/fields.\nEmpty when retained heap is zero or thread has no local objects. Additive.",
+          "type": "string"
+        },
         "frames": {
           "description": "Stack frames, top-first, each \"class.method (source:line)\".",
           "type": "array",

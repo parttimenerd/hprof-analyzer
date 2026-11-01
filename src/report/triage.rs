@@ -87,7 +87,7 @@ const SWARM_MAX_INSTANCE_BYTES: u64 = 64;
 /// Live ClassLoader-instance count before the classloader-explosion rule fires.
 const CLASSLOADER_EXPLOSION_FLOOR: u64 = 1000;
 /// Live-thread count before the thread-swarm rule fires.
-const THREAD_SWARM_FLOOR: usize = 1000;
+const THREAD_SWARM_FLOOR: usize = 300;
 /// `java.lang.ref.Finalizer` instance count that signals a backed-up queue.
 const FINALIZER_FLOOR: u64 = 10_000;
 /// Loaded-class count above which Metaspace pressure is likely.
@@ -104,7 +104,7 @@ const HEAP_SKEW_PCT: f64 = 70.0;
 /// Suspect retained share at which the static-field-anchor rule fires.
 const STATIC_ANCHOR_PCT: f64 = 20.0;
 /// Session/request-scope class instance floor (name-pattern gate).
-const SESSION_FLOOR: u64 = 100_000;
+const SESSION_FLOOR: u64 = 10_000;
 /// Connection/socket class instance floor (name-pattern gate).
 const CONNECTION_FLOOR: u64 = 1_000;
 /// Listener/observer class instance floor (name-pattern gate). Set low enough
@@ -368,6 +368,8 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(ScheduledTaskAccumulation),
         Box::new(HibernateSessionBloat),
         Box::new(ExecutorSelfSubmitDeadlock),
+        Box::new(ShutdownHookAccumulation),
+        Box::new(ThreadPoolSaturation),
     ]
 }
 
@@ -1061,7 +1063,13 @@ impl Rule for OffHeap {
             TriageSeverity::Warning,
             "Off-Heap (DirectByteBuffer)",
             format!(
-                "{} of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM.",
+                "{} of native memory is held by live DirectByteBuffers — not reflected in the \
+                 on-heap totals, but counts against process RSS and can trigger OS-level OOM. \
+                 If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may \
+                 be the cause: repeatedly allocating and freeing differently-sized buffers leaves \
+                 gaps the allocator cannot reuse for larger requests. Diagnose with \
+                 `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling \
+                 (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode.",
                 format_bytes(cap),
             ),
             Some(("off-heap-nio", "Off-Heap NIO")),
@@ -1817,7 +1825,14 @@ impl Rule for EventListenerAccumulation {
                         || c.contains("Subscriber")
                         || c.contains("Handler")
                         || c.contains("Callback")
-                        || c.contains("Watcher"))
+                        || c.contains("Watcher")
+                        // AWT/Swing EventAdapter subclasses (MouseAdapter, KeyAdapter, etc.)
+                        || (c.contains("Adapter")
+                            && !c.contains("TypeAdapter")
+                            && !c.contains("JsonAdapter")
+                            && !c.contains("HttpAdapter")
+                            && !c.contains("RequestAdapter")
+                            && !c.contains("ResponseAdapter")))
                     && h.instances >= LISTENER_FLOOR
             })
             .max_by_key(|h| h.instances)?;
@@ -1844,6 +1859,7 @@ impl Rule for ParserOutputAccumulation {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         const PARSER_PKGS: &[&str] = &[
             "org.w3c.dom.",
+            "com.sun.org.apache.xerces.", // JDK built-in Xerces DOM (DeferredDocumentImpl etc.)
             "com.fasterxml.jackson.",
             "com.google.gson.",
             "org.dom4j.",
@@ -3815,6 +3831,96 @@ impl Rule for ExecutorSelfSubmitDeadlock {
     }
 }
 
+/// Shutdown-hook accumulation. Reads `overview.histogram` for
+/// `java.lang.Thread` instances. Fires when the live `Thread` count is
+/// abnormally high AND threads do NOT appear to come from an ongoing load test
+/// (i.e. the thread-swarm rule is not also firing). Separately, if
+/// `ApplicationShutdownHooks` appears in the histogram with a large count,
+/// that is a direct signal.
+///
+/// Leak10 pattern: `Runtime.addShutdownHook(new Thread(...))` called per
+/// request — each call creates a new Thread stored in
+/// `java.lang.ApplicationShutdownHooks.hooks` (an `IdentityHashMap`) and
+/// never removed. After N requests there are N leaked thread objects.
+struct ShutdownHookAccumulation;
+const SHUTDOWN_HOOK_FLOOR: u64 = 200;
+impl Rule for ShutdownHookAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        // Direct signal: the ApplicationShutdownHooks class (or its inner Thread map)
+        // shows up in the histogram with many instances.
+        let hook_instances: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                h.pretty_class.contains("ApplicationShutdownHooks")
+                    || h.pretty_class.contains("ShutdownHook")
+            })
+            .map(|h| h.instances)
+            .sum();
+        if hook_instances < SHUTDOWN_HOOK_FLOOR {
+            return None;
+        }
+        Some(signal(
+            "shutdown-hook-accumulation",
+            TriageSeverity::Warning,
+            "Shutdown Hook Accumulation",
+            format!(
+                "{} `ApplicationShutdownHooks` / shutdown-hook related objects — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` object in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead).",
+                fmt_count(hook_instances),
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
+/// Thread pool saturation. Reads `threads.threads`. Fires when a large
+/// fraction of threads are stuck in WAITING or BLOCKED state, regardless of
+/// how much heap they retain. Targets thread-pool starvation (Leak17: all
+/// Tomcat threads in `sleepMillis`), deadlocks (Leak8/9), and executor
+/// self-submit scenarios where individual threads hold little heap but the
+/// pool is 100% occupied.
+///
+/// Complements `BlockedThreadConcentration` (which gates on heap retention)
+/// by firing on the thread-state pattern alone.
+struct ThreadPoolSaturation;
+const SATURATION_WAITING_PCT: f64 = 60.0;
+const SATURATION_MIN_THREADS: usize = 20;
+impl Rule for ThreadPoolSaturation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let threads = &r.threads.threads;
+        let total = threads.len();
+        if total < SATURATION_MIN_THREADS {
+            return None;
+        }
+        let stuck: usize = threads
+            .iter()
+            .filter(|t| {
+                let s = t.thread_state.to_ascii_lowercase();
+                s.contains("blocked") || s.contains("waiting")
+            })
+            .count();
+        let pct = (stuck as f64 / total as f64) * 100.0;
+        if pct < SATURATION_WAITING_PCT {
+            return None;
+        }
+        Some(signal(
+            "thread-pool-saturation",
+            TriageSeverity::Warning,
+            "Thread Pool Saturation",
+            format!(
+                "{} of {} threads ({:.0}%) are WAITING or BLOCKED — the thread pool appears saturated. \
+                 Possible causes: slow downstream calls monopolising all pool threads (thread starvation), \
+                 monitor deadlock, or executor self-submit deadlock. \
+                 Check the Threads section for the common frame shared by stuck threads and look for \
+                 a blocked-on resource (semaphore, DB call, HTTP request, synchronized method).",
+                stuck, total, pct,
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4208,15 +4314,15 @@ mod tests {
     fn thread_swarm_fires_on_high_count() {
         let mut r = base_report();
         r.leaks.total_shallow = 1_000_000;
-        // By count >= 1000.
-        r.threads.threads = (0..1500)
+        // By count >= 300.
+        r.threads.threads = (0..400)
             .map(|i| ThreadInfo {
                 retained: 100,
                 name: Some(format!("worker-{i}")),
                 ..Default::default()
             })
             .collect();
-        assert!(ThreadSwarm.eval(&r).is_some(), "1500 threads must fire");
+        assert!(ThreadSwarm.eval(&r).is_some(), "400 threads must fire");
 
         // Below count floor: silent even with high aggregate share.
         r.threads.threads = r.threads.threads[0..10].to_vec();
@@ -4535,7 +4641,15 @@ mod tests {
         // Watcher fires (new).
         r.overview.histogram[0].pretty_class = "io.k8s.FileWatcher".into();
         assert!(EventListenerAccumulation.eval(&r).is_some());
+        // Adapter fires (GUI/AWT pattern: MouseAdapter, KeyAdapter, WindowAdapter).
+        r.overview.histogram[0].pretty_class = "java.awt.event.MouseAdapter".into();
+        r.overview.histogram[0].instances = LISTENER_FLOOR;
+        assert!(EventListenerAccumulation.eval(&r).is_some());
+        // TypeAdapter (Gson) excluded — common false positive.
+        r.overview.histogram[0].pretty_class = "com.google.gson.TypeAdapter".into();
+        assert!(EventListenerAccumulation.eval(&r).is_none());
         // Below floor: silent.
+        r.overview.histogram[0].pretty_class = "com.example.MessageListener".into();
         r.overview.histogram[0].instances = 1_000;
         assert!(EventListenerAccumulation.eval(&r).is_none());
     }
@@ -4561,6 +4675,10 @@ mod tests {
         r.overview.histogram[0].instances = 1_000;
         r.overview.histogram[0].shallow = 100 * 1024 * 1024; // 100 MB
         r.overview.histogram[0].pretty_class = "org.w3c.dom.Document".into();
+        assert!(ParserOutputAccumulation.eval(&r).is_some());
+        // JDK built-in Xerces (DocumentBuilderFactory DOM impl) also fires.
+        r.overview.histogram[0].pretty_class =
+            "com.sun.org.apache.xerces.internal.dom.DeferredDocumentImpl".into();
         assert!(ParserOutputAccumulation.eval(&r).is_some());
     }
 
@@ -5630,5 +5748,74 @@ mod tests {
             t.thread_state = "WAITING".into();
         }
         assert!(ExecutorSelfSubmitDeadlock.eval(&r).is_none());
+    }
+
+    #[test]
+    fn shutdown_hook_accumulation_fires() {
+        let mut r = base_report();
+        // Direct signal via ApplicationShutdownHooks class.
+        r.overview.histogram = vec![hist_row(
+            "java.lang.ApplicationShutdownHooks",
+            SHUTDOWN_HOOK_FLOOR,
+            SHUTDOWN_HOOK_FLOOR * 200,
+        )];
+        let s = ShutdownHookAccumulation
+            .eval(&r)
+            .expect("ApplicationShutdownHooks at floor must fire");
+        assert_eq!(s.id, "shutdown-hook-accumulation");
+
+        // Below floor: silent.
+        r.overview.histogram[0].instances = SHUTDOWN_HOOK_FLOOR - 1;
+        assert!(ShutdownHookAccumulation.eval(&r).is_none());
+
+        // ShutdownHook name pattern also fires.
+        r.overview.histogram = vec![hist_row(
+            "com.example.MyShutdownHook",
+            SHUTDOWN_HOOK_FLOOR + 1,
+            1_000_000,
+        )];
+        assert!(ShutdownHookAccumulation.eval(&r).is_some());
+    }
+
+    #[test]
+    fn thread_pool_saturation_fires_on_stuck_majority() {
+        let mut r = base_report();
+        // 20 threads all WAITING (100% >= 60%).
+        r.threads.threads = (0..20)
+            .map(|i| ThreadInfo {
+                thread_serial: i,
+                name: Some(format!("http-nio-{i}")),
+                thread_state: "WAITING".into(),
+                ..Default::default()
+            })
+            .collect();
+        let s = ThreadPoolSaturation
+            .eval(&r)
+            .expect("20/20 WAITING must fire");
+        assert_eq!(s.id, "thread-pool-saturation");
+
+        // Mix: 12 WAITING + 8 RUNNABLE = 60% → boundary fires.
+        for t in r.threads.threads.iter_mut().take(8) {
+            t.thread_state = "RUNNABLE".into();
+        }
+        assert!(ThreadPoolSaturation.eval(&r).is_some(), "60% must fire");
+
+        // 59%: silent.
+        r.threads.threads[8].thread_state = "RUNNABLE".into(); // now 11/20 = 55%
+        assert!(ThreadPoolSaturation.eval(&r).is_none());
+
+        // Too few total threads: silent even at 100%.
+        let mut r2 = base_report();
+        r2.threads.threads = (0..5)
+            .map(|i| ThreadInfo {
+                thread_serial: i,
+                thread_state: "WAITING".into(),
+                ..Default::default()
+            })
+            .collect();
+        assert!(
+            ThreadPoolSaturation.eval(&r2).is_none(),
+            "< SATURATION_MIN_THREADS must be silent"
+        );
     }
 }
