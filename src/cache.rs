@@ -47,7 +47,7 @@ const MAGIC: &[u8; 4] = b"HPCA";
 // stayed true and the stale report.json.zst was served as-is. Bump this on
 // any change that could alter the CONTENT of a freshly-built Report, not
 // just on raw array-format changes.
-pub(crate) const VERSION: u16 = 3;
+pub(crate) const VERSION: u16 = 5;
 const ENTRY_SIZE: usize = 16 + 8 + 8; // name[16] + offset:u64 + len:u64
 
 // ── CacheMode ────────────────────────────────────────────────────────────────

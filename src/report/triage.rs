@@ -107,10 +107,15 @@ const STATIC_ANCHOR_PCT: f64 = 20.0;
 const SESSION_FLOOR: u64 = 100_000;
 /// Connection/socket class instance floor (name-pattern gate).
 const CONNECTION_FLOOR: u64 = 1_000;
-/// Listener/observer class instance floor (name-pattern gate).
-const LISTENER_FLOOR: u64 = 100_000;
+/// Listener/observer class instance floor (name-pattern gate). Set low enough
+/// to catch real leaks before OOM: 10k listeners is already pathological for
+/// most frameworks. Noise risk is low because the name pattern is specific.
+const LISTENER_FLOOR: u64 = 10_000;
 /// Parser-output class instance floor (package-pattern gate).
 const PARSER_FLOOR: u64 = 100_000;
+/// Parser-output shallow bytes floor: fires even at low instance count if
+/// the total shallow size is large (e.g. 1000 large DOM trees).
+const PARSER_SHALLOW_FLOOR: u64 = 32 * 1024 * 1024; // 32 MB
 /// String instance count + JNI global count that together signal intern() abuse.
 const INTERNED_STRING_FLOOR: u64 = 2_000_000;
 const INTERNED_JNI_FLOOR: u64 = 1_000;
@@ -144,7 +149,10 @@ const DUP_PRIM_ARRAYS_PCT: f64 = 5.0;
 const DUP_PRIM_ARRAYS_FLOOR: u64 = 16 * 1024 * 1024;
 /// Dominator-chain depth threshold: a longest-chain above this signals a
 /// linked-list-shaped heap (unbounded accumulation via linked structure).
-const DEEP_CHAIN_DEPTH: u32 = 10_000;
+/// 1 000 nodes is a practical floor — a LinkedList/queue that accumulated
+/// this many chained dominators is almost certainly an unbounded leak, but
+/// not yet so large that its pattern is obvious from the class histogram alone.
+const DEEP_CHAIN_DEPTH: u32 = 1_000;
 /// Minimum framework retained bytes before the framework-leak rule fires.
 const FRAMEWORK_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
 /// Framework retained share of total heap that constitutes a "significant" signal.
@@ -177,13 +185,16 @@ const CGLIB_PROXY_SHALLOW_FLOOR: u64 = 32 * 1024 * 1024;
 const CGLIB_PROXY_INSTANCE_FLOOR: u64 = 50_000;
 /// WeakHashMap instance count above which the accumulation rule fires.
 const WEAK_HASHMAP_FLOOR: u64 = 100_000;
+/// WeakHashMap$Entry count above which a single large WeakHashMap is suspected.
+/// One WeakHashMap with >10k entries is already unusual; at 100k it's a clear leak.
+const WEAK_HASHMAP_ENTRY_FLOOR: u64 = 10_000;
 /// Minimum async-log ring-buffer event count before the rule fires.
 /// Ring buffers are sized as powers of 2; >= 512 live instances of RingBufferLogEvent
 /// means the buffer is non-trivially populated (default Log4j2 size is 262,144).
 const ASYNC_LOG_RINGBUF_FLOOR: u64 = 512;
 /// Map-entry instance count threshold: when HashMap$Node / CHM$Node / LHM$Entry
 /// together exceed this, accumulated map entries dominate the heap.
-const MAP_ENTRY_INSTANCE_FLOOR: u64 = 50_000_000;
+const MAP_ENTRY_INSTANCE_FLOOR: u64 = 1_000_000;
 /// … or map entries as a share of total live objects.
 const MAP_ENTRY_OBJECT_PCT: f64 = 20.0;
 /// Hibernate field/setter interceptor instance count floor.
@@ -1789,7 +1800,10 @@ impl Rule for EventListenerAccumulation {
                 !c.ends_with("[]")
                     && (c.contains("Listener")
                         || c.contains("Observer")
-                        || c.contains("Subscriber"))
+                        || c.contains("Subscriber")
+                        || c.contains("Handler")
+                        || c.contains("Callback")
+                        || c.contains("Watcher"))
                     && h.instances >= LISTENER_FLOOR
             })
             .max_by_key(|h| h.instances)?;
@@ -1798,7 +1812,7 @@ impl Rule for EventListenerAccumulation {
             TriageSeverity::Warning,
             "Event-Listener Accumulation",
             format!(
-                "{} live `{}` instances — listeners accumulating without removal; call `removeListener()` / `unsubscribe()` when the component is disposed, or use weak-reference listener registries.",
+                "{} live `{}` instances — listeners/handlers accumulating without removal; call `removeListener()` / `unsubscribe()` / `deregister()` when the component is disposed, or use weak-reference listener registries.",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
@@ -1824,6 +1838,7 @@ impl Rule for ParserOutputAccumulation {
             "javax.xml.",
             "jakarta.xml.",
         ];
+        // Pick row with highest instances; if none exceed PARSER_FLOOR, pick by shallow.
         let row = r
             .overview
             .histogram
@@ -1833,17 +1848,25 @@ impl Rule for ParserOutputAccumulation {
                     && PARSER_PKGS
                         .iter()
                         .any(|pkg| h.pretty_class.starts_with(pkg))
-                    && h.instances >= PARSER_FLOOR
+                    && (h.instances >= PARSER_FLOOR || h.shallow >= PARSER_SHALLOW_FLOOR)
             })
             .max_by_key(|h| h.instances)?;
+        let count_part = if row.instances >= PARSER_FLOOR {
+            format!("{} live instances", fmt_count(row.instances))
+        } else {
+            format!(
+                "{} live instances ({})",
+                fmt_count(row.instances),
+                format_bytes(row.shallow)
+            )
+        };
         Some(signal_cls(
             "parser-output-accumulation",
             TriageSeverity::Info,
             "Parser-Output Accumulation",
             format!(
-                "{} live `{}` instances — XML/JSON parse results are accumulating; discard documents after processing, or use a streaming parser (SAX/StAX/Jackson streaming) instead of building a full in-memory tree.",
-                fmt_count(row.instances),
-                row.pretty_class,
+                "`{}` has {} — XML/JSON parse results are accumulating; discard documents after processing, or use a streaming parser (SAX/StAX/Jackson streaming) instead of building a full in-memory tree.",
+                row.pretty_class, count_part,
             ),
             Some(("system-overview", "System Overview")),
             &row.pretty_class,
@@ -1963,6 +1986,20 @@ impl Rule for BigDropConcentration {
         if pct < BIG_DROP_PCT {
             return None;
         }
+        // When the drop node has a single dominant child, naming it guides the
+        // next drill-down step ("the big bucket is `CacheMap` which holds
+        // `CacheEntry` objects").
+        let child_hint = if !row.largest_child_class.is_empty()
+            && row.largest_child_class != row.display_class
+        {
+            let child_pct = pct_of(row.largest_child_retained, row.retained);
+            format!(
+                " Its largest child in the dominator tree is `{}` ({:.0}% of its retained heap).",
+                row.largest_child_class, child_pct
+            )
+        } else {
+            String::new()
+        };
         Some(signal_cls(
             "big-drop-concentration",
             TriageSeverity::Critical,
@@ -1970,7 +2007,7 @@ impl Rule for BigDropConcentration {
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
                  drops here in the dominator tree — every path from a GC root to those objects \
-                 passes through this one node. Follow the retaining chain to find the GC root that keeps it alive.",
+                 passes through this one node.{child_hint} Follow the retaining chain to find the GC root that keeps it alive.",
                 row.display_class,
                 pct,
                 format_bytes(row.drop_bytes),
@@ -2826,14 +2863,44 @@ impl Rule for WeakHashMapAccumulation {
             .map(|row| row.instances)
             .unwrap_or(0);
 
-        if count < WEAK_HASHMAP_FLOOR {
+        let entry_count = r
+            .overview
+            .histogram
+            .iter()
+            .find(|row| row.pretty_class == "java.util.WeakHashMap$Entry")
+            .map(|row| row.instances)
+            .unwrap_or(0);
+
+        if count < WEAK_HASHMAP_FLOOR && entry_count < WEAK_HASHMAP_ENTRY_FLOOR {
             return None;
         }
 
-        Some(signal(
-            "weak-hashmap-accumulation",
-            TriageSeverity::Warning,
-            "WeakHashMap Instance Accumulation",
+        // Two distinct patterns to surface:
+        let detail = if count >= WEAK_HASHMAP_FLOOR && entry_count >= WEAK_HASHMAP_ENTRY_FLOOR {
+            format!(
+                "{} live `java.util.WeakHashMap` instances with {} entries — both the map \
+                 count and entry count are high, suggesting maps are created per-request \
+                 AND individual maps are accumulating entries. WeakHashMaps expunge stale \
+                 entries lazily (only on put/get/size); if keys are strongly held elsewhere \
+                 (e.g. in a static collection) entries never expire. \
+                 Search for `new WeakHashMap` call sites; consider replacing with \
+                 `Cache<K,V>` (Guava/Caffeine) with explicit size/TTL bounds, or \
+                 `Collections.synchronizedMap(new WeakHashMap<>())` with periodic cleanup.",
+                fmt_count(count),
+                fmt_count(entry_count),
+            )
+        } else if entry_count >= WEAK_HASHMAP_ENTRY_FLOOR {
+            format!(
+                "{} live `java.util.WeakHashMap$Entry` objects — a single (or few) \
+                 WeakHashMap instances are accumulating large numbers of entries that \
+                 are never expunged. This happens when the map's keys are still strongly \
+                 reachable from another data structure (e.g. an ArrayList or static field), \
+                 preventing GC from clearing the weak references and triggering expunge. \
+                 Find the WeakHashMap in the Leak Suspects section and trace what \
+                 strongly retains its keys.",
+                fmt_count(entry_count),
+            )
+        } else {
             format!(
                 "{} live `java.util.WeakHashMap` instances — far above the handful \
                  expected from a healthy application. WeakHashMaps are intended as \
@@ -2847,7 +2914,14 @@ impl Rule for WeakHashMapAccumulation {
                  Search for `new WeakHashMap` call sites and verify that map lifecycles \
                  are bounded.",
                 fmt_count(count),
-            ),
+            )
+        };
+
+        Some(signal(
+            "weak-hashmap-accumulation",
+            TriageSeverity::Warning,
+            "WeakHashMap Accumulation",
+            detail,
             Some(("system-overview", "Class Histogram")),
         ))
     }
@@ -2947,6 +3021,28 @@ impl Rule for MapEntryDominance {
             return None;
         }
 
+        // If any leak suspect's class looks like a Map, name it so users have a
+        // concrete starting point instead of just "check Biggest Collections".
+        let suspect_hint = r
+            .leaks
+            .suspects
+            .iter()
+            .find(|s| {
+                let c = &s.pretty_class;
+                c.contains("HashMap")
+                    || c.contains("Map")
+                    || c.contains("Cache")
+                    || c.contains("Registry")
+            })
+            .map(|s| {
+                format!(
+                    " The top leak suspect is `{}` ({}) — start there.",
+                    s.pretty_class,
+                    format_bytes(s.retained)
+                )
+            })
+            .unwrap_or_default();
+
         Some(signal(
             "map-entry-dominance",
             TriageSeverity::Warning,
@@ -2959,7 +3055,7 @@ impl Rule for MapEntryDominance {
                  Common causes: a cache without an eviction policy; thread-locals that \
                  accumulate a map entry per processed item and are never cleared; a \
                  batch job that builds in-memory indexes without releasing them between \
-                 iterations. \
+                 iterations.{suspect_hint} \
                  Identify the owning `HashMap` instances via the Biggest Collections \
                  section and trace them up the dominator tree to find the GC root \
                  preventing collection.",
@@ -3342,7 +3438,7 @@ impl Rule for ComponentRetentionImbalance {
 struct ExceptionObjectAccumulation;
 impl Rule for ExceptionObjectAccumulation {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
-        // Collect all exception/error rows that meet both floors, pick the worst.
+        // Collect all exception/error rows that meet either floor, pick the worst.
         let rows: Vec<_> = r
             .overview
             .histogram
@@ -3358,8 +3454,8 @@ impl Rule for ExceptionObjectAccumulation {
                     || c.ends_with("ErrorListener");
                 is_exc
                     && !is_noise
-                    && h.instances >= EXCEPTION_ACCUM_FLOOR
-                    && h.shallow >= EXCEPTION_ACCUM_SHALLOW_FLOOR
+                    && (h.instances >= EXCEPTION_ACCUM_FLOOR
+                        || h.shallow >= EXCEPTION_ACCUM_SHALLOW_FLOOR)
             })
             .collect();
         if rows.is_empty() {
@@ -4161,6 +4257,19 @@ mod tests {
         let mut r = base_report();
         r.overview.histogram = vec![hist_row("com.example.MessageListener", 150_000, 2_400_000)];
         assert!(EventListenerAccumulation.eval(&r).is_some());
+        // Observer fires.
+        r.overview.histogram[0].pretty_class = "com.example.ChangeObserver".into();
+        assert!(EventListenerAccumulation.eval(&r).is_some());
+        // Handler fires (new).
+        r.overview.histogram[0].pretty_class = "com.example.EventHandler".into();
+        assert!(EventListenerAccumulation.eval(&r).is_some());
+        // Callback fires (new).
+        r.overview.histogram[0].pretty_class = "com.example.RequestCallback".into();
+        assert!(EventListenerAccumulation.eval(&r).is_some());
+        // Watcher fires (new).
+        r.overview.histogram[0].pretty_class = "io.k8s.FileWatcher".into();
+        assert!(EventListenerAccumulation.eval(&r).is_some());
+        // Below floor: silent.
         r.overview.histogram[0].instances = 1_000;
         assert!(EventListenerAccumulation.eval(&r).is_none());
     }
@@ -4174,12 +4283,19 @@ mod tests {
             6_400_000,
         )];
         assert!(ParserOutputAccumulation.eval(&r).is_some());
+        // Low instance count but below shallow floor too: silent.
         r.overview.histogram[0].instances = 10;
+        r.overview.histogram[0].shallow = 1_000_000; // 1 MB, well below 32 MB
         assert!(ParserOutputAccumulation.eval(&r).is_none());
-        // Non-parser package: silent.
+        // Non-parser package: silent even with high count.
         r.overview.histogram[0].instances = 500_000;
         r.overview.histogram[0].pretty_class = "com.example.Node".into();
         assert!(ParserOutputAccumulation.eval(&r).is_none());
+        // Low instance count but large shallow (e.g. 1000 big DOM trees at 100 KB each = 100 MB): fires.
+        r.overview.histogram[0].instances = 1_000;
+        r.overview.histogram[0].shallow = 100 * 1024 * 1024; // 100 MB
+        r.overview.histogram[0].pretty_class = "org.w3c.dom.Document".into();
+        assert!(ParserOutputAccumulation.eval(&r).is_some());
     }
 
     #[test]
@@ -4375,15 +4491,15 @@ mod tests {
     #[test]
     fn deep_retention_chain_fires_above_threshold() {
         let mut r = base_report();
-        r.dominator_analysis.longest_chain_depth = 5_000;
+        r.dominator_analysis.longest_chain_depth = 500;
         assert!(
             DeepRetentionChain.eval(&r).is_none(),
-            "5k depth must not fire"
+            "500 depth must not fire"
         );
-        r.dominator_analysis.longest_chain_depth = 15_000;
-        let s = DeepRetentionChain.eval(&r).expect("15k depth must fire");
+        r.dominator_analysis.longest_chain_depth = 1_500;
+        let s = DeepRetentionChain.eval(&r).expect("1.5k depth must fire");
         assert_eq!(s.id, "deep-retention-chain");
-        assert!(s.detail.contains("15,000"));
+        assert!(s.detail.contains("1,500"));
     }
 
     #[test]
@@ -4684,11 +4800,25 @@ mod tests {
         assert_eq!(s.id, "weak-hashmap-accumulation");
         assert!(s.detail.contains("200,000"));
 
-        // Below floor
-        r.overview.histogram[0].instances = 50;
+        // Below map-count floor but high entry count fires (single large map).
+        r.overview.histogram = vec![
+            hist_row("java.util.WeakHashMap", 5, 10_000),
+            hist_row("java.util.WeakHashMap$Entry", 50_000, 3_200_000),
+        ];
+        let s2 = WeakHashMapAccumulation
+            .eval(&r)
+            .expect("50k entries must fire even with few map instances");
+        assert_eq!(s2.id, "weak-hashmap-accumulation");
+        assert!(s2.detail.contains("50,000"));
+
+        // Below both floors: silent.
+        r.overview.histogram = vec![
+            hist_row("java.util.WeakHashMap", 50, 10_000),
+            hist_row("java.util.WeakHashMap$Entry", 100, 6_400),
+        ];
         assert!(WeakHashMapAccumulation.eval(&r).is_none());
 
-        // Not present
+        // Not present: silent.
         r.overview.histogram = vec![];
         assert!(WeakHashMapAccumulation.eval(&r).is_none());
     }
@@ -4740,9 +4870,9 @@ mod tests {
         assert_eq!(s.id, "map-entry-dominance");
         assert!(s.detail.contains("60,000,000"));
 
-        // Below both floor (5M total) and pct (2.5%): silent
-        r.overview.histogram[0].instances = 4_000_000;
-        r.overview.histogram[1].instances = 1_000_000;
+        // Below both floor (900k total, 0.45% of 200M): silent
+        r.overview.histogram[0].instances = 700_000;
+        r.overview.histogram[1].instances = 200_000;
         assert!(MapEntryDominance.eval(&r).is_none());
     }
 
@@ -4995,18 +5125,32 @@ mod tests {
         let mut r = base_report();
         r.overview.total_shallow = 1_000_000_000;
 
-        // Below instance floor: silent.
+        // Only instance floor met (shallow below): fires (OR logic).
         r.overview.histogram.push(hist_row(
+            "com.example.MyException",
+            EXCEPTION_ACCUM_FLOOR,
+            EXCEPTION_ACCUM_SHALLOW_FLOOR - 1,
+        ));
+        let s0 = ExceptionObjectAccumulation
+            .eval(&r)
+            .expect("instance floor alone must fire");
+        assert_eq!(s0.id, "exception-object-accumulation");
+
+        // Only shallow floor met (instances below): fires (OR logic).
+        r.overview.histogram[0] = hist_row(
             "com.example.MyException",
             EXCEPTION_ACCUM_FLOOR - 1,
             EXCEPTION_ACCUM_SHALLOW_FLOOR,
-        ));
-        assert!(ExceptionObjectAccumulation.eval(&r).is_none());
+        );
+        let s1 = ExceptionObjectAccumulation
+            .eval(&r)
+            .expect("shallow floor alone must fire");
+        assert_eq!(s1.id, "exception-object-accumulation");
 
-        // Below shallow floor: silent.
+        // Both below: silent.
         r.overview.histogram[0] = hist_row(
             "com.example.MyException",
-            EXCEPTION_ACCUM_FLOOR,
+            EXCEPTION_ACCUM_FLOOR - 1,
             EXCEPTION_ACCUM_SHALLOW_FLOOR - 1,
         );
         assert!(ExceptionObjectAccumulation.eval(&r).is_none());
