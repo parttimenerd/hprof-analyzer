@@ -293,6 +293,14 @@ leak_test!(scenario_32, "32_AppSessionStore", normal);
 leak_test!(scenario_33, "33_AppEventPipeline", normal);
 leak_test!(scenario_34, "34_AppProductCatalog", normal);
 
+// Part 8 — New Leak Patterns
+leak_test!(scenario_35, "35_ClassLoaderSpam", normal);
+leak_test!(scenario_36, "36_ClassLoaderLeak", leak);
+leak_test!(scenario_37, "37_ThreadLocalPooledThread", leak);
+leak_test!(scenario_38, "38_ExcessiveThreads", normal);
+leak_test!(scenario_39, "39_ThreadExecutorLeak", leak);
+leak_test!(scenario_40, "40_DirectBufferLeak", leak);
+
 // ---------------------------------------------------------------------------
 // Bulk smoke tests (fast): run JSON report on every dump present, no asserts
 // beyond "no panic".  Catches scenarios for which no specific test was written.

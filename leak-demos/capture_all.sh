@@ -352,6 +352,15 @@ main() {
   should_run 33 && capture_live 33_AppEventPipeline.java  25 -Xmx256m
   should_run 34 && capture_live 34_AppProductCatalog.java 25 -Xmx256m
 
+  # ── PART 8: New Leak Patterns ────────────────────────────────────────────
+  hdr "PART 8 — New Leak Patterns (ClassLoader / ThreadLocal / Thread / DirectBuffer)"
+  should_run 35 && capture_live 35_ClassLoaderSpam.java          20 -Xmx128m
+  should_run 36 && capture_live 36_ClassLoaderLeak.java          25 -Xmx256m
+  should_run 37 && capture_live 37_ThreadLocalPooledThread.java  20 -Xmx64m
+  should_run 38 && capture_live 38_ExcessiveThreads.java         20 -Xmx256m
+  should_run 39 && capture_live 39_ThreadExecutorLeak.java       25 -Xmx256m
+  should_run 40 && capture_live 40_DirectBufferLeak.java         20 -Xmx64m -XX:MaxDirectMemorySize=256m
+
   # ── Summary ──────────────────────────────────────────────────────────────
   echo ""
   hdr "Summary"
