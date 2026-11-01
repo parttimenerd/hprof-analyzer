@@ -1253,10 +1253,10 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
   </div>
 
   <div id="mode-buttons" style="display:none">
-    <button id="btn-analyze-report">
+    <button id="btn-analyze-report" title="Quick mode: collection fill-ratio and duplicate-string detection are disabled. Use Full Analysis to detect over-capacity collections or duplicate strings.">
       <span class="mode-icon">📊</span>
-      <span class="mode-title">Analysis</span>
-      <span class="mode-desc">Histogram, leak suspects, dominator tree, GC roots, and retained sizes</span>
+      <span class="mode-title">Analysis (Quick)</span>
+      <span class="mode-desc">Histogram, leak suspects, dominator tree, GC roots, and retained sizes. <em>Collection and duplicate detection disabled — use Full Analysis for those.</em></span>
     </button>
     <button id="btn-full-analysis">
       <span class="mode-icon">🔬</span>
