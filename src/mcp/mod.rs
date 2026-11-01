@@ -28,6 +28,18 @@ pub struct GetOqlDocsParams {
     pub topic: Option<String>,
 }
 
+/// Parameters for `load_dump`.
+///
+/// CACHE CAVEAT: the on-disk analysis cache is keyed ONLY by dump path, not
+/// by these options. If this exact dump was already loaded (by you or the
+/// CLI) with different options, the STALE cached report is served as-is —
+/// these flags silently have no effect until the cache is cleared
+/// (`hprof-analyzer heap cache-clear <dump>` from a shell, or delete the
+/// `<dump>.hprof-cache/` directory). There is currently no way to force a
+/// fresh analysis from MCP alone; ask the user to clear the cache if you
+/// suspect this is happening (e.g. a section you expect to be populated,
+/// like "collections", comes back empty even though you set
+/// collections=true here).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoadDumpParams {
     /// Absolute path to the .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
@@ -39,6 +51,55 @@ pub struct LoadDumpParams {
     /// you specifically need to trace object references field-by-field.
     #[serde(default)]
     pub with_graph: bool,
+    /// Enable collection-waste analysis (fill ratios, over-capacity
+    /// collections, map load factors) — the MCP equivalent of the CLI's
+    /// `--collections` flag. Adds ~300 MB peak RSS during analysis. Off by
+    /// default; set true for a deeper first pass instead of reloading later.
+    #[serde(default)]
+    pub collections: bool,
+    /// Enable duplicate-String/array detection and ThreadLocal leak
+    /// analysis — the MCP equivalent of `--find-duplicates`. Adds a few
+    /// extra heap-file scans. Off by default.
+    #[serde(default)]
+    pub find_duplicates: bool,
+    /// Shortcut for collections=true AND find_duplicates=true — the MCP
+    /// equivalent of the CLI's `--full-analysis` flag. If either this or
+    /// the individual flags above are true, the corresponding analysis runs.
+    #[serde(default)]
+    pub full_analysis: bool,
+    /// Ad hoc class categories, e.g. `["application=com.mycompany."]` — the
+    /// MCP equivalent of the CLI's repeatable `--category NAME=PREFIX`
+    /// flag. Classified BEFORE the built-in `framework`/`jdk` categories;
+    /// unmatched classes fall through to `"other"`. See the `categories`
+    /// report section and the `[[category]]` README docs for the full
+    /// prefix/first-match-wins semantics.
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+/// Parse `["name=prefix", ...]` entries into `CategoryDef`s, the same
+/// "NAME=PREFIX" syntax the CLI's `--category` flag accepts (see
+/// `resolve_categories` in main.rs — kept as a separate implementation
+/// rather than a shared helper since the error type differs: this returns
+/// a plain `String` for the caller to wrap in `McpError::invalid_params`,
+/// while the CLI calls `fail()`/exits directly).
+fn parse_category_specs(specs: &[String]) -> Result<Vec<crate::classify::CategoryDef>, String> {
+    let mut out = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let Some((name, prefix)) = spec.split_once('=') else {
+            return Err(format!(
+                "invalid categories entry {spec:?}: expected \"NAME=PREFIX\" \
+                 (e.g. \"application=com.mycompany.\")"
+            ));
+        };
+        if name.is_empty() || prefix.is_empty() {
+            return Err(format!(
+                "invalid categories entry {spec:?}: NAME and PREFIX must both be non-empty"
+            ));
+        }
+        out.push(crate::classify::CategoryDef::prefix(name, &[prefix]));
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -205,7 +266,12 @@ impl HprofMcpServer {
                        IMPORTANT: wait for this to complete before calling any other tool — it may take 5–15 min on first load, ~1 s on repeat loads. \
                        After loading, call get_report({section:\"triage\"}) for severity-tagged diagnosis, then get_report({section:\"leaks\"}) to investigate. \
                        After loading, jsonify() and array subscript in OQL queries will return actual object data \
-                       (requires native file system access; not available in the web version)."
+                       (requires native file system access; not available in the web version). \
+                       Set collections=true (or full_analysis=true) up front if you expect to need collection-waste \
+                       analysis (over-capacity collections, fill ratios) — the on-disk cache is keyed by dump path \
+                       ONLY, not by these options, so a dump already cached under different options silently keeps \
+                       serving the OLD options' data; ask the user to run `hprof-analyzer heap cache-clear <dump>` \
+                       if a section you expect to be populated comes back empty."
     )]
     async fn load_dump(
         &self,
@@ -217,9 +283,19 @@ impl HprofMcpServer {
         } else {
             CacheMode::Full
         };
+        let categories =
+            parse_category_specs(&p.categories).map_err(|e| McpError::invalid_params(e, None))?;
+        let collections = p.collections || p.full_analysis;
+        let find_duplicates = p.find_duplicates || p.full_analysis;
+        let opts = AnalyzeOptions {
+            collections,
+            find_duplicates,
+            categories,
+            ..AnalyzeOptions::default()
+        };
         let session_ref = Arc::clone(&self.session);
         let result = tokio::task::spawn_blocking(move || {
-            crate::analyze_with_cache(&path, &AnalyzeOptions::default(), mode, |_| {})
+            crate::analyze_with_cache(&path, &opts, mode, |_| {})
         })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
@@ -1438,6 +1514,48 @@ mod tests {
     fn load_session() -> Option<crate::cache::CachedSession> {
         let path = philosophers_path()?;
         crate::analyze_with_cache(&path, &AnalyzeOptions::default(), CacheMode::Full, |_| {}).ok()
+    }
+
+    #[test]
+    fn parse_category_specs_valid_entries() {
+        // More specific category ("legacy") must be listed FIRST to ever
+        // match anything — same first-match-wins rule as classify.rs's own
+        // more_specific_user_category_must_be_listed_first test.
+        let specs = vec![
+            "legacy=com.mycompany.legacy.".to_string(),
+            "application=com.mycompany.".to_string(),
+        ];
+        let defs = parse_category_specs(&specs).expect("valid specs must parse");
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0].name, "legacy");
+        assert_eq!(defs[1].name, "application");
+        // Classify through the same path load_dump would use.
+        let classifier = crate::classify::build_classifier(defs);
+        assert_eq!(
+            classifier.classify("com.mycompany.legacy.OldThing"),
+            "legacy"
+        );
+        assert_eq!(classifier.classify("com.mycompany.NewThing"), "application");
+        assert_eq!(classifier.classify("java.util.HashMap"), "jdk");
+    }
+
+    #[test]
+    fn parse_category_specs_rejects_missing_equals() {
+        let specs = vec!["application".to_string()];
+        let err = parse_category_specs(&specs).expect_err("missing '=' must be rejected");
+        assert!(err.contains("application"));
+        assert!(err.contains("NAME=PREFIX"));
+    }
+
+    #[test]
+    fn parse_category_specs_rejects_empty_name_or_prefix() {
+        assert!(parse_category_specs(&["=com.mycompany.".to_string()]).is_err());
+        assert!(parse_category_specs(&["application=".to_string()]).is_err());
+    }
+
+    #[test]
+    fn parse_category_specs_empty_input_is_ok() {
+        assert!(parse_category_specs(&[]).unwrap().is_empty());
     }
 
     #[test]
