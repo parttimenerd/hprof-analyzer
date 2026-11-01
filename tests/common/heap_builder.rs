@@ -407,6 +407,18 @@ impl HeapBuilder {
         obj_id
     }
 
+    /// Add a `ROOT_STICKY_CLASS` (tag 0x05) GC root record for a class object.
+    /// This makes the class reachable as a "Sticky Class" root — needed for the
+    /// `static-field-anchor` triage rule, which fires only when the top suspect's
+    /// `root_type_label` is "Sticky Class".
+    ///
+    /// Format: sub-tag 0x05 + object_id (8 bytes, ID_SIZE=8).
+    pub fn root_sticky_class(&mut self, class_id: u64) {
+        let mut rec = vec![0x05u8]; // ROOT_STICKY_CLASS
+        write_id(&mut rec, class_id);
+        self.heap_subrecords.extend_from_slice(&rec);
+    }
+
     /// Add a `ROOT_THREAD_OBJ` GC root for an existing object id (the object
     /// must already have been created via `instance`/`instance_at`), with a
     /// fresh thread_serial. Returns the thread_serial used.
@@ -858,4 +870,125 @@ pub fn build_over_capacity_hashmap(b: &mut HeapBuilder) -> u64 {
 
     b.class_with_static_root("HashMapHolder", "map", map_id, &[]);
     map_id
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 12: Static-field anchor (fires "static-field-anchor" signal)
+// ---------------------------------------------------------------------------
+
+/// Build a heap where a class is itself a `ROOT_STICKY_CLASS` GC root and retains
+/// many objects via a static field. The `static-field-anchor` triage rule fires
+/// when the top suspect's `root_type_label` is "Sticky Class" and it retains
+/// >= 20% of the heap.
+///
+/// We emit an explicit ROOT_STICKY_CLASS (0x05) record for the holder class
+/// so pass2 records that class's GC root type as "Sticky Class". The holder
+/// class then holds a chain of nodes through its static field, so the class
+/// (as a top-level dominator) accumulates substantial retained size.
+///
+/// The class itself is the suspect here (not its instances) — class objects
+/// can be GC roots and suspects when they dominate large subgraphs.
+pub fn build_static_field_anchor(b: &mut HeapBuilder) {
+    // Node class: each instance has one int field for size.
+    let node_class = b.class("scenarios/CachedEntry", &[("value", T_INT)]);
+
+    // Build 100 nodes — enough retained to dominate the heap.
+    let mut refs: Vec<u64> = Vec::new();
+    for i in 0..100i32 {
+        let mut data = Vec::new();
+        int_field(&mut data, i);
+        refs.push(b.instance(node_class, &data));
+    }
+
+    // Object[] backing array holds all nodes.
+    let object_class = b.class("java/lang/Object", &[]);
+    let arr = b.obj_array(object_class, &refs);
+
+    // Cache class: static field → array. We explicitly emit ROOT_STICKY_CLASS
+    // for this class so it has root_type_label == "Sticky Class".
+    let cache_class = b.class_with_static_root("scenarios/AppCache", "entries", arr, &[]);
+    b.root_sticky_class(cache_class);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 13: Session-scope leak (fires "session-scope-leak" signal)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with >= 100,000 instances of a class whose name contains "Session".
+/// The `session-scope-leak` rule fires on name-pattern match (>= SESSION_FLOOR = 100,000).
+///
+/// All instances are anchored in an Object[] held by a static root so they are
+/// counted as live objects in the histogram.
+pub fn build_session_scope_leak(b: &mut HeapBuilder) {
+    // UserSession class: two int fields to give each instance nonzero size.
+    let session_class = b.class("com/example/UserSession", &[("id", T_INT), ("ts", T_INT)]);
+
+    let mut session_ids: Vec<u64> = Vec::with_capacity(100_000);
+    for i in 0..100_000u64 {
+        let mut data = Vec::new();
+        int_field(&mut data, i as i32);
+        int_field(&mut data, (i * 13) as i32);
+        session_ids.push(b.instance(session_class, &data));
+    }
+
+    // Anchor all sessions via a static field holding an Object[] array.
+    let object_class = b.class("java/lang/Object", &[]);
+    let arr = b.obj_array(object_class, &session_ids);
+    b.class_with_static_root("scenarios/SessionRegistry", "sessions", arr, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 14: Unique strings — no duplicate-strings signal
+//              (false-positive guard: must-not-fire test)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with 50 strings whose backing char arrays all have UNIQUE
+/// content. The `duplicate-strings` rule must NOT fire (each string has a
+/// different sequence of chars → no shared content → wasted% = 0).
+///
+/// Requires AnalyzeOptions { find_duplicates: true } to enable the scan.
+pub fn build_unique_strings_no_dup(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+    let string_class = b.class_with_super("java/lang/String", object_class, &[("value", T_OBJECT)]);
+
+    let mut first_id: u64 = 0;
+    for i in 0u32..50 {
+        // Each backing array has unique content: 10 chars spelling out the index.
+        // Encode i as 10 BE char values 0x0030..0x0039 (ASCII digits).
+        let digits: Vec<u8> = format!("{i:010}")
+            .chars()
+            .flat_map(|c| [(c as u16).to_be_bytes()[0], (c as u16).to_be_bytes()[1]])
+            .collect();
+        let arr_id = b.prim_array(5, &digits); // type 5 = char
+        let mut data = Vec::new();
+        obj_field(&mut data, arr_id);
+        let str_id = b.instance(string_class, &data);
+        if i == 0 {
+            first_id = str_id;
+        }
+    }
+    b.class_with_static_root("UniqueStringHolder", "strings", first_id, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 15: Constant-value arrays (fires "constant-value-arrays" signal)
+//              Requires AnalyzeOptions { collections: true }
+// ---------------------------------------------------------------------------
+
+/// Build a heap consisting almost entirely of zero-filled `byte[]` arrays large
+/// enough to clear CONSTARR_FLOOR (8 MiB total shallow). The
+/// `constant-value-arrays` rule fires when constant-valued primitive arrays
+/// (all elements the same byte) sum to >= 8 MiB.
+///
+/// 100 arrays × 100,000 bytes each = 10 MB > 8 MB floor → fires.
+pub fn build_constant_value_arrays(b: &mut HeapBuilder) {
+    let zero_elem = vec![0u8; 100_000]; // 100 KB of zero bytes per array
+    let mut first_id: u64 = 0;
+    for i in 0..100u64 {
+        let arr_id = b.prim_array(8, &zero_elem); // type 8 = byte
+        if i == 0 {
+            first_id = arr_id;
+        }
+    }
+    b.class_with_static_root("ConstArrayHolder", "arrays", first_id, &[]);
 }

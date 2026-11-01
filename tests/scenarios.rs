@@ -403,8 +403,60 @@ fn check_threadlocal_pooled_multiple(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario table
+// Scenario 12: static_field_anchor (fires "static-field-anchor" signal)
 // ---------------------------------------------------------------------------
+
+fn build_static_field_anchor() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_static_field_anchor(&mut b);
+    b.build()
+}
+
+fn check_static_field_anchor(report: &Report) {
+    assert_signal_fires(report, "static-field-anchor");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 13: session_scope_leak (fires "session-scope-leak" signal)
+// ---------------------------------------------------------------------------
+
+fn build_session_scope_leak() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_session_scope_leak(&mut b);
+    b.build()
+}
+
+fn check_session_scope_leak(report: &Report) {
+    assert_signal_fires(report, "session-scope-leak");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 14: unique_strings_no_dup (must NOT fire "duplicate-strings")
+// ---------------------------------------------------------------------------
+
+fn build_unique_strings_no_dup() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_unique_strings_no_dup(&mut b);
+    b.build()
+}
+
+fn check_unique_strings_no_dup(report: &Report) {
+    assert_signal_silent(report, "duplicate-strings");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 15: constant_value_arrays (fires "constant-value-arrays" signal)
+// ---------------------------------------------------------------------------
+
+fn build_constant_value_arrays() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_constant_value_arrays(&mut b);
+    b.build()
+}
+
+fn check_constant_value_arrays(report: &Report) {
+    assert_signal_fires(report, "constant-value-arrays");
+}
 
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
@@ -477,6 +529,30 @@ const SCENARIOS: &[Scenario] = &[
         build: build_threadlocal_pooled_multiple,
         check: check_threadlocal_pooled_multiple,
     },
+    Scenario {
+        name: "static_field_anchor",
+        opts: default_opts,
+        build: build_static_field_anchor,
+        check: check_static_field_anchor,
+    },
+    Scenario {
+        name: "session_scope_leak",
+        opts: default_opts,
+        build: build_session_scope_leak,
+        check: check_session_scope_leak,
+    },
+    Scenario {
+        name: "unique_strings_no_dup",
+        opts: opts_with_find_duplicates,
+        build: build_unique_strings_no_dup,
+        check: check_unique_strings_no_dup,
+    },
+    Scenario {
+        name: "constant_value_arrays",
+        opts: opts_with_collections,
+        build: build_constant_value_arrays,
+        check: check_constant_value_arrays,
+    },
 ];
 
 #[test]
@@ -539,6 +615,26 @@ fn scenario_threadlocal_pooled_multiple() {
     run_scenario(&SCENARIOS[10]);
 }
 
+#[test]
+fn scenario_static_field_anchor() {
+    run_scenario(&SCENARIOS[11]);
+}
+
+#[test]
+fn scenario_session_scope_leak() {
+    run_scenario(&SCENARIOS[12]);
+}
+
+#[test]
+fn scenario_unique_strings_no_dup() {
+    run_scenario(&SCENARIOS[13]);
+}
+
+#[test]
+fn scenario_constant_value_arrays() {
+    run_scenario(&SCENARIOS[14]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -547,7 +643,7 @@ fn scenario_threadlocal_pooled_multiple() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        11,
+        15,
         "update this test when adding scenarios"
     );
 }
