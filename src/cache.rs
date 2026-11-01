@@ -16,7 +16,7 @@
 //!
 //! Both `arrays.bin`, `graph.bin`, and `offsets.bin` share a seekable indexed format:
 //! ```text
-//! [4B magic: b"HPCA"] [2B version: u16 LE = 1] [1B n_arrays]
+//! [4B magic: b"HPCA"] [2B version: u16 LE = VERSION] [1B n_arrays]
 //! [index: n × { name[16B], offset: u64 LE, len: u64 LE }]
 //! [data: concatenated independent zstd frames, one per array]
 //! ```
@@ -34,7 +34,20 @@ use crate::{pass1::Pass1Snapshot, report::Report};
 // ── File format constants ─────────────────────────────────────────────────────
 
 const MAGIC: &[u8; 4] = b"HPCA";
-const VERSION: u16 = 1;
+// NOTE: `is_valid()` gates the ENTIRE disk cache (arrays.bin + pass1.bin.zst +
+// report.json.zst [+ graph.bin]) on this one check_magic() call against
+// arrays.bin alone — report.json.zst's own staleness check is ONLY
+// `.exists()`, never content-based (see is_valid() below). That means this
+// VERSION is the ONLY thing that invalidates a stale cached Report when
+// report-BUILDING logic changes (a new/changed triage rule, a new model
+// field, a bug fix in build_model/build_system_overview/etc.) even though
+// nothing about the raw array FORMAT changed. Confirmed empirically during
+// development: a triage-rule change silently had no effect on an
+// already-cached dump until this constant was bumped, because arrays_ok
+// stayed true and the stale report.json.zst was served as-is. Bump this on
+// any change that could alter the CONTENT of a freshly-built Report, not
+// just on raw array-format changes.
+const VERSION: u16 = 2;
 const ENTRY_SIZE: usize = 16 + 8 + 8; // name[16] + offset:u64 + len:u64
 
 // ── CacheMode ────────────────────────────────────────────────────────────────

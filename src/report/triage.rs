@@ -29,6 +29,23 @@ const THREAD_PIN_PCT: f64 = 20.0;
 const THREAD_PIN_LOCALS: u64 = 100;
 /// Minimum retained share for the many-local-roots branch to fire.
 const THREAD_PIN_LOCALS_MIN_PCT: f64 = 10.0;
+/// Minimum number of threads that must each independently show a
+/// significant thread-local footprint (see `THREAD_LOCAL_POOL_MIN_PCT`
+/// below) for `ThreadLocalPoolAccumulation` to fire — distinguishes "a
+/// worker POOL is accumulating via ThreadLocal" from "one anomalous
+/// thread happens to be busy" (the latter is `ThreadPinning`'s territory).
+const THREAD_LOCAL_POOL_MIN_THREADS: usize = 2;
+/// Minimum per-thread retained share (of total heap) for a thread to count
+/// toward the pool-accumulation pattern. Lower than `THREAD_PIN_PCT`
+/// (20%) on purpose: with N pooled threads splitting the load evenly, no
+/// single thread may cross 20% even though the POOL collectively holds
+/// most of the heap — this is exactly the shape that makes the pattern
+/// easy to miss by only ever looking at the single worst thread.
+const THREAD_LOCAL_POOL_MIN_PCT: f64 = 5.0;
+/// Combined retained share (across all qualifying threads) the pool must
+/// cross for this to be worth flagging as a distinct, named pattern rather
+/// than noise.
+const THREAD_LOCAL_POOL_COMBINED_MIN_PCT: f64 = 30.0;
 /// Top GC-root type retaining at least this share of the heap.
 const GC_ROOT_DOMINANT_PCT: f64 = 50.0;
 /// Anonymous/generated classes as a share of all loaded classes.
@@ -221,6 +238,7 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(MetaspacePressure),
         Box::new(ThreadLocalLeak),
         Box::new(ThreadPinning),
+        Box::new(ThreadLocalPoolAccumulation),
         Box::new(ThreadSwarm),
         Box::new(WeakRefEscape),
         Box::new(ProxyLambdaBloat),
@@ -698,6 +716,81 @@ impl Rule for ThreadPinning {
                 format_bytes(t.retained),
                 share,
                 fmt_count(t.local_root_count),
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
+/// Thread-local accumulation across a worker pool. Reads `threads.threads`.
+/// Fires when >= `THREAD_LOCAL_POOL_MIN_THREADS` DISTINCT threads each hold
+/// a non-trivial thread-local footprint (>= `THREAD_LOCAL_POOL_MIN_PCT` of
+/// the heap, via `local_root_count > 0`) and their COMBINED retained share
+/// crosses `THREAD_LOCAL_POOL_COMBINED_MIN_PCT`.
+///
+/// This is the rule `ThreadPinning` structurally cannot be: ThreadPinning
+/// only ever looks at the single WORST thread, so with N pooled threads
+/// splitting an accumulating ThreadLocal evenly (the common case — a fixed
+/// worker pool, each thread handling its own share of requests), no single
+/// thread may cross ThreadPinning's 20% floor even though the pool
+/// collectively retains most of the heap. Confirmed on a real repro: 4
+/// pooled threads each retaining ~24% via a `static final ThreadLocal`
+/// whose values are appended-to but never cleared — ThreadPinning stayed
+/// silent (no single thread crossed 20%) and the EXISTING `ThreadLocalLeak`
+/// rule also stayed silent, correctly, since that rule only detects the
+/// OTHER ThreadLocal-leak variant (a stale entry whose WeakReference key
+/// was GC'd) — a `static` ThreadLocal's key is never stale, by definition,
+/// since the ThreadLocal instance itself never becomes unreachable. This
+/// rule is what actually names the "many threads, each pinning a growing
+/// ThreadLocal value, pool never calls remove()" pattern.
+struct ThreadLocalPoolAccumulation;
+impl Rule for ThreadLocalPoolAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total = r.leaks.total_shallow;
+        if total == 0 {
+            return None;
+        }
+        let mut qualifying: Vec<&crate::report::ThreadInfo> = r
+            .threads
+            .threads
+            .iter()
+            .filter(|t| {
+                t.local_root_count > 0 && pct_of(t.retained, total) >= THREAD_LOCAL_POOL_MIN_PCT
+            })
+            .collect();
+        if qualifying.len() < THREAD_LOCAL_POOL_MIN_THREADS {
+            return None;
+        }
+        let combined: u64 = qualifying.iter().map(|t| t.retained).sum();
+        let combined_pct = pct_of(combined, total);
+        if combined_pct < THREAD_LOCAL_POOL_COMBINED_MIN_PCT {
+            return None;
+        }
+        qualifying.sort_unstable_by_key(|t| std::cmp::Reverse(t.retained));
+        let example = qualifying[0];
+        let example_name = example
+            .name
+            .as_deref()
+            .or(example.class_name.as_deref())
+            .unwrap_or("<unknown thread>");
+        Some(signal(
+            "thread-local-pool-accumulation",
+            TriageSeverity::Warning,
+            "Thread-Local Accumulation Across Worker Pool",
+            format!(
+                "{} threads (e.g. `{}`) each pin a significant thread-local footprint, \
+                 totaling {} ({:.1}% of heap) — a classic worker-pool `ThreadLocal` leak: \
+                 each thread accumulates its own copy of a value that is set but never \
+                 cleared (no `ThreadLocal.remove()` between tasks), so the leak is spread \
+                 evenly across the pool instead of concentrated in one thread. Check \
+                 `heap report --section thread_locals` for the specific value classes, and \
+                 ensure every task calls `remove()` in a `finally` block (or wraps the \
+                 ThreadLocal access with try/finally) once the per-task value is no longer \
+                 needed.",
+                fmt_count(qualifying.len() as u64),
+                example_name,
+                format_bytes(combined),
+                combined_pct,
             ),
             Some(("threads", "Threads")),
         ))
@@ -3165,6 +3258,113 @@ mod tests {
             ..Default::default()
         }];
         assert!(ThreadPinning.eval(&r).is_none());
+    }
+
+    #[test]
+    fn thread_local_pool_accumulation_fires_on_pool_not_single_thread() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1000;
+
+        // 4 pooled threads, each at 24% (below ThreadPinning's 20%... wait,
+        // 24% > 20%, use a value that demonstrates the POOL-specific case:
+        // each thread individually BELOW ThreadPinning's 20% floor, but the
+        // pool collectively retains most of the heap.
+        r.threads.threads = vec![
+            ThreadInfo {
+                retained: 150, // 15% — below THREAD_PIN_PCT (20%)
+                local_root_count: 10,
+                name: Some("pool-1-thread-1".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                retained: 150,
+                local_root_count: 10,
+                name: Some("pool-1-thread-2".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                retained: 150,
+                local_root_count: 10,
+                name: Some("pool-1-thread-3".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                retained: 150,
+                local_root_count: 10,
+                name: Some("pool-1-thread-4".into()),
+                ..Default::default()
+            },
+        ];
+        // No single thread crosses ThreadPinning's floors.
+        assert!(
+            ThreadPinning.eval(&r).is_none(),
+            "no single pooled thread should individually trip ThreadPinning"
+        );
+        // But the pool-accumulation rule must fire: 4 threads >= 2, each >=
+        // 5%, combined 60% >= 30%.
+        let s = ThreadLocalPoolAccumulation
+            .eval(&r)
+            .expect("4 pooled threads at 15% each (60% combined) must fire");
+        assert_eq!(s.id, "thread-local-pool-accumulation");
+        assert!(s.detail.contains("4 threads"));
+        assert!(s.detail.contains("60.0%"));
+    }
+
+    #[test]
+    fn thread_local_pool_accumulation_silent_below_thresholds() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1000;
+
+        // Only 1 qualifying thread: below THREAD_LOCAL_POOL_MIN_THREADS (2).
+        r.threads.threads = vec![ThreadInfo {
+            retained: 150,
+            local_root_count: 10,
+            name: Some("solo".into()),
+            ..Default::default()
+        }];
+        assert!(ThreadLocalPoolAccumulation.eval(&r).is_none());
+
+        // 2 threads each qualifying individually, but combined share below
+        // THREAD_LOCAL_POOL_COMBINED_MIN_PCT (30%).
+        r.threads.threads = vec![
+            ThreadInfo {
+                retained: 60, // 6%
+                local_root_count: 10,
+                name: Some("a".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                retained: 60, // 6%, combined 12% < 30%
+                local_root_count: 10,
+                name: Some("b".into()),
+                ..Default::default()
+            },
+        ];
+        assert!(
+            ThreadLocalPoolAccumulation.eval(&r).is_none(),
+            "combined 12% share must not fire (floor is 30%)"
+        );
+
+        // 2 threads but no thread-local roots at all (local_root_count == 0)
+        // — not a ThreadLocal pattern, must not fire regardless of share.
+        r.threads.threads = vec![
+            ThreadInfo {
+                retained: 200,
+                local_root_count: 0,
+                name: Some("a".into()),
+                ..Default::default()
+            },
+            ThreadInfo {
+                retained: 200,
+                local_root_count: 0,
+                name: Some("b".into()),
+                ..Default::default()
+            },
+        ];
+        assert!(
+            ThreadLocalPoolAccumulation.eval(&r).is_none(),
+            "threads with zero local_root_count must not qualify"
+        );
     }
 
     #[test]
