@@ -226,6 +226,15 @@ const EXCEPTION_ACCUM_SHALLOW_FLOOR: u64 = 16 * 1024 * 1024;
 const DAEMON_RETAINED_PCT: f64 = 15.0;
 const DAEMON_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
 
+/// SubList instance count floor; a handful is normal for non-leaking code.
+const SUBLIST_FLOOR: u64 = 1_000;
+/// Micrometer/metrics class instance count floor for high-cardinality signal.
+const HIGH_CARDINALITY_METRICS_FLOOR: u64 = 100_000;
+/// ScheduledFutureTask / TimerTask instance count floor.
+const SCHEDULED_TASK_FLOOR: u64 = 10_000;
+/// Hibernate persistence-context entity count floor.
+const HIBERNATE_SESSION_ENTITY_FLOOR: u64 = 10_000;
+
 // ── Framework ─────────────────────────────────────────────────────────────────
 
 /// A single OOM-triage rule. Reads the finished report; returns `Some` when the
@@ -354,6 +363,11 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(ComponentRetentionImbalance),
         Box::new(ExceptionObjectAccumulation),
         Box::new(DaemonThreadRetention),
+        Box::new(SubListBackingLeak),
+        Box::new(HighCardinalityMetrics),
+        Box::new(ScheduledTaskAccumulation),
+        Box::new(HibernateSessionBloat),
+        Box::new(ExecutorSelfSubmitDeadlock),
     ]
 }
 
@@ -3549,6 +3563,258 @@ impl Rule for DaemonThreadRetention {
     }
 }
 
+// ── New rules (batch N: victorrentea gap-fill) ────────────────────────────────
+
+/// SubList / subArray view retaining large backing collection.
+///
+/// `ArrayList.subList(from, to)` returns an `ArrayList$SubList` that holds a
+/// reference to the full backing `Object[]`. When the subList is stored longer
+/// than the backing list, GC cannot collect the discarded elements. The pattern
+/// is: store `subList` into a field/cache to "trim" the list, but the original
+/// array stays live.
+///
+/// Detection: `java.util.ArrayList$SubList` present with non-trivial instance
+/// count. A single SubList is harmless; many of them means per-request creation
+/// without releasing the backing lists.
+struct SubListBackingLeak;
+impl Rule for SubListBackingLeak {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let row = r
+            .overview
+            .histogram
+            .iter()
+            .find(|h| h.pretty_class == "java.util.ArrayList$SubList")?;
+        if row.instances < SUBLIST_FLOOR {
+            return None;
+        }
+        Some(signal(
+            "sublist-backing-leak",
+            TriageSeverity::Warning,
+            "SubList View Retaining Backing Array",
+            format!(
+                "{} live `ArrayList$SubList` objects — each SubList holds a reference to \
+                 the full backing `Object[]` of its parent ArrayList, preventing GC from \
+                 collecting discarded head elements. A common pattern: \
+                 `lastTen = lastTen.subList(1, lastTen.size())` accumulates backing arrays \
+                 of ever-increasing size. Fix: copy the view into a new list \
+                 (`new ArrayList<>(list.subList(from, to))`) or switch to an `ArrayDeque` / \
+                 `LinkedList` with explicit `removeFirst()`.",
+                fmt_count(row.instances),
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// High-cardinality metric tags creating unbounded metric series.
+///
+/// Micrometer (and Prometheus/Dropwizard) store one `Meter` per unique
+/// combination of tag values. Using dynamic values — UUIDs, user IDs, order
+/// numbers — as tag keys/values causes one new `Meter` per distinct value,
+/// growing without bound until OOM. Each `Meter` retains its `Id` (with the
+/// tag strings) plus internal statistics storage.
+///
+/// Detection: `io.micrometer.core.instrument` classes present in significant
+/// numbers, especially `Meter$Id` or `Tag`.
+struct HighCardinalityMetrics;
+impl Rule for HighCardinalityMetrics {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        const MICROMETER_PKGS: &[&str] = &[
+            "io.micrometer.core.instrument.",
+            "io.micrometer.prometheus.",
+            "com.codahale.metrics.",
+        ];
+        let row = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                MICROMETER_PKGS
+                    .iter()
+                    .any(|pkg| h.pretty_class.starts_with(pkg))
+                    && h.instances >= HIGH_CARDINALITY_METRICS_FLOOR
+            })
+            .max_by_key(|h| h.instances)?;
+        Some(signal_cls(
+            "high-cardinality-metrics",
+            TriageSeverity::Warning,
+            "High-Cardinality Metric Tags",
+            format!(
+                "{} live `{}` objects — Micrometer/metrics registry is accumulating one \
+                 series per unique tag-value combination. Using dynamic values \
+                 (UUIDs, user IDs, request IDs, URLs) as metric tags causes one new \
+                 `Meter` per distinct value, growing without eviction. \
+                 Fix: remove high-cardinality dimensions from tags; if cardinality is \
+                 intentional, set `meterRegistry.config().meterFilter(MeterFilter.maximumAllowableTags(...))` \
+                 or switch to a histogram/summary instead of a per-value counter/timer.",
+                fmt_count(row.instances),
+                row.pretty_class,
+            ),
+            Some(("system-overview", "Class Histogram")),
+            &row.pretty_class,
+        ))
+    }
+}
+
+/// Scheduled / timer task accumulation.
+///
+/// `ScheduledThreadPoolExecutor` stores pending tasks as
+/// `ScheduledFutureTask` objects in a heap (delay queue). If tasks are
+/// submitted faster than they complete — or if tasks hold large data and
+/// are re-scheduled without cancellation — the queue grows without bound.
+/// `java.util.TimerTask` on a plain `java.util.Timer` follows the same
+/// pattern.
+struct ScheduledTaskAccumulation;
+impl Rule for ScheduledTaskAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let total = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                h.pretty_class.ends_with("ScheduledFutureTask")
+                    || h.pretty_class == "java.util.TimerTask"
+                    || h.pretty_class.ends_with("$ScheduledFutureTask")
+            })
+            .map(|h| h.instances)
+            .sum::<u64>();
+        if total < SCHEDULED_TASK_FLOOR {
+            return None;
+        }
+        Some(signal(
+            "scheduled-task-accumulation",
+            TriageSeverity::Warning,
+            "Scheduled Task Accumulation",
+            format!(
+                "{} live scheduled-task objects (`ScheduledFutureTask`/`TimerTask`) — \
+                 tasks are queued faster than they execute, or completed tasks are not \
+                 being GC'd because their results or `Future` handles are retained \
+                 elsewhere. Common causes: (1) a `ScheduledExecutorService.scheduleAtFixedRate` \
+                 task that blocks and misses its interval, causing tasks to pile up; \
+                 (2) each HTTP request schedules a new task (e.g. timeout watchdog) \
+                 without cancelling it on completion; (3) a `Timer` whose tasks capture \
+                 large request-scoped objects. \
+                 Check thread state in the Threads section; cancel tasks explicitly \
+                 (store the returned `ScheduledFuture` and call `cancel(true)`).",
+                fmt_count(total),
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// Hibernate first-level cache (persistence context) bloat.
+///
+/// Hibernate's `StatefulPersistenceContext` (the entity manager's "session")
+/// retains every loaded entity in memory until the transaction ends or the
+/// context is explicitly cleared. When a query or stream loads thousands of
+/// entities in a single transaction, they all accumulate in the persistence
+/// context's internal maps. The pattern is especially common with
+/// `entityManager.find()` in a loop, bulk queries inside a long transaction,
+/// or OSIV (Open Session In View) anti-pattern.
+struct HibernateSessionBloat;
+impl Rule for HibernateSessionBloat {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        // EntityHolder, EntityEntry, or StatefulPersistenceContext directly.
+        let entry_count: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                let c = &h.pretty_class;
+                c.contains("StatefulPersistenceContext")
+                    || c.contains("EntityHolder")
+                    || c.ends_with("EntityEntry")
+            })
+            .map(|h| h.instances)
+            .sum();
+        if entry_count < HIBERNATE_SESSION_ENTITY_FLOOR {
+            return None;
+        }
+        Some(signal(
+            "hibernate-session-bloat",
+            TriageSeverity::Warning,
+            "Hibernate First-Level Cache Bloat",
+            format!(
+                "{} live Hibernate persistence-context entries \
+                 (`StatefulPersistenceContext` / `EntityHolder` / `EntityEntry`) — \
+                 the Hibernate session is retaining a large number of managed entities, \
+                 which prevents GC. Common causes: (1) loading entities in a loop with \
+                 `entityManager.find()` inside a long transaction; (2) streaming a result \
+                 set inside a transaction without calling `entityManager.clear()` \
+                 periodically; (3) Open Session In View (OSIV) keeping the session open \
+                 for the entire HTTP request. Fix: call `entityManager.clear()` or \
+                 `entityManager.detach(entity)` after processing each batch, use \
+                 `@Modifying(clearAutomatically = true)` on bulk queries, or disable OSIV \
+                 (`spring.jpa.open-in-view=false`).",
+                fmt_count(entry_count),
+            ),
+            Some(("system-overview", "Class Histogram")),
+        ))
+    }
+}
+
+/// Executor self-submit deadlock (thread pool starvation).
+///
+/// All threads in a `ThreadPoolExecutor` are blocked waiting for the result of
+/// tasks submitted back to the same pool — a "thread starvation deadlock".
+/// The heap shows a moderate number of blocked threads (matching the pool
+/// size) and a queue of `FutureTask` / `RunnableFuture` objects that can never
+/// run because there are no free threads.
+struct ExecutorSelfSubmitDeadlock;
+impl Rule for ExecutorSelfSubmitDeadlock {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        // Heuristic: many FutureTask/RunnableFuture objects AND many threads in WAITING.
+        let queued_tasks: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                let c = &h.pretty_class;
+                c == "java.util.concurrent.FutureTask"
+                    || c.ends_with("$RunnableFuture")
+                    || c.ends_with("CompletableFuture$AsyncSupply")
+                    || c.ends_with("CompletableFuture$AsyncRun")
+                    || c.ends_with("ForkJoinTask$RunnableExecuteAction")
+            })
+            .map(|h| h.instances)
+            .sum();
+        if queued_tasks < SCHEDULED_TASK_FLOOR {
+            return None;
+        }
+        let waiting_threads = r
+            .threads
+            .threads
+            .iter()
+            .filter(|t| t.thread_state == "WAITING" || t.thread_state == "TIMED_WAITING")
+            .count();
+        // Only fire when there are also many waiting threads (otherwise it's
+        // just a healthy work queue, not a deadlock).
+        let total_threads = r.threads.threads.len();
+        if total_threads < 4 || waiting_threads * 100 / total_threads.max(1) < 60 {
+            return None;
+        }
+        Some(signal(
+            "executor-self-submit-deadlock",
+            TriageSeverity::Critical,
+            "Executor Self-Submit Deadlock (Thread Starvation)",
+            format!(
+                "{} queued `FutureTask`/`CompletableFuture` tasks with {}/{} threads in \
+                 WAITING/TIMED_WAITING state — possible thread pool starvation deadlock. \
+                 This happens when all worker threads block on results from tasks submitted \
+                 to the same pool, so no thread is free to process the queued tasks. \
+                 Fix: use a separate executor for sub-tasks, switch to async composition \
+                 (`thenApply`/`thenCompose`) instead of blocking `get()`, or restructure \
+                 the workflow to avoid circular thread dependencies.",
+                fmt_count(queued_tasks),
+                waiting_threads,
+                total_threads,
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5228,5 +5494,141 @@ mod tests {
         let pct_boundary = ((DAEMON_RETAINED_PCT - 0.1) / 100.0 * 1_000_000_000f64) as u64;
         r.threads.threads[0].retained = pct_boundary;
         assert!(DaemonThreadRetention.eval(&r).is_none());
+    }
+
+    #[test]
+    fn sublist_backing_leak_fires_above_floor() {
+        let mut r = base_report();
+        r.overview.histogram = vec![hist_row(
+            "java.util.ArrayList$SubList",
+            SUBLIST_FLOOR,
+            100_000,
+        )];
+        let s = SubListBackingLeak
+            .eval(&r)
+            .expect("SUBLIST_FLOOR SubList instances must fire");
+        assert_eq!(s.id, "sublist-backing-leak");
+        assert!(s.detail.contains("SubList"));
+
+        // Below floor: silent.
+        r.overview.histogram[0].instances = SUBLIST_FLOOR - 1;
+        assert!(SubListBackingLeak.eval(&r).is_none());
+
+        // Other class: silent.
+        r.overview.histogram[0].instances = SUBLIST_FLOOR * 10;
+        r.overview.histogram[0].pretty_class = "java.util.ArrayList".into();
+        assert!(SubListBackingLeak.eval(&r).is_none());
+    }
+
+    #[test]
+    fn high_cardinality_metrics_fires() {
+        let mut r = base_report();
+        r.overview.histogram = vec![hist_row(
+            "io.micrometer.core.instrument.Timer",
+            200_000,
+            32_000_000,
+        )];
+        let s = HighCardinalityMetrics
+            .eval(&r)
+            .expect("200k micrometer instances must fire");
+        assert_eq!(s.id, "high-cardinality-metrics");
+        assert!(s.detail.contains("Timer") || s.detail.contains("micrometer"));
+
+        // Below floor: silent.
+        r.overview.histogram[0].instances = HIGH_CARDINALITY_METRICS_FLOOR - 1;
+        assert!(HighCardinalityMetrics.eval(&r).is_none());
+
+        // Non-micrometer class: silent.
+        r.overview.histogram[0].instances = HIGH_CARDINALITY_METRICS_FLOOR * 2;
+        r.overview.histogram[0].pretty_class = "com.example.Counter".into();
+        assert!(HighCardinalityMetrics.eval(&r).is_none());
+    }
+
+    #[test]
+    fn scheduled_task_accumulation_fires() {
+        let mut r = base_report();
+        r.overview.histogram = vec![hist_row(
+            "java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask",
+            SCHEDULED_TASK_FLOOR,
+            1_000_000,
+        )];
+        let s = ScheduledTaskAccumulation
+            .eval(&r)
+            .expect("SCHEDULED_TASK_FLOOR tasks must fire");
+        assert_eq!(s.id, "scheduled-task-accumulation");
+        assert!(s.detail.contains("ScheduledFutureTask") || s.detail.contains("task"));
+
+        // TimerTask also triggers.
+        r.overview.histogram[0].pretty_class = "java.util.TimerTask".into();
+        let s2 = ScheduledTaskAccumulation
+            .eval(&r)
+            .expect("TimerTask must also fire");
+        assert_eq!(s2.id, "scheduled-task-accumulation");
+
+        // Below floor: silent.
+        r.overview.histogram[0].instances = SCHEDULED_TASK_FLOOR - 1;
+        assert!(ScheduledTaskAccumulation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn hibernate_session_bloat_fires() {
+        let mut r = base_report();
+        r.overview.histogram = vec![hist_row(
+            "org.hibernate.engine.internal.StatefulPersistenceContext",
+            1,
+            1_000,
+        )];
+        // Add EntityHolder entries to reach floor.
+        r.overview.histogram.push(hist_row(
+            "org.hibernate.engine.internal.EntityEntry",
+            HIBERNATE_SESSION_ENTITY_FLOOR,
+            640_000_000,
+        ));
+        let s = HibernateSessionBloat
+            .eval(&r)
+            .expect("high EntityEntry count must fire");
+        assert_eq!(s.id, "hibernate-session-bloat");
+
+        // Both well below floor: silent.
+        r.overview.histogram[0].instances = 1;
+        r.overview.histogram[1].instances = HIBERNATE_SESSION_ENTITY_FLOOR / 2 - 1;
+        assert!(HibernateSessionBloat.eval(&r).is_none());
+    }
+
+    #[test]
+    fn executor_self_submit_deadlock_fires() {
+        let mut r = base_report();
+        r.overview.histogram = vec![hist_row(
+            "java.util.concurrent.FutureTask",
+            SCHEDULED_TASK_FLOOR,
+            800_000,
+        )];
+        // Add 8 WAITING threads (100% WAITING = 100% >= 60% threshold).
+        for i in 0..8 {
+            r.threads.threads.push(ThreadInfo {
+                thread_serial: i as u32,
+                name: Some(format!("pool-{i}")),
+                thread_state: "WAITING".into(),
+                ..ThreadInfo::default()
+            });
+        }
+        let s = ExecutorSelfSubmitDeadlock
+            .eval(&r)
+            .expect("queued tasks + all threads WAITING must fire");
+        assert_eq!(s.id, "executor-self-submit-deadlock");
+
+        // Not enough threads in WAITING (only 1/8 = 12.5%): silent.
+        for t in &mut r.threads.threads {
+            t.thread_state = "RUNNABLE".into();
+        }
+        r.threads.threads[0].thread_state = "WAITING".into();
+        assert!(ExecutorSelfSubmitDeadlock.eval(&r).is_none());
+
+        // Below task floor: silent (even with all threads waiting).
+        r.overview.histogram[0].instances = SCHEDULED_TASK_FLOOR - 1;
+        for t in &mut r.threads.threads {
+            t.thread_state = "WAITING".into();
+        }
+        assert!(ExecutorSelfSubmitDeadlock.eval(&r).is_none());
     }
 }
