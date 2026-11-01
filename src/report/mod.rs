@@ -1594,6 +1594,7 @@ mod tests {
                     is_daemon: false,
                     priority: 5,
                     thread_state: "[alive, runnable]".to_string(),
+                    dominant_retained_class: String::new(),
                     significant_frames: vec![],
                 }],
             },

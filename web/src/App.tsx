@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SelfReferentialClassRow, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, CategoryRollup, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SelfReferentialClassRow, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -2193,6 +2193,23 @@ function SystemOverviewSection({ report }: { report: Report }) {
         );
       })()}
 
+      {report.category_rollup && report.category_rollup.length > 1 && (() => {
+        const catCols: TableColumn<CategoryRollup>[] = [
+          { id: "category", name: "Category", grow: 1, minWidth: "100px", selector: (r) => r.category, sortable: true },
+          { id: "instances", name: "Objects", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
+          { id: "shallow", name: "Shallow Heap", right: true, width: "138px", cell: (r: CategoryRollup) => <span title={fmtExactBytes(r.shallow)}>{formatBytes(r.shallow)}</span>, selector: (r) => r.shallow, sortable: true },
+          { id: "shallow_pct", name: "% of Heap", right: true, width: "110px", format: (r) => fmtPct(r.shallow_pct / 100), selector: (r) => r.shallow_pct, sortable: true },
+          { id: "class_count", name: "Classes", right: true, width: "100px", format: (r) => fmtCount(r.class_count), selector: (r) => r.class_count, sortable: true },
+        ];
+        return (
+          <>
+            <h3>Heap by Category</h3>
+            <p className="subtitle">Shallow heap by origin — JDK runtime, framework libraries, application code, and other. If "framework" dominates, look for a framework object leak; if "app" dominates, check data structures your code owns.</p>
+            <StdTable columns={catCols} data={report.category_rollup!} searchKeys={["category"]} defaultSortFieldId="shallow" defaultSortAsc={false} />
+          </>
+        );
+      })()}
+
       {(o.gc_roots_retained_by_type?.length ?? o.gc_roots_by_type.length) > 0 && (() => {
         const gcRows = o.gc_roots_retained_by_type?.length
           ? o.gc_roots_retained_by_type
@@ -3574,6 +3591,18 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       sortable: true,
       cell: byteCell((t) => t.max_local_retained, fmtB, useKB),
       selector: (t) => t.max_local_retained,
+    },
+    {
+      id: "dominant_class",
+      name: "Dominant Retained Class",
+      grow: 1,
+      minWidth: "140px",
+      selector: (t) => t.dominant_retained_class ?? "",
+      cell: (t: ThreadInfo) => {
+        const cls = t.dominant_retained_class;
+        return cls ? <code title={cls} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{cls}</code> : <span style={{ color: "var(--muted)" }}>—</span>;
+      },
+      sortable: true,
     },
     {
       id: "stack_depth",

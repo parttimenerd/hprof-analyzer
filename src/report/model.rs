@@ -983,6 +983,11 @@ pub struct ThreadInfo {
     /// `threadStatus` bits. Empty when unknown. Additive.
     #[serde(default)]
     pub thread_state: String,
+    /// The class that dominates the most retained heap for this thread — the
+    /// single most expensive type reachable from this thread's locals/fields.
+    /// Empty when retained heap is zero or thread has no local objects. Additive.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dominant_retained_class: String,
     /// Per-frame significant local variables, interleaved top-first. Populated
     /// only under the opt-in `--thread-locals` flag; empty otherwise. Additive:
     /// not part of MAT parity.

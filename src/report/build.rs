@@ -2290,6 +2290,24 @@ pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOver
             let (significant_frames, max_local_retained) =
                 build_significant_frames(g, t, total_shallow);
 
+            // Dominant retained class: aggregate local_objects by class, pick the
+            // class with the highest total retained (best-effort from the sample).
+            let dominant_retained_class = {
+                let objs = local_objects.as_deref().unwrap_or(&[]);
+                let mut class_retained: std::collections::HashMap<&str, u64> =
+                    std::collections::HashMap::new();
+                for obj in objs {
+                    *class_retained
+                        .entry(obj.display_class.as_str())
+                        .or_insert(0) += obj.retained;
+                }
+                class_retained
+                    .into_iter()
+                    .max_by_key(|(_, r)| *r)
+                    .map(|(cls, _)| cls.to_string())
+                    .unwrap_or_default()
+            };
+
             ThreadInfo {
                 thread_serial: t.thread_serial,
                 name: g
@@ -2312,6 +2330,7 @@ pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOver
                 is_daemon,
                 priority,
                 thread_state,
+                dominant_retained_class,
                 significant_frames,
             }
         })

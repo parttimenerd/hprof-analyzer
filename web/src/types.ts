@@ -412,6 +412,8 @@ export interface ThreadInfo {
   is_daemon: boolean;
   priority: number;
   thread_state: string;
+  // Class dominating most retained heap for this thread (best-effort from local sample).
+  dominant_retained_class?: string;
   // Per-frame significant locals, interleaved top-first. Empty when locals
   // were not sampled.
   significant_frames?: SignificantFrame[];
@@ -866,6 +868,18 @@ export interface Report {
   field_stats?: FieldStats;
   // Recursive class structures (e.g. Node→Node chains). Always-on; omitted when empty.
   self_referential_classes?: SelfReferentialClassRow[];
+  // Classes-by-category rollup: how much heap belongs to JDK / framework / app / other.
+  // Always-on; sorted by shallow desc.
+  category_rollup?: CategoryRollup[];
+}
+
+export interface CategoryRollup {
+  category: string;
+  class_count: number;
+  instances: number;
+  shallow: number;
+  retained: number;
+  shallow_pct: number;
 }
 
 // Which opt-in analysis passes were enabled when the report was generated.
