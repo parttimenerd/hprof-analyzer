@@ -738,9 +738,12 @@ mod tests {
             "missing heap composition table"
         );
         assert!(md.contains("**Heap Shape:**"), "missing shape line");
+        // Concentration is suppressed when HeadlineRetainer already names the
+        // same class and there's no owner context to add (no redundant double
+        // bullet). Assert HeadlineRetainer fired instead.
         assert!(
-            md.contains("**Concentration:**"),
-            "missing concentration line"
+            md.contains("**Headline Retainer:**"),
+            "missing headline retainer line"
         );
     }
 
@@ -1417,9 +1420,11 @@ mod tests {
             triage.has_bullet_containing("`com.foo.A`"),
             "headline should name the #1 suspect"
         );
+        // Concentration is suppressed when HeadlineRetainer already names the same
+        // class without extra owner context — the headline bullet is sufficient.
         assert!(
-            triage.has_bullet_containing("highly concentrated"),
-            "1000/270 is >= 50% so it should read as highly concentrated"
+            !triage.has_bullet_containing("highly concentrated"),
+            "concentration should be suppressed when headline-retainer names same class without owner"
         );
 
         // The triage block must precede System Overview.

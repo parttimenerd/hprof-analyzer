@@ -531,11 +531,10 @@ impl Rule for HeadlineRetainer {
 }
 
 /// Concentration. Reads `primary_culprits` (preferred) with `leaks.suspects`
-/// as a fallback. Always fires (concentrated vs. diffuse variants). Note this
-/// now structurally cannot restate `HeadlineRetainer`'s own class pick with
-/// different wording for a different class — both read the SAME resolved
-/// `primary_culprits[0]`, so "Concentration" only ever adds the owner-join
-/// detail HeadlineRetainer doesn't carry.
+/// as a fallback. Fires only when it adds information HeadlineRetainer doesn't
+/// carry: specifically, the `held_by` owner detail for single-object suspects.
+/// When both signals would name the same class without owner context, suppress
+/// this one to avoid a redundant second "X holds Y%" Critical bullet.
 struct Concentration;
 impl Rule for Concentration {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
@@ -561,6 +560,12 @@ impl Rule for Concentration {
                 Some(o) => format!(" held by `{o}`"),
                 None => String::new(),
             };
+            // Suppress when there's no owner detail to add: HeadlineRetainer
+            // already stated "X retains Y%" with the same class; repeating it
+            // as "X holds Y%" (with no held_by) is redundant noise.
+            if held_by.is_empty() {
+                return None;
+            }
             return Some(signal_cls(
                 "concentration",
                 TriageSeverity::Critical,
@@ -605,13 +610,13 @@ impl Rule for DominantGcRootType {
             return None;
         }
         // Suppress when the dominant root-type name already matches the
-        // resolved primary culprit's class — HeadlineRetainer/Concentration
-        // already named this exact object with more specific data (and, as
-        // of the primary_culprits refinement, may name a MORE specific class
-        // further down the path than the GC-root-held object itself); a
-        // third bullet repeating the same percentage adds nothing.
+        // resolved primary culprit's class — HeadlineRetainer already named
+        // this exact object with more specific data; a second bullet repeating
+        // the same percentage adds nothing.
+        // When primary_culprits is empty, HeadlineRetainer falls back to
+        // leaks.suspects.first() — apply the same suppression for that path.
+        let rt = top.root_type.to_ascii_lowercase();
         if let Some(c) = r.primary_culprits.first() {
-            let rt = top.root_type.to_ascii_lowercase();
             let sc = c.class_name.to_ascii_lowercase();
             if !rt.is_empty() && (sc.contains(&rt) || rt.contains(&sc)) {
                 return None;
@@ -630,6 +635,14 @@ impl Rule for DominantGcRootType {
                 if sus.contains(&rt) || rt.contains(&sus) {
                     return None;
                 }
+            }
+        } else if let Some(s) = r.leaks.suspects.first() {
+            // primary_culprits empty: HeadlineRetainer uses suspects[0] as
+            // fallback. Suppress gc-root-type when that suspect's class already
+            // matches the dominant root type (Thread holding Thread = redundant).
+            let sc = s.pretty_class.to_ascii_lowercase();
+            if !rt.is_empty() && (sc.contains(&rt) || rt.contains(&sc)) {
+                return None;
             }
         }
         Some(signal(
