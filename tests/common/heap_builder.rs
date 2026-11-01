@@ -971,9 +971,36 @@ pub fn build_unique_strings_no_dup(b: &mut HeapBuilder) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 15: Constant-value arrays (fires "constant-value-arrays" signal)
-//              Requires AnalyzeOptions { collections: true }
+// Scenario 16: Single large object with static-field ownership via root_path
+//              Verifies static-field-anchor and concentration name the holder
 // ---------------------------------------------------------------------------
+
+/// Build a heap with ONE big `DataBuffer` instance (holding a 200 KB byte[])
+/// anchored by a static field on `StaticCacheService`. The DataBuffer is the
+/// primary culprit as a single object. `static-field-anchor` must name
+/// `StaticCacheService` as the holder; `concentration` should too (via
+/// root_path attribution, no --collections required).
+///
+/// Shape:
+///   StaticCacheService [Sticky Class] --static--> DataBuffer --field--> byte[200KB]
+pub fn build_single_object_static_owner(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+    // DataBuffer has one Object field (the backing byte[]).
+    let data_buffer_class =
+        b.class_with_super("scenarios/DataBuffer", object_class, &[("data", T_OBJECT)]);
+
+    // Build the large backing array (~200 KB).
+    let big_array = b.prim_array(8, &vec![42u8; 200_000]); // byte[] 200 KB
+
+    // Build ONE DataBuffer instance pointing to the array.
+    let mut inst_data = Vec::new();
+    obj_field(&mut inst_data, big_array);
+    let buffer_id = b.instance(data_buffer_class, &inst_data);
+
+    // StaticCacheService holds the DataBuffer via a static field.
+    let holder = b.class_with_static_root("scenarios/StaticCacheService", "cache", buffer_id, &[]);
+    b.root_sticky_class(holder);
+}
 
 /// Build a heap consisting almost entirely of zero-filled `byte[]` arrays large
 /// enough to clear CONSTARR_FLOOR (8 MiB total shallow). The

@@ -414,6 +414,17 @@ fn build_static_field_anchor() -> Vec<u8> {
 
 fn check_static_field_anchor(report: &Report) {
     assert_signal_fires(report, "static-field-anchor");
+    // The signal detail must name the holding class so users know where to look.
+    let signal = report
+        .triage
+        .iter()
+        .find(|s| s.id == "static-field-anchor")
+        .expect("static-field-anchor must fire");
+    assert!(
+        signal.detail.contains("AppCache"),
+        "static-field-anchor detail must name the holder class 'AppCache', got: {}",
+        signal.detail
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +467,45 @@ fn build_constant_value_arrays() -> Vec<u8> {
 
 fn check_constant_value_arrays(report: &Report) {
     assert_signal_fires(report, "constant-value-arrays");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 16: Single large object with static-field ownership via root_path
+// ---------------------------------------------------------------------------
+
+fn build_single_object_static_owner() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_single_object_static_owner(&mut b);
+    b.build()
+}
+
+fn check_single_object_static_owner(report: &Report) {
+    // static-field-anchor must fire and name the holder class.
+    assert_signal_fires(report, "static-field-anchor");
+    let anchor_signal = report
+        .triage
+        .iter()
+        .find(|s| s.id == "static-field-anchor")
+        .expect("static-field-anchor must fire");
+    assert!(
+        anchor_signal.detail.contains("StaticCacheService"),
+        "static-field-anchor detail must name the holder 'StaticCacheService', got: {}",
+        anchor_signal.detail
+    );
+    // When primary_culprits is populated (single object dominates), the
+    // concentration signal should fire naming the holder via root_path.
+    if !report.primary_culprits.is_empty() {
+        let conc = report
+            .triage
+            .iter()
+            .find(|s| s.id == "concentration")
+            .expect("concentration must fire when primary_culprits is non-empty");
+        assert!(
+            conc.detail.contains("StaticCacheService"),
+            "concentration detail must name holder 'StaticCacheService' via root_path, got: {}",
+            conc.detail
+        );
+    }
 }
 
 fn default_opts() -> AnalyzeOptions {
@@ -553,6 +603,12 @@ const SCENARIOS: &[Scenario] = &[
         build: build_constant_value_arrays,
         check: check_constant_value_arrays,
     },
+    Scenario {
+        name: "single_object_static_owner",
+        opts: default_opts,
+        build: build_single_object_static_owner,
+        check: check_single_object_static_owner,
+    },
 ];
 
 #[test]
@@ -635,6 +691,11 @@ fn scenario_constant_value_arrays() {
     run_scenario(&SCENARIOS[14]);
 }
 
+#[test]
+fn scenario_single_object_static_owner() {
+    run_scenario(&SCENARIOS[15]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -643,7 +704,7 @@ fn scenario_constant_value_arrays() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        15,
+        16,
         "update this test when adding scenarios"
     );
 }
