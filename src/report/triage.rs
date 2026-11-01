@@ -414,6 +414,42 @@ fn pct_of(retained: u64, total: u64) -> f64 {
     }
 }
 
+/// Build a human-readable ownership hint from a suspect's `root_path`.
+///
+/// Returns `" held by \`HolderClass\` via RootType"` when the root_path has at
+/// least one intermediate step (i.e. the suspect is not itself the GC root).
+/// Returns an empty string when the root_path is absent, empty, or consists of
+/// only the suspect itself (it IS the root).
+fn root_path_owner_hint(s: &crate::report::model::Suspect) -> String {
+    let path = match s.root_path.as_deref() {
+        Some(p) if p.len() >= 2 => p,
+        _ => return String::new(),
+    };
+    // The last step is the GC root (has root_type_label). Use the
+    // second-to-last step's class as the "immediate holder" — it is the
+    // object closest to the root that directly dominates the suspect.
+    // For short paths (2 steps: suspect + root), the root itself is the holder.
+    let terminal = path.last().unwrap();
+    let root_type = match terminal.root_type_label.as_deref() {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    // Prefer the step just before the terminal as the holder when the path has
+    // 3+ steps, because the terminal is often an anonymous Class object — the
+    // step before it (e.g. MyService) is more informative.
+    let holder_step = if path.len() >= 3 {
+        &path[path.len() - 2]
+    } else {
+        terminal
+    };
+    // Skip uninformative synthetic/class-object holder names.
+    let holder = &holder_step.display_class;
+    if holder.is_empty() || holder == &s.pretty_class {
+        return String::new();
+    }
+    format!(" held by `{}` via {} root", holder, root_type)
+}
+
 /// Small `TriageSignal` builder for the common linked case.
 fn signal(
     id: &str,
@@ -545,6 +581,8 @@ impl Rule for Concentration {
             } else {
                 format!("a class group of {} instances", s.instance_count)
             };
+            // Derive owner from biggest_objects (requires --collections) or fall
+            // back to root_path chain (always available for single suspects).
             let owner = if s.is_single {
                 r.top.biggest_objects.first().and_then(|o| {
                     if o.display_class == s.pretty_class {
@@ -556,9 +594,22 @@ impl Rule for Concentration {
             } else {
                 None
             };
-            let held_by = match owner {
-                Some(o) => format!(" held by `{o}`"),
-                None => String::new(),
+            // Derive an ownership string for the `held_by` clause:
+            // 1. Field-level owner from biggest_objects (requires --collections).
+            // 2. Root-path chain attribution (always available for singles).
+            // 3. When the resolved culprit class differs from the suspect class,
+            //    the suspect class IS the holder — e.g. suspect is
+            //    `StaticCacheService`, resolved culprit is `DataBuffer` that
+            //    it holds via a field; surfacing "held by StaticCacheService"
+            //    is directly actionable without --collections.
+            let held_by = if let Some(o) = owner {
+                format!(" held by `{o}`")
+            } else if s.is_single && c.class_name != s.pretty_class {
+                format!(" held by `{}`", s.pretty_class)
+            } else if s.is_single {
+                root_path_owner_hint(s)
+            } else {
+                String::new()
             };
             // Suppress when there's no owner detail to add: HeadlineRetainer
             // already stated "X retains Y%" with the same class; repeating it
@@ -1599,11 +1650,28 @@ impl Rule for HeapCompositionSkew {
 /// Static-field anchor. Reads `leaks.suspects`. Fires when the top suspect is
 /// anchored by a `Sticky Class` GC root (i.e. a static field) and retains a
 /// large heap share — classic "static cache that never evicts".
+///
+/// Two code paths detect the "Sticky Class" anchor:
+///
+/// 1. The suspect IS itself a GC root of type ROOT_STICKY_CLASS — set on
+///    `s.root_type_label` directly (e.g. a class object that retains via a
+///    static field and was itself emitted as a ROOT_STICKY_CLASS record).
+///
+/// 2. The suspect is reachable *through* a Sticky Class GC root — the suspect
+///    is a HashMap/ArrayList/etc. held by a static field on some class. In
+///    this case the class object (not the HashMap) carries ROOT_STICKY_CLASS,
+///    so `s.root_type_label` is empty but the terminal step of `s.root_path`
+///    has `root_type_label == Some("Sticky Class")`. This is the common shape
+///    for static caches: `CACHE` field on `MyService` → HashMap.
 struct StaticFieldAnchor;
 impl Rule for StaticFieldAnchor {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let s = r.leaks.suspects.first()?;
-        if s.root_type_label != "Sticky Class" {
+        let terminal_step = s.root_path.as_deref().and_then(|p| p.last());
+        let is_sticky = s.root_type_label == "Sticky Class"
+            || terminal_step.and_then(|step| step.root_type_label.as_deref())
+                == Some("Sticky Class");
+        if !is_sticky {
             return None;
         }
         let total = r.leaks.total_shallow;
@@ -1611,13 +1679,25 @@ impl Rule for StaticFieldAnchor {
         if pct < STATIC_ANCHOR_PCT {
             return None;
         }
+        // When detected via root_path (the common case where the suspect is
+        // a HashMap/ArrayList held by a static field on a class), include the
+        // holder class name so users know exactly where to look. Skip when the
+        // holder IS the suspect (class holds itself via its own static field).
+        let holder_suffix = terminal_step
+            .filter(|step| {
+                step.root_type_label.as_deref() == Some("Sticky Class")
+                    && step.display_class != s.pretty_class
+            })
+            .map(|step| format!(" on `{}`", step.display_class))
+            .unwrap_or_default();
         Some(signal_cls(
             "static-field-anchor",
             TriageSeverity::Warning,
             "Static-Field Anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — the object lives for the class-loader lifetime; add eviction, null out the field after use, or replace with a `WeakReference` if the data should be reclaimable.",
+                "`{}` is anchored via a static field{} (`Sticky Class` root) and retains {} ({:.1}% of heap) — the object lives for the class-loader lifetime; add eviction, null out the field after use, or replace with a `WeakReference` if the data should be reclaimable.",
                 s.pretty_class,
+                holder_suffix,
                 format_bytes(s.retained),
                 pct,
             ),
@@ -3996,6 +4076,59 @@ mod tests {
         // Sticky class but low share.
         r.leaks.suspects[0].root_type_label = "Sticky Class".into();
         r.leaks.suspects[0].retained = 100; // 0.01%
+        assert!(StaticFieldAnchor.eval(&r).is_none());
+    }
+
+    #[test]
+    fn static_field_anchor_fires_via_root_path() {
+        use crate::report::model::RootPathStep;
+        let mut r = base_report();
+        r.leaks.total_shallow = 1_000_000;
+        // Suspect is a HashMap (not itself a GC root), but reachable through a
+        // Sticky Class — the common static-cache shape.
+        r.leaks.suspects = vec![Suspect {
+            pretty_class: "java.util.HashMap".into(),
+            is_single: true,
+            instance_count: 1,
+            retained: 400_000,
+            root_type_label: String::new(), // not itself a GC root
+            root_path: Some(vec![
+                RootPathStep {
+                    obj_index_1based: 1,
+                    display_class: "java.util.HashMap".into(),
+                    retained: 400_000,
+                    root_type_label: None,
+                    field_edge: None,
+                },
+                RootPathStep {
+                    obj_index_1based: 2,
+                    display_class: "com.example.MyService".into(),
+                    retained: 400_016,
+                    root_type_label: Some("Sticky Class".into()),
+                    field_edge: Some("cache".into()),
+                },
+            ]),
+            ..Default::default()
+        }];
+        let s = StaticFieldAnchor
+            .eval(&r)
+            .expect("HashMap via Sticky Class root_path must fire");
+        assert!(s.detail.contains("HashMap"));
+        // The holder class (terminal root_path step) should appear in the detail.
+        assert!(
+            s.detail.contains("MyService"),
+            "holder class must be named: {}",
+            s.detail
+        );
+
+        // If the terminal step's root_type_label is Thread, it should NOT fire.
+        r.leaks.suspects[0]
+            .root_path
+            .as_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .root_type_label = Some("Thread".into());
         assert!(StaticFieldAnchor.eval(&r).is_none());
     }
 
