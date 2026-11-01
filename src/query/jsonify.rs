@@ -452,7 +452,7 @@ mod imp {
         if f.read_exact(&mut head).is_err() || &head[0..4] != b"HPCA" {
             return Ok(None);
         }
-        if u16::from_le_bytes([head[4], head[5]]) != 1 {
+        if u16::from_le_bytes([head[4], head[5]]) != crate::cache::VERSION {
             return Ok(None);
         }
         let n = head[6] as usize;
