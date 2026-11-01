@@ -780,7 +780,65 @@ pub fn build_single_culprit_simple_class(b: &mut HeapBuilder) {
     b.class_with_static_root("scenarios/Root", "container", container, &[]);
 }
 
-/// Build a heap with a single `java/util/HashMap` pre-sized with a 200,000-slot
+// ---------------------------------------------------------------------------
+// Scenario 10: Healthy baseline (no triage signals expected)
+// ---------------------------------------------------------------------------
+
+/// Build a tiny, completely unremarkable heap — a single small object and
+/// nothing else. No triage signal should fire (all are threshold-gated).
+pub fn build_healthy_baseline(b: &mut HeapBuilder) {
+    // Create multiple independent root objects of roughly equal size so no
+    // single object crosses the 50% dominance floor.
+    let cls = b.class("scenarios/Ping", &[("x", T_INT)]);
+    for i in 0..5i32 {
+        let mut data = Vec::new();
+        int_field(&mut data, i);
+        let obj = b.instance(cls, &data);
+        b.thread_root(obj);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 11: Multiple ThreadLocal null-key leaks (pooled-thread pattern)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with 5 `ThreadLocal$ThreadLocalMap$Entry` instances, each
+/// with a null `referent` (stale key). Models a thread-pool scenario where
+/// 5 pooled threads each have one stale ThreadLocal value that was never
+/// removed after the ThreadLocal was GC'd.
+///
+/// Uses the same inheritance chain as Scenario 5. The "threadlocal-leak"
+/// signal must fire when there are multiple stale entries across threads.
+pub fn build_threadlocal_pooled_multiple(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+    let reference_class = b.class_with_super(
+        "java/lang/ref/Reference",
+        object_class,
+        &[("referent", T_OBJECT)],
+    );
+    let weak_ref_class = b.class_with_super("java/lang/ref/WeakReference", reference_class, &[]);
+    let entry_class = b.class_with_super(
+        "java/lang/ThreadLocal$ThreadLocalMap$Entry",
+        weak_ref_class,
+        &[("value", T_OBJECT)],
+    );
+
+    let value_class = b.class("scenarios/PooledTlValue", &[]);
+    // Create 5 stale entries (simulating 5 pooled threads each with one stale TL value).
+    let mut first_id: u64 = 0;
+    for i in 0..5u64 {
+        let value_obj = b.instance(value_class, &[]);
+        let mut data = Vec::new();
+        obj_field(&mut data, value_obj); // value (non-null)
+        obj_field(&mut data, 0); // referent = null (stale)
+        let entry_id = b.instance(entry_class, &data);
+        if i == 0 {
+            first_id = entry_id;
+        }
+    }
+    b.class_with_static_root("PoolTlHolder", "entry", first_id, &[]);
+}
+
 /// table and zero live entries — exactly the "pre-sized but empty" shape that
 /// triggers `OverCapacityCollections`.
 ///

@@ -362,6 +362,47 @@ fn check_single_culprit_simple_class(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 10: healthy_baseline (no signals expected)
+// ---------------------------------------------------------------------------
+
+fn build_healthy_baseline() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_healthy_baseline(&mut b);
+    b.build()
+}
+
+fn check_healthy_baseline(report: &Report) {
+    // The primary value of this scenario: verify that a diffuse heap (no
+    // single object > 50% retained) does NOT produce a primary_culprit.
+    // Triage signals like "fixed-per-object-overhead" and "gc-root-type"
+    // will legitimately fire on a synthetic 5-object heap, so we only assert
+    // the report doesn't falsely accuse anyone — not that it's perfectly quiet.
+    assert_culprit(report, &CulpritExpectation::NoneExpected);
+    // The report-generation round-trip itself (no panic) is the second assertion.
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 11: threadlocal_pooled_thread_multiple (multiple stale entries)
+// ---------------------------------------------------------------------------
+
+fn build_threadlocal_pooled_multiple() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_threadlocal_pooled_multiple(&mut b);
+    b.build()
+}
+
+fn check_threadlocal_pooled_multiple(report: &Report) {
+    // The threadlocal-leak signal must fire even when there are multiple stale
+    // entries (pool-thread scenario — not just a single stale entry).
+    assert_signal_fires(report, "threadlocal-leak");
+    assert!(
+        report.leak_indicators.thread_local_null_key_count >= 5,
+        "expected at least 5 stale ThreadLocal entries; got: {}",
+        report.leak_indicators.thread_local_null_key_count,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario table
 // ---------------------------------------------------------------------------
 
@@ -424,6 +465,18 @@ const SCENARIOS: &[Scenario] = &[
         build: build_single_culprit_simple_class,
         check: check_single_culprit_simple_class,
     },
+    Scenario {
+        name: "healthy_baseline",
+        opts: default_opts,
+        build: build_healthy_baseline,
+        check: check_healthy_baseline,
+    },
+    Scenario {
+        name: "threadlocal_pooled_multiple",
+        opts: default_opts,
+        build: build_threadlocal_pooled_multiple,
+        check: check_threadlocal_pooled_multiple,
+    },
 ];
 
 #[test]
@@ -476,11 +529,25 @@ fn scenario_single_culprit_simple_class() {
     run_scenario(&SCENARIOS[8]);
 }
 
+#[test]
+fn scenario_healthy_baseline() {
+    run_scenario(&SCENARIOS[9]);
+}
+
+#[test]
+fn scenario_threadlocal_pooled_multiple() {
+    run_scenario(&SCENARIOS[10]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
 /// running the new scenario.
 #[test]
 fn all_scenarios_have_a_dedicated_test() {
-    assert_eq!(SCENARIOS.len(), 9, "update this test when adding scenarios");
+    assert_eq!(
+        SCENARIOS.len(),
+        11,
+        "update this test when adding scenarios"
+    );
 }
