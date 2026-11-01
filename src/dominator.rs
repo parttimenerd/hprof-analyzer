@@ -866,4 +866,216 @@ mod tests {
             "idom(S)=vroot (reconverges below two gc roots)"
         );
     }
+
+    // ── Naive reference-dominator oracle (P1 item 8: correctness oracle) ──────
+    //
+    // A brute-force O(n * (n + m)) reference implementation of dominators,
+    // using only the textbook definition ("u dominates v iff every path from
+    // the virtual root to v passes through u"), independent of SEMI-NCA's
+    // semidominator/union-find machinery. Cross-checking SEMI-NCA against this
+    // on small random graphs catches bugs the hand-crafted example tests above
+    // might not happen to hit (unusual reconvergence shapes, self-loops, multi-
+    // edges, disconnected components, ...) — this testing layer did not exist
+    // before. Deliberately kept OUT of the production `compute_dominators` path
+    // (it would be O(n^2) on multi-million-node heaps): test-only, small-n.
+
+    /// BFS reachability from the virtual root (`n`) over `adj` (successor
+    /// lists, node space `0..n`, virtual root's children given by `roots`),
+    /// skipping any traversal through `excluded` (`None` = full graph).
+    /// Returns a `bool` vec of length `n` (virtual root itself is not a
+    /// "node" in this space and is always implicitly the start).
+    fn naive_reachable(
+        n: usize,
+        roots: &[u32],
+        adj: &[Vec<u32>],
+        excluded: Option<u32>,
+    ) -> Vec<bool> {
+        let mut seen = vec![false; n];
+        let mut stack: Vec<u32> = Vec::new();
+        for &r in roots {
+            if (r as usize) < n && Some(r) != excluded && !seen[r as usize] {
+                seen[r as usize] = true;
+                stack.push(r);
+            }
+        }
+        while let Some(v) = stack.pop() {
+            for &w in &adj[v as usize] {
+                if (w as usize) < n && Some(w) != excluded && !seen[w as usize] {
+                    seen[w as usize] = true;
+                    stack.push(w);
+                }
+            }
+        }
+        seen
+    }
+
+    /// Brute-force idom array (length `n + 1`, vroot = `n`, `UNDEFINED` for
+    /// unreachable nodes) via the textbook dominance definition. See module
+    /// docs above for the algorithm and complexity.
+    fn naive_dominators(n: usize, roots: &[u32], adj: &[Vec<u32>]) -> Vec<u32> {
+        let vroot = n as u32;
+        let full = naive_reachable(n, roots, adj, None);
+
+        // dom_sets[v] = every node (in 0..n) that dominates v, NOT including v
+        // itself and NOT including the virtual root (both handled separately
+        // below — v trivially dominates itself, and vroot dominates every
+        // reachable node without needing a "removal" check).
+        let mut dom_sets: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for v in 0..n {
+            if !full[v] {
+                continue;
+            }
+            for u in 0..n {
+                if u == v || !full[u] {
+                    continue;
+                }
+                let reach_without_u = naive_reachable(n, roots, adj, Some(u as u32));
+                if !reach_without_u[v] {
+                    dom_sets[v].push(u as u32);
+                }
+            }
+        }
+
+        let mut idom = vec![UNDEFINED; n + 1];
+        idom[n] = vroot;
+        for v in 0..n {
+            if !full[v] {
+                continue;
+            }
+            if dom_sets[v].is_empty() {
+                // Only the virtual root dominates v (v is a direct root child
+                // with no other dominator) — idom(v) = vroot.
+                idom[v] = vroot;
+                continue;
+            }
+            // The proper dominators of v (dom_sets[v] ∪ {vroot}) form a chain
+            // under the dominance partial order (a property of the dominator
+            // TREE) — idom(v) is the one closest to v, i.e. the one with the
+            // LARGEST dominator set of its own (ties are impossible on a
+            // correct chain; `max_by_key` picks the first on a genuine tie,
+            // which would indicate a malformed/non-chain input graph, not a
+            // valid heap-shaped one).
+            let best = dom_sets[v]
+                .iter()
+                .copied()
+                .max_by_key(|&u| dom_sets[u as usize].len())
+                .expect("non-empty dom_sets[v] checked above");
+            idom[v] = best;
+        }
+        idom
+    }
+
+    /// Convert `adj` (successor lists) into the production forward CSR
+    /// (`fwd_off`, `fwd_tgt`) format `rpo_dfs`/`compute_dominators` expect.
+    fn adj_to_fwd_csr(n: usize, adj: &[Vec<u32>]) -> (Vec<u32>, ChunkU32) {
+        let mut fwd_off = vec![0u32; n + 1];
+        let mut fwd_tgt_raw = Vec::new();
+        for v in 0..n {
+            fwd_off[v] = fwd_tgt_raw.len() as u32;
+            fwd_tgt_raw.extend_from_slice(&adj[v]);
+        }
+        fwd_off[n] = fwd_tgt_raw.len() as u32;
+        (fwd_off, make_fwd_tgt(fwd_tgt_raw))
+    }
+
+    /// Run the production SEMI-NCA pipeline (rpo_dfs -> rebuild_vertex ->
+    /// compute_dominators) on `(n, roots, adj)` exactly as `pass2`/`retained`
+    /// do, returning the idom array.
+    fn run_semi_nca(n: usize, roots: &[u32], adj: &[Vec<u32>]) -> Vec<u32> {
+        let (fwd_off, fwd_tgt) = adj_to_fwd_csr(n, adj);
+        let mut rpo = rpo_dfs(n, roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
+        // Build the inbound CSR as the exact transpose of `adj` (see
+        // `build_inb` docs above) — predecessor lists keyed by pre-order.
+        let mut preds: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for v in 0..n {
+            for &w in &adj[v] {
+                if (w as usize) < n {
+                    preds[w as usize].push(v as u32);
+                }
+            }
+        }
+        let (inb_off, inb_data) = build_inb(n, &preds, &rpo.dfn);
+        compute_dominators(n, rpo, roots, &inb_off, &inb_data)
+            .expect("consistent fwd/inbound CSR must never be rejected")
+    }
+
+    #[test]
+    fn naive_oracle_agrees_on_diamond() {
+        // vroot -> 0, 0 -> {1, 2}, 1 -> 3, 2 -> 3 (the same shape as diamond_idom).
+        let adj = vec![vec![1u32, 2], vec![3u32], vec![3u32], vec![]];
+        let roots = vec![0u32];
+        let naive = naive_dominators(4, &roots, &adj);
+        let fast = run_semi_nca(4, &roots, &adj);
+        assert_eq!(naive, fast, "naive oracle must agree with SEMI-NCA");
+    }
+
+    #[test]
+    fn naive_oracle_agrees_on_self_loop() {
+        // vroot -> 0 -> 0 (self-loop) -> 1. Self-loops are common in heaps
+        // (a node referencing itself via a field) and must not confuse either
+        // implementation's reachability/union-find bookkeeping.
+        let adj = vec![vec![0u32, 1u32], vec![]];
+        let roots = vec![0u32];
+        let naive = naive_dominators(2, &roots, &adj);
+        let fast = run_semi_nca(2, &roots, &adj);
+        assert_eq!(naive, fast);
+    }
+
+    #[test]
+    fn naive_oracle_agrees_on_disconnected_component() {
+        // Node 2 has no path from vroot at all (no root points at it, nothing
+        // reachable points at it) — must stay UNDEFINED in both.
+        let adj = vec![vec![1u32], vec![], vec![1u32]];
+        let roots = vec![0u32];
+        let naive = naive_dominators(3, &roots, &adj);
+        let fast = run_semi_nca(3, &roots, &adj);
+        assert_eq!(naive, fast);
+        assert_eq!(naive[2], UNDEFINED, "node 2 is genuinely unreachable");
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig { cases: 300, ..Default::default() })]
+        // Property form of the differential oracle: on ANY small random
+        // directed graph (with 1-3 GC roots, allowing self-loops, multi-edges,
+        // disconnected nodes, and arbitrary reconvergence), SEMI-NCA's idom
+        // array must exactly match the brute-force textbook-definition
+        // dominator computation. n is kept small (<= 12) because the naive
+        // oracle is O(n * (n + m)) and this runs 300 cases per `cargo test`.
+        #[test]
+        fn prop_semi_nca_matches_naive_oracle(
+            n in 1usize..=12,
+            edges in proptest::collection::vec((0u32..12, 0u32..12), 0..30),
+            root_count in 1usize..=3,
+            root_picks in proptest::collection::vec(0u32..12, 1..=3),
+        ) {
+            // Clamp edges/roots into 0..n and dedupe roots (empty roots list is
+            // a degenerate case already covered by production call sites
+            // always passing >= 1 root; skip it here rather than special-case).
+            let mut adj: Vec<Vec<u32>> = vec![Vec::new(); n];
+            for (a, b) in edges {
+                let a = (a as usize % n) as u32;
+                let b = (b as usize % n) as u32;
+                adj[a as usize].push(b);
+            }
+            let mut roots: Vec<u32> = root_picks
+                .into_iter()
+                .take(root_count)
+                .map(|r| r % n as u32)
+                .collect();
+            roots.sort_unstable();
+            roots.dedup();
+            if roots.is_empty() {
+                roots.push(0);
+            }
+
+            let naive = naive_dominators(n, &roots, &adj);
+            let fast = run_semi_nca(n, &roots, &adj);
+            proptest::prop_assert_eq!(
+                naive, fast,
+                "SEMI-NCA disagrees with the naive oracle for n={} roots={:?} adj={:?}",
+                n, roots, adj
+            );
+        }
+    }
 }
