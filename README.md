@@ -771,13 +771,13 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 1
 
 | Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
 |----------|-----------|------------|-----------|-----------|----------|------------|-----------|
-| Renaissance scala-doku | 51 MiB | 1.3 s | 131 MiB | 2.2 s | 211 MiB | 4.8 s | 1.40 GiB |
-| gauss-mix | 70 MiB | 1.1 s | 115 MiB | 1.9 s | 183 MiB | 3.9 s | 1.29 GiB |
-| naive-bayes (1.3 GiB) | 1.3 GiB | 2.7 s | 186 MiB | 4.8 s | 333 MiB | 5.1 s | 1.43 GiB |
-| VS Code JVM (1.1 GiB) | 1.1 GiB | 19.2 s | 485 MiB | 32.9 s | 821 MiB | 27.4 s | 3.42 GiB |
-| HeapothesYs 16g | 11 GiB | 1:08 | 967 MiB | 1:42 | 2.19 GiB | 1:00 | 5.59 GiB |
-| HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 3:27 | 3.67 GiB | 1:56 | 8.25 GiB |
-| Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 27:06 | 16.74 GiB | 20:27 | 75.7 GiB |
+| Renaissance scala-doku | 51 MiB | 1.3 s | 131 MiB | 2.2 s | 211 MiB | 4.8 s | 1.32 GiB |
+| gauss-mix | 70 MiB | 1.1 s | 115 MiB | 1.9 s | 183 MiB | 4.0 s | 1.31 GiB |
+| naive-bayes (1.3 GiB) | 1.3 GiB | 2.7 s | 186 MiB | 4.8 s | 333 MiB | 5.3 s | 1.44 GiB |
+| VS Code JVM (1.1 GiB) | 1.1 GiB | 19.2 s | 485 MiB | 32.9 s | 821 MiB | 27.5 s | 4.39 GiB |
+| HeapothesYs 16g | 11 GiB | 1:08 | 967 MiB | 1:42 | 2.19 GiB | 1:02 | 5.83 GiB |
+| HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 3:27 | 3.67 GiB | 1:55 | 7.39 GiB |
+| Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 27:06 | 16.74 GiB | 19:18 | 79.73 GiB |
 
 MAT was run with `ParseHeapDump.sh -Xmx60g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
 
