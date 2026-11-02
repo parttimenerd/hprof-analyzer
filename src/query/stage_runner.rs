@@ -640,6 +640,10 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 SelectItem::Attr(Attr::RetainedHeapSize) => {
                     QueryValue::Int(ctx.retained.get(s as usize).copied().unwrap_or(0) as i64)
                 }
+                SelectItem::Attr(Attr::DominatorOf(_)) => match ctx.idom.get(s as usize).copied() {
+                    Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
+                    _ => QueryValue::Null,
+                },
                 SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                     match ctx.class_name_of(s) {
                         Some(name) => QueryValue::Str(name.to_string()),
@@ -1036,6 +1040,14 @@ fn eval_late_expr_multi(
                     None => QueryValue::Null,
                 }
             }
+            // dominatorof(x): return the immediate dominator as a dense-index Int.
+            // Returns Null for GC-root objects (idom == u32::MAX, no dominator).
+            // Users can wrap it: classof(dominatorof(x)) uses eval_late_expr_multi
+            // recursively through SelectItem::Expr or a method call.
+            Attr::DominatorOf(_) => match ctx.idom.get(idx as usize).copied() {
+                Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
+                _ => QueryValue::Null,
+            },
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1170,6 +1182,10 @@ fn project_string_row_item(
         SelectItem::Attr(Attr::RetainedHeapSize) => {
             QueryValue::Int(ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64)
         }
+        SelectItem::Attr(Attr::DominatorOf(_)) => match ctx.idom.get(dense as usize).copied() {
+            Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
+            _ => QueryValue::Null,
+        },
         SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
             match ctx.class_name_of(dense) {
                 Some(name) => QueryValue::Str(name.to_string()),
@@ -2180,6 +2196,10 @@ fn project_late_row(
         .map(|it| match it {
             SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
             SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+            SelectItem::Attr(Attr::DominatorOf(_)) => match ctx.idom.get(idx as usize).copied() {
+                Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
+                _ => QueryValue::Null,
+            },
             SelectItem::Attr(Attr::UsedHeapSize) => {
                 QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
             }

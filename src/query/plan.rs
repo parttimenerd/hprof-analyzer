@@ -1212,6 +1212,18 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         (Phase::P1, Vec::new())
     };
 
+    // dominatorof(x) in a mixed SELECT or WHERE: arm the dominator tree so
+    // idom[] is available in LateCtx, and upgrade to P3 if not already there.
+    if uses_dominator_of(q) {
+        needs.dominator_children = true;
+        if finalize_at != Phase::P3 {
+            finalize_at = Phase::P3;
+            // JoinRetained is the established "enter P3" signal; it costs
+            // nothing in the stage runner (the op body is empty).
+            late_ops.push(StageOp::JoinRetained);
+        }
+    }
+
     // N-hop RefWalk: a predicate-critical path (in WHERE) must resolve before
     // row filtering; a projection-only path (SELECT only) resolves after. The
     // hop count is the number of reference edges to follow; we emit one
@@ -1459,6 +1471,35 @@ fn uses_retained(q: &Query) -> bool {
         .iter()
         .any(|ge| expr_any_attr(ge, |a| matches!(a, Attr::RetainedHeapSize)));
     in_select || in_where || in_order || in_group_by
+}
+
+/// True if any SELECT item or WHERE predicate references `dominatorof(x)`.
+/// When true the planner sets `needs.dominator_children` so idom[] is loaded.
+fn uses_dominator_of(q: &Query) -> bool {
+    let in_select = q
+        .select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Attr(Attr::DominatorOf(_))));
+    let in_where = q
+        .where_
+        .as_ref()
+        .map(pred_uses_dominator_of)
+        .unwrap_or(false);
+    in_select || in_where
+}
+
+fn pred_uses_dominator_of(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_uses_dominator_of(a) || pred_uses_dominator_of(b)
+        }
+        Predicate::Not(a) => pred_uses_dominator_of(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::DominatorOf(_)))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::DominatorOf(_)))
+        }
+        _ => false,
+    }
 }
 fn select_uses_retained(it: &SelectItem) -> bool {
     match it {
@@ -2611,6 +2652,40 @@ mod tests {
         assert!(matches!(plan.late_ops[0], StageOp::DominatorOf));
         assert_eq!(plan.finalize_at, Phase::P3);
         assert!(plan.needs.dominator_children);
+    }
+    #[test]
+    fn plan_dominatorof_in_mixed_select_arms_dominator_tree() {
+        // dominatorof(x) alongside other SELECT items must still arm the
+        // dominator tree and reach P3 — previously fell through to Null.
+        let plan = pq(&parse(
+            "SELECT dominatorof(x) AS dom_idx, classof(x) AS class \
+                 FROM INSTANCEOF java.lang.Object x",
+        )
+        .unwrap())
+        .unwrap();
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert!(
+            plan.needs.dominator_children,
+            "dominator_children must be armed"
+        );
+        assert!(
+            plan.late_ops.contains(&StageOp::JoinRetained),
+            "JoinRetained must be present to enter the P3 late window"
+        );
+    }
+    #[test]
+    fn plan_dominatorof_in_where_arms_dominator_tree() {
+        let plan = pq(&parse(
+            "SELECT classof(x) AS class FROM INSTANCEOF java.lang.Object x \
+                 WHERE dominatorof(x) = 0",
+        )
+        .unwrap())
+        .unwrap();
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert!(
+            plan.needs.dominator_children,
+            "dominator_children must be armed"
+        );
     }
     #[test]
     fn plan_inbounds_emits_edge_lookup_inbound() {
