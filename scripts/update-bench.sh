@@ -3,14 +3,14 @@
 #
 # Must run on the ThinkStation (Linux, /usr/bin/time -v, enough RAM).
 # Usage:
-#   scripts/update-bench.sh [--skip-mat] [--skip-hprof] [--skip-34g]
+#   scripts/update-bench.sh [--run-mat] [--skip-hprof] [--skip-34g]
 #
 # Options:
-#   --skip-mat    Skip MAT runs (use cached numbers from last run)
+#   --run-mat     Run MAT benchmarks (MAT numbers rarely change; cached by default)
 #   --skip-hprof  Skip hprof-analyzer runs (use cached numbers from last run)
 #   --skip-34g    Skip the 34 GiB real-world dump (takes 15-25 min each way)
 #
-# Results are cached in /tmp/hprof-bench-cache.sh and reused with --skip-*.
+# Results are cached in /tmp/hprof-bench-cache.sh and reused when skipped.
 # On success the script rewrites the "## Performance" section of README.md
 # in-place and prints a diff.  Commit the result yourself.
 set -euo pipefail
@@ -21,12 +21,12 @@ MAT="${MAT:-/home/i560383/mat/mat/ParseHeapDump.sh}"
 DUMPS_DIR="${DUMPS_DIR:-/home/i560383/test-heapdumps}"
 CACHE_FILE="/tmp/hprof-bench-cache.sh"
 
-SKIP_MAT=0
+SKIP_MAT=1  # MAT numbers are stable; only re-run with --run-mat
 SKIP_HPROF=0
 SKIP_34G=0
 for arg in "$@"; do
   case $arg in
-    --skip-mat)   SKIP_MAT=1 ;;
+    --run-mat)    SKIP_MAT=0 ;;
     --skip-hprof) SKIP_HPROF=1 ;;
     --skip-34g)   SKIP_34G=1 ;;
   esac

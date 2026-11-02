@@ -422,7 +422,7 @@ function Nav({ report }: { report: Report }) {
             className={id === active ? "active" : ""}
             onClick={id === "app-classes" ? (e) => {
               e.preventDefault();
-              window.dispatchEvent(new CustomEvent("set-cls-kind-filter", { detail: "app" }));
+              window.dispatchEvent(new CustomEvent("set-cls-kind-filter", { detail: "other" }));
               navTo("top-consumers");
               setTimeout(() => document.getElementById("top-consumers")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
             } : undefined}>
@@ -3474,10 +3474,27 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const hasTwoHopChains = t.biggest_classes.some(c => c.holders?.some(h => h.via_class?.length));
   const [topView, setTopView] = React.useState<"tables" | "treemap" | "chains">("tables");
-  const [clsKindFilter, setClsKindFilter] = React.useState<"all" | "app" | "jdk" | "framework">("all");
+
+  // Derive the set of categories present in biggest_classes (or category_rollup).
+  // Always include "all"; add every distinct category found, with jdk/framework/other
+  // normalised to fixed labels. User-defined categories appear as-is.
+  const availableCategories = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const c of t.biggest_classes) {
+      const cat = c.category || "other";
+      seen.add(cat);
+    }
+    // fixed order: all, then user-defined (alphabetical), then other, framework, jdk last
+    const fixed = ["other", "framework", "jdk"];
+    const user = [...seen].filter(c => !fixed.includes(c)).sort();
+    const present = [...user, ...fixed.filter(c => seen.has(c))];
+    return ["all", ...present];
+  }, [t.biggest_classes]);
+
+  const [clsKindFilter, setClsKindFilter] = React.useState<string>("all");
 
   React.useEffect(() => {
-    const handler = (e: Event) => setClsKindFilter((e as CustomEvent<"all" | "app" | "jdk" | "framework">).detail);
+    const handler = (e: Event) => setClsKindFilter((e as CustomEvent<string>).detail);
     window.addEventListener("set-cls-kind-filter", handler);
     return () => window.removeEventListener("set-cls-kind-filter", handler);
   }, []);
@@ -3492,13 +3509,7 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const filteredClasses = React.useMemo(() => {
     if (clsKindFilter === "all") return t.biggest_classes;
-    return t.biggest_classes.filter(c => {
-      const cat = classCategory(c);
-      if (clsKindFilter === "jdk") return cat === "jdk";
-      if (clsKindFilter === "framework") return cat === "framework";
-      // "app" = everything that isn't jdk or framework
-      return cat !== "jdk" && cat !== "framework";
-    });
+    return t.biggest_classes.filter(c => classCategory(c) === clsKindFilter);
   }, [t.biggest_classes, clsKindFilter, classCategory]);
 
   return (
@@ -3520,13 +3531,13 @@ function TopConsumersSection({ report }: { report: Report }) {
         <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />
         <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
           <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Classes:</span>
-          {(["all", "app", "framework", "jdk"] as const).map(v => (
+          {availableCategories.map(v => (
             <button key={v} onClick={() => setClsKindFilter(v)} style={{
               padding: "0.15rem 0.55rem", fontSize: "0.8rem",
               border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
               background: clsKindFilter === v ? "var(--accent)" : "transparent",
               color: clsKindFilter === v ? "#fff" : "var(--fg)",
-            }}>{v === "all" ? "All" : v === "app" ? "App" : v === "framework" ? "Framework" : "JDK"}</button>
+            }}>{v === "all" ? "All" : v === "jdk" ? "JDK" : v === "framework" ? "Framework" : v === "other" ? "Other" : v}</button>
           ))}
         </div>
       </div>
