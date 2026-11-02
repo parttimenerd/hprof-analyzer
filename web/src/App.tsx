@@ -6286,34 +6286,162 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   );
 }
 
-// ── Off-Heap NIO Memory (V6) ───────────────────────────────────────────────────
-// DirectByteBuffer capacity card: shows native (OS) memory allocation for NIO buffers
-// which is not counted in JVM heap totals.
+// ── Off-Heap NIO Memory ────────────────────────────────────────────────────────
 function DirectByteBufferCard({ indicators }: { indicators?: LeakIndicators }) {
   if (!indicators || (indicators.direct_byte_buffer_capacity_sum ?? 0) <= 0) return null;
 
   const capacity = indicators.direct_byte_buffer_capacity_sum;
-  const bufferCount = indicators.direct_byte_buffer_count;
-  const isLarge = capacity > 256 * 1024 * 1024;
+  const count = indicators.direct_byte_buffer_count ?? 0;
+  const buckets = indicators.direct_byte_buffer_cap_buckets ?? [0, 0, 0, 0, 0, 0, 0, 0];
+  const bucketTotal = buckets.reduce((a, b) => a + b, 0);
+  const avg = count > 0 ? Math.round(capacity / count) : 0;
+  const owners = indicators.nio_buffer_owners ?? [];
+
+  // Fragmentation: b[0]=<1KB, b[1]=1-4KB are the "small" buckets
+  const smallCount = buckets[0] + buckets[1];
+  const smallPct = bucketTotal > 0 ? (smallCount / bucketTotal) * 100 : 0;
+  const isFragmented = count >= 500 && avg < 4096 && capacity >= 64 * 1024 * 1024;
+  const fragLevel: "high" | "medium" | "low" =
+    isFragmented && smallPct >= 70 ? "high" :
+    isFragmented ? "medium" : "low";
+  const fragColor = fragLevel === "high" ? "var(--critical, #e74c3c)" :
+    fragLevel === "medium" ? "var(--warn, #e67e22)" : "var(--ok, #27ae60)";
+
+  const BUCKET_LABELS = ["< 1 KB", "1–4 KB", "4–16 KB", "16–64 KB", "64–256 KB", "256 KB–1 MB", "1–16 MB", "≥ 16 MB"];
+  const BUCKET_COLORS = ["#e74c3c", "#e67e22", "#f39c12", "#f1c40f", "#2ecc71", "#27ae60", "#3498db", "#2980b9"];
 
   return (
     <section id="off-heap-nio" tabIndex={-1}>
       <h2>Off-Heap NIO Memory</h2>
-      <p className="subtitle">Native (OS) memory allocated by <code>DirectByteBuffer</code> — not counted in JVM heap totals and invisible to the GC. Can trigger OS-level OOM if unbounded.</p>
-      <div className="card">
-        <p>
-          <strong title={fmtExactBytes(capacity)}>{formatBytes(capacity)}</strong>
-          {bufferCount && bufferCount > 0 && ` across ${fmtCount(bufferCount)} buffers`}
-        </p>
-        {isLarge && (
-          <p className="subtitle">
-            ⚠ Over 256 MB of off-heap NIO memory detected — invisible to GC and pressures OS memory.
-          </p>
+      <p className="subtitle">Native (OS) memory held by live <code>DirectByteBuffer</code> instances — outside JVM heap, invisible to GC, counts against process RSS.</p>
+
+      {/* Headline stats */}
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+        <div className="card" style={{ flex: "1 1 160px", minWidth: 0 }}>
+          <div style={{ fontSize: "0.72rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.2rem" }}>Total capacity</div>
+          <div style={{ fontSize: "1.4rem", fontWeight: 700 }} title={fmtExactBytes(capacity)}>{formatBytes(capacity)}</div>
+          <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>off-heap native memory</div>
+        </div>
+        {count > 0 && (
+          <div className="card" style={{ flex: "1 1 140px", minWidth: 0 }}>
+            <div style={{ fontSize: "0.72rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.2rem" }}>Buffer count</div>
+            <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>{fmtCount(count)}</div>
+            <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>live DirectByteBuffers</div>
+          </div>
         )}
-        <p className="subtitle" style={{ marginTop: "0.5rem" }}>
-          <strong>Fragmentation risk:</strong> if RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause — allocating and freeing many differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with <code>jcmd &lt;pid&gt; VM.native_memory detail</code>, NativeMemoryTracking (add <code>-XX:NativeMemoryTracking=detail</code>), or jemalloc heap profiling (<code>MALLOC_CONF=prof:true</code>).
-        </p>
+        {count > 0 && (
+          <div className="card" style={{ flex: "1 1 140px", minWidth: 0 }}>
+            <div style={{ fontSize: "0.72rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.2rem" }}>Avg buffer size</div>
+            <div style={{ fontSize: "1.4rem", fontWeight: 700, color: fragLevel !== "low" ? fragColor : undefined }} title={fmtExactBytes(avg)}>{formatBytes(avg)}</div>
+            <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>capacity / count</div>
+          </div>
+        )}
+        {fragLevel !== "low" && count > 0 && (
+          <div className="card" style={{ flex: "1 1 160px", minWidth: 0, borderColor: fragColor }}>
+            <div style={{ fontSize: "0.72rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.2rem" }}>Fragmentation risk</div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 700, color: fragColor }}>
+              {fragLevel === "high" ? "⚠ High" : "⚠ Medium"}
+            </div>
+            <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{Math.round(smallPct)}% of buffers &lt; 4 KB</div>
+          </div>
+        )}
       </div>
+
+      {/* Capacity distribution bar */}
+      {bucketTotal > 0 && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <strong style={{ fontSize: "0.85rem" }}>Buffer capacity distribution</strong>
+          <div style={{ marginTop: "0.6rem" }}>
+            <div style={{ display: "flex", height: "20px", borderRadius: "4px", overflow: "hidden", width: "100%" }}>
+              {buckets.map((n, i) => {
+                if (n === 0) return null;
+                const pct = (n / bucketTotal) * 100;
+                return (
+                  <div
+                    key={i}
+                    title={`${BUCKET_LABELS[i]}: ${fmtCount(n)} (${pct.toFixed(1)}%)`}
+                    style={{ width: `${pct}%`, background: BUCKET_COLORS[i], transition: "width 0.2s" }}
+                  />
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: "1rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+              {buckets.map((n, i) => n > 0 && (
+                <span key={i} style={{ fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                  <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", background: BUCKET_COLORS[i] }} />
+                  {BUCKET_LABELS[i]}: <strong>{fmtCount(n)}</strong>
+                  {" "}({((n / bucketTotal) * 100).toFixed(0)}%)
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fragmentation explanation */}
+      {fragLevel !== "low" && (
+        <div className="card" style={{ borderColor: fragColor, marginBottom: "1rem" }}>
+          <strong style={{ color: fragColor }}>
+            {fragLevel === "high" ? "⚠ High fragmentation risk" : "⚠ Possible fragmentation"}
+          </strong>
+          <p style={{ marginTop: "0.4rem", marginBottom: "0.4rem" }}>
+            {Math.round(smallPct)}% of buffers are under 4 KB ({fmtCount(smallCount)} of {fmtCount(bucketTotal)}).
+            Allocating and freeing many small NIO buffers without pooling causes native heap fragmentation:
+            freed small slots cannot satisfy the next large-buffer request, so RSS grows even while Java heap stays flat.
+          </p>
+          <p style={{ marginBottom: 0 }}>
+            Fix: use a pooled allocator (<code>Netty PooledByteBufAllocator</code>, reuse pool via <code>ByteBuffer.allocateDirect</code>)
+            or consolidate small buffers into fewer large ones.
+            Diagnose: <code>jcmd &lt;pid&gt; VM.native_memory detail</code> · <code>-XX:NativeMemoryTracking=detail</code> · jemalloc <code>MALLOC_CONF=prof:true</code>.
+          </p>
+        </div>
+      )}
+
+      {/* Top buffer owners */}
+      {owners.length > 0 && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <strong style={{ fontSize: "0.85rem" }}>Top buffer owners</strong>
+          <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.2rem", marginBottom: "0.6rem" }}>
+            Largest <code>DirectByteBuffer</code> objects with dominator-tree root paths.
+          </p>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Capacity</th>
+                <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Class</th>
+                <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Retained</th>
+                <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Root path</th>
+              </tr>
+            </thead>
+            <tbody>
+              {owners.slice(0, 10).map((o, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid var(--border-light, #eee)" }}>
+                  <td style={{ padding: "0.35rem 0.5rem", fontWeight: 600 }} title={fmtExactBytes(o.capacity)}>{formatBytes(o.capacity)}</td>
+                  <td style={{ padding: "0.35rem 0.5rem", fontFamily: "var(--mono)", fontSize: "0.78rem" }}>{o.display_class}</td>
+                  <td style={{ padding: "0.35rem 0.5rem", color: "var(--muted)" }} title={fmtExactBytes(o.retained)}>{formatBytes(o.retained)}</td>
+                  <td style={{ padding: "0.35rem 0.5rem" }}>
+                    {o.root_path.length > 0
+                      ? <RootPathChain steps={o.root_path} />
+                      : <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>GC root</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {fragLevel === "low" && (
+        <div className="card">
+          <p style={{ marginBottom: "0.4rem" }}>
+            Buffer sizes look healthy. If RSS still grows beyond heap + {formatBytes(capacity)}, native heap fragmentation
+            may be the cause — allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse.
+          </p>
+          <p style={{ marginBottom: 0, fontSize: "0.85rem", color: "var(--muted)" }}>
+            Diagnose: <code>jcmd &lt;pid&gt; VM.native_memory detail</code> · <code>-XX:NativeMemoryTracking=detail</code> · jemalloc <code>MALLOC_CONF=prof:true</code>.
+          </p>
+        </div>
+      )}
     </section>
   );
 }

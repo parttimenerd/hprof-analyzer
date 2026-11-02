@@ -731,6 +731,17 @@ export interface LeakIndicators {
   thread_local_null_key_count: number;
   direct_byte_buffer_capacity_sum: number;
   direct_byte_buffer_count?: number | null;
+  /** [<1KB, 1–4KB, 4–16KB, 16–64KB, 64–256KB, 256KB–1MB, 1–16MB, ≥16MB] */
+  direct_byte_buffer_cap_buckets?: [number, number, number, number, number, number, number, number] | null;
+  nio_buffer_owners?: NioBufferOwner[] | null;
+}
+
+export interface NioBufferOwner {
+  capacity: number;
+  obj_index_1based: number;
+  display_class: string;
+  retained: number;
+  root_path: RootPathStep[];
 }
 
 export type TriageSeverity = "info" | "warning" | "critical";
