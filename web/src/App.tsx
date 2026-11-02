@@ -5361,6 +5361,127 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
   );
 }
 
+// ── Reference-edge view: incoming + outgoing type-graph edges for a class ──
+function RefEdgesView({
+  edges,
+  target,
+  onPivot,
+}: {
+  edges: TypeEdge[];
+  target: string;
+  onPivot?: (cls: string) => void;
+}) {
+  const [selected, setSelected] = React.useState(target);
+  const [search, setSearch] = React.useState("");
+
+  // Sync external pivot
+  React.useEffect(() => {
+    if (target && target !== selected) setSelected(target);
+  }, [target]);
+
+  const allClasses = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const e of edges) { s.add(e.src_class); s.add(e.dst_class); }
+    return Array.from(s).sort();
+  }, [edges]);
+
+  const incoming = React.useMemo(
+    () => edges.filter(e => e.dst_class === selected).sort((a, b) => b.edge_count - a.edge_count),
+    [edges, selected],
+  );
+  const outgoing = React.useMemo(
+    () => edges.filter(e => e.src_class === selected).sort((a, b) => b.edge_count - a.edge_count),
+    [edges, selected],
+  );
+
+  const filtered = search.length >= 2
+    ? allClasses.filter(c => c.toLowerCase().includes(search.toLowerCase())).slice(0, 10)
+    : [];
+
+  const pivot = (cls: string) => {
+    setSelected(cls);
+    onPivot?.(cls);
+    setSearch("");
+  };
+
+  const shortCls = (c: string) => { const d = c.lastIndexOf("."); return d >= 0 ? c.slice(d + 1) : c; };
+
+  const edgeRow = (e: TypeEdge, srcOrDst: "src" | "dst") => {
+    const cls = srcOrDst === "src" ? e.src_class : e.dst_class;
+    return (
+      <tr key={cls} style={{ cursor: "pointer" }} onClick={() => pivot(cls)}>
+        <td style={{ padding: "0.25rem 0.5rem" }}>
+          <span title={cls} style={{ fontFamily: "var(--mono, monospace)", fontSize: "0.82rem" }}>{shortCls(cls)}</span>
+        </td>
+        <td style={{ padding: "0.25rem 0.5rem", color: "var(--muted)", fontSize: "0.82rem", fontVariantNumeric: "tabular-nums" }}>
+          {e.edge_count.toLocaleString()}
+        </td>
+        <td style={{ padding: "0.25rem 0.5rem", color: "var(--muted)", fontSize: "0.82rem" }}>
+          {e.top_field_names?.length ? e.top_field_names.map(f => <code key={f} style={{ marginRight: "0.4rem" }}>.{f}</code>) : "—"}
+        </td>
+      </tr>
+    );
+  };
+
+  return (
+    <div>
+      <p className="subtitle">
+        Reference edges from the type graph — who references <strong>{shortCls(selected)}</strong> (incoming), and what it references (outgoing). Unlike the dominator tree, these are raw object-field references, so a class can appear here even if it is not the immediate dominator.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem", position: "relative" }}>
+        <input
+          type="text"
+          placeholder="Jump to class…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ padding: "0.2rem 0.5rem", fontSize: "0.85rem", border: "1px solid var(--border)", borderRadius: 4, width: 280, background: "var(--input-bg, var(--bg))", color: "var(--fg)" }}
+        />
+        {filtered.length > 0 && (
+          <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 99, background: "var(--card-bg, var(--bg))", border: "1px solid var(--border)", borderRadius: 4, width: 280, boxShadow: "0 4px 10px rgba(0,0,0,0.15)" }}>
+            {filtered.map(c => (
+              <div key={c} style={{ padding: "0.3rem 0.6rem", cursor: "pointer", fontSize: "0.82rem", fontFamily: "var(--mono, monospace)" }}
+                onMouseDown={() => pivot(c)}>{shortCls(c)}</div>
+            ))}
+          </div>
+        )}
+        <code style={{ fontSize: "0.82rem", color: "var(--accent)" }}>{shortCls(selected)}</code>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+        <div>
+          <h4 style={{ margin: "0 0 0.4rem", fontSize: "0.9rem" }}>Incoming — who references {shortCls(selected)}</h4>
+          {incoming.length === 0 ? (
+            <p className="subtitle">No incoming reference edges recorded.</p>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+              <thead><tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "0.2rem 0.5rem" }}>From class</th>
+                <th style={{ textAlign: "right", padding: "0.2rem 0.5rem" }}># refs</th>
+                <th style={{ textAlign: "left", padding: "0.2rem 0.5rem" }}>Fields</th>
+              </tr></thead>
+              <tbody>{incoming.map(e => edgeRow(e, "src"))}</tbody>
+            </table>
+          )}
+        </div>
+        <div>
+          <h4 style={{ margin: "0 0 0.4rem", fontSize: "0.9rem" }}>Outgoing — what {shortCls(selected)} references</h4>
+          {outgoing.length === 0 ? (
+            <p className="subtitle">No outgoing reference edges recorded.</p>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+              <thead><tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "0.2rem 0.5rem" }}>To class</th>
+                <th style={{ textAlign: "right", padding: "0.2rem 0.5rem" }}># refs</th>
+                <th style={{ textAlign: "left", padding: "0.2rem 0.5rem" }}>Fields</th>
+              </tr></thead>
+              <tbody>{outgoing.map(e => edgeRow(e, "dst"))}</tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DomGraphView({ pairs, idoms }: {
   pairs: ImmDomPair[];
   idoms: import("./types").ImmediateDominatorRow[];
@@ -6064,14 +6185,14 @@ function SelfReferentialClustersSubsection({ rows }: { rows: SelfReferentialClas
   );
 }
 
-function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: DominatorAnalysis; selfReferentialClasses?: SelfReferentialClassRow[] }) {
+function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }: { data?: DominatorAnalysis; selfReferentialClasses?: SelfReferentialClassRow[]; typeRefGraph?: TypeEdge[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
   const threshold = data?.big_drops?.threshold ?? 0;
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
   const idoms = data?.immediate_dominators?.rows ?? [];
   const pairs = data?.immediate_dominators?.pairs ?? [];
-  const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap" | "flame">("tables");
+  const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap" | "flame" | "ref">("tables");
 
   // Navigator state lifted so tables can drive it.
   const [navTarget, setNavTarget] = React.useState<string | null>(null);
@@ -6119,13 +6240,13 @@ function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: Dom
       <p className="subtitle">An object <em>dominates</em> another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. <strong>Big Drops</strong> shows objects holding memory directly or across many small children. <strong>Immediate Dominators</strong> ranks classes by how much dominated shallow heap they gate. <strong>Graph</strong> shows a class-level dominator graph (top 50 classes by retained); <strong>Heatmap</strong> maps dominator → dominated by class.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        {(["tables", "graph", "heatmap", "flame"] as const).map(v => (
-          <button key={v} onClick={() => setDomView(v)} style={{
+        {(["tables", "graph", "heatmap", "flame", ...(typeRefGraph?.length ? ["ref"] : [])] as const).map(v => (
+          <button key={v} onClick={() => setDomView(v as typeof domView)} style={{
             padding: "0.25rem 0.85rem", fontSize: "0.88rem",
             border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
             background: domView === v ? "var(--accent)" : "transparent",
             color: domView === v ? "#fff" : "var(--fg)",
-          }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : v === "heatmap" ? "▦ Heatmap" : "🔥 Flame"}</button>
+          }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : v === "heatmap" ? "▦ Heatmap" : v === "flame" ? "🔥 Flame" : "🔗 Ref Edges"}</button>
         ))}
       </div>
 
@@ -6223,7 +6344,7 @@ function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: Dom
         <div ref={navigatorRef}>
           <h3>Who Holds This Class?</h3>
           <p className="subtitle">
-            Select a class — <strong>left</strong> shows what dominates it (the objects keeping it alive); <strong>right</strong> shows what it dominates (everything it keeps alive — making it unreachable reclaims that memory). A wide right side means this class retains a large portion of the heap. Click any node or row to refocus.
+            Select a class — <strong>left</strong> shows its <em>immediate dominators</em> (the classes whose instances directly gate its memory in the dominator tree); <strong>right</strong> shows what it dominates (making it unreachable reclaims all that memory). A wide right side means this class retains a large portion of the heap. Click any node or row to refocus.{typeRefGraph?.length ? <> For raw field-level references (who holds a reference to this class, not who dominates it), switch to the <button className="trg-link-btn" onClick={() => setDomView("ref")}>🔗 Ref Edges</button> view.</> : <em> Note: intermediate reference-chain classes are shown in the Inspector's "GC Root Path" panel.</em>}
           </p>
           <WhoHoldsSankey
             pairs={pairs}
@@ -6260,6 +6381,10 @@ function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: Dom
             />
           )}
         </div>
+      )}
+
+      {domView === "ref" && typeRefGraph && (
+        <RefEdgesView edges={typeRefGraph} target={effectiveNavTarget} onPivot={setNavTarget} />
       )}
 
       {selfReferentialClasses && selfReferentialClasses.length > 0 && (
@@ -13099,7 +13224,7 @@ export default function App({ report }: { report: Report }) {
       <DuplicatePrimArraysSection report={report} />
       <BoxedNumbersSection report={report} />
       <HeaderOverheadSection report={report} />
-      <DominatorAnalysisSection data={report.dominator_analysis} selfReferentialClasses={report.self_referential_classes} />
+      <DominatorAnalysisSection data={report.dominator_analysis} selfReferentialClasses={report.self_referential_classes} typeRefGraph={report.type_ref_graph} />
       <ThreadsSection report={report} />
       <FrameworkAnalysisSection items={report.framework_analysis} />
       {report.top_components?.components?.length ? (
