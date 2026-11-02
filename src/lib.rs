@@ -560,24 +560,45 @@ pub fn analyze_with_cache(
         path.to_str()
             .ok_or_else(|| std::io::Error::other("non-UTF8 path"))?,
     );
-    let mut p1 = pass1::Pass1::run(&source, true)?;
-    let offsets = std::mem::take(&mut p1.hprof_offsets);
+    // Do NOT capture hprof_offsets during the main analysis pass. Offsets are
+    // only needed for objread (heap inspect / OQL). Capturing them here would
+    // allocate a 2.5+ GB Vec<u64> that sits live alongside p1's IdMap throughout
+    // the full analysis pipeline, raising peak RSS by ~4 GB on large dumps.
+    // Instead write offsets.bin with a separate short pass1 run after the main
+    // analysis completes (when p1 is already freed).
+    let p1 = pass1::Pass1::run(&source, false)?;
+
+    // Write pass1.bin NOW (while p1 is alive) then read it back after analysis
+    // to form the CachedSession.pass1 snapshot. This avoids holding both the
+    // original Pass1 and a full clone simultaneously, which costs ~1.5 GB
+    // (IdMap offsets Vec<u32> alone is ~1.3 GB for 320M objects).
     let snap = pass1::Pass1Snapshot::from_pass1(&p1);
+    cache.write_pass1(&snap)?;
+    drop(snap);
 
     let mut prog_fn = |stage: &str, _frac: f32| progress(stage);
     let (report, _retained, class_names) =
         analyze_to_report_inner_with_cache(&source, p1, opts, &mut prog_fn, &cache, mode)?;
 
     cache.write_report(&report)?;
-    cache.write_pass1(&snap)?;
     if let Err(e) = cache.write_class_names(&class_names) {
         eprintln!("hprof-cache: failed to write class_names.json.zst: {e}");
     }
-    if !offsets.is_empty() {
-        if let Err(e) = cache.write_hprof_offsets(&offsets) {
-            eprintln!("hprof-cache: failed to write offsets.bin: {e}");
+
+    // Write offsets.bin with a separate pass1 run now that p1 is freed.
+    // This adds ~20-40 s wall time but keeps the main analysis RSS low.
+    if !cache.has_hprof_offsets() {
+        progress("offsets");
+        if let Ok(mut p1_off) = pass1::Pass1::run(&source, true) {
+            let off = std::mem::take(&mut p1_off.hprof_offsets);
+            if !off.is_empty() {
+                if let Err(e) = cache.write_hprof_offsets(&off) {
+                    eprintln!("hprof-cache: failed to write offsets.bin: {e}");
+                }
+            }
         }
     }
+
     if objread::is_gz_path(path) && !cache.has_gz_index() {
         progress("gz-index");
         if let Err(e) = cache.write_gz_index(path) {
@@ -585,10 +606,15 @@ pub fn analyze_with_cache(
         }
     }
 
+    // Read the pass1 snapshot back from the cache file we just wrote.
+    let pass1 = cache
+        .read_pass1()?
+        .ok_or_else(|| std::io::Error::other("cache corrupt: missing pass1 after write"))?;
+
     Ok(CachedSession {
         dump_path: path.to_path_buf(),
         report,
-        pass1: snap,
+        pass1,
         cache,
         mode,
         class_names,
