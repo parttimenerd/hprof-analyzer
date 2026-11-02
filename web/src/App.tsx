@@ -3670,6 +3670,13 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
     () => [...threads].sort((a, b) => b.retained - a.retained),
     [threads],
   );
+
+  // Pool-spread TL detection: ≥5 threads each with local_root_count > 0 and
+  // retained ≥ 1 MB — matches the ThreadLocalSpreadLeak triage rule thresholds.
+  const TL_FLOOR = 1024 * 1024;
+  const spreadThreads = threads.filter(t => t.local_root_count > 0 && t.retained >= TL_FLOOR);
+  const showSpreadBanner = spreadThreads.length >= 5;
+
   const cols: TableColumn<ThreadInfo>[] = [
     {
       id: "name",
@@ -3708,6 +3715,17 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       selector: (t) => t.max_local_retained,
     },
     {
+      id: "local_roots",
+      name: "TL Roots",
+      right: true,
+      width: "100px",
+      sortable: true,
+      selector: (t) => t.local_root_count,
+      cell: (t) => t.local_root_count > 0
+        ? <span title="ThreadLocal root objects held by this thread" style={{ color: t.local_root_count > 10 ? "var(--warn, #c84)" : undefined }}>{fmtCount(t.local_root_count)}</span>
+        : <span style={{ color: "var(--muted)" }}>—</span>,
+    },
+    {
       id: "dominant_class",
       name: "Dominant Retained Class",
       grow: 1,
@@ -3732,7 +3750,14 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
   return (
     <>
       <h3>Threads by Retained Heap</h3>
-      <p className="subtitle">Sorted by retained heap — threads high on this list keep significant memory alive through local variables on their call stack. Click a name to jump to its stack trace.</p>
+      <p className="subtitle">Sorted by retained heap — threads high on this list keep significant memory alive through local variables on their call stack. Click a name to jump to its stack trace. <strong>TL Roots</strong> = ThreadLocal root objects held alive by that thread.</p>
+      {showSpreadBanner && (
+        <p style={{ background: "var(--warn-bg, #fff8e1)", border: "1px solid var(--warn, #c84)", borderRadius: 4, padding: "0.5rem 0.75rem", fontSize: "0.85rem", marginBottom: "0.5rem" }}>
+          <strong>⚠ ThreadLocal pool spread:</strong> {fmtCount(spreadThreads.length)} threads each hold ThreadLocal roots with ≥ 1 MB retained.
+          In pooled servers (Tomcat, Netty) threads never terminate, so values accumulate unless <code>ThreadLocal.remove()</code> is called.
+          See the <strong>ThreadLocal Variables</strong> table below for the value class breakdown.
+        </p>
+      )}
       <StdTable columns={cols} data={sorted} searchKeys={["name"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
     </>
   );

@@ -1994,15 +1994,41 @@ alive — blocked or long-running threads can hold significant memory through lo
     // ── Thread Overview table (always-on properties) ────────────────────────
     out.push_str("### Thread Overview\n\n");
     out.push_str(
-        "_Name, shallow/retained heap, max single-local retained, context class loader, \
+        "_Name, shallow/retained heap, max single-local retained, TL root count, context class loader, \
 daemon flag, priority, and thread state for every recorded thread._\n\n",
     );
+
+    // Pool-spread ThreadLocal banner: ≥5 threads with local_root_count > 0 and retained ≥ 1 MB.
+    let tl_floor: u64 = 1024 * 1024;
+    let spread_count = t
+        .threads
+        .iter()
+        .filter(|th| th.local_root_count > 0 && th.retained >= tl_floor)
+        .count();
+    if spread_count >= 5 {
+        let combined: u64 = t
+            .threads
+            .iter()
+            .filter(|th| th.local_root_count > 0 && th.retained >= tl_floor)
+            .map(|th| th.retained)
+            .sum();
+        out.push_str(&format!(
+            "> ⚠ **ThreadLocal pool spread**: {} threads each hold ThreadLocal roots with ≥ 1 MB \
+retained ({} combined). In pooled servers (Tomcat, Netty) threads never terminate, so values \
+accumulate unless `ThreadLocal.remove()` is called. See the **ThreadLocal Analysis** section below \
+for the value class breakdown.\n\n",
+            fmt_count(spread_count as u64),
+            format_bytes(combined),
+        ));
+    }
+
     let retained_max = t.threads.iter().map(|th| th.retained).max().unwrap_or(0);
     let mut headers: Vec<&str> = vec![
         "Name",
         "Shallow",
         "Retained",
         "Max Local Retained",
+        "TL Roots",
         "Context Class Loader",
         "Daemon",
         "Priority",
@@ -2010,6 +2036,7 @@ daemon flag, priority, and thread state for every recorded thread._\n\n",
     ];
     let mut aligns = vec![
         Align::Left,
+        Align::Right,
         Align::Right,
         Align::Right,
         Align::Right,
@@ -2037,6 +2064,11 @@ daemon flag, priority, and thread state for every recorded thread._\n\n",
             format_bytes(th.shallow),
             format_bytes(th.retained),
             format_bytes(th.max_local_retained),
+            if th.local_root_count > 0 {
+                fmt_count(th.local_root_count)
+            } else {
+                "—".into()
+            },
             format!("`{ctx}`"),
             if th.is_daemon { "Yes" } else { "No" }.into(),
             th.priority.to_string(),
