@@ -277,7 +277,7 @@ let selectedFile = null;  // File object selected on the upload screen
 
 // ── Screen helpers ────────────────────────────────────────────────────────────
 function showScreen(id, { pushHistory = true } = {}) {
-  for (const sid of ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen']) {
+  for (const sid of ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen', 'compare-screen']) {
     const el = document.getElementById(sid);
     if (el) el.style.display = sid === id ? 'flex' : 'none';
   }
@@ -298,7 +298,7 @@ function showScreen(id, { pushHistory = true } = {}) {
 // Restore the correct screen when the browser back/forward button is used.
 window.addEventListener('popstate', () => {
   const hash = window.location.hash.slice(1);
-  const valid = ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen'];
+  const valid = ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen', 'compare-screen'];
   const target = valid.includes(hash) ? hash : 'upload-screen';
   showScreen(target, { pushHistory: false });
 });
@@ -549,6 +549,34 @@ const SAMPLE_DUMPS = [
       runRedact(selectedFile);
     }
   });
+
+  // Compare Reports: show the React ComparePanel in a dedicated screen.
+  const compareJsonSection = document.getElementById('compare-json-section');
+  if (compareJsonSection) compareJsonSection.style.display = '';
+  const btnCompare = document.getElementById('btn-compare-reports');
+  if (btnCompare) {
+    btnCompare.addEventListener('click', () => {
+      showScreen('compare-screen');
+      const container = document.getElementById('compare-container');
+      if (container && window.hprofRenderComparePanel) {
+        // Only mount once; the ComparePanel manages its own state.
+        if (!container._compareMounted) {
+          container._compareMounted = true;
+          window.hprofRenderComparePanel(container, () => showScreen('upload-screen'));
+        }
+      }
+    });
+  }
+  const btnCompareBack = document.getElementById('btn-compare-back');
+  if (btnCompareBack) btnCompareBack.addEventListener('click', () => showScreen('upload-screen'));
+  const btnThemeCompare = document.getElementById('btn-theme-toggle-compare');
+  if (btnThemeCompare) {
+    btnThemeCompare.addEventListener('click', () => {
+      // Reuse the same theme-cycle logic (call the main toggle if defined, or do it inline).
+      const btn = document.getElementById('btn-theme-toggle');
+      if (btn) btn.click();
+    });
+  }
 
   // Always show sample section; probe availability to decide if items are clickable
   const sampleList = document.getElementById('sample-list');

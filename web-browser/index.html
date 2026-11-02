@@ -176,6 +176,14 @@
     <p class="sample-label">— or try a sample dump —</p>
     <div id="sample-list"></div>
   </div>
+
+  <div id="compare-json-section" style="margin-top:1.5rem; text-align:center; display:none">
+    <p class="sample-label">— or compare existing report files —</p>
+    <button id="btn-compare-reports" class="mode-btn-compact">
+      <span class="mode-icon" style="font-size:1.1em">⇌</span>
+      Compare Report JSONs
+    </button>
+  </div>
   <!-- sample section shown by JS once WASM is ready -->
   <p id="wasm-load-status" style="display:none"></p>
 
@@ -234,6 +242,15 @@
   <div id="report-container">
     <p id="report-message"></p>
   </div>
+</div>
+
+<!-- ── Compare screen ─────────────────────────────────────────────────────── -->
+<div id="compare-screen" style="display:none">
+  <div id="report-topbar">
+    <button id="btn-compare-back">↩ Back</button>
+    <button id="btn-theme-toggle-compare" title="Cycle theme: auto / light / dark">◐ Theme: Auto</button>
+  </div>
+  <div id="compare-container"></div>
 </div>
 
 <!-- ── Shell screen ───────────────────────────────────────────────────────── -->

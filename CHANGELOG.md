@@ -6,7 +6,108 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **In-browser dump comparison** — a "Compare Reports" panel embedded in every
+  single-dump HTML report lets users drag-and-drop two or more report JSON files
+  and see the full diff rendered instantly, no CLI required. The diff covers
+  Growth Leaders, New/Removed Classes, Transient Spikes, Suspect changes,
+  TPFG changes, Triage Signal changes (new/resolved rules between dumps), and
+  Leak Indicator deltas (DirectByteBuffer, anon classes, ThreadLocal null keys).
+
+- **`dominatorof(x)` OQL function** — `SELECT dominatorof(x) FROM java.lang.String x`
+  returns the immediate dominator of each object. The planner sets
+  `needs.dominator_children = true` which routes the query through the full
+  retained+dominator pipeline, so `idom[]` is available in `LateCtx`. Usable
+  in any `SELECT` projection or `WHERE` predicate; works in the REPL, MCP
+  `query` tool, and `heap query` CLI.
+
+- **`compare_dumps` MCP tool** — compare two heap dump reports side by side
+  directly from an MCP session: returns growth leaders (by Δ retained),
+  new classes, and grown suspects with delta figures. Complements the existing
+  `compare reports --format html` CLI.
+
+- **Soft-reference retained total in References section** — both the HTML report
+  and Markdown/CLI output now show "**X MB** only softly retained — would be
+  freed under OOM pressure" for `Soft` reference groups, making it immediately
+  clear how much memory the GC could reclaim if it needed to.
+
+- **ThreadLocal pool spread surfaced in Threads section** — the HTML report and
+  Markdown output surface the `ThreadLocalPoolAccumulation` signal data:
+  per-pool-thread retained heap and the "spread" count (how many threads each
+  carry a copy of the same leaked value).
+
+- **Collection Retained Heap and Resource Handles sections in HTML report** —
+  the HTML report now renders the `static_collections` and `resources` sections
+  from the report model, surfacing static-field-anchored collection sizes and
+  unclosed resource handles (zip streams, file channels, etc.) alongside the
+  existing collection waste analysis.
+
+- **`find_incoming_references_by_class` MCP tool** — given a fully-qualified
+  class name, returns all inbound references to instances of that class grouped
+  by source class, with aggregate counts and retained-heap totals. The
+  histogram-investigation workflow MAT users reach for constantly ("what holds
+  all these `String` instances?"), now available in a single MCP call.
+
+- **6 new `get_report` MCP sections** — `gc-roots`, `classloaders`, `strings`,
+  `packages`, `culprits`, `self-referential` — expose existing `Report` data
+  under friendlier section names without requiring the caller to parse the
+  giant `overview` or `top` blob.
+
+- **6 exploration OQL named views** — `xml-dom-documents`, `fjp-task-queue`,
+  `classloader-instances`, `big-decimal-instances`, `http-sessions`,
+  `thread-pool-waiters` — surfaced in `list_views` output and cross-linked from
+  relevant triage signal hints.
+
+- **Off-Heap NIO panel redesign** (HTML report) — 8-bucket capacity histogram
+  (from `<1 KB` to `≥16 MB`) with a stacked distribution bar, fragmentation
+  risk card, and a "Top Buffer Owners" table showing the largest
+  `DirectByteBuffer` instances with their dominator root-path chain.
+  `LeakIndicators.nio_buffer_owners` carries the new owner records.
+  Schema v15; `cache::VERSION` bumped.
+
+- **Thread state overview and pool-group analysis** (HTML report) — the Threads
+  section now shows a thread-state pie (RUNNABLE / WAITING / TIMED_WAITING /
+  BLOCKED / NEW / TERMINATED) and groups threads by pool prefix (e.g.
+  `ForkJoinPool.commonPool-worker-*`) with per-group aggregate retained heap.
+
+- **Dominant retained class on `ThreadInfo`** — `thread_info.dominant_retained_class`
+  names the single class responsible for the most retained bytes within each
+  thread's retention subgraph.
+
+- **Triage follow-up hints** — `ThreadLocalSpreadLeak`, `UnclosedResourceLeak`,
+  and `ConnectionLeak` signal texts now include concrete next-step OQL snippets
+  pointing at the named investigation views.
+
+- **Track 2 triage rules**: `XmlDomNodeAccumulation`, `ForkJoinBlobAccumulation`,
+  `ClassLoaderProliferation`, `HttpSessionAccumulation`, `BigNumberAccumulation`,
+  `ConnectionPoolExhaustion`, plus threshold fixes for `ParserOutputAccumulation`
+  (floor 32 MB → 8 MB), `ScheduledTaskAccumulation` (also matches
+  `ForkJoinTask`), `ClassloaderLeak` (Warning fires at ≥ 5 loaders, not ≥ 10
+  duplicate classes), and `SessionScopeLeak` (retained-bytes path for "few fat
+  sessions").
+
+- **5 additional triage rules** from the victorrentea gap-coverage analysis:
+  `ShutdownHookThreadCount`, `StaticCacheGrowth`, `ReflectionProxyLeaks`,
+  `SoftReferenceOverRetention`, `WeakHashMapValueLeak`.
+
+- **JDK/App/All filter toggle** on the Biggest Classes table in the HTML report
+  — filter the histogram to application-owned classes only, isolating user-code
+  retention from JDK/framework noise.
+
+- **`Report.waste_breakdown`** — unified "Where Is My Memory Going?" breakdown,
+  one row per fired waste-source rule with its `recoverable_bytes`. Exposed
+  in `heap report --section waste`, the MCP `waste` section, and the Markdown
+  report. Grows automatically with new waste-category rules; no second
+  hand-maintained list.
+
 - **`Report.primary_culprits`** — the "who's actually responsible" answer,
+  resolved once from `leaks.suspects` and shared by `Headline
+  Retainer`/`Concentration`/`Dominant GC-Root Type` instead of each
+  independently (and sometimes inconsistently) re-deriving it. Fixes the
+  "Thread retains 79%, three redundant headlines" pattern: a nearby GC-root
+  holder (e.g. a `Thread` whose stack frame merely transits a deeper
+  structure) no longer out-ranks the real, deeper culprit, and the
+  redundant `Dominant GC-Root Type` bullet is suppressed once the other two
+  already name the same object. Schema v12. — the "who's actually responsible" answer,
   resolved once from `leaks.suspects` and shared by `Headline
   Retainer`/`Concentration`/`Dominant GC-Root Type` instead of each
   independently (and sometimes inconsistently) re-deriving it. Fixes the
@@ -70,6 +171,36 @@ All notable changes to hprof-analyzer are documented here.
   Schema v15; `cache::VERSION` bumped to 3.
 
 ### Fixed
+
+- **Gross retained churn displayed raw bytes with a doubled minus sign** —
+  `gross_shrink_retained` is already negative in the data model; prepending the
+  `−` sign produced `−-35583696 B` instead of `−33.9 MB`. Fixed with
+  `Math.abs()` before formatting, in both the verdict sentence and the bullet
+  list.
+
+- **Holder-computation window too narrow** — the `top_n * 2` window used when
+  building holder breakdowns in `biggest_classes` was insufficient for classes
+  where many instances are held by a single owner; widened to `top_n * 3`.
+
+- **`Concentration` fired redundantly when `HeadlineRetainer` already named the
+  same class** — suppressed when the concentration culprit matches the headline
+  retainer to eliminate duplicate triage noise.
+
+- **`static-field-anchor` headline didn't name the holding class** — the
+  anchoring `Class#field` was present in the supplemental data but not included
+  in the rule's headline text; now rendered as "held by `ClassName.fieldName`".
+
+- **`Concentration` fired even without `--collections`** — concentration is
+  computed from collection attribution data that requires `--collections`; the
+  rule now silently skips when collection data is absent.
+
+- **Back-button navigation broken in single-page app** — hash-based navigation
+  pushed duplicate history entries; fixed with `replaceState` for same-hash
+  transitions and a `Self-Referential Clusters` sub-section added to the nav.
+
+- **Analysis (Quick) button description was misleading** — the button didn't
+  note that collection detection (`--collections`) is disabled in Quick mode;
+  now shows an explanatory note.
 
 - **`Node`/`Simple`-style classes invisible in Biggest Classes and "Who
   Holds This Class?"** — six holder/dominator-visibility bugs (BUG-1

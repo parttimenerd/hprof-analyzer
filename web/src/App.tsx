@@ -11452,6 +11452,389 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
   );
 }
 
+// ── Client-side diff_series (mirrors src/diff_reports.rs) ────────────────────
+// Pure TypeScript reimplementation — no WASM required. Accepts two or more
+// fully-parsed Report objects and returns a SeriesDiffResult identical to what
+// the Rust engine would produce for the same inputs.
+
+const DIFF_TOP_N = 25;
+
+export function diffSeriesReports(reports: import("./types").Report[]): SeriesDiffResult {
+  const n = reports.length;
+  const last = Math.max(0, n - 1);
+
+  const labels = reports.map((r, i) =>
+    r.overview.source_name?.trim() || `report ${i + 1}`
+  );
+  const total_objects = reports.map(r => r.overview.total_objects ?? 0);
+  const total_shallow = reports.map(r => r.overview.total_shallow ?? 0);
+  const delta_total_objects = n === 0 ? 0 : total_objects[last] - total_objects[0];
+  const delta_total_shallow = n === 0 ? 0 : total_shallow[last] - total_shallow[0];
+
+  // Join histograms by class name. joined[name][i] = [instances, retained] | null.
+  const joined = new Map<string, (null | [number, number])[]>();
+  for (let i = 0; i < n; i++) {
+    for (const row of (reports[i].overview.histogram ?? [])) {
+      let cells = joined.get(row.pretty_class);
+      if (!cells) { cells = Array(n).fill(null); joined.set(row.pretty_class, cells); }
+      cells[i] = [row.instances, row.retained];
+    }
+  }
+
+  const sortedNames = [...joined.keys()].sort();
+  let net_delta_retained = 0;
+  let gross_growth_retained = 0;
+  let gross_shrink_retained = 0;
+  const allRows: SeriesClassRow[] = [];
+  const new_classes_raw: SeriesClassRow[] = [];
+  const removed_classes_raw: SeriesClassRow[] = [];
+
+  for (const name of sortedNames) {
+    const cells = joined.get(name)!;
+    const instances = cells.map(c => c ? c[0] : 0);
+    const retained  = cells.map(c => c ? c[1] : 0);
+    const firstPresent = n > 0 && cells[0] !== null;
+    const lastPresent  = n > 0 && cells[last] !== null;
+    const delta_retained  = n === 0 ? 0 : retained[last] - retained[0];
+    const delta_instances = n === 0 ? 0 : instances[last] - instances[0];
+    const peak_retained   = Math.max(...retained);
+    const peak_over_baseline = peak_retained - (retained[0] ?? 0);
+    let gross_growth = 0, gross_shrink = 0;
+    for (let i = 1; i < n; i++) {
+      const d = retained[i] - retained[i - 1];
+      if (d > 0) gross_growth += d; else gross_shrink += d;
+    }
+    net_delta_retained   += delta_retained;
+    gross_growth_retained += delta_retained > 0 ? delta_retained : 0;
+    gross_shrink_retained += delta_retained < 0 ? delta_retained : 0;
+    const row: SeriesClassRow = {
+      pretty_class: name, retained, instances,
+      delta_retained, delta_instances, peak_retained, peak_over_baseline,
+      gross_growth, gross_shrink,
+    };
+    if (lastPresent && !firstPresent) new_classes_raw.push(row);
+    else if (firstPresent && !lastPresent) removed_classes_raw.push(row);
+    allRows.push(row);
+  }
+
+  const peakDelta = (r: SeriesClassRow) => r.peak_retained - (r.retained[0] ?? 0);
+  const growth_leaders = allRows
+    .filter(r => peakDelta(r) > 0)
+    .sort((a, b) => peakDelta(b) - peakDelta(a) || a.pretty_class.localeCompare(b.pretty_class))
+    .slice(0, DIFF_TOP_N);
+
+  const spike_leaders: SeriesClassRow[] = n >= 3
+    ? allRows
+        .filter(r => r.peak_retained > (r.retained[0] ?? 0) && r.peak_retained > (r.retained[last] ?? 0))
+        .sort((a, b) => peakDelta(b) - peakDelta(a) || a.pretty_class.localeCompare(b.pretty_class))
+        .slice(0, DIFF_TOP_N)
+    : [];
+
+  const new_classes = new_classes_raw
+    .sort((a, b) => (b.retained[last] ?? 0) - (a.retained[last] ?? 0) || a.pretty_class.localeCompare(b.pretty_class))
+    .slice(0, DIFF_TOP_N);
+  const removed_classes = removed_classes_raw
+    .sort((a, b) => (b.retained[0] ?? 0) - (a.retained[0] ?? 0) || a.pretty_class.localeCompare(b.pretty_class))
+    .slice(0, DIFF_TOP_N);
+
+  // Suspects: join by pretty_class, keep max retained per report.
+  const suspectMap = new Map<string, (null | number)[]>();
+  for (let i = 0; i < n; i++) {
+    for (const s of (reports[i].leaks?.suspects ?? [])) {
+      let cells = suspectMap.get(s.pretty_class);
+      if (!cells) { cells = Array(n).fill(null); suspectMap.set(s.pretty_class, cells); }
+      cells[i] = cells[i] === null ? s.retained : Math.max(cells[i]!, s.retained);
+    }
+  }
+  const grown_suspects: SeriesSuspectRow[] = [];
+  const shrunk_suspects: SeriesSuspectRow[] = [];
+  const gone_suspects: SeriesSuspectRow[] = [];
+  for (const [name, cells] of [...suspectMap.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const retained = cells.map(c => c ?? 0);
+    const firstPresent = n > 0 && cells[0] !== null;
+    const lastPresent  = n > 0 && cells[last] !== null;
+    const delta_retained = n === 0 ? 0 : retained[last] - retained[0];
+    const is_new  = lastPresent && !firstPresent;
+    const is_gone = firstPresent && !lastPresent;
+    const row: SeriesSuspectRow = { pretty_class: name, retained, delta_retained, is_new, is_gone };
+    if (is_gone) gone_suspects.push(row);
+    else if ((is_new || delta_retained > 0) && lastPresent) grown_suspects.push(row);
+    else if (lastPresent && firstPresent && delta_retained < 0) shrunk_suspects.push(row);
+  }
+  grown_suspects.sort((a, b) => (b.retained[last] ?? 0) - (a.retained[last] ?? 0) || a.pretty_class.localeCompare(b.pretty_class));
+  shrunk_suspects.sort((a, b) => a.delta_retained - b.delta_retained || a.pretty_class.localeCompare(b.pretty_class));
+  gone_suspects.sort((a, b) => (b.retained[0] ?? 0) - (a.retained[0] ?? 0) || a.pretty_class.localeCompare(b.pretty_class));
+
+  // TPFG diff
+  type EdgeKey = string;
+  const edgeKey = (src: string, dst: string): EdgeKey => `${src}\0${dst}`;
+  let tpfg_diff: TypeEdgeDiff[] = [];
+  if (n >= 2 && (reports[0].type_ref_graph?.length ?? 0) > 0 && (reports[last].type_ref_graph?.length ?? 0) > 0) {
+    const firstMap = new Map<EdgeKey, [number, number]>();
+    for (const e of reports[0].type_ref_graph!) firstMap.set(edgeKey(e.src_class, e.dst_class), [e.edge_count, e.retained_weight]);
+    const lastMap = new Map<EdgeKey, [number, number]>();
+    for (const e of reports[last].type_ref_graph!) lastMap.set(edgeKey(e.src_class, e.dst_class), [e.edge_count, e.retained_weight]);
+    const allKeys = [...new Set([...firstMap.keys(), ...lastMap.keys()])].sort();
+    tpfg_diff = allKeys.map(k => {
+      const [src, dst] = k.split("\0");
+      const [count_first, weight_first] = firstMap.get(k) ?? [0, 0];
+      const [count_last,  weight_last]  = lastMap.get(k)  ?? [0, 0];
+      return { src_class: src, dst_class: dst, count_first, count_last, delta_count: count_last - count_first, weight_first, weight_last, delta_weight: weight_last - weight_first };
+    }).sort((a, b) => Math.abs(b.delta_weight) - Math.abs(a.delta_weight) || Math.abs(b.delta_count) - Math.abs(a.delta_count) || a.src_class.localeCompare(b.src_class));
+  }
+
+  return {
+    labels, total_objects, total_shallow, delta_total_objects, delta_total_shallow,
+    net_delta_retained, gross_growth_retained, gross_shrink_retained,
+    growth_leaders, spike_leaders, new_classes, removed_classes,
+    grown_suspects, shrunk_suspects, gone_suspects, tpfg_diff,
+  };
+}
+
+// ── Triage signal diff section ────────────────────────────────────────────────
+// Shows triage signals that are new (fired in last but not first), resolved
+// (fired in first but not last), or changed severity.
+
+interface TriageSignalDiff {
+  id: string;
+  title: string;
+  status: "new" | "resolved" | "escalated" | "deescalated";
+  first_severity?: string;
+  last_severity?: string;
+}
+
+function computeTriageDiff(
+  first: import("./types").TriageSignal[],
+  last: import("./types").TriageSignal[],
+): TriageSignalDiff[] {
+  const firstMap = new Map(first.map(s => [s.id, s]));
+  const lastMap  = new Map(last.map(s => [s.id, s]));
+  const result: TriageSignalDiff[] = [];
+  for (const [id, s] of lastMap) {
+    if (!firstMap.has(id)) {
+      result.push({ id, title: s.title, status: "new", last_severity: s.severity });
+    } else {
+      const prev = firstMap.get(id)!;
+      if (prev.severity !== s.severity) {
+        const sevOrder: Record<string, number> = { info: 0, warning: 1, critical: 2 };
+        const status = (sevOrder[s.severity] ?? 0) > (sevOrder[prev.severity] ?? 0) ? "escalated" : "deescalated";
+        result.push({ id, title: s.title, status, first_severity: prev.severity, last_severity: s.severity });
+      }
+    }
+  }
+  for (const [id, s] of firstMap) {
+    if (!lastMap.has(id)) result.push({ id, title: s.title, status: "resolved", first_severity: s.severity });
+  }
+  return result.sort((a, b) => {
+    const order = { new: 0, escalated: 1, deescalated: 2, resolved: 3 };
+    return (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.title.localeCompare(b.title);
+  });
+}
+
+function TriageDiffSection({ reports }: { reports: import("./types").Report[] }) {
+  const n = reports.length;
+  if (n < 2) return null;
+  const first = reports[0].triage ?? [];
+  const last  = reports[n - 1].triage ?? [];
+  const diffs = computeTriageDiff(first, last);
+  if (diffs.length === 0) return (
+    <section className="diff-section">
+      <h2>Triage Signals</h2>
+      <p className="subtitle">No triage signal changes between first and last dump.</p>
+    </section>
+  );
+  const statusLabel: Record<string, string> = { new: "New", resolved: "Resolved", escalated: "Escalated", deescalated: "De-escalated" };
+  const statusColor: Record<string, string> = { new: "var(--sev-critical, #f87171)", resolved: "var(--sev-info, #60a5fa)", escalated: "var(--sev-warning, #facc15)", deescalated: "var(--sev-info, #60a5fa)" };
+  const sevBadge = (sev?: string) => sev ? <span className={`triage-sev triage-sev-${sev}`} style={{ fontSize: "0.75em", padding: "1px 5px", borderRadius: 3 }}>{sev}</span> : null;
+  return (
+    <section className="diff-section">
+      <h2>Triage Signals</h2>
+      <p className="subtitle">Signals that are new, resolved, or changed severity between first and last dump.</p>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Status</th>
+            <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Rule</th>
+            <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>Severity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {diffs.map(d => (
+            <tr key={d.id}>
+              <td style={{ padding: "5px 8px", borderBottom: "1px solid var(--border-faint, var(--border))", color: statusColor[d.status], fontWeight: 600 }}>{statusLabel[d.status]}</td>
+              <td style={{ padding: "5px 8px", borderBottom: "1px solid var(--border-faint, var(--border))" }}><code>{d.id}</code> {d.title}</td>
+              <td style={{ padding: "5px 8px", borderBottom: "1px solid var(--border-faint, var(--border))" }}>
+                {d.status === "new" && sevBadge(d.last_severity)}
+                {d.status === "resolved" && sevBadge(d.first_severity)}
+                {(d.status === "escalated" || d.status === "deescalated") && <>{sevBadge(d.first_severity)} → {sevBadge(d.last_severity)}</>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// ── Leak indicator delta section ──────────────────────────────────────────────
+function LeakIndicatorDiffSection({ reports }: { reports: import("./types").Report[] }) {
+  const n = reports.length;
+  if (n < 2) return null;
+  const [fmtB] = useFmtBytes();
+  const first = reports[0].leak_indicators;
+  const last  = reports[n - 1].leak_indicators;
+  if (!first || !last) return null;
+
+  const rows: { label: string; first: string; last: string; delta: string; up: boolean | null }[] = [];
+  const numRow = (label: string, f: number, l: number, fmt: (v: number) => string, higherIsBad = true) => {
+    const d = l - f;
+    if (d === 0 && f === 0) return;
+    rows.push({ label, first: fmt(f), last: fmt(l), delta: (d > 0 ? "+" : "") + fmt(d), up: d > 0 ? higherIsBad : (d < 0 ? !higherIsBad : null) });
+  };
+  numRow("DirectByteBuffer capacity", first.direct_byte_buffer_capacity_sum, last.direct_byte_buffer_capacity_sum, fmtB);
+  numRow("DirectByteBuffer count", first.direct_byte_buffer_count ?? 0, last.direct_byte_buffer_count ?? 0, v => v.toLocaleString("en-US"));
+  numRow("Anonymous class count", first.anonymous_class_count, last.anonymous_class_count, v => v.toLocaleString("en-US"));
+  numRow("ThreadLocal null keys", first.thread_local_null_key_count, last.thread_local_null_key_count, v => v.toLocaleString("en-US"));
+
+  if (rows.length === 0) return null;
+  return (
+    <section className="diff-section">
+      <h2>Leak Indicators</h2>
+      <p className="subtitle">First vs. last dump for key leak-indicator counters.</p>
+      <table style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}>
+        <thead>
+          <tr>
+            {["Indicator", "First", "Last", "Delta"].map(h => (
+              <th key={h} style={{ textAlign: h === "Indicator" ? "left" : "right", padding: "6px 12px", borderBottom: "1px solid var(--border)" }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.label}>
+              <td style={{ padding: "5px 12px", borderBottom: "1px solid var(--border-faint, var(--border))" }}>{r.label}</td>
+              <td style={{ padding: "5px 12px", textAlign: "right", borderBottom: "1px solid var(--border-faint, var(--border))" }}>{r.first}</td>
+              <td style={{ padding: "5px 12px", textAlign: "right", borderBottom: "1px solid var(--border-faint, var(--border))" }}>{r.last}</td>
+              <td style={{ padding: "5px 12px", textAlign: "right", borderBottom: "1px solid var(--border-faint, var(--border))", fontWeight: 600, color: r.up === true ? "var(--sev-critical, #f87171)" : r.up === false ? "var(--sev-info, #60a5fa)" : undefined }}>{r.delta}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// ── ComparePanel: in-browser report comparison ────────────────────────────────
+// Accepts 2+ report JSON files via drag-and-drop or file picker, runs
+// diffSeriesReports() client-side, and renders the full DiffApp view.
+
+export function ComparePanel({ onClose }: { onClose?: () => void }) {
+  const [reports, setReports] = React.useState<import("./types").Report[]>([]);
+  const [names,   setNames]   = React.useState<string[]>([]);
+  const [error,   setError]   = React.useState<string | null>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const loadFiles = async (files: FileList | File[]) => {
+    const fileArr = Array.from(files);
+    const parsed: import("./types").Report[] = [];
+    const ns: string[] = [];
+    for (const f of fileArr) {
+      try {
+        const text = await f.text();
+        const obj = JSON.parse(text);
+        // Accept both raw Report and series-diff envelope (unwrap envelope).
+        if (obj?.kind === "series-diff") {
+          setError(`"${f.name}" is a diff report, not a single-dump report. Drop individual report files.`);
+          return;
+        }
+        parsed.push(obj as import("./types").Report);
+        ns.push(f.name.replace(/\.json$/, ""));
+      } catch (e) {
+        setError(`Failed to parse "${f.name}": ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+    }
+    if (parsed.length < 2) { setError("Drop at least 2 report JSON files to compare."); return; }
+    setError(null);
+    setReports(parsed);
+    setNames(ns);
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false);
+    loadFiles(e.dataTransfer.files);
+  };
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) loadFiles(e.target.files);
+  };
+
+  const diff = React.useMemo(() => {
+    if (reports.length < 2) return null;
+    try { return diffSeriesReports(reports); } catch { return null; }
+  }, [reports]);
+
+  if (diff) {
+    return (
+      <div>
+        {onClose && <div style={{ padding: "0.5rem 1rem", background: "var(--bg-alt, #f8f8f8)", borderBottom: "1px solid var(--border)", display: "flex", gap: 8 }}>
+          <button className="theme-toggle" onClick={() => { setReports([]); setNames([]); setError(null); }}>← Compare new files</button>
+          {onClose && <button className="theme-toggle" onClick={onClose}>✕ Close</button>}
+        </div>}
+        <DiffAppWithExtra diff={diff} reports={reports} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 640, margin: "2rem auto", padding: "1rem" }}>
+      <h2 style={{ marginBottom: "0.5rem" }}>Compare Heap Reports</h2>
+      <p style={{ color: "var(--fg-muted, #666)", marginBottom: "1rem", fontSize: "0.9rem" }}>
+        Drop two or more <code>report.json</code> files (generated by <code>hprof-analyzer heap report --format json</code>) to compare retained-heap changes across dump series.
+      </p>
+      <div
+        style={{
+          border: `2px dashed ${dragging ? "var(--accent, #3b82f6)" : "var(--border, #ccc)"}`,
+          borderRadius: 8, padding: "2.5rem 1.5rem", textAlign: "center",
+          background: dragging ? "var(--accent-bg, #eff6ff)" : "var(--bg-alt, #fafafa)",
+          cursor: "pointer", transition: "all 0.15s",
+        }}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        onClick={() => inputRef.current?.click()}
+      >
+        <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>📂</div>
+        <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>Drop report JSON files here</div>
+        <div style={{ fontSize: "0.85rem", color: "var(--fg-muted, #666)" }}>or click to select · 2 files minimum · order matters (first = baseline)</div>
+      </div>
+      <input ref={inputRef} type="file" accept=".json,application/json" multiple style={{ display: "none" }} onChange={onFileChange} />
+      {error && <p style={{ color: "var(--sev-critical, #dc2626)", marginTop: "0.75rem", fontSize: "0.875rem" }}>{error}</p>}
+      {names.length > 0 && names.length < 2 && (
+        <p style={{ marginTop: "0.75rem", fontSize: "0.875rem" }}>Loaded: {names[0]} — drop one more file.</p>
+      )}
+    </div>
+  );
+}
+
+// ── DiffApp extended with extra diff sections ─────────────────────────────────
+// Wraps DiffApp but appends triage-signal diff and leak-indicator diff sections,
+// which require the original Report objects (not just the SeriesDiffResult).
+
+function DiffAppWithExtra({ diff, reports }: { diff: SeriesDiffResult; reports?: import("./types").Report[] }) {
+  return (
+    <>
+      <DiffApp diff={diff} />
+      {reports && reports.length >= 2 && (
+        <div className="app" style={{ marginTop: 0, paddingTop: 0, borderTop: "1px solid var(--border)" }}>
+          <TriageDiffSection reports={reports} />
+          <LeakIndicatorDiffSection reports={reports} />
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Heap Inspector page components ───────────────────────────────────────────
 
 function InspectorClassPage({ cls, histogram, report, onNavigate }: {

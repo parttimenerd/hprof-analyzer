@@ -7,12 +7,13 @@
 // We decode + inflate + JSON.parse the report data, then render.
 import React from "react";
 import { createRoot } from "react-dom/client";
-import App, { DiffApp, ErrorBoundary } from "./App";
+import App, { DiffApp, ErrorBoundary, ComparePanel, diffSeriesReports } from "./App";
 import type { Report, SeriesDiffEnvelope } from "./types";
 import { FlatTreemap, QueryViz } from "./charts";
 import { formatBytes, fmtCount } from "./format";
-import type { QueryResult } from "./types";
+import type { QueryResult, SeriesDiffResult } from "./types";
 import css from "./styles.css";
+
 
 function fail(msg: string): void {
   const root = document.getElementById("root");
@@ -45,6 +46,12 @@ declare global {
     ) => void;
     hprofRenderQueryViz: (container: Element, query: QueryResult) => void;
     hprofUnmountViz: (container: Element) => void;
+    /** Render a SeriesDiffResult (+ optional source Reports for triage/indicator diffs) into a container. */
+    hprofRenderDiff: (container: Element, diff: SeriesDiffResult, reports?: Report[]) => void;
+    /** Compute a SeriesDiffResult from two or more Report objects client-side. */
+    hprofDiffReports: (reports: Report[]) => SeriesDiffResult;
+    /** Mount the ComparePanel (file-drop UI) into a container. */
+    hprofRenderComparePanel: (container: Element, onClose?: () => void) => void;
   }
 }
 
@@ -81,6 +88,38 @@ window.hprofUnmountViz = (container) => {
     root.unmount();
     _vizRoots.delete(container);
   }
+};
+
+window.hprofRenderDiff = (container, diff, _reports) => {
+  let root = _vizRoots.get(container);
+  if (!root) {
+    root = createRoot(container);
+    _vizRoots.set(container, root);
+  }
+  root.render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <DiffApp diff={diff} />
+      </ErrorBoundary>
+    </React.StrictMode>,
+  );
+};
+
+window.hprofDiffReports = (reports) => diffSeriesReports(reports);
+
+window.hprofRenderComparePanel = (container, onClose) => {
+  let root = _vizRoots.get(container);
+  if (!root) {
+    root = createRoot(container);
+    _vizRoots.set(container, root);
+  }
+  root.render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <ComparePanel onClose={onClose} />
+      </ErrorBoundary>
+    </React.StrictMode>,
+  );
 };
 
 async function boot(): Promise<void> {

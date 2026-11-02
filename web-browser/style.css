@@ -1270,3 +1270,14 @@ th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
 }
 .dashboard-card-btn:hover { background: var(--bg3); color: var(--fg); }
 .dashboard-viz { padding: 10px; min-height: 180px; overflow: hidden; }
+/* ── Compare panel ───────────────────────────────────────────────────────── */
+#compare-screen { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+#compare-container { flex: 1; overflow-y: auto; }
+#compare-json-section { margin-top: 1.5rem; }
+.mode-btn-compact {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg2); border: 1.5px solid var(--border);
+  border-radius: 8px; padding: 8px 20px; cursor: pointer;
+  color: var(--fg); font-size: .9rem; transition: border-color .15s, box-shadow .15s;
+}
+.mode-btn-compact:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
