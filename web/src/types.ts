@@ -358,7 +358,7 @@ export interface HolderRow {
   count: number;
   retained: number;
   level2?: HolderRow[];
-  via_class?: string;
+  via_class?: string[];
 }
 
 export interface ClassRow {

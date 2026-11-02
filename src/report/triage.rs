@@ -3436,8 +3436,9 @@ impl Rule for MapEntryDominance {
                  batch job that builds in-memory indexes without releasing them between \
                  iterations.{suspect_hint} \
                  Identify the owning `HashMap` instances via the Biggest Collections \
-                 section and trace them up the dominator tree to find the GC root \
-                 preventing collection.",
+                 section. To see the full upstream retention chain \
+                 (e.g. `HashMap → HashMap$Node[] → HashMap$Node`), use the \
+                 ⛓ Retention Chains tab in the Top Consumers section.",
                 fmt_count(total_entries),
                 pct,
                 fmt_count(total_objects),

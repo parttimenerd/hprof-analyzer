@@ -5117,6 +5117,40 @@ fn build_top_consumers(
             e.1 += g.retained[obj];
         }
 
+        // Collect level-2 holder class indices for Pass 3.
+        let mut level2_flag: Vec<bool> = vec![false; class_count];
+        for map in &level2_accum {
+            for &hci2 in map.keys() {
+                if hci2 < class_count {
+                    level2_flag[hci2] = true;
+                }
+            }
+        }
+
+        // level3_accum[holder_ci] = HashMap<idom3_ci, (count, retained_sum)>
+        // Pass 3: same structure as Pass 2 but scans level-2 holder classes.
+        let mut level3_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
+            vec![std::collections::HashMap::new(); class_count];
+
+        // Pass 3
+        for obj in 0..n {
+            let ci = g.class_idx[obj] as usize;
+            if ci >= class_count || !level2_flag[ci] {
+                continue;
+            }
+            let par = g.idom[obj];
+            if par == undef || par == vroot || par as usize >= n {
+                continue;
+            }
+            let par_ci = g.class_idx[par as usize] as usize;
+            if par_ci >= class_count {
+                continue;
+            }
+            let e = level3_accum[ci].entry(par_ci).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += g.retained[obj];
+        }
+
         // Build level-2 HolderRows per holder class
         let build_level2 = |hci: usize| -> Vec<crate::report::HolderRow> {
             let mut v: Vec<(usize, u64, u64)> = level2_accum[hci]
@@ -5133,7 +5167,7 @@ fn build_top_consumers(
                             count: cnt,
                             retained: ret,
                             level2: vec![],
-                            via_class: None,
+                            via_class: vec![],
                         })
                     } else {
                         None
@@ -5150,7 +5184,7 @@ fn build_top_consumers(
                 .collect();
             v.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
             if let Some(row) = biggest_classes_holders.get_mut(rank) {
-                // Build the full (uncapped) level-1 list so the two-hop pass
+                // Build the full (uncapped) level-1 list so the multi-hop pass
                 // below can reference all direct holders when bubbling up.
                 let level1_hcis: std::collections::HashSet<usize> =
                     v.iter().map(|&(hci, ..)| hci).collect();
@@ -5164,7 +5198,7 @@ fn build_top_consumers(
                                 count: cnt,
                                 retained: ret,
                                 level2: build_level2(hci),
-                                via_class: None,
+                                via_class: vec![],
                             })
                         } else {
                             None
@@ -5172,40 +5206,80 @@ fn build_top_consumers(
                     })
                     .collect();
 
-                // Pass 2.5: bubble up level-2 holders that are NOT already a
-                // direct (level-1) holder. This surfaces two-hop upstream owners
-                // (e.g. `HashMap` for a class dominated by `HashMap$Node[]`)
-                // that would otherwise be invisible in the holder breakdown.
-                // two_hop[hci2] = (total_count, total_retained, best_via_hci, best_via_retained)
-                let mut two_hop: std::collections::HashMap<usize, (u64, u64, usize, u64)> =
+                // Pass 2.5: bubble up multi-hop holders (up to 3 hops) that
+                // are NOT already direct (level-1) holders. via_class records
+                // the intermediate path from direct dominator toward the target.
+                //
+                // multi_hop[upstream_hci] = (total_count, total_retained, via_path)
+                // via_path is ordered: [direct_l1_holder, ..., direct_l2_holder]
+                // i.e. for a 2-hop chain A→B→Target: via=[B]
+                //      for a 3-hop chain A→B→C→Target: via=[C, B]  (innermost first)
+                let mut multi_hop: std::collections::HashMap<usize, (u64, u64, Vec<String>, u64)> =
                     std::collections::HashMap::new();
+
+                // 2-hop: level-2 holders of level-1 holders
                 for &(hci, ..) in &v {
                     if hci >= class_count {
                         continue;
                     }
                     for (&hci2, &(cnt2, ret2)) in &level2_accum[hci] {
-                        if level1_hcis.contains(&hci2) {
-                            continue; // already a direct holder
+                        if level1_hcis.contains(&hci2) || hci2 >= g.class_names.len() {
+                            continue;
                         }
-                        let e = two_hop.entry(hci2).or_insert((0, 0, hci, 0));
+                        let via = vec![pretty_class_name(&g.class_names[hci])];
+                        let e = multi_hop.entry(hci2).or_insert((0, 0, via.clone(), 0));
                         e.0 += cnt2;
                         e.1 += ret2;
                         if ret2 > e.3 {
-                            e.2 = hci;
+                            e.2 = via;
                             e.3 = ret2;
                         }
                     }
                 }
-                for (hci2, (cnt2, ret2, via_hci, _)) in two_hop {
-                    if hci2 < g.class_names.len() && via_hci < g.class_names.len() {
-                        row.push(crate::report::HolderRow {
-                            holder_class: pretty_class_name(&g.class_names[hci2]),
-                            count: cnt2,
-                            retained: ret2,
-                            level2: vec![],
-                            via_class: Some(pretty_class_name(&g.class_names[via_hci])),
-                        });
+
+                // 3-hop: level-3 holders of level-2 holders (that weren't
+                // already surfaced as direct or 2-hop holders)
+                let two_hop_hcis: std::collections::HashSet<usize> =
+                    multi_hop.keys().copied().collect();
+                for &(hci, ..) in &v {
+                    if hci >= class_count {
+                        continue;
                     }
+                    for &hci2 in level2_accum[hci].keys() {
+                        if hci2 >= class_count {
+                            continue;
+                        }
+                        for (&hci3, &(cnt3, ret3)) in &level3_accum[hci2] {
+                            if level1_hcis.contains(&hci3)
+                                || two_hop_hcis.contains(&hci3)
+                                || hci3 >= g.class_names.len()
+                                || hci2 >= g.class_names.len()
+                            {
+                                continue;
+                            }
+                            let via = vec![
+                                pretty_class_name(&g.class_names[hci2]),
+                                pretty_class_name(&g.class_names[hci]),
+                            ];
+                            let e = multi_hop.entry(hci3).or_insert((0, 0, via.clone(), 0));
+                            e.0 += cnt3;
+                            e.1 += ret3;
+                            if ret3 > e.3 {
+                                e.2 = via;
+                                e.3 = ret3;
+                            }
+                        }
+                    }
+                }
+
+                for (hci_up, (cnt, ret, via, _)) in multi_hop {
+                    row.push(crate::report::HolderRow {
+                        holder_class: pretty_class_name(&g.class_names[hci_up]),
+                        count: cnt,
+                        retained: ret,
+                        level2: vec![],
+                        via_class: via,
+                    });
                 }
 
                 row.sort_unstable_by(|a, b| {
@@ -5226,7 +5300,7 @@ fn build_top_consumers(
                         count: gc_cnt,
                         retained: gc_ret,
                         level2: vec![],
-                        via_class: None,
+                        via_class: vec![],
                     });
                     row.sort_unstable_by(|a, b| {
                         b.retained

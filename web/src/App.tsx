@@ -3204,7 +3204,7 @@ function TopConsumersTreemap({ rows }: { rows: Array<{ pretty_class: string; ret
 }
 
 function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow[]; total: number }) {
-  const hasTwoHop = rows.some(c => c.holders?.some(h => h.via_class));
+  const hasTwoHop = rows.some(c => c.holders?.some(h => h.via_class?.length));
   const [open, setOpen] = React.useState(hasTwoHop);
   const [fmtB] = useFmtBytes();
   const withHolders = rows.filter(c => c.holders && c.holders.length > 0);
@@ -3230,12 +3230,12 @@ function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow
                 {(cls.holders ?? []).map(h => {
                   const pct = cls.retained > 0 ? (h.retained / cls.retained * 100).toFixed(1) : "?";
                   return (
-                    <div key={h.holder_class + (h.via_class ?? "")} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline", marginBottom: "0.1rem" }}>
-                      {h.via_class ? (
+                    <div key={h.holder_class + (h.via_class?.join("") ?? "")} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline", marginBottom: "0.1rem" }}>
+                      {h.via_class?.length ? (
                         <span>
                           ↳ <code>{h.holder_class}</code>
                           <span className="muted" style={{ fontSize: "0.8rem" }}> via </span>
-                          <code style={{ fontSize: "0.8rem" }}>{h.via_class}</code>
+                          <code style={{ fontSize: "0.8rem" }}>{h.via_class.join(" → ")}</code>
                         </span>
                       ) : (
                         <span>↳ <code>{h.holder_class}</code></span>
@@ -3249,6 +3249,113 @@ function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Dedicated view: for each class that has two-hop holders, render a visual chain
+// showing the full upstream retention path and what fraction of retained it covers.
+// This answers "who is responsible for this class's 14 GB?" when the Sankey can't —
+// because the dominator-tree Sankey splits retained across millions of per-instance
+// pairs, but class-level holder aggregation (HolderRow) sums them correctly.
+function RetentionChainsView({ rows, total }: { rows: import("./types").ClassRow[]; total: number }) {
+  const [fmtB] = useFmtBytes();
+  // Only show classes that have at least one two-hop (via_class) holder — those are the
+  // cases where the Sankey is misleading and this view adds unique value.
+  const chainsClasses = rows.filter(c => c.holders?.some(h => h.via_class?.length));
+  if (chainsClasses.length === 0) {
+    return (
+      <div style={{ color: "var(--muted)", fontSize: "0.9rem", padding: "1rem 0" }}>
+        No multi-hop retention chains detected in the top classes.
+        Chains appear when a class is primarily held via an intermediate container
+        (e.g. <code>HashMap$Node[] → HashMap</code>).
+      </div>
+    );
+  }
+  return (
+    <div>
+      <p className="subtitle" style={{ marginBottom: "1rem" }}>
+        For each class where the dominator Sankey misses the full picture (retained heap is split
+        across millions of per-instance pairs), this view shows the class-level aggregated retention
+        chain. <strong>Holder retained</strong> = total retained of instances of this class that are
+        dominated through that upstream holder, summed across all instances.
+      </p>
+      {chainsClasses.map(cls => {
+        const twoHopHolders = cls.holders?.filter(h => h.via_class?.length) ?? [];
+        const directHolders = cls.holders?.filter(h => !h.via_class?.length) ?? [];
+        return (
+          <div key={cls.pretty_class} style={{
+            marginBottom: "1.4rem", padding: "0.8rem 1rem",
+            border: "1px solid var(--border)", borderRadius: 6,
+            background: "var(--card-bg, var(--bg))",
+          }}>
+            {/* Target class header */}
+            <div style={{ display: "flex", alignItems: "baseline", gap: "0.6rem", marginBottom: "0.6rem" }}>
+              <code style={{ fontWeight: 700, fontSize: "1rem" }}>{cls.pretty_class}</code>
+              <span className="muted" style={{ fontSize: "0.82rem" }}>
+                {fmtCount(cls.instances)} instances · {fmtB(cls.retained)} retained
+                ({(cls.retained / total * 100).toFixed(1)}% of heap)
+              </span>
+            </div>
+
+            {/* Two-hop chains */}
+            {twoHopHolders.length > 0 && (
+              <div style={{ marginBottom: "0.5rem" }}>
+                <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginBottom: "0.3rem", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>
+                  Multi-hop upstream holders
+                </div>
+                {twoHopHolders.map(h => {
+                  const pct = cls.retained > 0 ? (h.retained / cls.retained * 100) : 0;
+                  const barWidth = Math.max(2, Math.round(pct));
+                  return (
+                    <div key={h.holder_class + (h.via_class?.join("") ?? "")} style={{ marginBottom: "0.5rem" }}>
+                      {/* Chain: holder → via[0] → ... → via[n-1] → class */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.3rem", flexWrap: "wrap", fontSize: "0.9rem" }}>
+                        <code style={{ fontWeight: 600 }}>{h.holder_class}</code>
+                        {(h.via_class ?? []).map(v => (
+                          <React.Fragment key={v}>
+                            <span className="muted">→</span>
+                            <code style={{ color: "var(--muted)", fontSize: "0.82rem" }}>{v}</code>
+                          </React.Fragment>
+                        ))}
+                        <span className="muted">→</span>
+                        <code style={{ fontSize: "0.82rem" }}>{cls.pretty_class}</code>
+                        <span className="muted" style={{ fontSize: "0.82rem" }}>
+                          · {fmtCount(h.count)} holders · {fmtB(h.retained)} ({pct.toFixed(1)}%)
+                        </span>
+                      </div>
+                      {/* Retention bar */}
+                      <div style={{ marginTop: "0.2rem", height: 5, background: "var(--border)", borderRadius: 3, width: "100%", maxWidth: 360 }}>
+                        <div style={{ height: "100%", width: `${barWidth}%`, background: "var(--accent, #4a90d9)", borderRadius: 3 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Direct holders (for context) */}
+            {directHolders.length > 0 && (
+              <details style={{ fontSize: "0.82rem" }}>
+                <summary style={{ cursor: "pointer", color: "var(--muted)", marginTop: "0.2rem" }}>
+                  Direct holders ({directHolders.length})
+                </summary>
+                <div style={{ paddingLeft: "1rem", marginTop: "0.3rem" }}>
+                  {directHolders.map(h => {
+                    const pct = cls.retained > 0 ? (h.retained / cls.retained * 100).toFixed(1) : "?";
+                    return (
+                      <div key={h.holder_class} style={{ marginBottom: "0.15rem" }}>
+                        ↳ <code>{h.holder_class}</code>
+                        <span className="muted"> — {fmtCount(h.count)} instances, {fmtB(h.retained)} ({pct}%)</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3347,7 +3454,8 @@ function TopConsumersSection({ report }: { report: Report }) {
     },
   ];
 
-  const [topView, setTopView] = React.useState<"tables" | "treemap">("tables");
+  const hasTwoHopChains = t.biggest_classes.some(c => c.holders?.some(h => h.via_class?.length));
+  const [topView, setTopView] = React.useState<"tables" | "treemap" | "chains">("tables");
   const [clsKindFilter, setClsKindFilter] = React.useState<"all" | "app" | "jdk">("all");
 
   React.useEffect(() => {
@@ -3368,17 +3476,20 @@ function TopConsumersSection({ report }: { report: Report }) {
       <h2>Top Consumers</h2>
       <p className="subtitle">Biggest objects, classes, and packages by retained heap. Unlike Leak Suspects, these tables are unfiltered — use them when a suspect didn&apos;t cross the leak threshold, or to see the full retention picture.</p>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        {(["tables", "treemap"] as const).map(v => (
-          <button key={v} onClick={() => setTopView(v)} style={{
+        {(["tables", "treemap", ...(hasTwoHopChains ? ["chains"] : [])] as const).map(v => (
+          <button key={v} onClick={() => setTopView(v as typeof topView)} style={{
             padding: "0.25rem 0.85rem", fontSize: "0.88rem",
             border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
             background: topView === v ? "var(--accent)" : "transparent",
             color: topView === v ? "#fff" : "var(--fg)",
-          }}>{v === "tables" ? "⊞ Tables" : "▦ Treemap"}</button>
+          }}>{v === "tables" ? "⊞ Tables" : v === "treemap" ? "▦ Treemap" : "⛓ Retention Chains"}</button>
         ))}
       </div>
       {topView === "treemap" && (
         <TopConsumersTreemap rows={t.biggest_classes} />
+      )}
+      {topView === "chains" && (
+        <RetentionChainsView rows={t.biggest_classes} total={total} />
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects (Top-Level Dominators)</h3>

@@ -563,7 +563,7 @@ fn check_two_hop_holders(report: &Report) {
     let direct = target_row
         .holders
         .iter()
-        .find(|h| h.holder_class.contains("Substatement") && h.via_class.is_none());
+        .find(|h| h.holder_class.contains("Substatement") && h.via_class.is_empty());
     assert!(
         direct.is_some(),
         "Substatement must appear as a direct holder of TargetClass.\nActual holders: {:#?}",
@@ -574,7 +574,7 @@ fn check_two_hop_holders(report: &Report) {
     let two_hop = target_row
         .holders
         .iter()
-        .find(|h| h.holder_class.contains("Container") && h.via_class.is_some());
+        .find(|h| h.holder_class.contains("Container") && !h.via_class.is_empty());
     assert!(
         two_hop.is_some(),
         "Container must appear as a two-hop holder of TargetClass (via Substatement).\nActual holders: {:#?}",
@@ -582,10 +582,7 @@ fn check_two_hop_holders(report: &Report) {
     );
     let two_hop = two_hop.unwrap();
     assert!(
-        two_hop
-            .via_class
-            .as_deref()
-            .is_some_and(|v| v.contains("Substatement")),
+        two_hop.via_class.iter().any(|v| v.contains("Substatement")),
         "via_class for Container holder must mention Substatement. Got: {:?}",
         two_hop.via_class
     );
