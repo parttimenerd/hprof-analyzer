@@ -11287,7 +11287,7 @@ function diffVerdict(diff: SeriesDiffResult, fmtB: (n: number) => string): strin
     diff.gross_growth_retained > 0 &&
     diff.gross_growth_retained > Math.max(diff.net_delta_retained, 0) * 2
   ) {
-    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(diff.gross_shrink_retained)} reclaimed across steps.`;
+    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(Math.abs(diff.gross_shrink_retained))} reclaimed across steps.`;
   }
   if (newSuspects > 0) {
     line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
@@ -11371,7 +11371,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
           <li><strong>Δ Shallow Heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow, fmtB)}</li>
           <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained, fmtB)}</li>
-          <li><strong>Gross Retained Churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(diff.gross_shrink_retained)} reclaimed</li>
+          <li><strong>Gross Retained Churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(Math.abs(diff.gross_shrink_retained))} reclaimed</li>
         </ul>
       </section>
 
