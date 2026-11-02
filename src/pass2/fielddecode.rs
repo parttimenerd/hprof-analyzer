@@ -53,6 +53,10 @@ const REFERENT_HIST_CAP: usize = 200;
 /// cap to avoid unbounded allocation on pathological dumps.
 const TL_ENTRY_CAP: usize = 500_000;
 
+/// Max (dense_idx, capacity) records retained for NIO buffer owner attribution.
+/// Top-50 by capacity; trimmed/sorted in finish().
+const DBB_TOP_CAP: usize = 50;
+
 /// Max holder→pointee edges collected under --collections (16 B each → 160 MB).
 const FIELD_REF_CAP: usize = 10_000_000;
 /// Max container records collected under --collections (~32 B each → ~48 MB).
@@ -1022,6 +1026,13 @@ pub(crate) struct FieldDecodeState {
     dbb_class_addr_opt: Option<u64>,
     dbb_cap_off_opt: Option<u32>,
     dbb_capacity_sum: u64,
+    /// Instance count of DirectByteBuffers seen so far.
+    dbb_count: u64,
+    /// Capacity distribution buckets:
+    /// [<1KB, 1–4KB, 4–16KB, 16–64KB, 64–256KB, 256KB–1MB, 1–16MB, ≥16MB].
+    dbb_cap_buckets: [u64; 8],
+    /// Top-N (dense_idx, capacity) records by capacity descending, capped at DBB_TOP_CAP.
+    dbb_top_records: Vec<(u32, u64)>,
 
     // prim/obj array accumulators
     const_groups: HashMap<(u8, u64, i64), (u64, u64)>,
@@ -1085,6 +1096,9 @@ impl FieldDecodeState {
             dbb_class_addr_opt: None,
             dbb_cap_off_opt: None,
             dbb_capacity_sum: 0,
+            dbb_count: 0,
+            dbb_cap_buckets: [0; 8],
+            dbb_top_records: Vec::new(),
             const_groups: HashMap::new(),
             const_other: (0, 0),
             const_truncated: false,
@@ -1139,10 +1153,39 @@ impl FieldDecodeState {
         }
         if let (Some(dbb_addr), Some(cap_off)) = (self.dbb_class_addr_opt, self.dbb_cap_off_opt) {
             if class_id == dbb_addr {
+                self.dbb_count += 1;
                 let o = cap_off as usize;
                 if o + 4 <= blob.len() {
                     let v = i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
-                    self.dbb_capacity_sum += v.max(0) as u64;
+                    let cap = v.max(0) as u64;
+                    self.dbb_capacity_sum += cap;
+                    let bucket = match cap {
+                        0..=1023 => 0,
+                        1024..=4095 => 1,
+                        4096..=16383 => 2,
+                        16384..=65535 => 3,
+                        65536..=262143 => 4,
+                        262144..=1_048_575 => 5,
+                        1_048_576..=16_777_215 => 6,
+                        _ => 7,
+                    };
+                    self.dbb_cap_buckets[bucket] += 1;
+                    if let Some(dense_idx) = self.ic.index_of(&p1.id_map, addr) {
+                        let rec = (dense_idx as u32, cap);
+                        if self.dbb_top_records.len() < DBB_TOP_CAP {
+                            self.dbb_top_records.push(rec);
+                        } else if let Some(min_pos) = self
+                            .dbb_top_records
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|(_, r)| r.1)
+                            .map(|(i, _)| i)
+                        {
+                            if cap > self.dbb_top_records[min_pos].1 {
+                                self.dbb_top_records[min_pos] = rec;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1838,6 +1881,13 @@ impl FieldDecodeState {
             },
             attribution_truncated,
             self.dbb_capacity_sum,
+            self.dbb_count,
+            self.dbb_cap_buckets,
+            {
+                let mut top = self.dbb_top_records;
+                top.sort_unstable_by_key(|b| std::cmp::Reverse(b.1));
+                top
+            },
             self.tl_null_key_count,
             self.tl_entry_records,
         ))
@@ -1849,7 +1899,7 @@ impl FieldDecodeState {
 /// Return type of [`build_field_decode_views`]: the collection & reference
 /// views, the per-kind referent indices, the optional raw attribution records
 /// (`Some` only under `--collections`), the optional raw fields-by-size groups
-/// (`Some` only under `--collections`), a truncation flag, and the sum of
+/// (`Some` only under `--collections`), a truncation flag, and the sum/count of
 /// `capacity` fields across all `java/nio/DirectByteBuffer` instances.
 type FieldDecodeViews = (
     CollectionsAnalysis,
@@ -1862,7 +1912,10 @@ type FieldDecodeViews = (
     Option<HashMap<u32, (u32, u32)>>, // node_kv: wrapper dense idx → (key, val)
     bool,
     u64,              // direct_byte_buffer_capacity_sum
-    u64,              // thread_local_null_key_count
+    u64,              // direct_byte_buffer_count
+    [u64; 8], // dbb_cap_buckets: [<1KB, 1–4KB, 4–16KB, 16–64KB, 64–256KB, 256KB–1MB, 1–16MB, ≥16MB]
+    Vec<(u32, u64)>, // dbb_top_records: (dense_idx, capacity) top-50 by capacity desc
+    u64,      // thread_local_null_key_count
     Vec<(bool, u32)>, // tl_entry_records: (is_stale, value_dense_idx)
 );
 

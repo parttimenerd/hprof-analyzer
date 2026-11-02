@@ -455,6 +455,20 @@ pub struct Graph {
     /// resolved. Computed unconditionally during the pass2 field-decode scan.
     #[allow(dead_code)]
     pub direct_byte_buffer_capacity_sum: u64,
+    /// Count of live `java/nio/DirectByteBuffer` instances seen during the
+    /// pass2 field-decode scan. Paired with `direct_byte_buffer_capacity_sum`
+    /// to compute average capacity and detect native-heap fragmentation.
+    #[allow(dead_code)]
+    pub direct_byte_buffer_count: u64,
+    /// Capacity distribution of DirectByteBuffer instances across 8 buckets:
+    /// `[<1 KB, 1–4 KB, 4–16 KB, 16–64 KB, 64–256 KB, 256 KB–1 MB, 1–16 MB, ≥16 MB]`.
+    #[allow(dead_code)]
+    pub direct_byte_buffer_cap_buckets: [u64; 8],
+    /// Top-N (dense_idx, capacity) records for the largest DirectByteBuffers,
+    /// sorted by capacity descending. Capped at 50 entries. Used by the report
+    /// layer to attribute which objects own the biggest NIO buffers.
+    #[allow(dead_code)]
+    pub direct_byte_buffer_top_records: Vec<(u32, u64)>,
     /// Count of live `ThreadLocal$ThreadLocalMap$Entry` instances whose weak
     /// `referent` (the ThreadLocal key) is null — the classic thread-local leak
     /// signature (cleared key, value still strongly held). Computed during the
@@ -2204,6 +2218,9 @@ mod obj_graph_tests {
             fwd_field_name_idx: None,
             field_name_pool: None,
             direct_byte_buffer_capacity_sum: 0,
+            direct_byte_buffer_count: 0,
+            direct_byte_buffer_cap_buckets: [0; 8],
+            direct_byte_buffer_top_records: Vec::new(),
             thread_local_null_key_count: 0,
             tl_entry_records: vec![],
             unreachable_retained: None,

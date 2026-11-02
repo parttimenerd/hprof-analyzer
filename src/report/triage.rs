@@ -88,6 +88,14 @@ const SWARM_MAX_INSTANCE_BYTES: u64 = 64;
 const CLASSLOADER_EXPLOSION_FLOOR: u64 = 1000;
 /// Live-thread count before the thread-swarm rule fires.
 const THREAD_SWARM_FLOOR: usize = 300;
+/// Minimum DirectByteBuffer count before the native-heap-fragmentation rule
+/// fires. Below this the average-size signal is too noisy.
+const FRAG_DBB_COUNT_FLOOR: u64 = 500;
+/// Average DirectByteBuffer capacity (bytes) below which many-small-buffer
+/// fragmentation is likely. Typical IO/netty buffers are 8–64 KB; if the
+/// average is < 4 KB the allocator is likely recycling page-sized slabs but
+/// leaking most of the space as inter-allocation gaps.
+const FRAG_AVG_CAPACITY_CEILING: u64 = 4 * 1024;
 /// `java.lang.ref.Finalizer` instance count that signals a backed-up queue.
 const FINALIZER_FLOOR: u64 = 10_000;
 /// Loaded-class count above which Metaspace pressure is likely.
@@ -370,6 +378,7 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(ExecutorSelfSubmitDeadlock),
         Box::new(ShutdownHookAccumulation),
         Box::new(ThreadPoolSaturation),
+        Box::new(NativeHeapFragmentation),
     ]
 }
 
@@ -3921,6 +3930,67 @@ impl Rule for ThreadPoolSaturation {
     }
 }
 
+/// Native-heap fragmentation via many small DirectByteBuffers. Reads
+/// `leak_indicators.direct_byte_buffer_count` (count from pass2 field-decode),
+/// `leak_indicators.direct_byte_buffer_capacity_sum` (total capacity), and
+/// `leak_indicators.direct_byte_buffer_cap_buckets` (size distribution).
+///
+/// When an app allocates and frees many small NIO buffers without pooling,
+/// the native allocator ends up with a large number of holes it cannot reuse
+/// for the next large-buffer request. This shows up as: many live
+/// DirectByteBuffers with an unusually small average capacity (< 4 KB), while
+/// the total capacity and RSS still grow — a classic glibc/ptmalloc pattern.
+struct NativeHeapFragmentation;
+impl Rule for NativeHeapFragmentation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let cap_sum = r.leak_indicators.direct_byte_buffer_capacity_sum;
+        // Must have at least the OffHeap floor to be worth examining at all.
+        if cap_sum < DBB_FLOOR_BYTES {
+            return None;
+        }
+        let dbb_count = r.leak_indicators.direct_byte_buffer_count;
+        if dbb_count < FRAG_DBB_COUNT_FLOOR {
+            return None;
+        }
+        let avg = cap_sum / dbb_count;
+        if avg >= FRAG_AVG_CAPACITY_CEILING {
+            return None;
+        }
+        let b = r.leak_indicators.direct_byte_buffer_cap_buckets;
+        // buckets: [<1KB, 1–4KB, 4–16KB, 16–64KB, 64–256KB, 256KB–1MB, 1–16MB, ≥16MB]
+        let small = b[0] + b[1]; // <4 KB total
+        let small_pct = (small as f64 / dbb_count as f64) * 100.0;
+        Some(signal(
+            "native-heap-fragmentation",
+            TriageSeverity::Warning,
+            "Native Heap Fragmentation (many small DirectByteBuffers)",
+            format!(
+                "{} live DirectByteBuffers, average capacity {} ({:.0}% are <4 KB). \
+                 Allocating and freeing many short-lived small buffers leaves holes in the native \
+                 heap the OS cannot reclaim, so RSS grows while Java heap stays flat. \
+                 Distribution: <1 KB: {}, 1–4 KB: {}, 4–16 KB: {}, 16–64 KB: {}, \
+                 64–256 KB: {}, 256 KB–1 MB: {}, 1–16 MB: {}, ≥16 MB: {}. \
+                 Fix: use a pooled allocator (Netty PooledByteBufAllocator, \
+                 ByteBuffer.allocateDirect reuse pool) or consolidate small buffers into fewer \
+                 large ones. Diagnose with `jcmd <pid> VM.native_memory detail` or \
+                 jemalloc heap profiling (`MALLOC_CONF=prof:true`).",
+                fmt_count(dbb_count),
+                format_bytes(avg),
+                small_pct,
+                fmt_count(b[0]),
+                fmt_count(b[1]),
+                fmt_count(b[2]),
+                fmt_count(b[3]),
+                fmt_count(b[4]),
+                fmt_count(b[5]),
+                fmt_count(b[6]),
+                fmt_count(b[7]),
+            ),
+            Some(("off-heap-nio", "Off-Heap NIO")),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5816,6 +5886,48 @@ mod tests {
         assert!(
             ThreadPoolSaturation.eval(&r2).is_none(),
             "< SATURATION_MIN_THREADS must be silent"
+        );
+    }
+
+    #[test]
+    fn native_heap_fragmentation_fires_on_many_small_buffers() {
+        let mut r = base_report();
+        // 1000 buffers × 1 KB each = 1 MB total — below DBB_FLOOR_BYTES: silent.
+        r.leak_indicators.direct_byte_buffer_capacity_sum = 1024 * 1024;
+        r.leak_indicators.direct_byte_buffer_count = 1000;
+        r.leak_indicators.direct_byte_buffer_cap_buckets = [1000, 0, 0, 0, 0, 0, 0, 0];
+        assert!(
+            NativeHeapFragmentation.eval(&r).is_none(),
+            "below DBB floor must be silent"
+        );
+
+        // 131072 buffers × 1 KB each = 128 MB total — avg 1 KB < 4 KB ceiling: fires.
+        r.leak_indicators.direct_byte_buffer_capacity_sum = 128 * 1024 * 1024;
+        r.leak_indicators.direct_byte_buffer_count = 128 * 1024; // 131072 buffers
+        // all in the 1–4 KB bucket (bucket index 1)
+        r.leak_indicators.direct_byte_buffer_cap_buckets = [0, 128 * 1024, 0, 0, 0, 0, 0, 0];
+        let s = NativeHeapFragmentation
+            .eval(&r)
+            .expect("many small bufs above floor must fire");
+        assert_eq!(s.id, "native-heap-fragmentation");
+        assert!(s.detail.contains("100%"), "all in <4 KB bucket");
+
+        // Avg above 4 KB ceiling: silent.
+        r.leak_indicators.direct_byte_buffer_capacity_sum = 128 * 1024 * 1024;
+        r.leak_indicators.direct_byte_buffer_count = 500; // 500 × 256 KB avg
+        r.leak_indicators.direct_byte_buffer_cap_buckets = [0, 0, 0, 0, 500, 0, 0, 0];
+        assert!(
+            NativeHeapFragmentation.eval(&r).is_none(),
+            "large average must be silent"
+        );
+
+        // Count below floor: silent.
+        r.leak_indicators.direct_byte_buffer_capacity_sum = 128 * 1024 * 1024;
+        r.leak_indicators.direct_byte_buffer_count = 100;
+        r.leak_indicators.direct_byte_buffer_cap_buckets = [100, 0, 0, 0, 0, 0, 0, 0];
+        assert!(
+            NativeHeapFragmentation.eval(&r).is_none(),
+            "count below FRAG_DBB_COUNT_FLOOR must be silent"
         );
     }
 }
