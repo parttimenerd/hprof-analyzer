@@ -410,6 +410,14 @@ enum Cmd {
     Heap {
         #[command(subcommand)]
         cmd: HeapCmd,
+        /// Define an ad hoc class category, e.g. --category application=com.mycompany.
+        /// (repeatable; same semantics as the top-level --category flag).
+        #[arg(long = "category", value_name = "NAME=PREFIX", global = true)]
+        category: Vec<String>,
+        /// Path to a TOML file with [[category]] entries (same auto-discovery
+        /// rules as the top-level --category-config flag).
+        #[arg(long, value_name = "PATH", global = true)]
+        category_config: Option<std::path::PathBuf>,
     },
     /// Start an MCP server that exposes heap-analysis tools via stdin/stdout.
     ///
@@ -1389,8 +1397,12 @@ fn main() {
                 }
             }
         },
-        Some(Cmd::Heap { cmd }) => {
-            if let Err(e) = run_heap_cmd(cmd) {
+        Some(Cmd::Heap {
+            cmd,
+            category,
+            category_config,
+        }) => {
+            if let Err(e) = run_heap_cmd(cmd, category, category_config.as_deref()) {
                 fail(e);
             }
         }
@@ -1426,9 +1438,31 @@ fn main() {
 
 /// Handler for all `heap` subcommands. Loads from cache (or runs the pipeline
 /// on first call), then dispatches to the appropriate output function.
-fn run_heap_cmd(cmd: HeapCmd) -> anyhow::Result<()> {
+fn run_heap_cmd(
+    cmd: HeapCmd,
+    category: Vec<String>,
+    category_config: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     use hprof_analyzer::{analyze_with_cache, cache::CacheMode, mcp::oql_docs};
-    let lib_opts = hprof_analyzer::AnalyzeOptions::default();
+    // Validate category specs before passing them to the lib.
+    for spec in &category {
+        let Some((name, prefix)) = spec.split_once('=') else {
+            fail(format!(
+                "invalid --category {spec:?}: expected NAME=PREFIX (e.g. --category application=com.mycompany.)"
+            ));
+        };
+        if name.is_empty() || prefix.is_empty() {
+            fail(format!(
+                "invalid --category {spec:?}: NAME and PREFIX must both be non-empty"
+            ));
+        }
+    }
+    // Build lib_opts via the hprof_analyzer public API so its type matches what
+    // analyze_with_cache expects (hprof_analyzer::AnalyzeOptions, not opts::AnalyzeOptions —
+    // same code, different crate-path in a split lib+bin setup).
+    let lib_opts = hprof_analyzer::AnalyzeOptions::default()
+        .with_category_specs(&category)
+        .with_category_config(category_config);
 
     // Helper: load a session with progress on stderr.
     let load =

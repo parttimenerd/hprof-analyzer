@@ -20,18 +20,29 @@ All notable changes to hprof-analyzer are documented here.
   `via_class` field on `HolderRow` is now `Vec<String>` (the full intermediate
   path) instead of `Option<String>`. Cache VERSION bumped to 11.
 
-- **`category` field on `ClassRow`** — each class in the Biggest Classes list now
-  carries a `category` string (`"jdk"`, `"framework"`, `"other"`) populated by
-  the existing classifier at report-build time. The UI uses this field for
-  accurate All / App / Framework / JDK filtering instead of a name-prefix
-  heuristic; older reports without the field fall back to the regex heuristic.
+- **`category` field on `ClassRow` and `UnreachableClassRow`** — every class in
+  the Biggest Classes list and Unreachable Objects section now carries a
+  `category` string (`"jdk"`, `"framework"`, `"other"`, or any user-defined name)
+  populated by the classifier at report-build time. The UI uses this field for
+  accurate filtering; older reports without the field fall back to a regex
+  heuristic for backward compatibility.
 
-- **App / Framework / JDK filter across all views** — the category filter toolbar
-  (All / App / Framework / JDK) now applies to all three Top Consumers tabs:
-  Tables, Treemap, and Retention Chains. Previously it only appeared on the
-  Tables view. A `Framework` button has been added alongside the existing App /
-  JDK buttons so third-party libraries can be isolated from both JDK classes and
-  application code.
+- **Dynamic category filter buttons** — the category filter toolbar is now fully
+  data-driven: it shows exactly the categories present in the loaded report, user-
+  defined category names (from `--category`/`--category-config`) appear as
+  additional buttons alongside the built-in Other / Framework / JDK. The bar hides
+  itself when all classes belong to a single category (no filter would change
+  anything).
+
+- **Category filter on System Overview histogram and Unreachable Objects** — the
+  dynamic filter bar now appears on the System Overview class histogram and the
+  Unreachable Objects section in addition to the existing Top Consumers coverage,
+  so all class-level views support category filtering.
+
+- **`heap` subcommand `--category` / `--category-config` support** — the cached
+  analysis (`heap report`, `heap query`, `heap summary`, `heap histogram`) now
+  accepts the same `--category NAME=PREFIX` and `--category-config PATH` flags as
+  the top-level command, so cache-rebuild runs use the user's custom categories.
 
 - **`--obj-graph` hot-path speedup** — the `capture_type_ref_and_obj_graph`
   inner loop (O(n×edges)) now uses a packed `u64` key and a Fibonacci-multiply

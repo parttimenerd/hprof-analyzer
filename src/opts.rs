@@ -169,13 +169,45 @@ pub struct AnalyzeOptions {
     /// not the path it came from. Library callers (WASM, MCP, tests) can also
     /// populate this directly without a config file. Empty means "built-ins
     /// only" (`framework`, `jdk`, else `other`).
-    pub(crate) categories: Vec<crate::classify::CategoryDef>,
+    pub categories: Vec<crate::classify::CategoryDef>,
 }
 
 impl Default for AnalyzeOptions {
     /// The `--detail default` preset (historical cap values).
     fn default() -> Self {
         DetailLevel::Default.options()
+    }
+}
+
+impl AnalyzeOptions {
+    /// Parse `"NAME=PREFIX"` specs (same format as `--category`) and set
+    /// `categories`. Called from the binary's `heap` subcommand to avoid a
+    /// crate-path mismatch between `opts::CategoryDef` and
+    /// `hprof_analyzer::classify::CategoryDef`.
+    #[allow(dead_code)]
+    pub fn with_category_specs(mut self, specs: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        for spec in specs {
+            let spec = spec.as_ref();
+            let Some((name, prefix)) = spec.split_once('=') else {
+                continue;
+            };
+            if name.is_empty() || prefix.is_empty() {
+                continue;
+            }
+            self.categories
+                .push(crate::classify::CategoryDef::prefix(name, &[prefix]));
+        }
+        self
+    }
+
+    /// Load `[[category]]` entries from a TOML config file and append them after
+    /// any already set (e.g. from `with_category_specs`). A missing or unreadable
+    /// file is silently ignored (same behaviour as the CLI path).
+    #[allow(dead_code)]
+    pub fn with_category_config(mut self, path: Option<&std::path::Path>) -> Self {
+        let extra = crate::collection_config::load_config_categories(path);
+        self.categories.extend(extra);
+        self
     }
 }
 

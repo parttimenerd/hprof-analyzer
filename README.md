@@ -272,10 +272,14 @@ Pass a standalone config file with `--category-config path/to/file.toml` if you 
 - List more-specific prefixes before broader ones: `com.example.thirdparty.` before `com.example.` or the broader entry always claims the class first.
 - A user-defined category can "steal" classes that would otherwise fall into a built-in — for example, putting `com.example.` before `jdk` lets you claim a vendored copy of a JDK class.
 
-Categories surface in three places in the HTML report:
+Categories surface in four places in the HTML report:
 - **Heap by Category** table (System Overview) — shallow heap % split across all categories.
-- **Top Consumers** filter toolbar — All / App / Framework / JDK buttons filter the Biggest Classes tables, treemap, and Retention Chains tab.
-- **`ClassRow.category`** field in the JSON output — available for programmatic post-processing.
+- **System Overview class histogram** filter toolbar — buttons filter by category.
+- **Top Consumers** filter toolbar — buttons filter the Biggest Classes tables, treemap, and Retention Chains tab.
+- **Unreachable Objects** filter toolbar — filter unreachable classes by category.
+- **`ClassRow.category`** / **`UnreachableClassRow.category`** fields in the JSON output — available for programmatic post-processing.
+
+The filter toolbar shows only the categories actually present in the data, so user-defined category names appear automatically. When all classes share the same category (e.g. a single-team codebase with no frameworks), the toolbar hides itself.
 
 The built-in `framework` category covers: `org.hibernate.`, `org.springframework.`, `io.netty.`, `com.zaxxer.hikari.`, `java.util.concurrent.ThreadPoolExecutor`. The built-in `jdk` category covers: `java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`, `scala.`, `kotlin.`.
 
@@ -355,6 +359,16 @@ hprof-analyzer heap summary heap.hprof
 # All subsequent runs load from cache in ~1 s — any subcommand:
 hprof-analyzer heap histogram heap.hprof
 hprof-analyzer heap query heap.hprof --oql "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY COUNT(*) DESC LIMIT 20"
+```
+
+The `heap` subcommand group accepts the same `--category` / `--category-config` flags as the top-level command. Pass them on any call; the cache is (re-)built with the supplied categories on first use:
+
+```sh
+# Analyse with a user-defined category; cache is keyed with the categories
+hprof-analyzer heap report heap.hprof --section categories \
+    --category app=com.example.
+hprof-analyzer heap query heap.hprof --oql "SELECT * FROM java.lang.String" \
+    --category app=com.example.
 ```
 
 Available subcommands:
