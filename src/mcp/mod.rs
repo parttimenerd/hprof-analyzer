@@ -121,6 +121,14 @@ pub struct GetReportParams {
     ///   "references", "dominators", "components", "alloc_sites", "thread_locals",
     ///   "framework", "field_stats", "categories"
     ///
+    /// QUICK-ACCESS SECTIONS (synthesized from existing data, no new model fields):
+    ///   "gc-roots"       — GC root counts + retained bytes by root type
+    ///   "classloaders"   — classloader count + loader_rollup + duplicate_classes
+    ///   "strings"        — string/char[] count/shallow + duplicate waste stats
+    ///   "packages"       — biggest_packages tree (which package dominates memory)
+    ///   "culprits"       — primary_culprits: top-N synthesized likely culprit objects
+    ///   "self-referential" — classes with many instances of themselves (list/trie node leaks)
+    ///
     /// Default "all" (everything — very large, avoid in LLM workflows).
     pub section: Option<String>,
     /// Max rows for "top-objects" and "threads" (default 20, max 100).
@@ -415,6 +423,12 @@ impl HprofMcpServer {
                           \n  \"collections\"  — fill ratios, map load factors\
                           \n  \"references\"   — Soft/Weak/Phantom reference counts\
                           \n  \"components\"   — retained heap per class loader\
+                          \n  \"gc-roots\"     — GC root counts + retained bytes by root type\
+                          \n  \"classloaders\" — classloader count + loader rollup + duplicate classes\
+                          \n  \"strings\"      — String/char[] counts + duplicate waste stats\
+                          \n  \"packages\"     — biggest_packages tree (which package dominates memory)\
+                          \n  \"culprits\"     — top-N synthesized likely culprit objects\
+                          \n  \"self-referential\" — classes with many self-referential instances (list/trie node leaks)\
                           \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\", \"categories\"\
                           \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
                           \n  \"all\"          — everything merged (very large — avoid in LLM workflows)")]
@@ -508,6 +522,33 @@ impl HprofMcpServer {
             "framework" => serde_json::to_string_pretty(&r.framework_analysis),
             "field_stats" => serde_json::to_string_pretty(&r.fields_by_size),
             "categories" => serde_json::to_string_pretty(&r.category_rollup),
+            "gc-roots" => serde_json::to_string_pretty(&serde_json::json!({
+                "gc_roots": r.overview.gc_roots,
+                "gc_roots_by_type": r.overview.gc_roots_by_type,
+                "gc_roots_retained_by_type": r.overview.gc_roots_retained_by_type,
+            })),
+            "classloaders" => serde_json::to_string_pretty(&serde_json::json!({
+                "classloader_count": r.overview.classloaders_loaded,
+                "loader_rollup": r.overview.loader_rollup,
+                "duplicate_classes": r.overview.duplicate_classes,
+            })),
+            "strings" => {
+                let str_row = r.overview.histogram.iter().find(|h| h.pretty_class == "java.lang.String");
+                let backing_row = r.overview.histogram.iter()
+                    .find(|h| h.pretty_class == "byte[]" || h.pretty_class == "char[]");
+                let dup_strings = r.overview.duplicate_strings.as_ref();
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "string_count": str_row.map(|h| h.instances).unwrap_or(0),
+                    "string_shallow_bytes": str_row.map(|h| h.shallow).unwrap_or(0),
+                    "backing_array_count": backing_row.map(|h| h.instances).unwrap_or(0),
+                    "backing_array_shallow_bytes": backing_row.map(|h| h.shallow).unwrap_or(0),
+                    "duplicate_string_count": dup_strings.map(|d| d.duplicated_values).unwrap_or(0),
+                    "duplicate_wasted_bytes": dup_strings.map(|d| d.approx_wasted_bytes).unwrap_or(0),
+                }))
+            }
+            "packages" => serde_json::to_string_pretty(&r.top.biggest_packages),
+            "culprits" => serde_json::to_string_pretty(&r.primary_culprits),
+            "self-referential" => serde_json::to_string_pretty(&r.self_referential_classes),
             section => {
                 if section != "all" {
                     return Err(McpError::invalid_params(
@@ -515,7 +556,8 @@ impl HprofMcpServer {
                             "Unknown section {:?}. Valid sections: top-objects, top-classes, \
                              leaks, top, threads, overview, triage, waste, indicators, retainers, \
                              arrays, collections, references, dominators, components, alloc_sites, \
-                             thread_locals, framework, field_stats, categories, all",
+                             thread_locals, framework, field_stats, categories, gc-roots, \
+                             classloaders, strings, packages, culprits, self-referential, all",
                             section
                         ),
                         None,
