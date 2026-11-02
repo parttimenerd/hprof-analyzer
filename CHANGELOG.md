@@ -6,6 +6,25 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **⛓ Retention Chains tab** — a new tab in the Top Consumers section shows
+  class-level aggregated retention chains for classes where the dominator Sankey
+  misses the full picture (retained heap split across millions of per-instance
+  pairs). Each card shows the upstream holder chain (e.g.
+  `HashMap → HashMap$Node[] → HashMap$Node`) with instance counts, retained
+  bytes, and a proportional retention bar. The tab only appears when multi-hop
+  holders are present.
+
+- **Multi-hop upstream holders in Biggest Classes** — the holder breakdown now
+  surfaces upstream classes up to 3 hops away (previously 2). A third O(n) pass
+  (`level3_accum`) over level-2 holder classes enables 3-hop bubble-up; the
+  `via_class` field on `HolderRow` is now `Vec<String>` (the full intermediate
+  path) instead of `Option<String>`. Cache VERSION bumped to 11.
+
+- **`--obj-graph` hot-path speedup** — the `capture_type_ref_and_obj_graph`
+  inner loop (O(n×edges)) now uses a packed `u64` key and a Fibonacci-multiply
+  integer hasher instead of SipHash on `(u32,u32)` tuples. Expected measurable
+  reduction in wall time for large dumps when `--obj-graph` is active.
+
 - **Drop 2+ `.hprof` files to compare** — the browser app now accepts multiple
   heap dump files at once (via drag-and-drop or file picker); it analyzes each
   sequentially via WASM and renders the full diff automatically, no CLI step
