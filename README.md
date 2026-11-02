@@ -781,7 +781,7 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 1
 
 MAT was run with `ParseHeapDump.sh -Xmx60g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
 
-**Disk footprint.** MAT writes a persistent binary index alongside the dump on first open (typically ~15–20% of the dump size for large dumps, up to 1× for small dumps). Measured sizes: 51 MiB dump → ~50 MiB index; 11 GiB dump → ~1.6 GiB index; 20 GiB dump → ~3.2 GiB index; a 34 GiB dump is projected at 15–25 GiB (index files total). hprof-analyzer writes no files next to the dump — its cache goes to a system temp directory and is not required for repeat runs.
+**Disk footprint.** MAT writes a persistent binary index alongside the dump on first open (typically ~15–20% of the dump size for large dumps, up to 1× for small dumps). Measured sizes: 51 MiB dump → ~50 MiB index; 11 GiB dump → ~1.6 GiB index; 20 GiB dump → ~3.2 GiB index; a 34 GiB dump is projected at 15–25 GiB (index files total). hprof-analyzer writes a `<dump>.hprof-cache/` directory alongside the dump on first analysis; subsequent runs reuse it for sub-second load times. Delete it to force re-analysis or free disk space.
 
 ## How it works
 
