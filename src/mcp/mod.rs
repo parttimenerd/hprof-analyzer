@@ -149,6 +149,7 @@ pub struct QueryParams {
     ///   "string-count"            — total string count and size
     ///   "all-threads"             — all Thread objects
     ///   "thread-count"            — thread count
+    ///   "thread-pool-waiters"     — threads with retained size, sorted desc (*)
     ///   "large-arrays"            — primitive arrays > 64 KB
     ///   "large-collections"       — collections with > 1000 elements
     ///   "empty-collections"       — empty collections (overhead waste)
@@ -160,6 +161,11 @@ pub struct QueryParams {
     ///   "retained-threads"        — threads by retained size (*)
     ///   "retained-summary"        — shallow vs retained by class (*)
     ///   "object-count-total"      — total object count
+    ///   "xml-dom-documents"       — accumulated Xerces DOM Document objects (*)
+    ///   "fjp-task-queue"          — ForkJoinTask subtypes accumulating
+    ///   "classloader-instances"   — live ClassLoader instances with retained sizes (*)
+    ///   "big-decimal-instances"   — BigDecimal accumulation by type
+    ///   "http-sessions"           — HTTP Session objects by retained size (*)
     ///  (*) = needs full analysis; always available after load_dump
     ///
     /// OQL EXAMPLES (for custom queries):
@@ -563,7 +569,7 @@ impl HprofMcpServer {
     /// appear as "ClassName@index" — use the index with inspect_object or browse_dominators.
     #[tool(description = "Run an OQL query OR a built-in view by name. \
                        SHORTCUT: pass a view name like \"top-retained-by-class\" instead of writing OQL. \
-                       All 20 view names are listed in the oql parameter description — use them directly. \
+                       All 26 view names are listed in the oql parameter description — use them directly. \
                        Returns {columns, rows, truncated, row_count, view_name?}. \
                        Rows are plain JSON. Objects appear as 'ClassName@index' — the number after '@' is object_index. \
                        Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object. \
@@ -1038,9 +1044,9 @@ impl HprofMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
     }
 
-    /// List the 20 built-in named query views, grouped by category.
+    /// List the 26 built-in named query views, grouped by category.
     #[tool(
-        description = "List all 20 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained). \
+        description = "List all 26 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained, Exploration). \
                        Each entry has: name, display (human label), group, needs_retained (bool), oql (full SQL for reference). \
                        SHORTCUT: pass the 'name' directly to query() — query({\"oql\":\"leak-suspects\"}) runs the view by name. \
                        No need to copy the SQL. 'needs_retained' views always work after load_dump."

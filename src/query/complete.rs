@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn run_prefix_with_all_queries() {
         let cs = complete("/run ", 5, &[], &ClassFieldIndex::empty());
-        assert_eq!(cs.len(), 20, "20 named queries total");
+        assert_eq!(cs.len(), 26, "26 named queries total");
         assert!(
             cs.iter().all(|c| c.group.is_some()),
             "all /run completions have a group"

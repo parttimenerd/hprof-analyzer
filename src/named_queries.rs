@@ -1,4 +1,4 @@
-//! The 20 canonical named OQL queries shared by CLI, REPL, server, and WASM.
+//! Named OQL queries shared by CLI, REPL, server, and WASM.
 
 #![allow(dead_code)]
 
@@ -84,6 +84,13 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         needs_retained: false,
         oql: "SELECT COUNT(*) AS count FROM java.lang.Thread",
     },
+    NamedQuery {
+        name: "thread-pool-waiters",
+        display: "Blocked/waiting threads by retained size",
+        group: "Threads",
+        needs_retained: true,
+        oql: "SELECT @objectId AS idx, @name AS thread_name, @retainedHeapSize AS retained_bytes FROM java.lang.Thread ORDER BY retained_bytes DESC LIMIT 30",
+    },
     // ── Collections ───────────────────────────────────────────────────────────
     NamedQuery {
         name: "large-arrays",
@@ -157,6 +164,42 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         needs_retained: true,
         oql: "SELECT classof(x) AS class, SUM(@usedHeapSize) AS shallow, SUM(@retainedHeapSize) AS retained_bytes FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 30",
     },
+    // ── Exploration ───────────────────────────────────────────────────────────
+    NamedQuery {
+        name: "xml-dom-documents",
+        display: "Accumulated DOM Document objects (Xerces)",
+        group: "Exploration",
+        needs_retained: true,
+        oql: "SELECT @objectId AS idx, @retainedHeapSize AS ret, classof(x) AS class FROM INSTANCEOF com.sun.org.apache.xerces.internal.dom.CoreDocumentImpl x ORDER BY ret DESC LIMIT 20",
+    },
+    NamedQuery {
+        name: "fjp-task-queue",
+        display: "ForkJoinTask subtypes accumulating",
+        group: "Exploration",
+        needs_retained: false,
+        oql: "SELECT classof(x) AS class, COUNT(*) AS n, SUM(@usedHeapSize) AS total_shallow FROM INSTANCEOF java.util.concurrent.ForkJoinTask x GROUP BY classof(x) ORDER BY n DESC LIMIT 20",
+    },
+    NamedQuery {
+        name: "classloader-instances",
+        display: "Live ClassLoader instances with retained sizes",
+        group: "Exploration",
+        needs_retained: true,
+        oql: "SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret FROM INSTANCEOF java.lang.ClassLoader x ORDER BY ret DESC LIMIT 30",
+    },
+    NamedQuery {
+        name: "big-decimal-instances",
+        display: "BigDecimal accumulation by type",
+        group: "Exploration",
+        needs_retained: false,
+        oql: "SELECT classof(x) AS class, COUNT(*) AS n, SUM(@usedHeapSize) AS total_shallow FROM INSTANCEOF java.math.BigDecimal x GROUP BY classof(x) ORDER BY n DESC LIMIT 10",
+    },
+    NamedQuery {
+        name: "http-sessions",
+        display: "HTTP Session objects by retained size",
+        group: "Exploration",
+        needs_retained: true,
+        oql: "SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret FROM INSTANCEOF javax.servlet.http.HttpSession x ORDER BY ret DESC LIMIT 30",
+    },
 ];
 
 #[cfg(test)]
@@ -165,8 +208,8 @@ mod tests {
     use crate::query::parse::parse;
 
     #[test]
-    fn all_20_queries_defined() {
-        assert_eq!(NAMED_QUERIES.len(), 20);
+    fn all_26_queries_defined() {
+        assert_eq!(NAMED_QUERIES.len(), 26);
     }
 
     #[test]
