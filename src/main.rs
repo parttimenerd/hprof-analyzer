@@ -3843,6 +3843,28 @@ fn run(
     }
     t_dark!("unreachable_retained done");
 
+    // Early fwd CSR drop: for large dumps that will take the rescan-inbound path
+    // AND have no features that need the fwd CSR between here and inbound dispatch
+    // (obj_graph, field_stats, OQL edge queries), drop fwd_targets + fwd_offsets
+    // NOW — right after unreachable_retained, before compress_parent_pre.
+    // This removes ~7-8 GB from the peak window at compress_parent_pre, cutting
+    // the direct-path basic RSS from ~15 GB to ~7 GB on 34GB dumps.
+    // The rescan-inbound dispatch below (total_inb > 1B) would drop them anyway;
+    // this just does it ~10 seconds earlier so they are absent during the
+    // compress_parent_pre coexistence window.
+    let can_early_drop_fwd = mat.is_none()
+        && !opts.obj_graph
+        && !opts.field_stats
+        && !run_flags.retain_forward
+        && !run_flags.outbounds_by_rescan
+        && !run_flags.retain_inbound
+        && inbound.total_inb > 1_000_000_000;
+    if can_early_drop_fwd {
+        drop(std::mem::take(&mut g.fwd_targets));
+        drop(std::mem::take(&mut g.fwd_offsets));
+        crate::trace::probe("main: early drop fwd CSR (before compress parent_pre)");
+    }
+
     // Compress parent_pre (~2 GB dense) between RPO and inbound to reduce
     // the peak during the transpose loop. parent_pre is not needed until
     // compute_dominators; holding it compressed saves ~1.5 GB at inb_flat alloc
