@@ -1083,6 +1083,51 @@ function SortableTh<T>({ label, colKey, sortKey, setSortKey }: {
   );
 }
 
+// ── Shared category helpers ───────────────────────────────────────────────────
+
+/** Resolve the category for any row that has a pretty_class + optional category field.
+ *  Uses the backend-supplied value when present; falls back to a name-prefix heuristic
+ *  for older reports that lack the field. */
+function rowCategory(row: { pretty_class: string; category?: string }): string {
+  if (row.category) return row.category;
+  if (/^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/.test(row.pretty_class)) return "jdk";
+  return "other";
+}
+
+/** Derive the sorted list of category buttons to show for a set of rows.
+ *  Always starts with "all"; user-defined categories come first (alphabetical),
+ *  then "other" / "framework" / "jdk" at the end if present. */
+function availableCategoryButtons(rows: { pretty_class: string; category?: string }[]): string[] {
+  const seen = new Set<string>();
+  for (const r of rows) seen.add(rowCategory(r));
+  const fixed = ["other", "framework", "jdk"];
+  const user = [...seen].filter(c => !fixed.includes(c)).sort();
+  const present = [...user, ...fixed.filter(c => seen.has(c))];
+  return present.length > 1 ? ["all", ...present] : [];
+}
+
+function CategoryFilterBar({ categories, active, onChange, style }: {
+  categories: string[];
+  active: string;
+  onChange: (cat: string) => void;
+  style?: React.CSSProperties;
+}) {
+  if (categories.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: "0.3rem", alignItems: "center", marginBottom: "0.5rem", ...style }}>
+      <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Classes:</span>
+      {categories.map(v => (
+        <button key={v} onClick={() => onChange(v)} style={{
+          padding: "0.15rem 0.55rem", fontSize: "0.8rem",
+          border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+          background: active === v ? "var(--accent)" : "transparent",
+          color: active === v ? "#fff" : "var(--fg)",
+        }}>{v === "all" ? "All" : v === "jdk" ? "JDK" : v === "framework" ? "Framework" : v === "other" ? "Other" : v}</button>
+      ))}
+    </div>
+  );
+}
+
 // ── Sortable / filterable class histogram ────────────────────────────────────
 const HIST_MIN_PCT = 0.1; // skip rows < 0.1% of heap
 
@@ -1093,6 +1138,9 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
   const [showLoader, setShowLoader] = React.useState(false);
   const [groupLambdas, setGroupLambdas] = React.useState(true);
   const [highlightedClass, setHighlightedClass] = React.useState<string | null>(null);
+  const [catFilter, setCatFilter] = React.useState("all");
+
+  const categoryButtons = React.useMemo(() => availableCategoryButtons(rows), [rows]);
 
   React.useEffect(() => {
     const handler = (e: CustomEvent) => {
@@ -1114,7 +1162,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
     [rows],
   );
 
-  // Filter by class name text (substring or /regex/) + optionally skip tiny rows
+  // Filter by class name text (substring or /regex/) + category + optionally skip tiny rows
   const filtered = React.useMemo(() => {
     let testFn: (s: string) => boolean = () => true;
     if (filter) {
@@ -1134,6 +1182,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
     }
     return rows.filter((r) => {
       if (filter && !testFn(r.pretty_class)) return false;
+      if (catFilter !== "all" && rowCategory(r) !== catFilter) return false;
       if (!showAll && pctOf(r.retained, totalShallow) < HIST_MIN_PCT) return false;
       return true;
     });
@@ -1336,6 +1385,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
 
   return (
     <div>
+      <CategoryFilterBar categories={categoryButtons} active={catFilter} onChange={setCatFilter} />
       <p className="subtitle" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>
         Next to each class: <span title="Open in Inspector">⬡</span> Inspector · <span title="Copy OQL query">⌗</span> Copy OQL · <span title="List all instances">⬡≡</span> List Instances · <span title="Copy class name">⎘</span> Copy Name
       </p>
@@ -3478,18 +3528,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   // Derive the set of categories present in biggest_classes (or category_rollup).
   // Always include "all"; add every distinct category found, with jdk/framework/other
   // normalised to fixed labels. User-defined categories appear as-is.
-  const availableCategories = React.useMemo(() => {
-    const seen = new Set<string>();
-    for (const c of t.biggest_classes) {
-      const cat = c.category || "other";
-      seen.add(cat);
-    }
-    // fixed order: all, then user-defined (alphabetical), then other, framework, jdk last
-    const fixed = ["other", "framework", "jdk"];
-    const user = [...seen].filter(c => !fixed.includes(c)).sort();
-    const present = [...user, ...fixed.filter(c => seen.has(c))];
-    return ["all", ...present];
-  }, [t.biggest_classes]);
+  const availableCategories = React.useMemo(() => availableCategoryButtons(t.biggest_classes), [t.biggest_classes]);
 
   const [clsKindFilter, setClsKindFilter] = React.useState<string>("all");
 
@@ -3499,18 +3538,10 @@ function TopConsumersSection({ report }: { report: Report }) {
     return () => window.removeEventListener("set-cls-kind-filter", handler);
   }, []);
 
-  // classCategory: use the backend-supplied category when present (reports ≥ v11),
-  // fall back to a name-prefix heuristic for older reports.
-  const classCategory = React.useCallback((c: import("./types").ClassRow): string => {
-    if (c.category) return c.category;
-    if (/^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/.test(c.pretty_class)) return "jdk";
-    return "other";
-  }, []);
-
   const filteredClasses = React.useMemo(() => {
     if (clsKindFilter === "all") return t.biggest_classes;
-    return t.biggest_classes.filter(c => classCategory(c) === clsKindFilter);
-  }, [t.biggest_classes, clsKindFilter, classCategory]);
+    return t.biggest_classes.filter(c => rowCategory(c) === clsKindFilter);
+  }, [t.biggest_classes, clsKindFilter]);
 
   return (
     <section id="top-consumers">
@@ -3529,17 +3560,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           ))}
         </div>
         <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />
-        <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Classes:</span>
-          {availableCategories.map(v => (
-            <button key={v} onClick={() => setClsKindFilter(v)} style={{
-              padding: "0.15rem 0.55rem", fontSize: "0.8rem",
-              border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
-              background: clsKindFilter === v ? "var(--accent)" : "transparent",
-              color: clsKindFilter === v ? "#fff" : "var(--fg)",
-            }}>{v === "all" ? "All" : v === "jdk" ? "JDK" : v === "framework" ? "Framework" : v === "other" ? "Other" : v}</button>
-          ))}
-        </div>
+        <CategoryFilterBar categories={availableCategories} active={clsKindFilter} onChange={setClsKindFilter} style={{ marginBottom: 0 }} />
       </div>
       {topView === "treemap" && (
         <TopConsumersTreemap rows={filteredClasses} />
@@ -6652,6 +6673,11 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
 function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const rows: UnreachableClassRow[] = data?.unreachable_histogram ?? [];
+  const [catFilter, setCatFilter] = React.useState("all");
+  const categoryButtons = React.useMemo(() => availableCategoryButtons(rows), [rows]);
+  const filteredRows = React.useMemo(() =>
+    catFilter === "all" ? rows : rows.filter(r => rowCategory(r) === catFilter),
+    [rows, catFilter]);
   const unreachablePct = React.useMemo(() => {
     const total = (data?.total_shallow ?? 0) + (data?.unreachable_shallow ?? 0);
     return total > 0 ? (data?.unreachable_shallow ?? 0) / total * 100 : 0;
@@ -6714,7 +6740,8 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
               ];
               return (
                 <>
-                  <StdTable columns={unreachCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
+                  <CategoryFilterBar categories={categoryButtons} active={catFilter} onChange={setCatFilter} />
+                  <StdTable columns={unreachCols} data={filteredRows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="shallow" defaultSortAsc={false} />
                   <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
                     <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
                     <span style={{ width: "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(data?.unreachable_count ?? 0)}</span>

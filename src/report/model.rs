@@ -67,6 +67,8 @@ pub struct UnreachableClassRow {
     /// a dominator pass over the unreachable subgraph (a synthetic root over the
     /// garbage roots). Goes beyond MAT, which discards unreachable objects.
     pub retained: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
 }
 
 /// One node in the per-garbage-root dominator sub-tree. A garbage root is an

@@ -18,6 +18,8 @@ export interface HistRow {
   // GC root. Present for the top-20 histogram rows by retained heap.
   // Absent for synthetic rows and rows outside the top-20.
   root_path?: RootPathStep[];
+  /** "jdk" | "framework" | "other" | custom category. Empty string on pre-v14 reports (treat as "other"). */
+  category?: string;
 }
 
 export interface GcRootTypeRow {
@@ -523,6 +525,7 @@ export interface UnreachableClassRow {
   objects: number;
   shallow: number;
   retained: number;
+  category?: string;
 }
 
 // One node in the garbage-root dominator tree (recursive).

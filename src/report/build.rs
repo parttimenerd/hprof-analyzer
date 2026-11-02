@@ -3265,11 +3265,16 @@ fn build_system_overview(
         order.truncate(UNREACHABLE_HISTOGRAM_CAP);
         order
             .into_iter()
-            .map(|ci| UnreachableClassRow {
-                pretty_class: pretty_class_name(&g.class_names[ci]),
-                objects: unreach_count[ci],
-                shallow: unreach_shallow[ci],
-                retained: unreach_retained_canonical[ci],
+            .map(|ci| {
+                let pretty = pretty_class_name(&g.class_names[ci]);
+                let category = classifier.classify(&pretty).to_string();
+                UnreachableClassRow {
+                    pretty_class: pretty,
+                    objects: unreach_count[ci],
+                    shallow: unreach_shallow[ci],
+                    retained: unreach_retained_canonical[ci],
+                    category,
+                }
             })
             .collect()
     };
