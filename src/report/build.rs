@@ -2105,10 +2105,14 @@ fn build_dominator_analysis(
             .then(a.dominator_class.cmp(&b.dominator_class))
             .then(a.dominated_class.cmp(&b.dominated_class))
     });
+    let pairs_total_count = pairs_vec.len() as u64;
+    let pairs_truncated = pairs_vec.len() > IMDOM_PAIRS_CAP;
     pairs_vec.truncate(IMDOM_PAIRS_CAP);
     let immediate_dominators = ImmediateDominators {
         rows,
         pairs: pairs_vec,
+        pairs_truncated,
+        pairs_total_count,
     };
 
     DominatorAnalysis {

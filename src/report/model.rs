@@ -1146,6 +1146,13 @@ pub struct ImmediateDominators {
     /// Additive; defaults to empty for round-trip with older JSON.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<ImmDomPair>,
+    /// True when `pairs` was capped and some pairs were dropped. Additive.
+    #[serde(default, skip_serializing_if = "crate::report::model::is_false")]
+    pub pairs_truncated: bool,
+    /// Total number of distinct (dominator_class, dominated_class) pairs before
+    /// capping. Equals `pairs.len()` when not truncated. Additive.
+    #[serde(default, skip_serializing_if = "crate::report::model::is_zero_u64")]
+    pub pairs_total_count: u64,
 }
 
 /// Always-on dominator-tree analysis grouping Big Drops (#1) and Immediate
@@ -2021,6 +2028,18 @@ pub struct RetainerRow {
     pub name: String,
     pub kind: String,
     pub retained: u64,
+}
+
+/// serde skip helper: skip `u64` field when it is zero.
+#[inline]
+pub fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+/// serde skip helper: skip `bool` field when it is false.
+#[inline]
+pub fn is_false(v: &bool) -> bool {
+    !v
 }
 
 #[cfg(test)]

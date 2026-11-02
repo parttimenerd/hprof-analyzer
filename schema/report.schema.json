@@ -2305,6 +2305,16 @@
             "$ref": "#/$defs/ImmDomPair"
           }
         },
+        "pairs_total_count": {
+          "description": "Total number of distinct (dominator_class, dominated_class) pairs before\ncapping. Equals `pairs.len()` when not truncated. Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pairs_truncated": {
+          "description": "True when `pairs` was capped and some pairs were dropped. Additive.",
+          "type": "boolean"
+        },
         "rows": {
           "description": "Rows sorted by dominated_shallow descending, capped.",
           "type": "array",
