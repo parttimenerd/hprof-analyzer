@@ -25,6 +25,8 @@ _All sizes are binary (1 KB = 1024 bytes, 1 MB = 1024 KB, and so on)._
 - [Allocation Sites](#allocation-sites)
 - [Retention Concentration](#retention-concentration)
 - [Dominator-Depth Distribution](#dominator-depth-distribution)
+- [Collection Retained Heap](#collection-retained-heap)
+- [Resource Handles](#resource-handles)
 - [Glossary](#glossary)
 
 ----
@@ -60,7 +62,7 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **Concentration:** diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Inspect individual suspects to find the most impactful target. See [Leak Suspects](#leak-suspects).
 - **Heap Shape:** deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects — 90% of objects within depth 7, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 objects each hold ≥1%. See [Top Consumers](#top-consumers).
-- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause: repeatedly allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode. See [Off-Heap NIO](#off-heap-nio).
 - **Fixed per-Object Header Overhead:** 2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Empty-Collection Cemetery:** 5,497 of 5,998 tracked collections (91.6%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
 - **Component Retention Imbalance:** Component `<boot>` retains 76.0% of heap (31.4 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.1%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
@@ -74,6 +76,15 @@ _Automated signals pointing to where memory concentrates and what to investigate
 | ------------------------------------------ | ----------: |
 | [Under-filled Object Arrays](#collections) |      4.4 MB |
 | [Under-filled Collections](#collections)   |    186.4 KB |
+
+
+### Waste by Source
+
+Reclaimable bytes broken down by waste category and rule:
+
+| Category            | Rule                                                        | Reclaimable |
+| ------------------- | ----------------------------------------------------------- | ----------: |
+| Per-Object Overhead | [Fixed per-Object Header Overhead](#object-header-overhead) |      2.7 MB |
 
 ## System Overview
 
@@ -598,6 +609,46 @@ _Classes ranked by total retained heap. High retained with low shallow means the
 | 18 | `java.util.concurrent.ConcurrentHashMap`                              |       117 | 611.2 KB |
 | 19 | `java.util.concurrent.ConcurrentHashMap$Node[]`                       |        93 | 604.7 KB |
 | 20 | `java.util.LinkedHashMap`                                             |     5,517 | 507.4 KB |
+| 21 | `java.util.concurrent.ConcurrentHashMap$Node`                         |     7,160 | 463.1 KB |
+| 22 | `java.util.jar.Attributes`                                            |     5,477 | 448.0 KB |
+| 23 | `scala.concurrent.stm.skel.CallbackList`                              |       774 | 417.2 KB |
+| 24 | `scala.Function1[]`                                                   |       774 | 399.1 KB |
+| 25 | `java.lang.Thread`                                                    |        27 | 309.1 KB |
+| 26 | `java.net.URLClassLoader`                                             |         2 | 243.5 KB |
+| 27 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |         1 | 155.3 KB |
+| 28 | `java.util.LinkedHashMap$Entry`                                       |     1,199 | 152.7 KB |
+| 29 | `java.util.ArrayList`                                                 |       102 | 150.8 KB |
+| 30 | `org.renaissance.core.ModuleLoader`                                   |         2 | 147.6 KB |
+| 31 | `java.util.LinkedHashSet`                                             |        38 | 144.5 KB |
+| 32 | `scala.collection.mutable.ArrayBuffer`                                |         1 | 125.8 KB |
+| 33 | `java.time.zone.TzdbZoneRulesProvider`                                |         1 | 118.2 KB |
+| 34 | `byte[][]`                                                            |         1 |  94.1 KB |
+| 35 | `java.util.ImmutableCollections$SetN`                                 |       149 |  91.5 KB |
+| 36 | `java.lang.invoke.MethodType`                                         |       666 |  84.0 KB |
+| 37 | `org.renaissance.core.BenchmarkSuite`                                 |         1 |  75.3 KB |
+| 38 | `java.util.Optional`                                                  |         4 |  73.9 KB |
+| 39 | `char[]`                                                              |       225 |  71.8 KB |
+| 40 | `java.util.HashSet`                                                   |       212 |  66.7 KB |
+| 41 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                     |         1 |  65.9 KB |
+| 42 | `java.lang.Module`                                                    |        70 |  65.0 KB |
+| 43 | `scala.concurrent.stm.skel.SimpleRandom$`                             |         1 |  64.0 KB |
+| 44 | `sun.util.cldr.CLDRLocaleProviderAdapter`                             |         1 |  61.6 KB |
+| 45 | `java.lang.invoke.MemberName`                                         |       763 |  55.5 KB |
+| 46 | `java.lang.ThreadLocal$ThreadLocalMap`                                |       130 |  54.6 KB |
+| 47 | `sun.security.provider.Sun`                                           |         1 |  53.7 KB |
+| 48 | `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`                        |       130 |  51.5 KB |
+| 49 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                |         1 |  51.4 KB |
+| 50 | `jdk.internal.util.ReferencedKeySet`                                  |         1 |  50.3 KB |
+| 51 | `jdk.internal.util.ReferencedKeyMap`                                  |         1 |  50.3 KB |
+| 52 | `java.lang.invoke.LambdaForm`                                         |       128 |  46.0 KB |
+| 53 | `java.lang.ThreadLocal$ThreadLocalMap$Entry`                          |       261 |  41.4 KB |
+| 54 | `java.lang.module.ModuleDescriptor`                                   |        62 |  40.0 KB |
+| 55 | `java.lang.invoke.MethodTypeForm`                                     |       159 |  38.6 KB |
+| 56 | `jdk.internal.math.FDBigInteger[]`                                    |         1 |  36.2 KB |
+| 57 | `jdk.internal.math.FDBigInteger`                                      |       341 |  34.9 KB |
+| 58 | `java.io.PrintStream`                                                 |         2 |  34.6 KB |
+| 59 | `java.lang.ref.SoftReference[]`                                       |       250 |  33.6 KB |
+| 60 | `java.io.BufferedWriter`                                              |         2 |  32.2 KB |
 
 #### Who Holds Each Class?
 
@@ -618,6 +669,7 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`      |    34 | 985.7 KB |
 | `scala.concurrent.stm.ccstm.InTxnImpl`                                     |   129 | 585.3 KB |
 |   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`  |    34 | 985.7 KB |
 |   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                           |     1 |  29.0 KB |
@@ -632,6 +684,8 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `scala.collection.convert.JavaCollectionWrappers$JListWrapper`         |     1 |    176 B |
 |   ↳ `java.lang.module.ModuleDescriptor$Version`                            |     3 |    152 B |
 |   ↳ `java.util.logging.Logger`                                             |     1 |    128 B |
+| `java.net.URLClassLoader`                                                  |     2 | 140.3 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`           |     3 | 125.8 KB |
 | `scala.collection.mutable.ArrayBuffer`                                     |     1 | 125.8 KB |
 |   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`       |     1 | 125.8 KB |
 | `(GC Root)`                                                                |     4 | 106.6 KB |
@@ -643,28 +697,7 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `jdk.internal.module.SystemModuleFinders$SystemModuleFinder`           |     1 |    536 B |
 |   ↳ `java.lang.module.Configuration`                                       |     1 |    536 B |
 |   ↳ `java.lang.Class`                                                      |     4 |    312 B |
-| `java.lang.Object[]`                                                       |   137 |  54.3 KB |
-|   ↳ `java.lang.Class`                                                      | 1,288 |   2.7 MB |
-|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`                                 |   129 | 585.3 KB |
-|   ↳ `java.util.ArrayList`                                                  |   102 | 148.4 KB |
-|   ↳ `scala.collection.mutable.ArrayBuffer`                                 |     1 | 125.8 KB |
-|   ↳ `java.util.ImmutableCollections$SetN`                                  |   149 |  90.1 KB |
-|   ↳ `java.lang.Object[]`                                                   |   137 |  54.3 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                     |     2 |  12.8 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                     |   277 |   7.7 KB |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                            |    77 |   7.5 KB |
-|   ↳ `java.util.ImmutableCollections$MapN`                                  |     6 |   6.6 KB |
-| `java.util.concurrent.atomic.AtomicReferenceArray`                         |     2 |  12.8 KB |
-|   ↳ `scala.concurrent.stm.ccstm.TxnSlotManager`                            |     1 |   8.3 KB |
-|   ↳ `scala.concurrent.stm.ccstm.WakeupManager`                             |     1 |   4.6 KB |
-| `java.lang.invoke.LambdaForm$Name`                                         |   277 |   7.7 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name[]`                                   |   330 |  24.2 KB |
-|   ↳ `java.lang.invoke.LambdaForm`                                          |     4 |    128 B |
-| `java.util.concurrent.CopyOnWriteArrayList`                                |    77 |   7.5 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |    71 |   9.3 KB |
-|   ↳ `java.util.logging.Logger$ConfigurationData`                           |     4 |   1.1 KB |
-|   ↳ `java.lang.Class`                                                      |     1 |     64 B |
-|   ↳ `java.util.logging.LogManager`                                         |     1 |     56 B |
+| `sun.util.cldr.CLDRLocaleProviderAdapter`                                  |     1 |  60.3 KB |
 
 **`scala.concurrent.stm.ccstm.InTxnImpl`**
 
@@ -672,149 +705,96 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | --------------------------------------------------------------------- | ----: | -------: |
 | `(GC Root)`                                                           |    94 |   2.7 MB |
 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |    34 | 985.7 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`                        |   261 |  41.4 KB |
 | `java.lang.ThreadLocal$ThreadLocalMap$Entry`                          |     1 |  29.0 KB |
 |   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`                    |   261 |  41.4 KB |
 
 **`java.lang.Class`**
 
-| Holder Class                                                               | Count | Retained |
-| -------------------------------------------------------------------------- | ----: | -------: |
-| `(GC Root)`                                                                | 1,688 |   3.4 MB |
-| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
-|   ↳ `java.lang.Class`                                                      | 1,288 |   2.7 MB |
-|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`                                 |   129 | 585.3 KB |
-|   ↳ `java.util.ArrayList`                                                  |   102 | 148.4 KB |
-|   ↳ `scala.collection.mutable.ArrayBuffer`                                 |     1 | 125.8 KB |
-|   ↳ `java.util.ImmutableCollections$SetN`                                  |   149 |  90.1 KB |
-|   ↳ `java.lang.Object[]`                                                   |   137 |  54.3 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                     |     2 |  12.8 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                     |   277 |   7.7 KB |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                            |    77 |   7.5 KB |
-|   ↳ `java.util.ImmutableCollections$MapN`                                  |     6 |   6.6 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
-|   ↳ `java.lang.Object[]`                                                   |   118 |  21.1 KB |
-|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`                 |     1 |    144 B |
-| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
-|   ↳ `java.lang.invoke.DirectMethodHandle`                                  |   169 |  19.1 KB |
-|   ↳ `java.lang.invoke.LambdaForm`                                          |   128 |  10.7 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |   242 |   9.5 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Special`                          |    63 |   7.4 KB |
-|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                            |    99 |   5.0 KB |
-|   ↳ `java.lang.invoke.MemberName[]`                                        |     8 |    448 B |
-|   ↳ `java.lang.Object[]`                                                   |     6 |    336 B |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |     8 |    320 B |
-|   ↳ `java.lang.invoke.MethodType`                                          |     1 |     56 B |
-|   ↳ `java.lang.Thread`                                                     |     1 |     56 B |
-| `java.lang.Class`                                                          |    18 |    432 B |
-|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
-|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
-|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
-|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
-|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
-|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
-|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
-|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
-| `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`                |     1 |     48 B |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                         |     1 |     64 B |
-| `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`             |     1 |     48 B |
-|   ↳ `java.lang.Class`                                                      |     1 |     64 B |
-| `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0`     |     1 |     48 B |
-| `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0`     |     1 |     48 B |
-| `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`       |     1 |     48 B |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                         |     1 |     64 B |
+| Holder Class                                           | Count | Retained |
+| ------------------------------------------------------ | ----: | -------: |
+| `(GC Root)`                                            | 1,688 |   3.4 MB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                 |   129 | 585.3 KB |
+| `java.util.ArrayList`                                  |   102 | 148.4 KB |
+| `java.lang.Object[]`                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.Class`                                  | 1,288 |   2.7 MB |
+|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`             |   129 | 585.3 KB |
+|   ↳ `java.util.ArrayList`                              |   102 | 148.4 KB |
+|   ↳ `scala.collection.mutable.ArrayBuffer`             |     1 | 125.8 KB |
+|   ↳ `java.util.ImmutableCollections$SetN`              |   149 |  90.1 KB |
+|   ↳ `java.lang.Object[]`                               |   137 |  54.3 KB |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray` |     2 |  12.8 KB |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                 |   277 |   7.7 KB |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList`        |    77 |   7.5 KB |
+|   ↳ `java.util.ImmutableCollections$MapN`              |     6 |   6.6 KB |
+| `scala.collection.mutable.ArrayBuffer`                 |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                  |   149 |  90.1 KB |
+| `java.lang.invoke.DirectMethodHandle`                  |   169 |  19.1 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`     |     2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm`                          |   128 |  10.7 KB |
+| `scala.math.BigInt$`                                   |     1 |   8.0 KB |
 
 **`byte[]`**
 
-| Holder Class                                                               |  Count | Retained |
-| -------------------------------------------------------------------------- | -----: | -------: |
-| `java.lang.String`                                                         | 23,215 |   1.2 MB |
-|   ↳ `java.util.HashMap$Node`                                               |  7,097 | 572.2 KB |
-|   ↳ `java.lang.Object[]`                                                   |  1,695 | 245.1 KB |
-|   ↳ `java.lang.Class`                                                      |  1,721 | 106.8 KB |
-|   ↳ `java.util.LinkedHashMap$Entry`                                        |  1,139 | 105.3 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |    909 |  60.1 KB |
-|   ↳ `java.lang.invoke.MethodType`                                          |    286 |  30.9 KB |
-|   ↳ `java.lang.invoke.MemberName`                                          |    283 |  18.0 KB |
-|   ↳ `java.lang.String[]`                                                   |    252 |  14.5 KB |
-|   ↳ `java.net.URI`                                                         |    129 |   7.5 KB |
-|   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`  |    128 |   7.0 KB |
-| `java.util.zip.ZipFile$Source`                                             |     19 |   1.1 MB |
-| `byte[][]`                                                                 |    345 |  92.8 KB |
-|   ↳ `java.lang.Class`                                                      |      1 |  94.1 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`                              |    229 |  59.6 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                        |  5,713 | 465.9 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |  1,447 | 104.9 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`                            |    116 |  33.2 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap`                               |     93 | 608.6 KB |
-| `java.nio.HeapByteBuffer`                                                  |      5 |   9.6 KB |
-|   ↳ `sun.nio.cs.StreamDecoder`                                             |      1 |   8.1 KB |
-|   ↳ `sun.nio.cs.StreamEncoder`                                             |      3 |   1.7 KB |
-| `(GC Root)`                                                                |     76 |   3.9 KB |
-| `java.lang.Class`                                                          |     17 |   1.3 KB |
-|   ↳ `java.lang.Object[]`                                                   |    806 | 127.6 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |     70 |   4.5 KB |
-|   ↳ `java.lang.invoke.MemberName`                                          |     61 |    976 B |
-|   ↳ `java.lang.Class`                                                      |     18 |    432 B |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |      1 |     48 B |
-|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |      1 |     48 B |
-|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |      1 |     48 B |
-|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |      1 |     48 B |
-|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |      1 |     48 B |
-|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |      1 |     48 B |
-| `sun.security.provider.NativePRNG$RandomIO`                                |      3 |    816 B |
-|   ↳ `java.lang.Class`                                                      |      3 |   1.9 KB |
-| `java.io.RandomAccessFile`                                                 |     19 |    456 B |
+| Holder Class                                                              |  Count | Retained |
+| ------------------------------------------------------------------------- | -----: | -------: |
+| `java.util.HashMap$Node[]`                                                |  7,466 |   1.5 MB |
+| `java.lang.String`                                                        | 23,215 |   1.2 MB |
+|   ↳ `java.util.HashMap$Node`                                              |  7,097 | 572.2 KB |
+|   ↳ `java.lang.Object[]`                                                  |  1,695 | 245.1 KB |
+|   ↳ `java.lang.Class`                                                     |  1,721 | 106.8 KB |
+|   ↳ `java.util.LinkedHashMap$Entry`                                       |  1,139 | 105.3 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                         |    909 |  60.1 KB |
+|   ↳ `java.lang.invoke.MethodType`                                         |    286 |  30.9 KB |
+|   ↳ `java.lang.invoke.MemberName`                                         |    283 |  18.0 KB |
+|   ↳ `java.lang.String[]`                                                  |    252 |  14.5 KB |
+|   ↳ `java.net.URI`                                                        |    129 |   7.5 KB |
+|   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |    128 |   7.0 KB |
+| `java.util.zip.ZipFile$Source`                                            |     19 |   1.1 MB |
+| `java.util.concurrent.ConcurrentHashMap`                                  |     93 | 608.6 KB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                    |    129 | 585.3 KB |
+| `java.util.ArrayList`                                                     |    102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                                    |      1 | 125.8 KB |
+| `java.util.LinkedHashMap$Entry`                                           |  1,139 | 105.3 KB |
+| `byte[][]`                                                                |    345 |  92.8 KB |
+|   ↳ `java.lang.Class`                                                     |      1 |  94.1 KB |
+| `java.util.ImmutableCollections$SetN`                                     |    149 |  90.1 KB |
 
 **`java.lang.Object`**
 
-| Holder Class                                                               |   Count | Retained |
-| -------------------------------------------------------------------------- | ------: | -------: |
-| `java.lang.Object[]`                                                       | 131,072 |   2.0 MB |
-|   ↳ `java.lang.Class`                                                      |   1,288 |   2.7 MB |
-|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`                                 |     129 | 585.3 KB |
-|   ↳ `java.util.ArrayList`                                                  |     102 | 148.4 KB |
-|   ↳ `scala.collection.mutable.ArrayBuffer`                                 |       1 | 125.8 KB |
-|   ↳ `java.util.ImmutableCollections$SetN`                                  |     149 |  90.1 KB |
-|   ↳ `java.lang.Object[]`                                                   |     137 |  54.3 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                     |       2 |  12.8 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                     |     277 |   7.7 KB |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                            |      77 |   7.5 KB |
-|   ↳ `java.util.ImmutableCollections$MapN`                                  |       6 |   6.6 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`                              |   2,906 |  45.4 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                        |   5,713 | 465.9 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |   1,447 | 104.9 KB |
-| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`      |     128 |   2.0 KB |
-| `java.util.concurrent.CopyOnWriteArrayList`                                |      77 |   1.2 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |      71 |   9.3 KB |
-|   ↳ `java.util.logging.Logger$ConfigurationData`                           |       4 |   1.1 KB |
-|   ↳ `java.lang.Class`                                                      |       1 |     64 B |
-|   ↳ `java.util.logging.LogManager`                                         |       1 |     56 B |
-| `java.lang.Thread`                                                         |      27 |    432 B |
-|   ↳ `java.lang.Object[]`                                                   |       2 |    576 B |
-| `java.io.RandomAccessFile`                                                 |      19 |    304 B |
-| `java.lang.Class`                                                          |      14 |    224 B |
-|   ↳ `java.lang.Object[]`                                                   |     806 | 127.6 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |      70 |   4.5 KB |
-|   ↳ `java.lang.invoke.MemberName`                                          |      61 |    976 B |
-|   ↳ `java.lang.Class`                                                      |      18 |    432 B |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |       1 |     48 B |
-|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |       1 |     48 B |
-|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |       1 |     48 B |
-|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |       1 |     48 B |
-|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |       1 |     48 B |
-|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |       1 |     48 B |
-| `sun.security.provider.NativePRNG$RandomIO`                                |       9 |    144 B |
-|   ↳ `java.lang.Class`                                                      |       3 |   1.9 KB |
-| `(GC Root)`                                                                |       3 |     48 B |
-| `java.io.FileInputStream`                                                  |       3 |     48 B |
+| Holder Class                                           |   Count | Retained |
+| ------------------------------------------------------ | ------: | -------: |
+| `java.lang.Object[]`                                   | 131,072 |   2.0 MB |
+|   ↳ `java.lang.Class`                                  |   1,288 |   2.7 MB |
+|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`             |     129 | 585.3 KB |
+|   ↳ `java.util.ArrayList`                              |     102 | 148.4 KB |
+|   ↳ `scala.collection.mutable.ArrayBuffer`             |       1 | 125.8 KB |
+|   ↳ `java.util.ImmutableCollections$SetN`              |     149 |  90.1 KB |
+|   ↳ `java.lang.Object[]`                               |     137 |  54.3 KB |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray` |       2 |  12.8 KB |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                 |     277 |   7.7 KB |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList`        |      77 |   7.5 KB |
+|   ↳ `java.util.ImmutableCollections$MapN`              |       6 |   6.6 KB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                 |     129 | 585.3 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`        |   5,713 | 465.9 KB |
+| `java.util.ArrayList`                                  |     102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                 |       1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                  |     149 |  90.1 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`          |   2,906 |  45.4 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`    |   5,713 | 465.9 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |   1,447 | 104.9 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`     |       2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm$Name`                     |     277 |   7.7 KB |
+| `java.util.ImmutableCollections$MapN`                  |       6 |   6.6 KB |
 
 **`java.lang.String`**
 
 | Holder Class                                                               | Count | Retained |
 | -------------------------------------------------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node[]`                                                 | 7,506 |   1.5 MB |
 | `(GC Root)`                                                                | 9,412 | 626.9 KB |
+| `java.util.concurrent.ConcurrentHashMap`                                   |    93 | 608.6 KB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                     |   129 | 585.3 KB |
 | `java.util.HashMap$Node`                                                   | 7,097 | 572.2 KB |
 |   ↳ `java.util.HashMap$Node[]`                                             | 7,466 |   1.5 MB |
 |   ↳ `java.util.HashMap$Node`                                               | 2,410 | 489.9 KB |
@@ -829,6 +809,9 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `java.lang.invoke.LambdaForm$Name`                                     |   277 |   7.7 KB |
 |   ↳ `java.util.concurrent.CopyOnWriteArrayList`                            |    77 |   7.5 KB |
 |   ↳ `java.util.ImmutableCollections$MapN`                                  |     6 |   6.6 KB |
+| `java.util.LinkedHashMap`                                                  | 1,199 | 152.7 KB |
+| `java.util.ArrayList`                                                      |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                                     |     1 | 125.8 KB |
 | `java.lang.Class`                                                          | 1,721 | 106.8 KB |
 |   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
@@ -840,43 +823,12 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
-| `java.util.LinkedHashMap$Entry`                                            | 1,139 | 105.3 KB |
-|   ↳ `java.util.LinkedHashMap`                                              | 1,199 | 152.7 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`                              |   909 |  60.1 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                        | 5,713 | 465.9 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          | 1,447 | 104.9 KB |
-| `java.lang.invoke.MethodType`                                              |   286 |  30.9 KB |
-|   ↳ `jdk.internal.util.WeakReferenceKey`                                   |     6 |    240 B |
-| `java.lang.invoke.MemberName`                                              |   283 |  18.0 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle`                                  |   169 |  19.1 KB |
-|   ↳ `java.lang.invoke.LambdaForm`                                          |   128 |  10.7 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |   242 |   9.5 KB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Special`                          |    63 |   7.4 KB |
-|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                            |    99 |   5.0 KB |
-|   ↳ `java.lang.invoke.MemberName[]`                                        |     8 |    448 B |
-|   ↳ `java.lang.Object[]`                                                   |     6 |    336 B |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |     8 |    320 B |
-|   ↳ `java.lang.invoke.MethodType`                                          |     1 |     56 B |
-|   ↳ `java.lang.Thread`                                                     |     1 |     56 B |
-| `java.lang.String[]`                                                       |   252 |  14.5 KB |
-|   ↳ `java.lang.Class`                                                      |    24 |  17.5 KB |
-|   ↳ `java.util.HashMap$Node`                                               |    82 |   4.5 KB |
-|   ↳ `sun.security.util.KnownOIDs`                                          |   264 |   4.4 KB |
-|   ↳ `java.util.Arrays$ArrayList`                                           |     1 |   2.4 KB |
-|   ↳ `java.util.HashMap$Node[]`                                             |    40 |   1.7 KB |
-|   ↳ `java.lang.String[][]`                                                 |    25 |    600 B |
-|   ↳ `java.lang.Thread`                                                     |     1 |    128 B |
-|   ↳ `sun.nio.cs.UTF_8`                                                     |     1 |     24 B |
-|   ↳ `sun.security.util.KnownOIDs$2`                                        |     1 |     16 B |
-|   ↳ `sun.security.util.KnownOIDs$1`                                        |     1 |     16 B |
-| `java.net.URI`                                                             |   129 |   7.5 KB |
-|   ↳ `java.lang.Class`                                                      |     3 |    576 B |
-|   ↳ `jdk.internal.module.ModuleReferenceImpl`                              |     1 |    200 B |
 
 **`java.util.HashMap`**
 
 | Holder Class                                                               | Count | Retained |
 | -------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.ref.SoftReference`                                              |     8 |   1.1 MB |
 | `java.util.jar.Manifest`                                                   |     8 |   1.1 MB |
 |   ↳ `java.lang.ref.SoftReference`                                          |     8 |   1.1 MB |
 | `org.renaissance.core.ModuleLoader`                                        |     2 | 147.6 KB |
@@ -884,6 +836,8 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `java.lang.Thread`                                                     |     1 |  73.8 KB |
 | `java.lang.Thread`                                                         |     1 | 137.1 KB |
 |   ↳ `java.lang.Object[]`                                                   |     2 |    576 B |
+| `java.lang.Object[]`                                                       |   808 | 128.1 KB |
+| `java.util.Optional`                                                       |     1 |  73.8 KB |
 | `java.util.HashSet`                                                        |   212 |  63.4 KB |
 |   ↳ `java.util.HashMap$Node`                                               |   140 |  28.3 KB |
 |   ↳ `java.util.Collections$UnmodifiableSet`                                |     5 |  24.0 KB |
@@ -897,6 +851,7 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `java.lang.Class`                                                      |     1 |     48 B |
 |   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`                     |     1 |     48 B |
 |   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                 |     1 |     48 B |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                            |    31 |  41.9 KB |
 | `java.lang.Class`                                                          |    21 |  37.5 KB |
 |   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
@@ -908,14 +863,6 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
-| `sun.text.resources.cldr.FormatData`                                       |     1 |  28.3 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                        |     1 |  28.3 KB |
-| `sun.text.resources.cldr.FormatData_en`                                    |     1 |  19.9 KB |
-|   ↳ `sun.util.resources.Bundles$BundleReference`                           |     1 |  20.0 KB |
-| `java.security.Provider$Service`                                           |    42 |  13.3 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                        |    30 |  13.6 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                          |    25 |   5.0 KB |
-| `java.lang.ModuleLayer`                                                    |     1 |   4.2 KB |
 
 **`java.util.HashMap$Node[]`**
 
@@ -932,21 +879,28 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `sun.text.resources.cldr.FormatData_en` |     1 |  19.9 KB |
 |   ↳ `java.security.Provider$Service`        |    42 |  13.3 KB |
 |   ↳ `java.lang.ModuleLayer`                 |     1 |   4.2 KB |
-| `java.util.LinkedHashMap`                   |    47 |   9.8 KB |
-|   ↳ `java.util.jar.Attributes`              | 5,477 | 362.4 KB |
-|   ↳ `java.util.LinkedHashSet`               |    38 | 143.9 KB |
-|   ↳ `java.util.Collections$SingletonMap`    |     2 |   1.1 KB |
+| `java.util.jar.Manifest`                    |     8 |   1.1 MB |
+| `java.util.jar.Attributes`                  | 5,477 | 362.4 KB |
+| `org.renaissance.core.ModuleLoader`         |     2 | 147.6 KB |
+| `java.util.LinkedHashSet`                   |    38 | 143.9 KB |
+| `java.lang.Thread`                          |     1 | 137.1 KB |
+| `java.util.HashSet`                         |   212 |  63.4 KB |
+| `java.lang.Module`                          |    56 |  48.4 KB |
+| `java.lang.Class`                           |    21 |  37.5 KB |
+| `sun.text.resources.cldr.FormatData`        |     1 |  28.3 KB |
 
 **`java.util.HashMap$Node`**
 
 | Holder Class                   | Count | Retained |
 | ------------------------------ | ----: | -------: |
+| `java.util.HashMap`            |   348 |   1.5 MB |
 | `java.util.HashMap$Node[]`     | 7,466 |   1.5 MB |
 |   ↳ `java.util.HashMap`        |   348 |   1.5 MB |
 |   ↳ `java.util.LinkedHashMap`  |    47 |   9.8 KB |
 | `java.util.HashMap$Node`       | 2,410 | 489.9 KB |
 |   ↳ `java.util.HashMap$Node[]` | 7,466 |   1.5 MB |
 |   ↳ `java.util.HashMap$Node`   | 2,410 | 489.9 KB |
+| `java.util.LinkedHashMap`      |    47 |   9.8 KB |
 
 **`java.util.zip.ZipFile$Source`**
 
@@ -959,13 +913,16 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | Holder Class                                           | Count | Retained |
 | ------------------------------------------------------ | ----: | -------: |
 | `java.util.jar.JarFile`                                |     8 |   1.1 MB |
+| `java.lang.invoke.MethodTypeForm`                      |   250 |  33.6 KB |
 | `java.lang.ref.SoftReference[]`                        |   129 |  15.1 KB |
 |   ↳ `java.lang.invoke.MethodTypeForm`                  |   250 |  33.6 KB |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    984 B |
 | `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |    984 B |
 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |    984 B |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    984 B |
+| `java.util.concurrent.ConcurrentHashMap$Node`          |    10 |    720 B |
 | `sun.util.locale.BaseLocale$Key`                       |    10 |    400 B |
 |   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |    10 |    720 B |
+| `java.lang.Class`                                      |     1 |    304 B |
 | `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    280 B |
 |   ↳ `java.lang.Class`                                  |     1 |    304 B |
 
@@ -976,7 +933,13 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `scala.concurrent.stm.ccstm.InTxnImpl`                                     |   129 |   1.0 MB |
 |   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`  |    34 | 985.7 KB |
 |   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                           |     1 |  29.0 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`      |    59 | 991.0 KB |
+| `java.util.ArrayList`                                                      |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                                     |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                                      |   149 |  90.1 KB |
 | `scala.concurrent.stm.skel.SimpleRandom$`                                  |     1 |  64.0 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`                               |     1 |  29.0 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`                         |     2 |  12.8 KB |
 | `java.lang.Class`                                                          |     7 |  10.3 KB |
 |   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
@@ -988,24 +951,7 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
-| `java.util.concurrent.atomic.AtomicLongArray`                              |     1 |   4.0 KB |
-|   ↳ `scala.concurrent.stm.ccstm.WakeupManager`                             |     1 |   4.0 KB |
-| `scala.concurrent.stm.ccstm.RetrySet`                                      |    25 |   2.9 KB |
-|   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`  |    25 |   5.3 KB |
-| `(GC Root)`                                                                |     1 |   2.1 KB |
-| `java.lang.Object[]`                                                       |     6 |   1.3 KB |
-|   ↳ `java.lang.Class`                                                      | 1,288 |   2.7 MB |
-|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`                                 |   129 | 585.3 KB |
-|   ↳ `java.util.ArrayList`                                                  |   102 | 148.4 KB |
-|   ↳ `scala.collection.mutable.ArrayBuffer`                                 |     1 | 125.8 KB |
-|   ↳ `java.util.ImmutableCollections$SetN`                                  |   149 |  90.1 KB |
-|   ↳ `java.lang.Object[]`                                                   |   137 |  54.3 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                     |     2 |  12.8 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                     |   277 |   7.7 KB |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                            |    77 |   7.5 KB |
-|   ↳ `java.util.ImmutableCollections$MapN`                                  |     6 |   6.6 KB |
-| `java.time.zone.ZoneRules`                                                 |     2 |    544 B |
-| `sun.invoke.util.Wrapper`                                                  |     1 |     16 B |
+| `java.lang.invoke.LambdaForm$Name`                                         |   277 |   7.7 KB |
 
 **`java.util.jar.JarFile`**
 
@@ -1017,6 +963,7 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 
 | Holder Class                                               | Count | Retained |
 | ---------------------------------------------------------- | ----: | -------: |
+| `java.util.jar.JarFile`                                    |     8 |   1.1 MB |
 | `java.lang.ref.SoftReference`                              |     8 |   1.1 MB |
 |   ↳ `java.util.jar.JarFile`                                |     8 |   1.1 MB |
 |   ↳ `java.lang.ref.SoftReference[]`                        |   129 |  15.1 KB |
@@ -1025,6 +972,12 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    984 B |
 |   ↳ `sun.util.locale.BaseLocale$Key`                       |    10 |    400 B |
 |   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    280 B |
+| `java.lang.ref.SoftReference[]`                            |   129 |  15.1 KB |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     1 |    984 B |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`         |     1 |    984 B |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     1 |    984 B |
+| `sun.util.locale.BaseLocale$Key`                           |    10 |    400 B |
+| `sun.security.util.CryptoAlgorithmConstraints`             |     1 |    280 B |
 
 **`org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`**
 
@@ -1039,6 +992,8 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `scala.concurrent.stm.ccstm.InTxnImpl`                                    |   258 |   1.0 MB |
 |   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |    34 | 985.7 KB |
 |   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                          |     1 |  29.0 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`     |    59 | 991.0 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`                              |     1 |  29.0 KB |
 | `scala.concurrent.stm.ccstm.RetrySet`                                     |    25 |   1.8 KB |
 |   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |    25 |   5.3 KB |
 
@@ -1046,10 +1001,16 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 
 | Holder Class                                                               | Count | Retained |
 | -------------------------------------------------------------------------- | ----: | -------: |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`      |    34 | 985.7 KB |
 | `scala.concurrent.stm.ccstm.InTxnImpl`                                     |   258 | 650.0 KB |
 |   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`  |    34 | 985.7 KB |
 |   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                           |     1 |  29.0 KB |
 | `java.util.zip.ZipFile$Source`                                             |    38 | 177.6 KB |
+| `java.util.ArrayList`                                                      |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                                     |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                                      |   149 |  90.1 KB |
+| `jdk.internal.math.FDBigInteger[]`                                         |   341 |  34.8 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`                               |     1 |  29.0 KB |
 | `jdk.internal.math.FDBigInteger`                                           |   341 |  24.2 KB |
 |   ↳ `jdk.internal.math.FDBigInteger[]`                                     |   340 |  34.8 KB |
 |   ↳ `java.lang.Object[]`                                                   |     1 |     48 B |
@@ -1064,38 +1025,14 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
 |   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
-| `java.math.BigInteger`                                                     |    59 |   1.4 KB |
-|   ↳ `java.math.BigInteger[]`                                               |    70 |   4.0 KB |
-|   ↳ `java.lang.Class`                                                      |    20 |    888 B |
-| `java.lang.Object[]`                                                       |     6 |    664 B |
-|   ↳ `java.lang.Class`                                                      | 1,288 |   2.7 MB |
-|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`                                 |   129 | 585.3 KB |
-|   ↳ `java.util.ArrayList`                                                  |   102 | 148.4 KB |
-|   ↳ `scala.collection.mutable.ArrayBuffer`                                 |     1 | 125.8 KB |
-|   ↳ `java.util.ImmutableCollections$SetN`                                  |   149 |  90.1 KB |
-|   ↳ `java.lang.Object[]`                                                   |   137 |  54.3 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                     |     2 |  12.8 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                     |   277 |   7.7 KB |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                            |    77 |   7.5 KB |
-|   ↳ `java.util.ImmutableCollections$MapN`                                  |     6 |   6.6 KB |
-| `int[][]`                                                                  |    10 |    560 B |
-|   ↳ `java.lang.Class`                                                      |     1 |    616 B |
-| `sun.security.provider.SHA`                                                |     2 |    376 B |
-|   ↳ `java.security.MessageDigest$Delegate$CloneableDelegate`               |     1 |    512 B |
-| `sun.nio.fs.UnixPath`                                                      |    10 |    360 B |
-|   ↳ `java.io.FilePermission`                                               |     7 |    504 B |
-|   ↳ `org.renaissance.core.BenchmarkSuite$SuiteBenchmarkContext`            |     1 |    248 B |
-|   ↳ `java.lang.Class`                                                      |     5 |    160 B |
-|   ↳ `java.lang.Thread`                                                     |     1 |     32 B |
-|   ↳ `sun.nio.fs.LinuxFileSystem`                                           |     1 |     32 B |
-|   ↳ `sun.nio.fs.NativeBuffer`                                              |     1 |     32 B |
-|   ↳ `org.renaissance.harness.Config`                                       |     1 |     32 B |
-| `(GC Root)`                                                                |     4 |    128 B |
 
 **`java.util.concurrent.ConcurrentHashMap`**
 
 | Holder Class                                                               | Count | Retained |
 | -------------------------------------------------------------------------- | ----: | -------: |
+| `java.util.jar.JarFile`                                                    |     8 |   1.1 MB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                            | 5,713 | 465.9 KB |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
 | `java.lang.Class`                                                          |    27 | 117.2 KB |
 |   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
@@ -1112,15 +1049,9 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `java.net.URLClassLoader`                                                  |     8 |  92.5 KB |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                          |     7 |  60.9 KB |
 | `sun.security.provider.Sun`                                                |     3 |  53.2 KB |
+| `jdk.internal.util.ReferencedKeySet`                                       |     1 |  50.3 KB |
 | `jdk.internal.util.ReferencedKeyMap`                                       |     1 |  50.1 KB |
 |   ↳ `jdk.internal.util.ReferencedKeySet`                                   |     1 |  50.3 KB |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                     |     7 |  49.9 KB |
-| `(GC Root)`                                                                |     1 |  34.0 KB |
-| `jdk.internal.module.ServicesCatalog`                                      |     4 |  12.4 KB |
-|   ↳ `java.lang.ModuleLayer`                                                |     1 |   7.5 KB |
-| `java.util.Properties`                                                     |     4 |   8.4 KB |
-|   ↳ `java.lang.Class`                                                      |     3 |   6.9 KB |
-|   ↳ `java.util.logging.LogManager`                                         |     1 |   1.6 KB |
 
 **`java.util.concurrent.ConcurrentHashMap$Node[]`**
 
@@ -1137,11 +1068,21 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `jdk.internal.module.ServicesCatalog`                  |     4 |  12.4 KB |
 |   ↳ `java.util.Properties`                                 |     4 |   8.4 KB |
 |   ↳ `java.security.Permissions`                            |     9 |   3.8 KB |
+| `java.lang.Class`                                          |    27 | 117.2 KB |
+| `java.time.zone.TzdbZoneRulesProvider`                     |     1 | 115.7 KB |
+| `java.net.URLClassLoader`                                  |     8 |  92.5 KB |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     7 |  60.9 KB |
+| `sun.security.provider.Sun`                                |     3 |  53.2 KB |
+| `jdk.internal.util.ReferencedKeyMap`                       |     1 |  50.1 KB |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     7 |  49.9 KB |
+| `jdk.internal.module.ServicesCatalog`                      |     4 |  12.4 KB |
+| `java.util.Properties`                                     |     4 |   8.4 KB |
 
 **`java.util.LinkedHashMap`**
 
 | Holder Class                                            | Count | Retained |
 | ------------------------------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node`                                | 5,505 | 571.4 KB |
 | `java.util.jar.Attributes`                              | 5,477 | 362.4 KB |
 |   ↳ `java.util.HashMap$Node`                            | 5,469 | 427.3 KB |
 |   ↳ `java.util.jar.Manifest`                            |     8 |  20.7 KB |
@@ -1149,8 +1090,576 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `java.util.HashMap$Node`                            |    36 | 144.1 KB |
 |   ↳ `sun.security.provider.Sun`                         |     1 |    328 B |
 |   ↳ `sun.security.jca.ProviderList$1`                   |     1 |     80 B |
+| `java.util.jar.Manifest`                                |     8 |  20.7 KB |
+| `java.time.format.DateTimeTextProvider$LocaleStore`     |     2 |   1.2 KB |
 | `java.util.Collections$SingletonMap`                    |     2 |   1.1 KB |
 |   ↳ `java.time.format.DateTimeTextProvider$LocaleStore` |     2 |   1.2 KB |
+| `sun.security.provider.Sun`                             |     1 |    328 B |
+| `sun.security.jca.ProviderList$1`                       |     1 |     80 B |
+
+**`java.util.concurrent.ConcurrentHashMap$Node`**
+
+| Holder Class                                        | Count | Retained |
+| --------------------------------------------------- | ----: | -------: |
+| `java.util.concurrent.ConcurrentHashMap`            |    93 | 608.6 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 5,713 | 465.9 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap`        |    93 | 608.6 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`       | 1,447 | 104.9 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 5,713 | 465.9 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   | 1,447 | 104.9 KB |
+
+**`java.util.jar.Attributes`**
+
+| Holder Class                      | Count | Retained |
+| --------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node[]`        | 7,466 |   1.5 MB |
+| `java.lang.ref.SoftReference`     |     8 |   1.1 MB |
+| `java.util.HashMap$Node`          | 5,469 | 427.3 KB |
+|   ↳ `java.util.HashMap$Node[]`    | 7,466 |   1.5 MB |
+|   ↳ `java.util.HashMap$Node`      | 2,410 | 489.9 KB |
+| `java.util.jar.Manifest`          |     8 |  20.7 KB |
+|   ↳ `java.lang.ref.SoftReference` |     8 |   1.1 MB |
+
+**`scala.concurrent.stm.skel.CallbackList`**
+
+| Holder Class                                                              | Count | Retained |
+| ------------------------------------------------------------------------- | ----: | -------: |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`     |    34 | 985.7 KB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                    |   774 | 417.2 KB |
+|   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |    34 | 985.7 KB |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                          |     1 |  29.0 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`                              |     1 |  29.0 KB |
+
+**`scala.Function1[]`**
+
+| Holder Class                               | Count | Retained |
+| ------------------------------------------ | ----: | -------: |
+| `scala.concurrent.stm.ccstm.InTxnImpl`     |   774 | 417.2 KB |
+| `scala.concurrent.stm.skel.CallbackList`   |   774 | 399.1 KB |
+|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl` |   774 | 417.2 KB |
+
+**`java.lang.Thread`**
+
+| Holder Class                                       | Count | Retained |
+| -------------------------------------------------- | ----: | -------: |
+| `java.lang.Class`                                  | 1,288 |   2.7 MB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`             |   129 | 585.3 KB |
+| `(GC Root)`                                        |    25 | 308.5 KB |
+| `java.util.ArrayList`                              |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`             |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`              |   149 |  90.1 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray` |     2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm$Name`                 |   277 |   7.7 KB |
+| `java.util.concurrent.CopyOnWriteArrayList`        |    77 |   7.5 KB |
+| `java.util.ImmutableCollections$MapN`              |     6 |   6.6 KB |
+
+**`java.net.URLClassLoader`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     2 | 243.5 KB |
+
+**`org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     1 | 155.3 KB |
+
+**`java.util.LinkedHashMap$Entry`**
+
+| Holder Class                             | Count | Retained |
+| ---------------------------------------- | ----: | -------: |
+| `java.util.jar.Attributes`               | 5,477 | 362.4 KB |
+| `java.util.LinkedHashMap`                | 1,199 | 152.7 KB |
+|   ↳ `java.util.jar.Attributes`           | 5,477 | 362.4 KB |
+|   ↳ `java.util.LinkedHashSet`            |    38 | 143.9 KB |
+|   ↳ `java.util.Collections$SingletonMap` |     2 |   1.1 KB |
+| `java.util.LinkedHashSet`                |    38 | 143.9 KB |
+| `java.util.Collections$SingletonMap`     |     2 |   1.1 KB |
+
+**`java.util.ArrayList`**
+
+| Holder Class                                          | Count | Retained |
+| ----------------------------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node[]`                            | 7,466 |   1.5 MB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`       | 5,743 | 479.5 KB |
+| `java.net.URLClassLoader`                             |     2 | 140.3 KB |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`     |     1 |   3.0 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`         |    31 |   2.8 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`   | 5,713 | 465.9 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`     | 1,447 | 104.9 KB |
+| `java.util.HashMap$Node`                              |    22 |   1.7 KB |
+|   ↳ `java.util.HashMap$Node[]`                        | 7,466 |   1.5 MB |
+|   ↳ `java.util.HashMap$Node`                          | 2,410 | 489.9 KB |
+| `java.security.Provider$Service`                      |    30 |   1.5 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`   |    30 |  13.6 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`     |    25 |   5.0 KB |
+| `jdk.internal.loader.URLClassPath`                    |     6 |    504 B |
+|   ↳ `java.net.URLClassLoader`                         |     2 |   9.1 KB |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader` |     1 |    696 B |
+| `java.util.logging.LogManager$RootLogger`             |     1 |    208 B |
+| `java.lang.Thread`                                    |     1 |    192 B |
+
+**`org.renaissance.core.ModuleLoader`**
+
+| Holder Class                              | Count | Retained |
+| ----------------------------------------- | ----: | -------: |
+| `org.renaissance.core.BenchmarkSuite`     |     1 |  73.8 KB |
+| `java.lang.Thread`                        |     1 |  73.8 KB |
+|   ↳ `java.lang.Object[]`                  |     2 |    576 B |
+| `java.util.Optional`                      |     1 |  73.8 KB |
+|   ↳ `org.renaissance.core.BenchmarkSuite` |     1 |  73.8 KB |
+|   ↳ `java.lang.Runtime$Version`           |     2 |     32 B |
+| `java.lang.Object[]`                      |     2 |    576 B |
+| `java.lang.Runtime$Version`               |     2 |     32 B |
+
+**`java.util.LinkedHashSet`**
+
+| Holder Class                      | Count | Retained |
+| --------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node[]`        | 7,466 |   1.5 MB |
+| `java.util.HashMap$Node`          |    36 | 144.1 KB |
+|   ↳ `java.util.HashMap$Node[]`    | 7,466 |   1.5 MB |
+|   ↳ `java.util.HashMap$Node`      | 2,410 | 489.9 KB |
+| `java.lang.Class`                 |     1 |    656 B |
+| `sun.security.provider.Sun`       |     1 |    328 B |
+| `sun.security.jca.ProviderList$1` |     1 |     80 B |
+|   ↳ `java.lang.Class`             |     1 |    656 B |
+
+**`scala.collection.mutable.ArrayBuffer`**
+
+| Holder Class                                                     | Count | Retained |
+| ---------------------------------------------------------------- | ----: | -------: |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread` |     1 | 125.8 KB |
+
+**`java.time.zone.TzdbZoneRulesProvider`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
+| `java.lang.Class`                                                          |     1 | 118.2 KB |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
+| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c00fc678`                |     1 |     48 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`                |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990`  |     1 |     48 B |
+
+**`byte[][]`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
+| `java.lang.Class`                                                          |     1 |  94.1 KB |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
+| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c00fc678`                |     1 |     48 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`                |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990`  |     1 |     48 B |
+
+**`java.util.ImmutableCollections$SetN`**
+
+| Holder Class                                       | Count | Retained |
+| -------------------------------------------------- | ----: | -------: |
+| `scala.concurrent.stm.ccstm.InTxnImpl`             |   129 | 585.3 KB |
+| `java.util.ArrayList`                              |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`             |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`              |   149 |  90.1 KB |
+| `sun.util.cldr.CLDRLocaleProviderAdapter`          |     1 |  60.3 KB |
+|   ↳ `java.lang.Class`                              |     1 |  61.6 KB |
+| `java.lang.module.ModuleDescriptor`                |    92 |  28.1 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray` |     2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm$Name`                 |   277 |   7.7 KB |
+| `java.util.concurrent.CopyOnWriteArrayList`        |    77 |   7.5 KB |
+| `java.util.ImmutableCollections$MapN`              |     6 |   6.6 KB |
+
+**`java.lang.invoke.MethodType`**
+
+| Holder Class                                      | Count | Retained |
+| ------------------------------------------------- | ----: | -------: |
+| `(GC Root)`                                       |   660 |  84.0 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`     |   666 |  21.0 KB |
+| `jdk.internal.util.WeakReferenceKey`              |     6 |    240 B |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node` |   666 |  21.0 KB |
+|   ↳ `jdk.internal.util.ReferencedKeyMap`          |     3 |     96 B |
+| `jdk.internal.util.ReferencedKeyMap`              |     3 |     96 B |
+
+**`org.renaissance.core.BenchmarkSuite`**
+
+| Holder Class             | Count | Retained |
+| ------------------------ | ----: | -------: |
+| `java.lang.Thread`       |     1 |  75.3 KB |
+|   ↳ `java.lang.Object[]` |     2 |    576 B |
+| `java.lang.Object[]`     |     2 |    576 B |
+
+**`java.util.Optional`**
+
+| Holder Class                          | Count | Retained |
+| ------------------------------------- | ----: | -------: |
+| `java.lang.Thread`                    |     1 |  75.3 KB |
+| `org.renaissance.core.BenchmarkSuite` |     1 |  73.8 KB |
+|   ↳ `java.lang.Thread`                |     1 |  75.3 KB |
+| `java.lang.Class`                     |     1 |    120 B |
+| `java.lang.Runtime$Version`           |     2 |     32 B |
+|   ↳ `java.lang.Class`                 |     1 |    120 B |
+| `(GC Root)`                           |     1 |     16 B |
+
+**`char[]`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                     |   129 | 585.3 KB |
+| `java.util.ArrayList`                                                      |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                                     |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                                      |   149 |  90.1 KB |
+| `java.io.PrintStream`                                                      |     2 |  32.2 KB |
+| `java.io.BufferedWriter`                                                   |     2 |  32.0 KB |
+|   ↳ `java.io.PrintStream`                                                  |     2 |  32.2 KB |
+| `scala.util.DynamicVariable`                                               |     1 |  24.4 KB |
+| `java.lang.Class`                                                          |    10 |  18.7 KB |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `java.io.BufferedReader`                                                   |     1 |  16.0 KB |
+|   ↳ `scala.util.DynamicVariable`                                           |     1 |  24.4 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`                         |     2 |  12.8 KB |
+
+**`java.util.HashSet`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node[]`                                                 | 7,466 |   1.5 MB |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
+| `java.util.HashMap$Node`                                                   |   140 |  28.3 KB |
+|   ↳ `java.util.HashMap$Node[]`                                             | 7,466 |   1.5 MB |
+|   ↳ `java.util.HashMap$Node`                                               | 2,410 | 489.9 KB |
+| `java.util.Collections$UnmodifiableSet`                                    |     5 |  24.0 KB |
+|   ↳ `java.lang.Class`                                                      |     7 |  23.5 KB |
+|   ↳ `com.sun.management.internal.PlatformMBeanProviderImpl$1`              |     1 |    256 B |
+|   ↳ `com.sun.management.internal.PlatformMBeanProviderImpl$3`              |     1 |    256 B |
+|   ↳ `com.sun.management.internal.PlatformMBeanProviderImpl$2`              |     1 |    224 B |
+| `java.lang.Module`                                                         |    62 |  13.3 KB |
+|   ↳ `java.util.HashMap$Node`                                               |     4 |   1.7 KB |
+|   ↳ `java.net.URLClassLoader`                                              |     2 |     96 B |
+|   ↳ `java.lang.Class`                                                      |     1 |     48 B |
+|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`                     |     1 |     48 B |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                 |     1 |     48 B |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
+| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
+| `java.lang.Class`                                                          |     2 |    496 B |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `java.nio.file.attribute.PosixFilePermissions$1`                           |     2 |    480 B |
+|   ↳ `java.lang.Class`                                                      |     2 |    512 B |
+| `com.sun.management.internal.PlatformMBeanProviderImpl$1`                  |     1 |    256 B |
+
+**`jdk.internal.loader.ClassLoaders$AppClassLoader`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     1 |  65.9 KB |
+
+**`java.lang.Module`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `java.util.HashMap$Node[]`                                                 | 7,466 |   1.5 MB |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
+| `(GC Root)`                                                                |    61 |  63.1 KB |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
+| `java.util.HashMap$Node`                                                   |     4 |   1.7 KB |
+|   ↳ `java.util.HashMap$Node[]`                                             | 7,466 |   1.5 MB |
+|   ↳ `java.util.HashMap$Node`                                               | 2,410 | 489.9 KB |
+| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
+| `java.net.URLClassLoader`                                                  |     2 |     96 B |
+| `java.lang.Class`                                                          |     1 |     48 B |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`                         |     1 |     48 B |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                     |     1 |     48 B |
+
+**`scala.concurrent.stm.skel.SimpleRandom$`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     1 |  64.0 KB |
+
+**`sun.util.cldr.CLDRLocaleProviderAdapter`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
+| `java.lang.Class`                                                          |     1 |  61.6 KB |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
+| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c00fc678`                |     1 |     48 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`                |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990`  |     1 |     48 B |
+
+**`java.lang.invoke.MemberName`**
+
+| Holder Class                                                  | Count | Retained |
+| ------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Class`                                             | 1,292 |   2.7 MB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                        |   129 | 585.3 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`               | 5,713 | 465.9 KB |
+| `java.util.ArrayList`                                         |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                        |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                         |   149 |  90.1 KB |
+| `java.lang.invoke.DirectMethodHandle`                         |   169 |  19.1 KB |
+|   ↳ `java.lang.Object[]`                                      |   118 |  19.7 KB |
+|   ↳ `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`    |    34 |   4.5 KB |
+|   ↳ `java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle` |     3 |    336 B |
+|   ↳ `java.lang.Class`                                         |     1 |    296 B |
+|   ↳ `java.util.ImmutableCollections$List12`                   |     2 |    192 B |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`           |     1 |     96 B |
+|   ↳ `java.lang.invoke.BoundMethodHandle$SpeciesData`          |     1 |     96 B |
+|   ↳ `java.lang.invoke.MethodType`                             |     1 |     40 B |
+|   ↳ `java.lang.Thread`                                        |     1 |     40 B |
+| `java.lang.invoke.LambdaForm$Name`                            |   389 |  14.2 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`            |     2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm`                                 |   128 |  10.7 KB |
+|   ↳ `java.lang.ref.SoftReference`                             |    26 |  10.0 KB |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform`             |     6 |   2.4 KB |
+|   ↳ `java.lang.invoke.LambdaForm[]`                           |     1 |    480 B |
+|   ↳ `java.lang.invoke.DirectMethodHandle`                     |     1 |    200 B |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`           |     1 |    192 B |
+
+**`java.lang.ThreadLocal$ThreadLocalMap`**
+
+| Holder Class                                                          | Count | Retained |
+| --------------------------------------------------------------------- | ----: | -------: |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |     1 |  29.2 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |   128 |  21.0 KB |
+| `java.lang.Thread`                                                    |     1 |   4.4 KB |
+|   ↳ `java.lang.Object[]`                                              |     2 |    576 B |
+| `java.lang.Object[]`                                                  |     2 |    576 B |
+
+**`sun.security.provider.Sun`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     1 |  53.7 KB |
+
+**`java.lang.ThreadLocal$ThreadLocalMap$Entry[]`**
+
+| Holder Class                                                              | Count | Retained |
+| ------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.ThreadLocal$ThreadLocalMap`                                    |   130 |  51.5 KB |
+|   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |     1 |  29.2 KB |
+|   ↳ `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |   128 |  21.0 KB |
+|   ↳ `java.lang.Thread`                                                    |     1 |   4.4 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`          |     1 |  29.2 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread`     |   128 |  21.0 KB |
+| `java.lang.Thread`                                                        |     1 |   4.4 KB |
+
+**`jdk.internal.loader.ClassLoaders$PlatformClassLoader`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     1 |  51.4 KB |
+
+**`jdk.internal.util.ReferencedKeySet`**
+
+| Holder Class                                                               | Count | Retained |
+| -------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Object[]`                                                       |   806 | 127.6 KB |
+| `java.lang.Class`                                                          |     1 |  50.3 KB |
+|   ↳ `java.lang.Object[]`                                                   |   806 | 127.6 KB |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                      |    70 |   4.5 KB |
+|   ↳ `java.lang.invoke.MemberName`                                          |    61 |    976 B |
+|   ↳ `java.lang.Class`                                                      |    18 |    432 B |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`            |     1 |     48 B |
+|   ↳ `scala.sys.BooleanProp$$$Lambda+0x00007e41c013dbc0`                    |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a36a0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.ccstm.CCSTMExecutor$$$Lambda+0x00007e41c01a2eb0` |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.TxnExecutor$$$Lambda+0x00007e41c01b7628`         |     1 |     48 B |
+|   ↳ `scala.concurrent.stm.skel.SimpleRandom$$$Lambda+0x00007e41c01c4000`   |     1 |     48 B |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |    70 |   4.5 KB |
+| `java.lang.invoke.MemberName`                                              |    61 |    976 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c00fc678`                |     1 |     48 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`                |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018`  |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990`  |     1 |     48 B |
+
+**`jdk.internal.util.ReferencedKeyMap`**
+
+| Holder Class                         | Count | Retained |
+| ------------------------------------ | ----: | -------: |
+| `java.lang.Class`                    |     1 |  50.3 KB |
+| `jdk.internal.util.ReferencedKeySet` |     1 |  50.3 KB |
+|   ↳ `java.lang.Class`                |     1 |  50.3 KB |
+
+**`java.lang.invoke.LambdaForm`**
+
+| Holder Class                                               | Count | Retained |
+| ---------------------------------------------------------- | ----: | -------: |
+| `java.util.jar.JarFile`                                    |     8 |   1.1 MB |
+| `(GC Root)`                                                |    93 |  35.1 KB |
+| `java.lang.Object[]`                                       |   126 |  20.5 KB |
+| `java.lang.ref.SoftReference[]`                            |   129 |  15.1 KB |
+| `java.lang.ref.SoftReference`                              |    26 |  10.0 KB |
+|   ↳ `java.util.jar.JarFile`                                |     8 |   1.1 MB |
+|   ↳ `java.lang.ref.SoftReference[]`                        |   129 |  15.1 KB |
+|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |    984 B |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |    984 B |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    984 B |
+|   ↳ `sun.util.locale.BaseLocale$Key`                       |    10 |    400 B |
+|   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    280 B |
+| `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`     |    34 |   4.5 KB |
+| `java.lang.invoke.LambdaFormEditor$Transform`              |     6 |   2.4 KB |
+|   ↳ `java.lang.invoke.LambdaForm`                          |     8 |   2.0 KB |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform[]`        |     4 |    984 B |
+| `java.lang.invoke.LambdaForm`                              |     8 |   2.0 KB |
+| `java.lang.Class`                                          |     4 |   1.4 KB |
+| `java.lang.invoke.LambdaFormEditor$Transform[]`            |     4 |    984 B |
+
+**`java.lang.ThreadLocal$ThreadLocalMap$Entry`**
+
+| Holder Class                                   | Count | Retained |
+| ---------------------------------------------- | ----: | -------: |
+| `java.lang.ThreadLocal$ThreadLocalMap`         |   130 |  51.5 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry[]` |   261 |  41.4 KB |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap`     |   130 |  51.5 KB |
+
+**`java.lang.module.ModuleDescriptor`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |    62 |  40.0 KB |
+
+**`java.lang.invoke.MethodTypeForm`**
+
+| Holder Class                             | Count | Retained |
+| ---------------------------------------- | ----: | -------: |
+| `(GC Root)`                              |   101 |  29.4 KB |
+| `java.lang.invoke.MethodType`            |    58 |   9.2 KB |
+|   ↳ `jdk.internal.util.WeakReferenceKey` |     6 |    240 B |
+| `jdk.internal.util.WeakReferenceKey`     |     6 |    240 B |
+
+**`jdk.internal.math.FDBigInteger[]`**
+
+| Holder Class                                           | Count | Retained |
+| ------------------------------------------------------ | ----: | -------: |
+| `java.lang.Class`                                      | 1,288 |   2.7 MB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                 |   129 | 585.3 KB |
+| `java.util.ArrayList`                                  |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`                 |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`                  |   149 |  90.1 KB |
+| `java.lang.Object[]`                                   |     1 |  36.2 KB |
+|   ↳ `java.lang.Class`                                  | 1,288 |   2.7 MB |
+|   ↳ `scala.concurrent.stm.ccstm.InTxnImpl`             |   129 | 585.3 KB |
+|   ↳ `java.util.ArrayList`                              |   102 | 148.4 KB |
+|   ↳ `scala.collection.mutable.ArrayBuffer`             |     1 | 125.8 KB |
+|   ↳ `java.util.ImmutableCollections$SetN`              |   149 |  90.1 KB |
+|   ↳ `java.lang.Object[]`                               |   137 |  54.3 KB |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray` |     2 |  12.8 KB |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                 |   277 |   7.7 KB |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList`        |    77 |   7.5 KB |
+|   ↳ `java.util.ImmutableCollections$MapN`              |     6 |   6.6 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`     |     2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm$Name`                     |   277 |   7.7 KB |
+| `java.util.concurrent.CopyOnWriteArrayList`            |    77 |   7.5 KB |
+| `java.util.ImmutableCollections$MapN`                  |     6 |   6.6 KB |
+
+**`jdk.internal.math.FDBigInteger`**
+
+| Holder Class                                       | Count | Retained |
+| -------------------------------------------------- | ----: | -------: |
+| `java.lang.Class`                                  | 1,288 |   2.7 MB |
+| `scala.concurrent.stm.ccstm.InTxnImpl`             |   129 | 585.3 KB |
+| `java.util.ArrayList`                              |   102 | 148.4 KB |
+| `scala.collection.mutable.ArrayBuffer`             |     1 | 125.8 KB |
+| `java.util.ImmutableCollections$SetN`              |   149 |  90.1 KB |
+| `jdk.internal.math.FDBigInteger[]`                 |   340 |  34.8 KB |
+|   ↳ `java.lang.Object[]`                           |     1 |  36.2 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray` |     2 |  12.8 KB |
+| `java.lang.invoke.LambdaForm$Name`                 |   277 |   7.7 KB |
+| `java.util.concurrent.CopyOnWriteArrayList`        |    77 |   7.5 KB |
+| `java.util.ImmutableCollections$MapN`              |     6 |   6.6 KB |
+
+**`java.io.PrintStream`**
+
+| Holder Class | Count | Retained |
+| ------------ | ----: | -------: |
+| `(GC Root)`  |     2 |  34.6 KB |
+
+**`java.lang.ref.SoftReference[]`**
+
+| Holder Class                      | Count | Retained |
+| --------------------------------- | ----: | -------: |
+| `java.lang.invoke.MethodTypeForm` |   250 |  33.6 KB |
+|   ↳ `java.lang.invoke.MethodType` |    58 |   9.2 KB |
+| `java.lang.invoke.MethodType`     |    58 |   9.2 KB |
+
+**`java.io.BufferedWriter`**
+
+| Holder Class          | Count | Retained |
+| --------------------- | ----: | -------: |
+| `java.io.PrintStream` |     2 |  32.2 KB |
 
 ### Retained Size Distribution
 
@@ -1297,143 +1806,143 @@ _Per-thread call stacks and retained heap. A thread keeps everything on its stac
 
 ### Thread Overview
 
-_Name, shallow/retained heap, max single-local retained, context class loader, daemon flag, priority, and thread state for every recorded thread._
+_Name, shallow/retained heap, max single-local retained, TL root count, context class loader, daemon flag, priority, and thread state for every recorded thread._
 
-| Name                           | Shallow | Retained | Max Local Retained | Context Class Loader                   | Daemon | Priority | State                                                  |
-| ------------------------------ | ------: | -------: | -----------------: | -------------------------------------- | ------ | -------: | ------------------------------------------------------ |
-| [main](#thread-1)              |   104 B | 302.4 KB |           155.3 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, in Object.wait] |
-| [Reference Handler](#thread-2) |   104 B |    200 B |                0 B | `—`                                    | Yes    |       10 | [alive, runnable]                                      |
-| [Finalizer](#thread-3)         |   112 B |    208 B |               40 B | `—`                                    | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
-| [Common-Cleaner](#thread-6)    |   112 B |    168 B |              128 B | `—`                                    | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
-| [Thread-259](#thread-7)        |   120 B | 155.3 KB |                0 B | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting with timeout, sleeping]       |
-| [Thread-131](#thread-8)        |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-132](#thread-9)        |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-133](#thread-10)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-134](#thread-11)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-135](#thread-12)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-136](#thread-13)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-137](#thread-14)       |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-138](#thread-15)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-139](#thread-16)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-140](#thread-17)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-141](#thread-18)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-142](#thread-19)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-143](#thread-20)       |   128 B |    600 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-144](#thread-21)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-145](#thread-22)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-146](#thread-23)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-147](#thread-24)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-148](#thread-25)       |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-149](#thread-26)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-150](#thread-27)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-151](#thread-28)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-152](#thread-29)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-153](#thread-30)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-154](#thread-31)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-155](#thread-32)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-156](#thread-33)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-157](#thread-34)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-158](#thread-35)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-159](#thread-36)       |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-160](#thread-37)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-161](#thread-38)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-162](#thread-39)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-163](#thread-40)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-164](#thread-41)       |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-165](#thread-42)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-166](#thread-43)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-167](#thread-44)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-168](#thread-45)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-169](#thread-46)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-170](#thread-47)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-171](#thread-48)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-172](#thread-49)       |   128 B |  29.9 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-173](#thread-50)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-174](#thread-51)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-175](#thread-52)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-176](#thread-53)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-177](#thread-54)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-178](#thread-55)       |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-179](#thread-56)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-180](#thread-57)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-181](#thread-58)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-182](#thread-59)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-183](#thread-60)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-184](#thread-61)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-185](#thread-62)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-186](#thread-63)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-187](#thread-64)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-188](#thread-65)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-189](#thread-66)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-190](#thread-67)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-191](#thread-68)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-192](#thread-69)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-193](#thread-70)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-194](#thread-71)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-195](#thread-72)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-196](#thread-73)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-197](#thread-74)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, blocked on monitor]                            |
-| [Thread-198](#thread-75)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-199](#thread-76)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-200](#thread-77)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-201](#thread-78)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-202](#thread-79)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-203](#thread-80)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-204](#thread-81)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-205](#thread-82)       |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-206](#thread-83)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-207](#thread-84)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-208](#thread-85)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-209](#thread-86)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-210](#thread-87)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-211](#thread-88)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-212](#thread-89)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-213](#thread-90)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, blocked on monitor]                            |
-| [Thread-214](#thread-91)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-215](#thread-92)       |   128 B |    600 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-216](#thread-93)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-217](#thread-94)       |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-218](#thread-95)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-219](#thread-96)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-220](#thread-97)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-221](#thread-98)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-222](#thread-99)       |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-223](#thread-100)      |   128 B |  29.9 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-224](#thread-101)      |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-225](#thread-102)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-226](#thread-103)      |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-227](#thread-104)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-228](#thread-105)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-229](#thread-106)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-230](#thread-107)      |   128 B |  29.9 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-231](#thread-108)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-232](#thread-109)      |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-233](#thread-110)      |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-234](#thread-111)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-235](#thread-112)      |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-236](#thread-113)      |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
-| [Thread-237](#thread-114)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-238](#thread-115)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-239](#thread-116)      |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-240](#thread-117)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-241](#thread-118)      |   128 B |  29.7 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-242](#thread-119)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-243](#thread-120)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-244](#thread-121)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-245](#thread-122)      |   128 B |  29.8 KB |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-246](#thread-123)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-247](#thread-124)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-248](#thread-125)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-249](#thread-126)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-250](#thread-127)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-251](#thread-128)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, blocked on monitor]                            |
-| [Thread-252](#thread-129)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-253](#thread-130)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-254](#thread-131)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-255](#thread-132)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-256](#thread-133)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-257](#thread-134)      |   128 B |    560 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
-| [Thread-258](#thread-135)      |   128 B |    584 B |            29.0 KB | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| Name                           | Shallow | Retained | Max Local Retained | TL Roots | Context Class Loader                   | Daemon | Priority | State                                                  |
+| ------------------------------ | ------: | -------: | -----------------: | -------: | -------------------------------------- | ------ | -------: | ------------------------------------------------------ |
+| [main](#thread-1)              |   104 B | 302.4 KB |           155.3 KB |       97 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, in Object.wait] |
+| [Reference Handler](#thread-2) |   104 B |    200 B |                0 B |        — | `—`                                    | Yes    |       10 | [alive, runnable]                                      |
+| [Finalizer](#thread-3)         |   112 B |    208 B |               40 B |        7 | `—`                                    | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
+| [Common-Cleaner](#thread-6)    |   112 B |    168 B |              128 B |       12 | `—`                                    | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
+| [Thread-259](#thread-7)        |   120 B | 155.3 KB |                0 B |        — | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting with timeout, sleeping]       |
+| [Thread-131](#thread-8)        |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-132](#thread-9)        |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-133](#thread-10)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-134](#thread-11)       |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-135](#thread-12)       |   128 B |  29.8 KB |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-136](#thread-13)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-137](#thread-14)       |   128 B |  29.7 KB |            29.0 KB |       13 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-138](#thread-15)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-139](#thread-16)       |   128 B |  29.8 KB |            29.0 KB |        7 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-140](#thread-17)       |   128 B |    560 B |            29.0 KB |       13 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-141](#thread-18)       |   128 B |  29.8 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-142](#thread-19)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-143](#thread-20)       |   128 B |    600 B |            29.0 KB |       15 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-144](#thread-21)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-145](#thread-22)       |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-146](#thread-23)       |   128 B |  29.8 KB |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-147](#thread-24)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-148](#thread-25)       |   128 B |  29.7 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-149](#thread-26)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-150](#thread-27)       |   128 B |    584 B |            29.0 KB |       15 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-151](#thread-28)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-152](#thread-29)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-153](#thread-30)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-154](#thread-31)       |   128 B |    584 B |            29.0 KB |       15 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-155](#thread-32)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-156](#thread-33)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-157](#thread-34)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-158](#thread-35)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-159](#thread-36)       |   128 B |  29.7 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-160](#thread-37)       |   128 B |    584 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-161](#thread-38)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-162](#thread-39)       |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-163](#thread-40)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-164](#thread-41)       |   128 B |  29.7 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-165](#thread-42)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-166](#thread-43)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-167](#thread-44)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-168](#thread-45)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-169](#thread-46)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-170](#thread-47)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-171](#thread-48)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-172](#thread-49)       |   128 B |  29.9 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-173](#thread-50)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-174](#thread-51)       |   128 B |  29.8 KB |            29.0 KB |        7 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-175](#thread-52)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-176](#thread-53)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-177](#thread-54)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-178](#thread-55)       |   128 B |  29.7 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-179](#thread-56)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-180](#thread-57)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-181](#thread-58)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-182](#thread-59)       |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-183](#thread-60)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-184](#thread-61)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-185](#thread-62)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-186](#thread-63)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-187](#thread-64)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-188](#thread-65)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-189](#thread-66)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-190](#thread-67)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-191](#thread-68)       |   128 B |    584 B |            29.0 KB |       16 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-192](#thread-69)       |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-193](#thread-70)       |   128 B |    584 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-194](#thread-71)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-195](#thread-72)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-196](#thread-73)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-197](#thread-74)       |   128 B |    584 B |            29.0 KB |       21 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, blocked on monitor]                            |
+| [Thread-198](#thread-75)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-199](#thread-76)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-200](#thread-77)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-201](#thread-78)       |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-202](#thread-79)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-203](#thread-80)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-204](#thread-81)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-205](#thread-82)       |   128 B |  29.8 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-206](#thread-83)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-207](#thread-84)       |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-208](#thread-85)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-209](#thread-86)       |   128 B |    584 B |            29.0 KB |       15 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-210](#thread-87)       |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-211](#thread-88)       |   128 B |    584 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-212](#thread-89)       |   128 B |    560 B |            29.0 KB |       10 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-213](#thread-90)       |   128 B |    584 B |            29.0 KB |       21 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, blocked on monitor]                            |
+| [Thread-214](#thread-91)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-215](#thread-92)       |   128 B |    600 B |            29.0 KB |       14 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-216](#thread-93)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-217](#thread-94)       |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-218](#thread-95)       |   128 B |    584 B |            29.0 KB |       15 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-219](#thread-96)       |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-220](#thread-97)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-221](#thread-98)       |   128 B |    584 B |            29.0 KB |       13 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-222](#thread-99)       |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-223](#thread-100)      |   128 B |  29.9 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-224](#thread-101)      |   128 B |  29.8 KB |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-225](#thread-102)      |   128 B |    560 B |            29.0 KB |       13 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-226](#thread-103)      |   128 B |  29.7 KB |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-227](#thread-104)      |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-228](#thread-105)      |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-229](#thread-106)      |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-230](#thread-107)      |   128 B |  29.9 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-231](#thread-108)      |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-232](#thread-109)      |   128 B |  29.7 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-233](#thread-110)      |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-234](#thread-111)      |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-235](#thread-112)      |   128 B |  29.8 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-236](#thread-113)      |   128 B |  29.8 KB |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, waiting, waiting indefinitely, parked]         |
+| [Thread-237](#thread-114)      |   128 B |    560 B |            29.0 KB |       13 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-238](#thread-115)      |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-239](#thread-116)      |   128 B |  29.7 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-240](#thread-117)      |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-241](#thread-118)      |   128 B |  29.7 KB |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-242](#thread-119)      |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-243](#thread-120)      |   128 B |    584 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-244](#thread-121)      |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-245](#thread-122)      |   128 B |  29.8 KB |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-246](#thread-123)      |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-247](#thread-124)      |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-248](#thread-125)      |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-249](#thread-126)      |   128 B |    584 B |            29.0 KB |       15 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-250](#thread-127)      |   128 B |    560 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-251](#thread-128)      |   128 B |    584 B |            29.0 KB |       21 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, blocked on monitor]                            |
+| [Thread-252](#thread-129)      |   128 B |    584 B |            29.0 KB |        8 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-253](#thread-130)      |   128 B |    584 B |            29.0 KB |       12 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-254](#thread-131)      |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-255](#thread-132)      |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-256](#thread-133)      |   128 B |    584 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-257](#thread-134)      |   128 B |    560 B |            29.0 KB |       11 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
+| [Thread-258](#thread-135)      |   128 B |    584 B |            29.0 KB |        9 | `java/net/URLClassLoader @ 0x80300d20` | No     |        5 | [alive, runnable]                                      |
 
 <a id="thread-1"></a>
 
@@ -6675,6 +7184,8 @@ _223 reference instances._
 
 _Referents reachable only through soft references — no strong path. GC clears these under memory pressure._
 
+_**2.1 KB** only softly retained — would be freed under OOM pressure (GC clears all soft references before throwing OutOfMemoryError)._
+
 | Class                            | Objects | Shallow | Retained |
 | -------------------------------- | ------: | ------: | -------: |
 | `java.lang.Class$ReflectionData` |      34 |  2.1 KB |   2.1 KB |
@@ -6931,6 +7442,143 @@ _Half of all live objects sit within 3 hops of a GC root; the deepest chain is 2
 |    12 |     608 |      0.3% |        99.9% |
 
 _… (+16 deeper buckets, 305 objects, 100.0% cumulative — see HTML report for full depth data)_
+
+## Collection Retained Heap
+
+_Collection classes ranked by retained heap. **Ratio** = retained ÷ shallow: a ratio >> 1 means the instances hold many other objects alive — a sign of accumulation. Check Leak Suspects or the Dominator Tree for the largest instances._
+
+| Class                                                          | Instances |  Shallow | Retained |  Ratio |
+| -------------------------------------------------------------- | --------: | -------: | -------: | -----: |
+| `java.util.HashMap`                                            |       361 |  16.9 KB |   1.5 MB |  93.1× |
+| `java.util.HashMap$Node`                                       |     9,876 | 308.6 KB |   1.5 MB |   4.8× |
+| `java.util.concurrent.ConcurrentHashMap`                       |       117 |   7.3 KB | 611.6 KB |  83.6× |
+| `java.util.LinkedHashMap`                                      |     5,517 | 344.8 KB | 507.4 KB |   1.5× |
+| `java.util.concurrent.ConcurrentHashMap$Node`                  |     7,160 | 223.8 KB | 463.1 KB |   2.1× |
+| `java.util.LinkedHashMap$Entry`                                |     1,199 |  46.8 KB | 152.7 KB |   3.3× |
+| `java.util.ArrayList`                                          |       102 |   2.4 KB | 150.9 KB |  63.1× |
+| `java.util.LinkedHashSet`                                      |        38 |    608 B | 144.6 KB | 243.5× |
+| `java.util.HashSet`                                            |       212 |   3.3 KB |  66.7 KB |  20.1× |
+| `java.util.concurrent.CopyOnWriteArrayList`                    |        77 |   1.8 KB |  10.6 KB |   5.9× |
+| `java.util.WeakHashMap`                                        |        24 |   1.1 KB |   6.1 KB |   5.4× |
+| `java.util.ArrayDeque`                                         |        23 |    552 B |   2.5 KB |   4.6× |
+| `java.util.Arrays$ArrayList`                                   |         1 |     24 B |   2.4 KB | 102.7× |
+| `java.util.IdentityHashMap`                                    |         3 |    120 B |   1.6 KB |  13.4× |
+| `scala.collection.immutable.Vector`                            |         2 |    112 B |    976 B |   8.7× |
+| `java.util.Hashtable`                                          |         4 |    192 B |    752 B |   3.9× |
+| `scala.collection.mutable.HashMap`                             |         3 |     96 B |    712 B |   7.4× |
+| `java.util.HashMap$EntrySet`                                   |        44 |    704 B |    704 B |   1.0× |
+| `java.util.WeakHashMap$Entry`                                  |        11 |    440 B |    632 B |   1.4× |
+| `java.util.concurrent.ConcurrentHashMap$KeySetView`            |         4 |     96 B |    440 B |   4.6× |
+| `java.util.WeakHashMap$KeySet`                                 |        21 |    336 B |    336 B |   1.0× |
+| `jdk.internal.vm.vector.VectorSupport`                         |         0 |      0 B |    328 B |   0.0× |
+| `java.util.Hashtable$Entry`                                    |         9 |    288 B |    320 B |   1.1× |
+| `scala.collection.immutable.Vector$`                           |         1 |     16 B |    296 B |  18.5× |
+| `scala.collection.immutable.Vector$`                           |         1 |     24 B |    176 B |   7.3× |
+| `scala.collection.mutable.HashMap$Node`                        |         4 |    128 B |    168 B |   1.3× |
+| `scala.collection.mutable.LinkedHashMap`                       |         1 |     32 B |    160 B |   5.0× |
+| `scala.collection.immutable.VectorStatics$`                    |         1 |     16 B |    128 B |   8.0× |
+| `scala.collection.mutable.LinkedHashSet`                       |         0 |      0 B |    128 B |   0.0× |
+| `scala.collection.immutable.Vector`                            |         0 |      0 B |    104 B |   0.0× |
+| `scala.collection.immutable.VectorIterator`                    |         1 |     64 B |     96 B |   1.5× |
+| `java.util.HashMap$KeySet`                                     |         5 |     80 B |     80 B |   1.0× |
+| `scala.collection.immutable.NewVectorIterator`                 |         1 |     80 B |     80 B |   1.0× |
+| `java.util.concurrent.ConcurrentHashMap$ValuesView`            |         4 |     64 B |     72 B |   1.1× |
+| `scala.collection.immutable.Vector0$`                          |         1 |     24 B |     64 B |   2.7× |
+| `java.util.HashMap$Values`                                     |         3 |     48 B |     48 B |   1.0× |
+| `java.util.LinkedHashMap$LinkedKeySet`                         |         2 |     48 B |     48 B |   1.0× |
+| `java.util.concurrent.ConcurrentHashMap$CounterCell`           |         2 |     48 B |     48 B |   1.0× |
+| `java.util.LinkedHashMap$LinkedEntrySet`                       |         2 |     48 B |     48 B |   1.0× |
+| `java.util.concurrent.ConcurrentHashMap$CollectionView`        |         0 |      0 B |     48 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$EntrySetView`          |         2 |     32 B |     40 B |   1.2× |
+| `scala.collection.mutable.LinkedHashSet$`                      |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.LinkedHashMap$`                      |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.HashMap$`                            |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.HashMap`                             |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.immutable.VectorImpl`                        |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.immutable.BigVector`                         |         0 |      0 B |     32 B |   0.0× |
+| `java.util.Vector`                                             |         0 |      0 B |     32 B |   0.0× |
+| `java.util.Hashtable$Enumerator`                               |         0 |      0 B |     32 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$Segment`               |         0 |      0 B |     32 B |   0.0× |
+| `java.util.ArrayList$SubList`                                  |         0 |      0 B |     32 B |   0.0× |
+| `java.util.TreeMap`                                            |         0 |      0 B |     32 B |   0.0× |
+| `java.util.TreeMap$Entry`                                      |         0 |      0 B |     32 B |   0.0× |
+| `java.util.TreeSet`                                            |         0 |      0 B |     32 B |   0.0× |
+| `jdk.internal.org.objectweb.asm.ByteVector`                    |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.mutable.LinkedHashMap$LinkedEntry`           |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.HashMap`                           |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.VectorMap`                         |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.Vector1`                           |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$VectorPayload`           |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$Vector`                  |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$VectorMask`              |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$VectorShuffle`           |         0 |      0 B |     24 B |   0.0× |
+| `java.util.HashMap$TreeNode`                                   |         0 |      0 B |     24 B |   0.0× |
+| `java.util.regex.IntHashSet`                                   |         0 |      0 B |     24 B |   0.0× |
+| `java.util.IdentityHashMap$KeySet`                             |         1 |     16 B |     16 B |   1.0× |
+| `java.util.IdentityHashMap$Values`                             |         1 |     16 B |     16 B |   1.0× |
+| `java.util.TreeMap$TreeMapSpliterator`                         |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$KeySpliterator`                             |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet$Entry`                 |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet$LinkedHashSetIterator` |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet$$anon$1`               |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.immutable.VectorPointer`                     |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.immutable.VectorBuilder`                     |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$EntrySpliterator`                           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.LinkedHashMap$LinkedKeyIterator`                    |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$Traverser`             |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$ReservationNode`       |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$KeyIterator`           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$ValueIterator`         |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$ForwardingNode`        |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$MapEntry`              |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$EntryIterator`         |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$BaseIterator`          |         0 |      0 B |      0 B |   0.0× |
+| `java.util.ArrayList$Itr`                                      |         0 |      0 B |      0 B |   0.0× |
+| `java.util.ArrayList$ArrayListSpliterator`                     |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$ValueSpliterator`                           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$KeySpliterator`                             |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$HashMapSpliterator`                         |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$EntryIterator`                              |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$ValueIterator`                              |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$KeyIterator`                                |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$HashIterator`                               |         0 |      0 B |      0 B |   0.0× |
+| `java.util.ArrayDeque$DeqIterator`                             |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.CopyOnWriteArrayList$COWIterator`        |         0 |      0 B |      0 B |   0.0× |
+| `java.util.LinkedHashMap$LinkedEntryIterator`                  |         0 |      0 B |      0 B |   0.0× |
+| `java.util.LinkedHashMap$LinkedHashIterator`                   |         0 |      0 B |      0 B |   0.0× |
+
+## Resource Handles
+
+_File, stream, and JDBC resource handle classes ranked by instance count. High counts suggest resources acquired but never closed. Fix: wrap acquisitions in **try-with-resources**. See the Triage section for `connection-leak` and `unclosed-resource-leak` signals._
+
+| Class                                                             | Instances | Shallow | Retained |
+| ----------------------------------------------------------------- | --------: | ------: | -------: |
+| `java.io.FileDescriptor`                                          |        24 |   960 B |   1000 B |
+| `java.io.OutputStreamWriter`                                      |         3 |    72 B |   2.4 KB |
+| `java.io.FileInputStream`                                         |         3 |    96 B |    184 B |
+| `java.io.FileOutputStream`                                        |         2 |    64 B |    128 B |
+| `sun.security.provider.FileInputStreamPool$StreamRef`             |         2 |    64 B |     64 B |
+| `sun.security.provider.FileInputStreamPool$UnclosableInputStream` |         2 |    32 B |     32 B |
+| `java.io.InputStreamReader`                                       |         1 |    24 B |   8.3 KB |
+| `java.net.SocketPermission`                                       |         1 |    56 B |    456 B |
+| `java.io.FileDescriptor$1`                                        |         1 |    16 B |     16 B |
+| `java.net.URLConnection`                                          |         0 |     0 B |    488 B |
+| `sun.security.provider.FileInputStreamPool`                       |         0 |     0 B |    448 B |
+| `sun.net.www.protocol.file.FileURLConnection`                     |         0 |     0 B |    304 B |
+| `sun.nio.ch.FileChannelImpl`                                      |         0 |     0 B |    128 B |
+| `sun.net.www.URLConnection`                                       |         0 |     0 B |    120 B |
+| `java.io.InputStream`                                             |         0 |     0 B |     56 B |
+| `sun.nio.ch.SocketChannelImpl`                                    |         0 |     0 B |     48 B |
+| `sun.net.www.protocol.jar.JarURLConnection`                       |         0 |     0 B |     48 B |
+| `java.net.JarURLConnection`                                       |         0 |     0 B |     40 B |
+| `sun.nio.ch.FileChannelImpl$Closer`                               |         0 |     0 B |     32 B |
+| `java.util.zip.ZipFile$ZipFileInputStream`                        |         0 |     0 B |     32 B |
+| `java.nio.channels.FileChannel`                                   |         0 |     0 B |     24 B |
+| `java.nio.channels.SocketChannel`                                 |         0 |     0 B |     24 B |
+| `jdk.internal.access.JavaIOFileDescriptorAccess`                  |         0 |     0 B |     24 B |
+| `sun.net.www.protocol.jar.JarURLConnection$JarURLInputStream`     |         0 |     0 B |      0 B |
+| `java.io.OutputStream`                                            |         0 |     0 B |      0 B |
+| `java.io.FileInputStream$1`                                       |         0 |     0 B |      0 B |
 
 ## Leak Indicators
 

@@ -60,10 +60,12 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **Concentration:** diffuse — no suspect exceeds the threshold; retention is spread across multiple roots. Inspect individual suspects to find the most impactful target. See [Leak Suspects](#leak-suspects).
 - **Heap Shape:** deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects — 90% of objects within depth 7, max depth 967. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.util.zip.ZipFile$Source`, retains 8.1% and the top 10 retain 43.5% of the heap; 15 objects each hold ≥1%. See [Top Consumers](#top-consumers).
-- **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
+- **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause: repeatedly allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode. See [Off-Heap NIO](#off-heap-nio).
 - **GC Waste:** 11.6% of the heap is unreachable (4.3 MB) — largest garbage cluster rooted at `int[]` (512.0 KB); the GC has not yet collected it. Trigger a full GC (`jcmd <pid> GC.run`) and re-dump — if the count drops sharply, the dump was taken mid-collection. See [Unreachable Objects](#unreachable-objects).
 - **Empty-Collection Cemetery:** 6,686 of 9,466 tracked collections (70.6%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
 - **Component Retention Imbalance:** Component `<boot>` retains 79.7% of heap (95.2 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.9%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
+- **Shutdown Hook Accumulation:** 270 `java.lang.Thread` instances with `ApplicationShutdownHooks` present — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead). See [Threads](#threads).
+- **Thread Pool Saturation:** 245 of 262 threads (94%) are WAITING or BLOCKED — the thread pool appears saturated. Possible causes: slow downstream calls monopolising all pool threads (thread starvation), monitor deadlock, or executor self-submit deadlock. Check the Threads section for the common frame shared by stuck threads and look for a blocked-on resource (semaphore, DB call, HTTP request, synchronized method). See [Threads](#threads).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
@@ -577,28 +579,68 @@ _All top-level dominators ranked by retained heap — every object directly held
 
 _Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._
 
-|  # | Class                                           | Instances | Retained |                  |
-| -: | ----------------------------------------------- | --------: | -------: | ---------------- |
-|  1 | `byte[]`                                        |    58,366 |  14.7 MB | ████████████████ |
-|  2 | `java.util.zip.ZipFile$Source`                  |       181 |  12.3 MB | █████████████▍   |
-|  3 | `java.lang.Class`                               |    12,493 |   7.0 MB | ███████▌         |
-|  4 | `java.lang.Object[]`                            |    11,059 |   6.3 MB | ██████▊          |
-|  5 | `java.lang.String`                              |    56,540 |   4.4 MB | ████▊            |
-|  6 | `java.util.concurrent.ConcurrentHashMap`        |     1,128 |   3.2 MB | ███▍             |
-|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]` |       444 |   3.1 MB | ███▍             |
-|  8 | `java.util.LinkedHashMap`                       |     6,104 |   3.1 MB | ███▎             |
-|  9 | `java.net.URLClassLoader`                       |         2 |   2.7 MB | ██▉              |
-| 10 | `java.util.concurrent.ConcurrentHashMap$Node`   |    42,785 |   2.6 MB | ██▊              |
-| 11 | `java.lang.Object`                              |   154,653 |   2.4 MB | ██▌              |
-| 12 | `org.apache.spark.storage.memory.MemoryStore`   |         1 |   2.3 MB | ██▌              |
-| 13 | `java.util.HashMap`                             |     1,089 |   2.2 MB | ██▍              |
-| 14 | `java.util.HashMap$Node[]`                      |     1,053 |   2.2 MB | ██▎              |
-| 15 | `java.util.ArrayList`                           |       716 |   2.1 MB | ██▎              |
-| 16 | `java.util.HashMap$Node`                        |    16,017 |   2.0 MB | ██▏              |
-| 17 | `int[]`                                         |     9,056 |   2.0 MB | ██▏              |
-| 18 | `java.lang.ref.SoftReference`                   |     1,653 |   1.5 MB | █▋               |
-| 19 | `double[]`                                      |    16,101 |   1.5 MB | █▌               |
-| 20 | `java.util.jar.JarFile`                         |       181 |   1.4 MB | █▌               |
+|  # | Class                                                            | Instances | Retained |                  |
+| -: | ---------------------------------------------------------------- | --------: | -------: | ---------------- |
+|  1 | `byte[]`                                                         |    58,366 |  14.7 MB | ████████████████ |
+|  2 | `java.util.zip.ZipFile$Source`                                   |       181 |  12.3 MB | █████████████▍   |
+|  3 | `java.lang.Class`                                                |    12,493 |   7.0 MB | ███████▌         |
+|  4 | `java.lang.Object[]`                                             |    11,059 |   6.3 MB | ██████▊          |
+|  5 | `java.lang.String`                                               |    56,540 |   4.4 MB | ████▊            |
+|  6 | `java.util.concurrent.ConcurrentHashMap`                         |     1,128 |   3.2 MB | ███▍             |
+|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  |       444 |   3.1 MB | ███▍             |
+|  8 | `java.util.LinkedHashMap`                                        |     6,104 |   3.1 MB | ███▎             |
+|  9 | `java.net.URLClassLoader`                                        |         2 |   2.7 MB | ██▉              |
+| 10 | `java.util.concurrent.ConcurrentHashMap$Node`                    |    42,785 |   2.6 MB | ██▊              |
+| 11 | `java.lang.Object`                                               |   154,653 |   2.4 MB | ██▌              |
+| 12 | `org.apache.spark.storage.memory.MemoryStore`                    |         1 |   2.3 MB | ██▌              |
+| 13 | `java.util.HashMap`                                              |     1,089 |   2.2 MB | ██▍              |
+| 14 | `java.util.HashMap$Node[]`                                       |     1,053 |   2.2 MB | ██▎              |
+| 15 | `java.util.ArrayList`                                            |       716 |   2.1 MB | ██▎              |
+| 16 | `java.util.HashMap$Node`                                         |    16,017 |   2.0 MB | ██▏              |
+| 17 | `int[]`                                                          |     9,056 |   2.0 MB | ██▏              |
+| 18 | `java.lang.ref.SoftReference`                                    |     1,653 |   1.5 MB | █▋               |
+| 19 | `double[]`                                                       |    16,101 |   1.5 MB | █▌               |
+| 20 | `java.util.jar.JarFile`                                          |       181 |   1.4 MB | █▌               |
+| 21 | `java.util.jar.Manifest`                                         |        63 |   1.3 MB | █▍               |
+| 22 | `java.util.LinkedHashMap$Entry`                                  |     2,792 |   1.3 MB | █▍               |
+| 23 | `io.netty.buffer.PoolSubpage[]`                                  |       202 | 957.9 KB | █                |
+| 24 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`        |         7 | 937.9 KB | ▉                |
+| 25 | `io.netty.buffer.PoolSubpage`                                    |     7,878 | 923.2 KB | ▉                |
+| 26 | `java.lang.Thread`                                               |       270 | 913.1 KB | ▉                |
+| 27 | `io.netty.buffer.PoolArena$HeapArena`                            |       101 | 695.2 KB | ▋                |
+| 28 | `io.netty.buffer.PoolArena$DirectArena`                          |       101 | 695.2 KB | ▋                |
+| 29 | `java.util.jar.Attributes`                                       |     5,841 | 652.9 KB | ▋                |
+| 30 | `breeze.linalg.Vector[]`                                         |         2 | 644.6 KB | ▋                |
+| 31 | `char[]`                                                         |       733 | 636.3 KB | ▋                |
+| 32 | `breeze.linalg.DenseVector$mcD$sp`                               |    15,006 | 586.7 KB | ▌                |
+| 33 | `java.lang.invoke.MethodType`                                    |     4,164 | 582.6 KB | ▌                |
+| 34 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   |       256 | 556.3 KB | ▌                |
+| 35 | `org.sparkproject.jetty.http.pathmap.PathMappings`               |        84 | 546.4 KB | ▌                |
+| 36 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 | 477.1 KB | ▌                |
+| 37 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 | 462.2 KB | ▍                |
+| 38 | `java.lang.invoke.MemberName`                                    |     5,801 | 460.4 KB | ▍                |
+| 39 | `org.sparkproject.jetty.util.IncludeExclude`                     |       112 | 446.7 KB | ▍                |
+| 40 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |         1 | 432.0 KB | ▍                |
+| 41 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 | 402.4 KB | ▍                |
+| 42 | `java.lang.String[]`                                             |     1,528 | 393.4 KB | ▍                |
+| 43 | `java.util.concurrent.locks.ReentrantLock`                       |     8,514 | 386.8 KB | ▍                |
+| 44 | `java.lang.invoke.DirectMethodHandle`                            |     2,436 | 371.6 KB | ▍                |
+| 45 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                |        56 | 364.4 KB | ▍                |
+| 46 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 | 307.1 KB | ▎                |
+| 47 | `jdk.internal.util.ReferencedKeySet`                             |         1 | 302.5 KB | ▎                |
+| 48 | `jdk.internal.util.ReferencedKeyMap`                             |         1 | 302.5 KB | ▎                |
+| 49 | `org.apache.spark.status.ElementTrackingStore`                   |         1 | 301.7 KB | ▎                |
+| 50 | `org.apache.spark.util.kvstore.InMemoryStore`                    |         1 | 301.1 KB | ▎                |
+| 51 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`      |         1 | 301.1 KB | ▎                |
+| 52 | `java.util.concurrent.locks.ReentrantLock$NonfairSync`           |     9,583 | 300.2 KB | ▎                |
+| 53 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`       |        12 | 297.3 KB | ▎                |
+| 54 | `org.apache.spark.mllib.linalg.Vector[]`                         |         2 | 293.0 KB | ▎                |
+| 55 | `java.lang.invoke.LambdaForm`                                    |       618 | 260.5 KB | ▎                |
+| 56 | `org.sparkproject.jetty.servlet.ServletHandler`                  |        29 | 251.2 KB | ▎                |
+| 57 | `io.netty.channel.nio.NioEventLoop`                              |        18 | 245.2 KB | ▎                |
+| 58 | `com.codahale.metrics.Timer`                                     |         7 | 243.8 KB | ▎                |
+| 59 | `com.codahale.metrics.Histogram`                                 |        11 | 242.4 KB | ▎                |
+| 60 | `com.codahale.metrics.ExponentiallyDecayingReservoir`            |        11 | 241.8 KB | ▎                |
 
 #### Who Holds Each Class?
 
@@ -606,58 +648,29 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 **`byte[]`**
 
-| Holder Class                                                                                     |  Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
-| `java.util.zip.ZipFile$Source`                                                                   |    181 |  10.9 MB | ████████████████ |
-| `java.lang.String`                                                                               | 56,320 |   3.2 MB | ████▋            |
-|   ↳ `java.util.HashMap$Node`                                                                     |  8,593 | 716.8 KB | █                |
-|   ↳ `java.lang.Object[]`                                                                         |  6,815 | 546.5 KB | ▊                |
-|   ↳ `java.lang.Class`                                                                            |  4,748 | 297.2 KB | ▍                |
-|   ↳ `java.lang.invoke.MethodType`                                                                |  2,375 | 287.7 KB | ▍                |
-|   ↳ `java.util.LinkedHashMap$Entry`                                                              |  1,960 | 234.5 KB | ▎                |
-|   ↳ `java.lang.String[]`                                                                         |  2,559 | 184.8 KB | ▎                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |  2,692 | 175.9 KB | ▎                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  2,349 | 168.1 KB | ▏                |
-|   ↳ `jdk.jfr.internal.jfc.JFC$KnownConfiguration`                                                |      6 |  73.4 KB | ▏                |
-|   ↳ `org.apache.spark.status.api.v1.StageData`                                                   |     35 |  43.2 KB | ▏                |
-| `java.lang.Thread`                                                                               |      1 | 177.5 KB | ▎                |
-|   ↳ `java.lang.Object[]`                                                                         |      2 |    576 B | ▏                |
-| `java.lang.Class`                                                                                |     53 | 132.4 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ██▏              |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▏                |
-|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
-| `byte[][]`                                                                                       |    372 |  94.2 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |      2 |  94.4 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.http.PreEncodedHttpField`                                            |     23 |   1.8 KB | ▏                |
-|   ↳ `org.apache.spark.storage.memory.DeserializedMemoryEntry`                                    |      1 |     24 B | ▏                |
-| `java.nio.HeapByteBuffer`                                                                        |     27 |  63.3 KB | ▏                |
-|   ↳ `java.nio.ByteBuffer[]`                                                                      |      3 |  45.4 KB | ▏                |
-|   ↳ `sun.nio.cs.StreamDecoder`                                                                   |      1 |   8.1 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.appender.OutputStreamManager`                                 |      1 |   8.1 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.http.HttpHeader`                                                     |     78 |   4.3 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.http.HttpMethod`                                                     |     40 |   2.2 KB | ▏                |
-|   ↳ `sun.nio.cs.StreamEncoder`                                                                   |      3 |   1.7 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.http.MimeTypes$Type`                                                 |     19 |   1.0 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.http.HttpHeaderValue`                                                |     12 |    992 B | ▏                |
-|   ↳ `org.sparkproject.jetty.http.HttpScheme`                                                     |      4 |    320 B | ▏                |
-|   ↳ `org.sparkproject.jetty.http.HttpVersion`                                                    |      4 |    224 B | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |    229 |  59.6 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              | 34,752 |   2.9 MB | ████▏            |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  8,033 | 626.6 KB | ▉                |
-| `(GC Root)`                                                                                      |    155 |  35.5 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`                                                  |    116 |  33.2 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap`                                                     |    408 |   3.4 MB | ████▉            |
-|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`                                    |     35 |   4.9 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.core.util.InternCache`                                                |      1 |   1.1 KB | ▏                |
-| `com.sun.xml.internal.stream.util.BufferAllocator`                                               |      1 |   8.0 KB | ▏                |
-|   ↳ `java.lang.ref.SoftReference`                                                                |      1 |  24.1 KB | ▏                |
+| Holder Class                                      |  Count | Retained |                  |
+| ------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.zip.ZipFile$Source`                    |    181 |  10.9 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap`          |    408 |   3.4 MB | ████▉            |
+| `java.lang.String`                                | 56,320 |   3.2 MB | ████▋            |
+|   ↳ `java.util.HashMap$Node`                      |  8,593 | 716.8 KB | █                |
+|   ↳ `java.lang.Object[]`                          |  6,815 | 546.5 KB | ▊                |
+|   ↳ `java.lang.Class`                             |  4,748 | 297.2 KB | ▍                |
+|   ↳ `java.lang.invoke.MethodType`                 |  2,375 | 287.7 KB | ▍                |
+|   ↳ `java.util.LinkedHashMap$Entry`               |  1,960 | 234.5 KB | ▎                |
+|   ↳ `java.lang.String[]`                          |  2,559 | 184.8 KB | ▎                |
+|   ↳ `java.lang.invoke.MemberName`                 |  2,692 | 175.9 KB | ▎                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node` |  2,349 | 168.1 KB | ▏                |
+|   ↳ `jdk.jfr.internal.jfc.JFC$KnownConfiguration` |      6 |  73.4 KB | ▏                |
+|   ↳ `org.apache.spark.status.api.v1.StageData`    |     35 |  43.2 KB | ▏                |
+| `java.lang.Object[]`                              | 11,995 |   2.0 MB | ███              |
+| `java.util.HashMap$Node[]`                        | 12,160 |   2.0 MB | ██▉              |
+| `java.lang.invoke.MethodType`                     |  2,378 | 287.7 KB | ▍                |
+| `java.util.LinkedHashMap$Entry`                   |  1,960 | 234.5 KB | ▎                |
+| `java.lang.invoke.MemberName`                     |  3,164 | 184.8 KB | ▎                |
+| `java.lang.String[]`                              |  2,559 | 184.8 KB | ▎                |
+| `java.lang.Thread`                                |      1 | 177.5 KB | ▎                |
+|   ↳ `java.lang.Object[]`                          |      2 |    576 B | ▏                |
 
 **`java.util.zip.ZipFile$Source`**
 
@@ -667,40 +680,35 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 **`java.lang.Class`**
 
+| Holder Class                                                                   | Count | Retained |                  |
+| ------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `(GC Root)`                                                                    | 5,007 |   5.4 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap`                                       |   408 |   3.4 MB | █████████▉       |
+| `org.apache.spark.storage.memory.MemoryStore`                                  |     1 |   2.3 MB | ██████▉          |
+| `java.util.HashMap`                                                            |   716 |   2.2 MB | ██████▍          |
+| `java.util.ArrayList`                                                          |   547 |   2.1 MB | ██████▎          |
+| `java.lang.Object[]`                                                           | 5,148 |   1.5 MB | ████▍            |
+|   ↳ `java.lang.Class`                                                          | 6,044 |   3.9 MB | ███████████▍     |
+|   ↳ `java.util.ArrayList`                                                      |   547 |   2.1 MB | ██████▎          |
+|   ↳ `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB | ▍                |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB | ▍                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB | ▍                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                       |   446 |  62.4 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB | ▏                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB | ▏                |
+| `java.util.jar.Attributes`                                                     | 5,841 | 561.6 KB | █▌               |
+| `java.lang.invoke.DirectMethodHandle`                                          | 2,334 | 275.4 KB | ▊                |
+| `java.util.ImmutableCollections$SetN`                                          |   165 | 148.6 KB | ▍                |
+| `java.util.LinkedHashSet`                                                      |    67 | 147.5 KB | ▍                |
+
+**`java.lang.Object[]`**
+
 | Holder Class                                                                                     | Count | Retained |                  |
 | ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `(GC Root)`                                                                                      | 5,007 |   5.4 MB | ████████████████ |
-| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB | ████▍            |
-|   ↳ `java.lang.Class`                                                                            | 6,044 |   3.9 MB | ███████████▍     |
-|   ↳ `java.util.ArrayList`                                                                        |   547 |   2.1 MB | ██████▎          |
-|   ↳ `java.util.ImmutableCollections$SetN`                                                        |   165 | 148.6 KB | ▍                |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |    36 | 144.8 KB | ▍                |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |   256 | 140.0 KB | ▍                |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |     1 |  75.3 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         |   446 |  62.4 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           | 1,665 |  48.1 KB | ▏                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |    60 |  42.6 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |     1 |  32.0 KB | ▏                |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         |   995 | 184.8 KB | ▌                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                                              |    41 |   5.8 KB | ▏                |
-|   ↳ `java.util.HashMap$Node`                                                                     |    11 |   3.2 KB | ▏                |
-|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`                                       |    18 |   2.5 KB | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                                             |     1 |    144 B | ▏                |
-| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB | ▏                |
-| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle`                                                        | 2,334 | 275.4 KB | ▊                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            | 2,137 |  83.5 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm`                                                                |   613 |  58.1 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                                                  |   366 |  19.1 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Special`                                                |    70 |   8.2 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Accessor`                                               |    76 |   3.0 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName[]`                                                              |    23 |   1.3 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Interface`                                              |     8 |    776 B | ▏                |
-|   ↳ `java.lang.invoke.MethodType`                                                                |    10 |    560 B | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |    13 |    520 B | ▏                |
-| `java.lang.Class`                                                                                |    24 |    488 B | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████▍            |
+| `java.lang.Class`                                                                                | 6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ██████▏          |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▏                |
 |   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
 |   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
@@ -710,104 +718,66 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
-| `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                               |     1 |    200 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                                               |     1 |    216 B | ▏                |
-| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                       |     1 |    192 B | ▏                |
-|   ↳ `java.lang.Class`                                                                            |     1 |    208 B | ▏                |
-| `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0`     |     1 |     48 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                                               |     1 |     64 B | ▏                |
-| `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0`     |     1 |     48 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`                                               |     1 |     64 B | ▏                |
-
-**`java.lang.Object[]`**
-
-| Holder Class                                                                                                | Count | Retained |                  |
-| ----------------------------------------------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.lang.Class`                                                                                           | 6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.lang.Object[]`                                                                                    | 5,148 |   1.5 MB | ██████▏          |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                                       |   847 |  45.3 KB | ▏                |
-|   ↳ `java.net.URLClassLoader`                                                                               |    10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                           |   472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                                       |    24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                                      |     1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                              |     1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                               |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0`            |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0`            |     1 |     48 B | ▏                |
-| `java.util.ArrayList`                                                                                       |   547 |   2.1 MB | ████████▊        |
-|   ↳ `java.net.URLClassLoader`                                                                               |     2 |   2.0 MB | ████████▏        |
-|   ↳ `java.lang.Class`                                                                                       |     5 |  74.7 KB | ▎                |
-|   ↳ `java.util.Collections$UnmodifiableRandomAccessList`                                                    |   215 |  29.9 KB | ▏                |
-|   ↳ `java.util.HashMap$Node`                                                                                |    35 |  28.8 KB | ▏                |
-|   ↳ `sun.reflect.generics.tree.ClassTypeSignature`                                                          |    70 |  17.0 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                           |   159 |  15.7 KB | ▏                |
-|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`                                                       |     1 |   4.1 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.util.DecoratedObjectFactory`                                                    |    29 |   2.7 KB | ▏                |
-|   ↳ `jdk.internal.loader.URLClassPath`                                                                      |     8 |   2.5 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                                         |    28 |   2.2 KB | ▏                |
-| `java.util.ImmutableCollections$SetN`                                                                       |   165 | 148.6 KB | ▌                |
-|   ↳ `sun.util.cldr.CLDRLocaleProviderAdapter`                                                               |     1 |  60.3 KB | ▏                |
-|   ↳ `java.lang.module.ModuleDescriptor`                                                                     |    92 |  28.1 KB | ▏                |
-|   ↳ `java.lang.module.ModuleDescriptor$Exports`                                                             |    26 |   2.1 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                                                                    |    23 |   1.7 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                                       |    10 |   1.1 KB | ▏                |
-|   ↳ `jdk.internal.module.SystemModuleFinders$SystemModuleFinder`                                            |     1 |    536 B | ▏                |
-|   ↳ `java.lang.module.Configuration`                                                                        |     1 |    536 B | ▏                |
-|   ↳ `jdk.net.ExtendedSocketOptions$1`                                                                       |     2 |    160 B | ▏                |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                                  |    36 | 144.8 KB | ▌                |
-|   ↳ `io.netty.channel.nio.NioEventLoop`                                                                     |    36 | 165.1 KB | ▋                |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                                              |   256 | 140.0 KB | ▌                |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                                                      |   252 | 529.6 KB | ██▏              |
-|   ↳ `java.lang.Class`                                                                                       |     3 |  14.3 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping`                                |     1 |  12.4 KB | ▏                |
-| `(GC Root)`                                                                                                 |     7 |  90.9 KB | ▎                |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                                             |     1 |  75.3 KB | ▎                |
-|   ↳ `org.apache.spark.storage.BlockInfoManager`                                                             |     1 |  75.3 KB | ▎                |
-| `java.lang.Object[]`                                                                                        |   446 |  62.4 KB | ▎                |
-|   ↳ `java.lang.Class`                                                                                       | 6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                                                   |   547 |   2.1 MB | ████████▊        |
-|   ↳ `java.util.ImmutableCollections$SetN`                                                                   |   165 | 148.6 KB | ▌                |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                              |    36 | 144.8 KB | ▌                |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                                          |   256 | 140.0 KB | ▌                |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                                         |     1 |  75.3 KB | ▎                |
-|   ↳ `java.lang.Object[]`                                                                                    |   446 |  62.4 KB | ▎                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                                                      | 1,665 |  48.1 KB | ▏                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                                      |    60 |  42.6 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                                        |     1 |  32.0 KB | ▏                |
-| `java.lang.invoke.LambdaForm$Name`                                                                          | 1,665 |  48.1 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$Name[]`                                                                    | 1,885 | 136.0 KB | ▌                |
-|   ↳ `java.lang.invoke.LambdaForm`                                                                           |    27 |   1.1 KB | ▏                |
-| `java.util.concurrent.atomic.AtomicReferenceArray`                                                          |    60 |  42.6 KB | ▏                |
-|   ↳ `org.sparkproject.guava.collect.MapMakerInternalMap$Segment`                                            |    12 |  22.2 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.core.util.BufferRecycler`                                                        |     2 |  16.2 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.util.internal.PrivateMaxEntriesMap`                                     |    13 |   3.7 KB | ▏                |
-|   ↳ `org.sparkproject.guava.cache.LocalCache$Segment`                                                       |    21 |   1000 B | ▏                |
-|   ↳ `org.apache.hadoop.thirdparty.com.google.common.cache.LocalCache$Segment`                               |     8 |    384 B | ▏                |
-|   ↳ `org.apache.hadoop.thirdparty.com.google.common.collect.MapMakerInternalMap$StrongKeyDummyValueSegment` |     4 |    192 B | ▏                |
+| `java.util.ArrayList`                                                                            |   547 |   2.1 MB | ████████▊        |
+|   ↳ `java.net.URLClassLoader`                                                                    |     2 |   2.0 MB | ████████▏        |
+|   ↳ `java.lang.Class`                                                                            |     5 |  74.7 KB | ▎                |
+|   ↳ `java.util.Collections$UnmodifiableRandomAccessList`                                         |   215 |  29.9 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                                                     |    35 |  28.8 KB | ▏                |
+|   ↳ `sun.reflect.generics.tree.ClassTypeSignature`                                               |    70 |  17.0 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |   159 |  15.7 KB | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`                                            |     1 |   4.1 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.DecoratedObjectFactory`                                         |    29 |   2.7 KB | ▏                |
+|   ↳ `jdk.internal.loader.URLClassPath`                                                           |     8 |   2.5 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |    28 |   2.2 KB | ▏                |
+| `java.net.URLClassLoader`                                                                        |    12 |   2.0 MB | ████████▏        |
+| `org.sparkproject.jetty.http.pathmap.PathMappings`                                               |   252 | 529.6 KB | ██▏              |
+| `io.netty.channel.nio.NioEventLoop`                                                              |    36 | 165.1 KB | ▋                |
+| `java.util.ImmutableCollections$SetN`                                                            |   165 | 148.6 KB | ▌                |
+|   ↳ `sun.util.cldr.CLDRLocaleProviderAdapter`                                                    |     1 |  60.3 KB | ▏                |
+|   ↳ `java.lang.module.ModuleDescriptor`                                                          |    92 |  28.1 KB | ▏                |
+|   ↳ `java.lang.module.ModuleDescriptor$Exports`                                                  |    26 |   2.1 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                                                         |    23 |   1.7 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |    10 |   1.1 KB | ▏                |
+|   ↳ `jdk.internal.module.SystemModuleFinders$SystemModuleFinder`                                 |     1 |    536 B | ▏                |
+|   ↳ `java.lang.module.Configuration`                                                             |     1 |    536 B | ▏                |
+|   ↳ `jdk.net.ExtendedSocketOptions$1`                                                            |     2 |    160 B | ▏                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                       |    36 | 144.8 KB | ▌                |
+|   ↳ `io.netty.channel.nio.NioEventLoop`                                                          |    36 | 165.1 KB | ▋                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                                   |   256 | 140.0 KB | ▌                |
+|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                                           |   252 | 529.6 KB | ██▏              |
+|   ↳ `java.lang.Class`                                                                            |     3 |  14.3 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping`                     |     1 |  12.4 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name[]`                                                             | 1,885 | 136.0 KB | ▌                |
+| `(GC Root)`                                                                                      |     7 |  90.9 KB | ▎                |
 
 **`java.lang.String`**
 
 | Holder Class                                                                                     |  Count | Retained |                  |
 | ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
-| `(GC Root)`                                                                                      | 20,520 |   1.5 MB | ████████████████ |
-| `java.util.HashMap$Node`                                                                         |  8,593 | 716.8 KB | ███████▍         |
-|   ↳ `java.util.HashMap$Node[]`                                                                   | 12,159 |   2.0 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                                                     |  3,830 | 659.2 KB | ██████▉          |
+| `java.util.concurrent.ConcurrentHashMap`                                                         |    408 |   3.4 MB | ████████████████ |
+| `java.util.ArrayList`                                                                            |    547 |   2.1 MB | ██████████▏      |
+| `java.util.HashMap$Node[]`                                                                       | 12,197 |   2.0 MB | █████████▋       |
+| `(GC Root)`                                                                                      | 20,520 |   1.5 MB | ███████          |
+| `java.util.LinkedHashMap`                                                                        |  2,719 |   1.3 MB | ██████▏          |
+| `java.util.HashMap$Node`                                                                         |  8,593 | 716.8 KB | ███▎             |
+|   ↳ `java.util.HashMap$Node[]`                                                                   | 12,159 |   2.0 MB | █████████▋       |
+|   ↳ `java.util.HashMap$Node`                                                                     |  3,830 | 659.2 KB | ███              |
 |   ↳ `java.lang.Object[]`                                                                         |     28 |   2.8 KB | ▏                |
-| `java.lang.Object[]`                                                                             |  6,815 | 546.5 KB | █████▋           |
+| `java.lang.Object[]`                                                                             |  6,815 | 546.5 KB | ██▌              |
 |   ↳ `java.lang.Class`                                                                            |  6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                                        |    547 |   2.1 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                                                        |    165 | 148.6 KB | █▌               |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |     36 | 144.8 KB | █▌               |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.0 KB | █▍               |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |      1 |  75.3 KB | ▊                |
-|   ↳ `java.lang.Object[]`                                                                         |    446 |  62.4 KB | ▋                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |  1,665 |  48.1 KB | ▌                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |     60 |  42.6 KB | ▍                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |      1 |  32.0 KB | ▎                |
-| `java.lang.Class`                                                                                |  4,748 | 297.2 KB | ███              |
-|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████████████ |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▍                |
+|   ↳ `java.util.ArrayList`                                                                        |    547 |   2.1 MB | ██████████▏      |
+|   ↳ `java.util.ImmutableCollections$SetN`                                                        |    165 | 148.6 KB | ▋                |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |     36 | 144.8 KB | ▋                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.0 KB | ▋                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |      1 |  75.3 KB | ▎                |
+|   ↳ `java.lang.Object[]`                                                                         |    446 |  62.4 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |  1,665 |  48.1 KB | ▏                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |     60 |  42.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |      1 |  32.0 KB | ▏                |
+| `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                                |     56 | 363.6 KB | █▋               |
+| `java.lang.Class`                                                                                |  4,748 | 297.2 KB | █▍               |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ███████▏         |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▏                |
 |   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
 |   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
 |   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
@@ -816,81 +786,25 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
-| `java.lang.invoke.MethodType`                                                                    |  2,375 | 287.7 KB | ███              |
+| `java.lang.invoke.MethodType`                                                                    |  2,375 | 287.7 KB | █▎               |
 |   ↳ `jdk.internal.util.WeakReferenceKey`                                                         |    175 |  10.0 KB | ▏                |
-| `java.util.LinkedHashMap$Entry`                                                                  |  1,960 | 234.5 KB | ██▍              |
-|   ↳ `java.util.LinkedHashMap`                                                                    |  2,718 |   1.3 MB | ██████████████   |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`                                    |     32 |   7.6 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`                                    |     33 |   1.6 KB | ▏                |
-|   ↳ `java.util.LinkedHashMap$LinkedKeyIterator`                                                  |      7 |    280 B | ▏                |
-|   ↳ `java.util.Map$Entry[]`                                                                      |      2 |     80 B | ▏                |
-| `java.lang.String[]`                                                                             |  2,559 | 184.8 KB | █▉               |
-|   ↳ `org.apache.xbean.asm9.ClassReader`                                                          |      1 | 181.0 KB | █▉               |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.4 KB | █▍               |
-|   ↳ `java.lang.Class`                                                                            |    102 |  24.7 KB | ▎                |
-|   ↳ `org.sparkproject.jetty.util.ArrayTrie`                                                      |      9 |  10.2 KB | ▏                |
-|   ↳ `javax.management.ImmutableDescriptor`                                                       |    269 |   7.1 KB | ▏                |
-|   ↳ `org.apache.hadoop.conf.Configuration$DeprecatedKeyInfo`                                     |    211 |   4.9 KB | ▏                |
-|   ↳ `java.util.HashMap$Node`                                                                     |     80 |   4.4 KB | ▏                |
-|   ↳ `sun.security.util.KnownOIDs`                                                                |    264 |   4.4 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     58 |   2.7 KB | ▏                |
-|   ↳ `java.util.Arrays$ArrayList`                                                                 |      7 |   2.6 KB | ▏                |
-| `java.lang.invoke.MemberName`                                                                    |  2,692 | 175.9 KB | █▊               |
-|   ↳ `java.lang.invoke.DirectMethodHandle`                                                        |  2,334 | 275.4 KB | ██▊              |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |  2,137 |  83.5 KB | ▊                |
-|   ↳ `java.lang.invoke.LambdaForm`                                                                |    613 |  58.1 KB | ▌                |
-|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                                                  |    366 |  19.1 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Special`                                                |     70 |   8.2 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Accessor`                                               |     76 |   3.0 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName[]`                                                              |     23 |   1.3 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Interface`                                              |      8 |    776 B | ▏                |
-|   ↳ `java.lang.invoke.MethodType`                                                                |     10 |    560 B | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |     13 |    520 B | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |  2,349 | 168.1 KB | █▊               |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              | 34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  8,033 | 626.6 KB | ██████▌          |
-| `jdk.jfr.internal.jfc.JFC$KnownConfiguration`                                                    |      6 |  73.4 KB | ▊                |
-|   ↳ `java.lang.Object[]`                                                                         |      2 |  74.0 KB | ▊                |
 
 **`java.util.concurrent.ConcurrentHashMap`**
 
-| Holder Class                                                                                     | Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `java.net.URLClassLoader`                                                                        |     9 | 633.3 KB | ████████████████ |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`                                                |     7 | 417.3 KB | ██████████▌      |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                                           |     7 | 391.2 KB | █████████▉       |
-| `jdk.internal.util.ReferencedKeyMap`                                                             |     1 | 302.4 KB | ███████▋         |
-|   ↳ `jdk.internal.util.ReferencedKeySet`                                                         |     1 | 302.5 KB | ███████▋         |
-| `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`                                      |     1 | 301.0 KB | ███████▌         |
-|   ↳ `org.apache.spark.util.kvstore.InMemoryStore`                                                |     1 | 301.1 KB | ███████▌         |
-| `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`                                       |    24 | 228.1 KB | █████▊           |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |    12 | 297.3 KB | ███████▌         |
-| `java.lang.Class`                                                                                |    49 | 194.4 KB | ████▉            |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | █▏               |
-|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
-| `sun.util.locale.BaseLocale$Cache`                                                               |     1 | 154.9 KB | ███▉             |
-|   ↳ `java.lang.Class`                                                                            |     1 | 155.0 KB | ███▉             |
-| `java.util.Properties`                                                                           |    27 | 139.1 KB | ███▌             |
-|   ↳ `org.apache.hadoop.conf.Configuration`                                                       |     5 |  77.0 KB | █▉               |
-|   ↳ `org.apache.hadoop.mapred.JobConf`                                                           |     2 |  46.8 KB | █▏               |
-|   ↳ `java.lang.Class`                                                                            |     7 |  11.7 KB | ▎                |
-|   ↳ `java.util.logging.LogManager`                                                               |     1 |   1.6 KB | ▏                |
-|   ↳ `scala.collection.mutable.HashMap$Node`                                                      |     3 |   1000 B | ▏                |
-|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                                                 |     3 |    720 B | ▏                |
-|   ↳ `scala.collection.convert.JavaCollectionWrappers$JPropertiesWrapper`                         |     1 |    496 B | ▏                |
-|   ↳ `org.apache.spark.metrics.sink.MetricsServlet`                                               |     1 |    360 B | ▏                |
-|   ↳ `org.apache.spark.metrics.MetricsConfig`                                                     |     1 |    344 B | ▏                |
-|   ↳ `org.apache.logging.log4j.util.PropertyFilePropertySource`                                   |     2 |    272 B | ▏                |
-| `java.time.zone.TzdbZoneRulesProvider`                                                           |     1 | 115.7 KB | ██▉              |
-|   ↳ `java.lang.Class`                                                                            |     1 | 118.2 KB | ██▉              |
+| Holder Class                                                |  Count | Retained |                  |
+| ----------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`             | 34,753 |   2.9 MB | ████████████████ |
+| `java.lang.Object[]`                                        |  5,151 |   1.5 MB | ████████▎        |
+| `java.util.jar.JarFile`                                     |     63 |   1.3 MB | ███████▎         |
+| `java.net.URLClassLoader`                                   |      9 | 633.3 KB | ███▍             |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`           |      7 | 417.3 KB | ██▎              |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |      7 | 391.2 KB | ██               |
+| `jdk.internal.util.ReferencedKeySet`                        |      1 | 302.5 KB | █▋               |
+| `jdk.internal.util.ReferencedKeyMap`                        |      1 | 302.4 KB | █▋               |
+|   ↳ `jdk.internal.util.ReferencedKeySet`                    |      1 | 302.5 KB | █▋               |
+| `org.apache.spark.util.kvstore.InMemoryStore`               |      1 | 301.1 KB | █▋               |
+| `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists` |      1 | 301.0 KB | █▋               |
+|   ↳ `org.apache.spark.util.kvstore.InMemoryStore`           |      1 | 301.1 KB | █▋               |
 
 **`java.util.concurrent.ConcurrentHashMap$Node[]`**
 
@@ -907,63 +821,46 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `sun.util.locale.BaseLocale$Cache`                          |     1 | 154.9 KB | ▋                |
 |   ↳ `java.util.Properties`                                      |    27 | 139.1 KB | ▋                |
 |   ↳ `java.time.zone.TzdbZoneRulesProvider`                      |     1 | 115.7 KB | ▌                |
-| `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`       |    35 |   4.9 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |    35 |   7.0 KB | ▏                |
-| `com.fasterxml.jackson.core.util.InternCache`                   |     1 |   1.1 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |     1 |   1.2 KB | ▏                |
+| `java.net.URLClassLoader`                                       |     9 | 633.3 KB | ██▉              |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`               |     7 | 417.3 KB | █▉               |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`          |     7 | 391.2 KB | █▊               |
+| `jdk.internal.util.ReferencedKeyMap`                            |     1 | 302.4 KB | █▍               |
+| `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`     |     1 | 301.0 KB | █▍               |
+| `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`      |    24 | 228.1 KB | █                |
+| `java.lang.Class`                                               |    50 | 195.7 KB | ▉                |
+| `sun.util.locale.BaseLocale$Cache`                              |     1 | 154.9 KB | ▋                |
+| `java.util.Properties`                                          |    27 | 139.1 KB | ▋                |
 
 **`java.util.LinkedHashMap`**
 
-| Holder Class                                                                                                                        | Count | Retained |                  |
-| ----------------------------------------------------------------------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `org.apache.spark.storage.memory.MemoryStore`                                                                                       |     1 |   2.3 MB | ████████████████ |
-| `java.util.jar.Attributes`                                                                                                          | 5,841 | 561.6 KB | ███▊             |
-|   ↳ `java.util.HashMap$Node`                                                                                                        | 5,778 | 451.4 KB | ███              |
-|   ↳ `java.util.jar.Manifest`                                                                                                        |    63 | 201.4 KB | █▎               |
-| `java.util.LinkedHashSet`                                                                                                           |    67 | 147.5 KB | ▉                |
-|   ↳ `java.util.HashMap$Node`                                                                                                        |    36 | 144.1 KB | ▉                |
-|   ↳ `java.util.Collections$UnmodifiableSet`                                                                                         |     7 |   1.5 KB | ▏                |
-|   ↳ `io.netty.channel.nio.NioEventLoop`                                                                                             |    18 |   1.4 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.ObjectMapper`                                                                                   |     2 |    576 B | ▏                |
-|   ↳ `java.lang.Class`                                                                                                               |     1 |    328 B | ▏                |
-|   ↳ `sun.security.provider.Sun`                                                                                                     |     1 |    328 B | ▏                |
-|   ↳ `org.sparkproject.jetty.server.ShutdownMonitor`                                                                                 |     1 |    200 B | ▏                |
-|   ↳ `sun.security.jca.ProviderList$1`                                                                                               |     1 |     80 B | ▏                |
-| `sun.reflect.annotation.AnnotationInvocationHandler`                                                                                |   102 |  23.8 KB | ▏                |
-|   ↳ `jdk.proxy3.$Proxy36`                                                                                                           |    70 |  18.7 KB | ▏                |
-|   ↳ `jdk.proxy3.$Proxy35`                                                                                                           |    25 |   3.7 KB | ▏                |
-|   ↳ `jdk.proxy3.$Proxy10`                                                                                                           |     1 |   2.1 KB | ▏                |
-|   ↳ `jdk.proxy1.$Proxy26`                                                                                                           |     4 |    992 B | ▏                |
-|   ↳ `jdk.proxy3.$Proxy38`                                                                                                           |     1 |    376 B | ▏                |
-|   ↳ `jdk.proxy3.$Proxy37`                                                                                                           |     1 |    296 B | ▏                |
-| `java.lang.reflect.Method`                                                                                                          |    71 |  18.1 KB | ▏                |
-|   ↳ `com.sun.jmx.mbeanserver.ConvertingMethod`                                                                                      |   159 |  42.0 KB | ▎                |
-|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo$MethodAccessor`                                                                       |    67 |  33.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Method`                                                                                                      |   385 |  33.1 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                                                               |   247 |  30.0 KB | ▏                |
-|   ↳ `java.lang.reflect.Method[]`                                                                                                    |    77 |  21.2 KB | ▏                |
-|   ↳ `java.util.HashMap$Node`                                                                                                        |    34 |   7.4 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethod`                                                                     |    16 |   1.4 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$anonfun$$nestedInanonfun$apply$3$1$$Lambda+0x00007b0ac0674cf8` |     2 |   1.0 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.ser.BeanPropertyWriter[]`                                                                       |     3 |    864 B | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.ObjectMapper`                                                                                   |     6 |    528 B | ▏                |
-| `org.apache.logging.log4j.core.pattern.PatternParser`                                                                               |     1 |   8.0 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                                                   |     1 |   8.1 KB | ▏                |
-| `org.apache.logging.log4j.core.config.plugins.util.PluginManager`                                                                   |     1 |   6.2 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.config.xml.XmlConfiguration`                                                                     |     1 |   6.3 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.config.NullConfiguration`                                                                        |     1 |     72 B | ▏                |
-| `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`                                                                      |     2 |   3.8 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedClass`                                                                      |     2 |   3.8 KB | ▏                |
-| `java.lang.reflect.Field`                                                                                                           |     3 |   1.1 KB | ▏                |
-|   ↳ `scala.collection.immutable.$colon$colon`                                                                                       |    37 |  24.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Field`                                                                                                       |    41 |   2.9 KB | ▏                |
-|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo$FieldAccessor`                                                                        |     3 |   2.5 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.deser.BeanDeserializer`                                                                         |     3 |    720 B | ▏                |
-|   ↳ `scala.Some`                                                                                                                    |     3 |    216 B | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedField`                                                                      |     3 |    216 B | ▏                |
-|   ↳ `java.lang.Class`                                                                                                               |     1 |    144 B | ▏                |
-| `java.util.Collections$SingletonMap`                                                                                                |     2 |   1.1 KB | ▏                |
-|   ↳ `java.time.format.DateTimeTextProvider$LocaleStore`                                                                             |     2 |   1.2 KB | ▏                |
+| Holder Class                                              | Count | Retained |                  |
+| --------------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.apache.spark.storage.memory.MemoryStore`             |     1 |   2.3 MB | ████████████████ |
+| `java.util.HashMap$Node`                                  | 5,848 | 602.9 KB | ████             |
+| `java.util.jar.Attributes`                                | 5,841 | 561.6 KB | ███▊             |
+|   ↳ `java.util.HashMap$Node`                              | 5,778 | 451.4 KB | ███              |
+|   ↳ `java.util.jar.Manifest`                              |    63 | 201.4 KB | █▎               |
+| `java.util.jar.Manifest`                                  |    63 | 201.4 KB | █▎               |
+| `java.util.LinkedHashSet`                                 |    67 | 147.5 KB | ▉                |
+|   ↳ `java.util.HashMap$Node`                              |    36 | 144.1 KB | ▉                |
+|   ↳ `java.util.Collections$UnmodifiableSet`               |     7 |   1.5 KB | ▏                |
+|   ↳ `io.netty.channel.nio.NioEventLoop`                   |    18 |   1.4 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.ObjectMapper`         |     2 |    576 B | ▏                |
+|   ↳ `java.lang.Class`                                     |     1 |    328 B | ▏                |
+|   ↳ `sun.security.provider.Sun`                           |     1 |    328 B | ▏                |
+|   ↳ `org.sparkproject.jetty.server.ShutdownMonitor`       |     1 |    200 B | ▏                |
+|   ↳ `sun.security.jca.ProviderList$1`                     |     1 |     80 B | ▏                |
+| `java.lang.Class`                                         |   250 |  64.2 KB | ▍                |
+| `com.sun.jmx.mbeanserver.ConvertingMethod`                |   159 |  42.0 KB | ▎                |
+| `org.apache.spark.util.kvstore.KVTypeInfo$MethodAccessor` |    67 |  33.8 KB | ▏                |
+| `scala.collection.immutable.$colon$colon`                 |    37 |  24.8 KB | ▏                |
+| `sun.reflect.annotation.AnnotationInvocationHandler`      |   102 |  23.8 KB | ▏                |
+|   ↳ `jdk.proxy3.$Proxy36`                                 |    70 |  18.7 KB | ▏                |
+|   ↳ `jdk.proxy3.$Proxy35`                                 |    25 |   3.7 KB | ▏                |
+|   ↳ `jdk.proxy3.$Proxy10`                                 |     1 |   2.1 KB | ▏                |
+|   ↳ `jdk.proxy1.$Proxy26`                                 |     4 |    992 B | ▏                |
+|   ↳ `jdk.proxy3.$Proxy38`                                 |     1 |    376 B | ▏                |
+|   ↳ `jdk.proxy3.$Proxy37`                                 |     1 |    296 B | ▏                |
 
 **`java.net.URLClassLoader`**
 
@@ -975,65 +872,43 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 | Holder Class                                                  |  Count | Retained |                  |
 | ------------------------------------------------------------- | -----: | -------: | ---------------- |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`               | 34,752 |   2.9 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap`                      |    408 |   3.4 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`               | 34,752 |   2.9 MB | █████████████▋   |
 |   ↳ `java.util.concurrent.ConcurrentHashMap`                  |    408 |   3.4 MB | ████████████████ |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys` |     35 |   4.9 KB | ▏                |
 |   ↳ `com.fasterxml.jackson.core.util.InternCache`             |      1 |   1.1 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.6 KB | ███▍             |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`           | 34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.6 KB | ███▍             |
+| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.6 KB | ██▉              |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`           | 34,752 |   2.9 MB | █████████████▋   |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.6 KB | ██▉              |
+| `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`     |     35 |   4.9 KB | ▏                |
+| `com.fasterxml.jackson.core.util.InternCache`                 |      1 |   1.1 KB | ▏                |
 
 **`java.lang.Object`**
 
-| Holder Class                                                                                     |   Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | ------: | -------: | ---------------- |
-| `java.lang.Object[]`                                                                             | 131,072 |   2.0 MB | ████████████████ |
-|   ↳ `java.lang.Class`                                                                            |   6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                                        |     547 |   2.1 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                                                        |     165 | 148.6 KB | █▏               |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |      36 | 144.8 KB | █▏               |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |     256 | 140.0 KB | █                |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |       1 |  75.3 KB | ▌                |
-|   ↳ `java.lang.Object[]`                                                                         |     446 |  62.4 KB | ▍                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |   1,665 |  48.1 KB | ▍                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |      60 |  42.6 KB | ▎                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |       1 |  32.0 KB | ▎                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |  21,815 | 340.9 KB | ██▋              |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              |  34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |   8,033 | 626.6 KB | ████▉            |
-| `java.util.concurrent.CopyOnWriteArrayList`                                                      |     861 |  13.5 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     348 |  21.1 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |      71 |   9.3 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |      87 |   8.0 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.server.handler.gzip.GzipHandler`                                     |      84 |   6.1 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`                                 |      36 |   2.6 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.io.ManagedSelector`                                                  |      36 |   2.3 KB | ▏                |
-|   ↳ `java.util.logging.Logger$ConfigurationData`                                                 |      23 |   2.2 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHolder`                                               |      30 |   1.6 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.FilterHolder`                                                |      29 |   1.6 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.server.SymlinkAllowedResourceAliasChecker`                           |      29 |   1.6 KB | ▏                |
-| `java.lang.Thread`                                                                               |     270 |   4.2 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         |       2 |    576 B | ▏                |
-| `java.io.RandomAccessFile`                                                                       |     181 |   2.8 KB | ▏                |
-| `sun.nio.ch.EPollSelectorImpl`                                                                   |      60 |    960 B | ▏                |
-|   ↳ `io.netty.channel.nio.NioEventLoop`                                                          |      16 |   8.0 KB | ▏                |
-| `java.lang.Class`                                                                                |      37 |    592 B | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         |   5,148 |   1.5 MB | ████████████     |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |     847 |  45.3 KB | ▎                |
-|   ↳ `java.net.URLClassLoader`                                                                    |      10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |     472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |      24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |       1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |       1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |       1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |       1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |       1 |     48 B | ▏                |
-| `org.sparkproject.jetty.servlet.ServletHolder`                                                   |      30 |    480 B | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |      30 |  10.6 KB | ▏                |
-| `org.sparkproject.jetty.servlet.FilterHolder`                                                    |      29 |    464 B | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |      29 |   7.0 KB | ▏                |
-| `org.sparkproject.jetty.servlet.ServletContextHandler`                                           |      29 |    464 B | ▏                |
-|   ↳ `org.apache.spark.ui.SparkUI`                                                                |       1 |   4.0 KB | ▏                |
+| Holder Class                                                                   |   Count | Retained |                  |
+| ------------------------------------------------------------------------------ | ------: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                                |  34,753 |   2.9 MB | ████████████████ |
+| `java.util.ArrayList`                                                          |     547 |   2.1 MB | ███████████▉     |
+| `java.lang.Object[]`                                                           | 131,072 |   2.0 MB | ███████████      |
+|   ↳ `java.lang.Class`                                                          |   6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                      |     547 |   2.1 MB | ███████████▉     |
+|   ↳ `java.util.ImmutableCollections$SetN`                                      |     165 | 148.6 KB | ▊                |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |      36 | 144.8 KB | ▊                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |     256 | 140.0 KB | ▊                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |       1 |  75.3 KB | ▍                |
+|   ↳ `java.lang.Object[]`                                                       |     446 |  62.4 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                         |   1,665 |  48.1 KB | ▎                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |      60 |  42.6 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |       1 |  32.0 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`                                  |  21,815 | 340.9 KB | █▊               |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                            |  34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                              |   8,033 | 626.6 KB | ███▍             |
+| `java.util.ImmutableCollections$SetN`                                          |     165 | 148.6 KB | ▊                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`     |      36 | 144.8 KB | ▊                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                 |     256 | 140.0 KB | ▊                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                |       1 |  75.3 KB | ▍                |
+| `java.lang.invoke.LambdaForm$Name`                                             |   1,665 |  48.1 KB | ▎                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                              |     847 |  45.3 KB | ▏                |
 
 **`org.apache.spark.storage.memory.MemoryStore`**
 
@@ -1043,98 +918,30 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 **`java.util.HashMap`**
 
-| Holder Class                                                                                     | Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `java.util.jar.Manifest`                                                                         |    63 |   1.1 MB | ████████████████ |
-|   ↳ `java.lang.ref.SoftReference`                                                                |    63 |   1.3 MB | ████████████████ |
-| `java.util.HashSet`                                                                              |   439 | 150.3 KB | ██               |
-|   ↳ `org.sparkproject.jetty.util.IncludeExclude`                                                 |   112 |  55.1 KB | ▊                |
-|   ↳ `java.util.Collections$UnmodifiableSet`                                                      |    11 |  30.0 KB | ▍                |
-|   ↳ `java.util.HashMap$Node`                                                                     |   140 |  28.3 KB | ▍                |
-|   ↳ `java.lang.Module`                                                                           |    62 |  13.3 KB | ▏                |
-|   ↳ `java.util.concurrent.ThreadPoolExecutor`                                                    |    17 |  10.8 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.util.RegexSet`                                                       |    56 |   7.0 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |     8 |   6.7 KB | ▏                |
-|   ↳ `java.util.WeakHashMap$Entry`                                                                |     1 |   1.7 KB | ▏                |
-|   ↳ `java.util.concurrent.ScheduledThreadPoolExecutor`                                           |    10 |   1.3 KB | ▏                |
-|   ↳ `java.nio.file.attribute.PosixFilePermissions$1`                                             |     2 |    480 B | ▏                |
-| `org.renaissance.core.ModuleLoader`                                                              |     2 | 147.6 KB | ██               |
-|   ↳ `java.lang.Thread`                                                                           |     1 |  73.8 KB | █                |
-|   ↳ `java.util.Optional`                                                                         |     1 |  73.8 KB | █                |
-| `java.lang.Class`                                                                                |    52 | 145.2 KB | ██               |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▋                |
-|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
-| `java.lang.Thread`                                                                               |     1 | 137.1 KB | █▉               |
-|   ↳ `java.lang.Object[]`                                                                         |     2 |    576 B | ▏                |
-| `scala.runtime.LambdaDeserialize`                                                                |     8 |  77.9 KB | █                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                                              |     4 |  78.1 KB | █                |
-| `com.sun.jmx.mbeanserver.PerInterface`                                                           |    54 |  70.7 KB | ▉                |
-| `java.util.Collections$UnmodifiableMap`                                                          |    10 |  62.5 KB | ▊                |
-|   ↳ `com.sun.management.internal.DiagnosticCommandImpl`                                          |     1 |  56.4 KB | ▊                |
-|   ↳ `jdk.internal.module.ModuleHashes`                                                           |     1 |   2.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |     6 |   2.4 KB | ▏                |
-|   ↳ `sun.management.ManagementFactoryHelper$LoggingMXBeanAccess`                                 |     1 |   1.1 KB | ▏                |
-|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`                                                 |     2 |    208 B | ▏                |
-| `java.lang.Module`                                                                               |    56 |  48.4 KB | ▋                |
-|   ↳ `java.util.HashMap$Node`                                                                     |     4 |   1.7 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |     1 |     48 B | ▏                |
-|   ↳ `java.net.URLClassLoader`                                                                    |     1 |     48 B | ▏                |
-|   ↳ `sun.reflect.misc.MethodUtil`                                                                |     1 |     48 B | ▏                |
-|   ↳ `org.apache.spark.util.MutableURLClassLoader`                                                |     1 |     48 B | ▏                |
-|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`                                           |     1 |     48 B | ▏                |
-|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                                       |     1 |     48 B | ▏                |
-| `org.apache.spark.util.kvstore.KVTypeInfo`                                                       |    24 |  36.2 KB | ▌                |
-|   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`                                   |    12 |  56.0 KB | ▊                |
-
-**`java.util.HashMap$Node[]`**
-
-| Holder Class                                                          | Count | Retained |                  |
-| --------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.HashMap`                                                   |   716 |   2.2 MB | ████████████████ |
-|   ↳ `java.util.jar.Manifest`                                          |    63 |   1.1 MB | ████████▎        |
-|   ↳ `java.util.HashSet`                                               |   439 | 150.3 KB | █                |
-|   ↳ `org.renaissance.core.ModuleLoader`                               |     2 | 147.6 KB | █                |
-|   ↳ `java.lang.Class`                                                 |    52 | 145.2 KB | █                |
-|   ↳ `java.lang.Thread`                                                |     1 | 137.1 KB | ▉                |
-|   ↳ `scala.runtime.LambdaDeserialize`                                 |     8 |  77.9 KB | ▌                |
-|   ↳ `com.sun.jmx.mbeanserver.PerInterface`                            |    54 |  70.7 KB | ▌                |
-|   ↳ `java.util.Collections$UnmodifiableMap`                           |    10 |  62.5 KB | ▍                |
-|   ↳ `java.lang.Module`                                                |    56 |  48.4 KB | ▎                |
-|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo`                        |    24 |  36.2 KB | ▎                |
-| `java.util.LinkedHashMap`                                             |   302 |  30.7 KB | ▏                |
-|   ↳ `org.apache.spark.storage.memory.MemoryStore`                     |     1 |   2.3 MB | ████████████████ |
-|   ↳ `java.util.jar.Attributes`                                        | 5,841 | 561.6 KB | ████             |
-|   ↳ `java.util.LinkedHashSet`                                         |    67 | 147.5 KB | █                |
-|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`              |   102 |  23.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Method`                                        |    71 |  18.1 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`             |     1 |   8.0 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager` |     1 |   6.2 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`    |     2 |   3.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Field`                                         |     3 |   1.1 KB | ▏                |
-|   ↳ `java.util.Collections$SingletonMap`                              |     2 |   1.1 KB | ▏                |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`             |    32 |   2.5 KB | ▏                |
-|   ↳ `java.util.LinkedHashMap$Entry`                                   |    32 |   6.4 KB | ▏                |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`             |     2 |    352 B | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Info$1`                   |     1 |   7.7 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Tags$1`                   |     1 |    384 B | ▏                |
-| `com.thoughtworks.paranamer.BytecodeReadingParanamer$1`               |     1 |    336 B | ▏                |
-|   ↳ `java.lang.Class`                                                 |     1 |    384 B | ▏                |
-
-**`java.util.ArrayList`**
-
 | Holder Class                                                                                     |  Count | Retained |                  |
 | ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
-| `java.net.URLClassLoader`                                                                        |      2 |   2.0 MB | ████████████████ |
-| `java.lang.Class`                                                                                |      5 |  74.7 KB | ▌                |
-|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████████▏    |
+| `java.util.ArrayList`                                                                            |    547 |   2.1 MB | ████████████████ |
+| `java.util.HashMap$Node[]`                                                                       | 12,160 |   2.0 MB | ███████████████▏ |
+| `java.lang.ref.SoftReference`                                                                    |     63 |   1.3 MB | █████████▉       |
+| `java.util.jar.Manifest`                                                                         |     63 |   1.1 MB | ████████▍        |
+|   ↳ `java.lang.ref.SoftReference`                                                                |     63 |   1.3 MB | █████████▉       |
+| `java.util.HashSet`                                                                              |    439 | 150.3 KB | █                |
+|   ↳ `org.sparkproject.jetty.util.IncludeExclude`                                                 |    112 |  55.1 KB | ▍                |
+|   ↳ `java.util.Collections$UnmodifiableSet`                                                      |     11 |  30.0 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                                                     |    140 |  28.3 KB | ▏                |
+|   ↳ `java.lang.Module`                                                                           |     62 |  13.3 KB | ▏                |
+|   ↳ `java.util.concurrent.ThreadPoolExecutor`                                                    |     17 |  10.8 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.util.RegexSet`                                                       |     56 |   7.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |      8 |   6.7 KB | ▏                |
+|   ↳ `java.util.WeakHashMap$Entry`                                                                |      1 |   1.7 KB | ▏                |
+|   ↳ `java.util.concurrent.ScheduledThreadPoolExecutor`                                           |     10 |   1.3 KB | ▏                |
+|   ↳ `java.nio.file.attribute.PosixFilePermissions$1`                                             |      2 |    480 B | ▏                |
+| `java.util.ImmutableCollections$SetN`                                                            |    165 | 148.6 KB | █                |
+| `org.renaissance.core.ModuleLoader`                                                              |      2 | 147.6 KB | █                |
+|   ↳ `java.lang.Thread`                                                                           |      1 |  73.8 KB | ▌                |
+|   ↳ `java.util.Optional`                                                                         |      1 |  73.8 KB | ▌                |
+| `java.lang.Class`                                                                                |     52 | 145.2 KB | █                |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ███████████▏     |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▎                |
 |   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
 |   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
@@ -1144,6 +951,56 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                       |     36 | 144.8 KB | █                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                                   |    256 | 140.0 KB | █                |
+
+**`java.util.HashMap$Node[]`**
+
+| Holder Class                                   | Count | Retained |                  |
+| ---------------------------------------------- | ----: | -------: | ---------------- |
+| `org.apache.spark.storage.memory.MemoryStore`  |     1 |   2.3 MB | ████████████████ |
+| `java.util.HashMap`                            |   716 |   2.2 MB | ██████████████▉  |
+|   ↳ `java.util.jar.Manifest`                   |    63 |   1.1 MB | ███████▋         |
+|   ↳ `java.util.HashSet`                        |   439 | 150.3 KB | █                |
+|   ↳ `org.renaissance.core.ModuleLoader`        |     2 | 147.6 KB | ▉                |
+|   ↳ `java.lang.Class`                          |    52 | 145.2 KB | ▉                |
+|   ↳ `java.lang.Thread`                         |     1 | 137.1 KB | ▉                |
+|   ↳ `scala.runtime.LambdaDeserialize`          |     8 |  77.9 KB | ▌                |
+|   ↳ `com.sun.jmx.mbeanserver.PerInterface`     |    54 |  70.7 KB | ▍                |
+|   ↳ `java.util.Collections$UnmodifiableMap`    |    10 |  62.5 KB | ▍                |
+|   ↳ `java.lang.Module`                         |    56 |  48.4 KB | ▎                |
+|   ↳ `org.apache.spark.util.kvstore.KVTypeInfo` |    24 |  36.2 KB | ▏                |
+| `java.util.jar.Manifest`                       |    63 |   1.1 MB | ███████▋         |
+| `java.util.jar.Attributes`                     | 5,841 | 561.6 KB | ███▊             |
+| `java.util.HashSet`                            |   439 | 150.3 KB | █                |
+| `org.renaissance.core.ModuleLoader`            |     2 | 147.6 KB | ▉                |
+| `java.util.LinkedHashSet`                      |    67 | 147.5 KB | ▉                |
+| `java.lang.Class`                              |    53 | 145.5 KB | ▉                |
+| `java.lang.Thread`                             |     1 | 137.1 KB | ▉                |
+| `scala.runtime.LambdaDeserialize`              |     8 |  77.9 KB | ▌                |
+
+**`java.util.ArrayList`**
+
+| Holder Class                                                                                     |  Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                                                  | 34,783 |   2.9 MB | ████████████████ |
+| `java.util.HashMap$Node[]`                                                                       | 12,160 |   2.0 MB | ███████████▏     |
+| `java.net.URLClassLoader`                                                                        |      2 |   2.0 MB | ██████████▉      |
+| `java.lang.Object[]`                                                                             |  5,178 |   1.5 MB | ████████▎        |
+| `java.lang.Class`                                                                                |      5 |  74.7 KB | ▍                |
+|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████▎        |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▏                |
+|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
+| `org.apache.spark.network.netty.NettyBlockTransferService`                                       |      1 |  57.7 KB | ▎                |
+| `org.apache.spark.rpc.netty.NettyRpcEnv`                                                         |      1 |  57.7 KB | ▎                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |    847 |  45.3 KB | ▏                |
 | `java.util.Collections$UnmodifiableRandomAccessList`                                             |    215 |  29.9 KB | ▏                |
 |   ↳ `java.lang.Class`                                                                            |      6 |  16.4 KB | ▏                |
 |   ↳ `io.netty.buffer.PoolArena$HeapArena`                                                        |    101 |   8.7 KB | ▏                |
@@ -1153,64 +1010,285 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `sun.management.VMManagementImpl`                                                            |      1 |     72 B | ▏                |
 |   ↳ `org.sparkproject.jetty.server.HttpConnectionFactory`                                        |      1 |     72 B | ▏                |
 | `java.util.HashMap$Node`                                                                         |     35 |  28.8 KB | ▏                |
-|   ↳ `java.util.HashMap$Node[]`                                                                   | 12,159 |   2.0 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                                                     |  3,830 | 659.2 KB | █████▏           |
+|   ↳ `java.util.HashMap$Node[]`                                                                   | 12,159 |   2.0 MB | ███████████▏     |
+|   ↳ `java.util.HashMap$Node`                                                                     |  3,830 | 659.2 KB | ███▌             |
 |   ↳ `java.lang.Object[]`                                                                         |     28 |   2.8 KB | ▏                |
-| `sun.reflect.generics.tree.ClassTypeSignature`                                                   |     70 |  17.0 KB | ▏                |
-|   ↳ `sun.reflect.generics.tree.MethodTypeSignature`                                              |     16 |   7.0 KB | ▏                |
-|   ↳ `sun.reflect.generics.tree.TypeArgument[]`                                                   |     32 |   5.7 KB | ▏                |
-|   ↳ `sun.reflect.generics.tree.TypeSignature[]`                                                  |      9 |   3.0 KB | ▏                |
-|   ↳ `sun.reflect.generics.tree.FieldTypeSignature[]`                                             |     11 |   1.9 KB | ▏                |
-|   ↳ `sun.reflect.generics.repository.FieldRepository`                                            |      1 |    384 B | ▏                |
-|   ↳ `sun.reflect.generics.tree.ClassSignature`                                                   |      1 |    176 B | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                                                    |    159 |  15.7 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                              | 34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                                |  8,033 | 626.6 KB | ████▉            |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`                                                |      1 |   4.1 KB | ▏                |
-| `org.sparkproject.jetty.util.DecoratedObjectFactory`                                             |     29 |   2.7 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     29 |   3.2 KB | ▏                |
-| `jdk.internal.loader.URLClassPath`                                                               |      8 |   2.5 KB | ▏                |
-|   ↳ `java.net.URLClassLoader`                                                                    |      2 |  87.8 KB | ▋                |
-|   ↳ `org.apache.spark.util.MutableURLClassLoader`                                                |      1 |    184 B | ▏                |
-| `org.sparkproject.jetty.servlet.ServletHandler`                                                  |     28 |   2.2 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler`                                       |     29 | 251.2 KB | █▉               |
 
 **`java.util.HashMap$Node`**
 
-| Holder Class                                                                   |  Count | Retained |                  |
-| ------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
-| `java.util.HashMap$Node[]`                                                     | 12,159 |   2.0 MB | ████████████████ |
-|   ↳ `java.util.HashMap`                                                        |    716 |   2.2 MB | ████████████████ |
-|   ↳ `java.util.LinkedHashMap`                                                  |    302 |  30.7 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`                  |     32 |   2.5 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`                  |      2 |    352 B | ▏                |
-|   ↳ `com.thoughtworks.paranamer.BytecodeReadingParanamer$1`                    |      1 |    336 B | ▏                |
-| `java.util.HashMap$Node`                                                       |  3,830 | 659.2 KB | █████            |
-|   ↳ `java.util.HashMap$Node[]`                                                 | 12,159 |   2.0 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                                   |  3,830 | 659.2 KB | █████            |
-|   ↳ `java.lang.Object[]`                                                       |     28 |   2.8 KB | ▏                |
-| `java.lang.Object[]`                                                           |     28 |   2.8 KB | ▏                |
-|   ↳ `java.lang.Class`                                                          |  6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                      |    547 |   2.1 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | █▏               |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | █                |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | █                |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |      1 |  75.3 KB | ▌                |
-|   ↳ `java.lang.Object[]`                                                       |    446 |  62.4 KB | ▍                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                         |  1,665 |  48.1 KB | ▎                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |     60 |  42.6 KB | ▎                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |      1 |  32.0 KB | ▏                |
+| Holder Class                                                               |  Count | Retained |                  |
+| -------------------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.lang.Class`                                                          |  6,044 |   3.9 MB | ████████████████ |
+| `java.util.HashMap`                                                        |    716 |   2.2 MB | █████████        |
+| `java.util.ArrayList`                                                      |    547 |   2.1 MB | ████████▊        |
+| `java.util.HashMap$Node[]`                                                 | 12,159 |   2.0 MB | ████████▍        |
+|   ↳ `java.util.HashMap`                                                    |    716 |   2.2 MB | █████████        |
+|   ↳ `java.util.LinkedHashMap`                                              |    302 |  30.7 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`              |     32 |   2.5 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`              |      2 |    352 B | ▏                |
+|   ↳ `com.thoughtworks.paranamer.BytecodeReadingParanamer$1`                |      1 |    336 B | ▏                |
+| `java.util.HashMap$Node`                                                   |  3,830 | 659.2 KB | ██▋              |
+|   ↳ `java.util.HashMap$Node[]`                                             | 12,159 |   2.0 MB | ████████▍        |
+|   ↳ `java.util.HashMap$Node`                                               |  3,830 | 659.2 KB | ██▋              |
+|   ↳ `java.lang.Object[]`                                                   |     28 |   2.8 KB | ▏                |
+| `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | ▌                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | ▌                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | ▌                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |      1 |  75.3 KB | ▎                |
+| `java.lang.invoke.LambdaForm$Name`                                         |  1,665 |  48.1 KB | ▏                |
 
 **`int[]`**
 
+| Holder Class                                                               |  Count | Retained |                  |
+| -------------------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                            | 34,753 |   2.9 MB | ████████████████ |
+| `java.util.ArrayList`                                                      |    547 |   2.1 MB | ███████████▉     |
+| `java.util.zip.ZipFile$Source`                                             |    382 |   1.4 MB | ███████▊         |
+| `java.lang.Thread`                                                         |      3 | 200.5 KB | █                |
+| `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | ▊                |
+| `io.netty.buffer.PoolArena$DirectArena`                                    |    303 | 145.2 KB | ▊                |
+| `io.netty.buffer.PoolArena$HeapArena`                                      |    303 | 145.2 KB | ▊                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | ▊                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | ▊                |
+| `int[][]`                                                                  |  4,397 | 139.2 KB | ▊                |
+|   ↳ `java.lang.Class`                                                      |    176 | 159.4 KB | ▊                |
+
+**`java.lang.ref.SoftReference`**
+
+| Holder Class                                           |  Count | Retained |                  |
+| ------------------------------------------------------ | -----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`        | 34,752 |   2.9 MB | ████████████████ |
+| `java.util.jar.JarFile`                                |     63 |   1.3 MB | ███████▎         |
+| `java.lang.invoke.MethodTypeForm`                      |  1,038 | 137.7 KB | ▋                |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`         |    559 |  97.5 KB | ▌                |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`           |      4 |  66.0 KB | ▎                |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`     |    559 |  97.5 KB | ▌                |
+| `java.lang.ref.SoftReference[]`                        |    535 |  60.7 KB | ▎                |
+|   ↳ `java.lang.invoke.MethodTypeForm`                  |  1,038 | 137.7 KB | ▋                |
+| `sun.util.locale.BaseLocale$Key`                       |  1,044 |  40.8 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |  1,044 |  73.4 KB | ▍                |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |      1 |  10.3 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`     |      1 |  10.3 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |      1 |  10.3 KB | ▏                |
+
+**`double[]`**
+
+| Holder Class                                                               |  Count | Retained |                  |
+| -------------------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `org.apache.spark.storage.memory.MemoryStore`                              |      1 |   2.3 MB | ████████████████ |
+| `java.util.ArrayList`                                                      |    547 |   2.1 MB | ██████████████▋  |
+| `java.util.LinkedHashMap`                                                  | 15,000 |   1.4 MB | █████████▍       |
+|   ↳ `org.apache.spark.storage.memory.MemoryStore`                          |      1 |   2.3 MB | ████████████████ |
+|   ↳ `java.util.jar.Attributes`                                             |  5,841 | 561.6 KB | ███▊             |
+|   ↳ `java.util.LinkedHashSet`                                              |     67 | 147.5 KB | ▉                |
+|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`                   |    102 |  23.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Method`                                             |     71 |  18.1 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`                  |      1 |   8.0 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager`      |      1 |   6.2 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`         |      2 |   3.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Field`                                              |      3 |   1.1 KB | ▏                |
+|   ↳ `java.util.Collections$SingletonMap`                                   |      2 |   1.1 KB | ▏                |
+| `breeze.linalg.Vector[]`                                                   | 15,000 | 585.9 KB | ███▉             |
+| `java.util.jar.Attributes`                                                 |  5,841 | 561.6 KB | ███▊             |
+| `org.apache.spark.mllib.linalg.Vector[]`                                   | 15,000 | 234.4 KB | █▌               |
+| `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | ▉                |
+| `java.util.LinkedHashSet`                                                  |     67 | 147.5 KB | ▉                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | ▉                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | ▉                |
+
+**`java.util.jar.JarFile`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |   181 |   1.4 MB | ████████████████ |
+
+**`java.util.jar.Manifest`**
+
+| Holder Class                                               | Count | Retained |                  |
+| ---------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.jar.JarFile`                                    |    63 |   1.3 MB | ████████████████ |
+| `java.lang.ref.SoftReference`                              |    63 |   1.3 MB | ███████████████▉ |
+|   ↳ `java.util.jar.JarFile`                                |    63 |   1.3 MB | ████████████████ |
+|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`           |     4 |  66.0 KB | ▊                |
+|   ↳ `java.lang.ref.SoftReference[]`                        |   535 |  60.7 KB | ▋                |
+|   ↳ `sun.util.locale.BaseLocale$Key`                       | 1,044 |  40.8 KB | ▍                |
+|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |  10.3 KB | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |  10.3 KB | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |  10.3 KB | ▏                |
+|   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    664 B | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`          |     1 |    224 B | ▏                |
+|   ↳ `org.apache.spark.broadcast.TorrentBroadcast`          |     2 |     80 B | ▏                |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`               |     4 |  66.0 KB | ▊                |
+| `java.lang.ref.SoftReference[]`                            |   535 |  60.7 KB | ▋                |
+| `sun.util.locale.BaseLocale$Key`                           | 1,044 |  40.8 KB | ▍                |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     1 |  10.3 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`         |     1 |  10.3 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     1 |  10.3 KB | ▏                |
+| `sun.security.util.CryptoAlgorithmConstraints`             |     1 |    664 B | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`              |     1 |    224 B | ▏                |
+
+**`java.util.LinkedHashMap$Entry`**
+
+| Holder Class                                                          | Count | Retained |                  |
+| --------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.apache.spark.storage.memory.MemoryStore`                         |     1 |   2.3 MB | ████████████████ |
+| `java.util.LinkedHashMap`                                             | 2,718 |   1.3 MB | █████████        |
+|   ↳ `org.apache.spark.storage.memory.MemoryStore`                     |     1 |   2.3 MB | ████████████████ |
+|   ↳ `java.util.jar.Attributes`                                        | 5,841 | 561.6 KB | ███▊             |
+|   ↳ `java.util.LinkedHashSet`                                         |    67 | 147.5 KB | ▉                |
+|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`              |   102 |  23.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Method`                                        |    71 |  18.1 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`             |     1 |   8.0 KB | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager` |     1 |   6.2 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`    |     2 |   3.8 KB | ▏                |
+|   ↳ `java.lang.reflect.Field`                                         |     3 |   1.1 KB | ▏                |
+|   ↳ `java.util.Collections$SingletonMap`                              |     2 |   1.1 KB | ▏                |
+| `java.util.jar.Attributes`                                            | 5,841 | 561.6 KB | ███▊             |
+| `java.util.LinkedHashSet`                                             |    67 | 147.5 KB | ▉                |
+| `sun.reflect.annotation.AnnotationInvocationHandler`                  |   102 |  23.8 KB | ▏                |
+| `java.lang.reflect.Method`                                            |    71 |  18.1 KB | ▏                |
+| `org.apache.logging.log4j.core.pattern.PatternParser`                 |     1 |   8.0 KB | ▏                |
+| `org.apache.hadoop.metrics2.lib.Interns$Info$1`                       |     1 |   7.7 KB | ▏                |
+| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`             |    32 |   7.6 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Info$1`                   |     1 |   7.7 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Tags$1`                   |     1 |    384 B | ▏                |
+| `java.util.LinkedHashMap$Entry`                                       |    32 |   6.4 KB | ▏                |
+
+**`io.netty.buffer.PoolSubpage[]`**
+
+| Holder Class                            | Count | Retained |                  |
+| --------------------------------------- | ----: | -------: | ---------------- |
+| `io.netty.buffer.PoolArena$DirectArena` |   101 | 479.0 KB | ████████████████ |
+| `io.netty.buffer.PoolArena$HeapArena`   |   101 | 479.0 KB | ████████████████ |
+
+**`org.apache.spark.storage.memory.DeserializedMemoryEntry`**
+
+| Holder Class                                                  | Count | Retained |                  |
+| ------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.LinkedHashMap`                                     | 2,718 |   1.3 MB | ████████████████ |
+| `java.util.LinkedHashMap$Entry`                               |     7 | 937.9 KB | ███████████▏     |
+|   ↳ `java.util.LinkedHashMap`                                 | 2,718 |   1.3 MB | ████████████████ |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1` |    32 |   7.6 KB | ▏                |
+|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2` |    33 |   1.6 KB | ▏                |
+|   ↳ `java.util.LinkedHashMap$LinkedKeyIterator`               |     7 |    280 B | ▏                |
+|   ↳ `java.util.Map$Entry[]`                                   |     2 |     80 B | ▏                |
+| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`     |    32 |   7.6 KB | ▏                |
+| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`     |    33 |   1.6 KB | ▏                |
+| `java.util.LinkedHashMap$LinkedKeyIterator`                   |     7 |    280 B | ▏                |
+| `java.util.Map$Entry[]`                                       |     2 |     80 B | ▏                |
+
+**`io.netty.buffer.PoolSubpage`**
+
+| Holder Class                                | Count | Retained |                  |
+| ------------------------------------------- | ----: | -------: | ---------------- |
+| `io.netty.buffer.PoolSubpage[]`             | 7,878 | 923.2 KB | ████████████████ |
+|   ↳ `io.netty.buffer.PoolArena$HeapArena`   |   101 | 479.0 KB | ████████▎        |
+|   ↳ `io.netty.buffer.PoolArena$DirectArena` |   101 | 479.0 KB | ████████▎        |
+| `io.netty.buffer.PoolArena$DirectArena`     |   101 | 479.0 KB | ████████▎        |
+| `io.netty.buffer.PoolArena$HeapArena`       |   101 | 479.0 KB | ████████▎        |
+
+**`java.lang.Thread`**
+
+| Holder Class                                                               | Count | Retained |                  |
+| -------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                                          | 6,044 |   3.9 MB | ████████████████ |
+| `java.util.ArrayList`                                                      |   547 |   2.1 MB | ████████▊        |
+| `(GC Root)`                                                                |   268 | 912.6 KB | ███▋             |
+| `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB | ▌                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB | ▌                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB | ▌                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB | ▎                |
+| `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB | ▏                |
+| `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB | ▏                |
+| `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB | ▏                |
+
+**`io.netty.buffer.PoolArena$HeapArena`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |   101 | 695.2 KB | ████████████████ |
+
+**`io.netty.buffer.PoolArena$DirectArena`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |   101 | 695.2 KB | ████████████████ |
+
+**`java.util.jar.Attributes`**
+
+| Holder Class                      |  Count | Retained |                  |
+| --------------------------------- | -----: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`        | 12,159 |   2.0 MB | ████████████████ |
+| `java.lang.ref.SoftReference`     |     63 |   1.3 MB | ██████████▍      |
+| `java.util.HashMap$Node`          |  5,778 | 451.4 KB | ███▍             |
+|   ↳ `java.util.HashMap$Node[]`    | 12,159 |   2.0 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`      |  3,830 | 659.2 KB | █████            |
+|   ↳ `java.lang.Object[]`          |     28 |   2.8 KB | ▏                |
+| `java.util.jar.Manifest`          |     63 | 201.4 KB | █▌               |
+|   ↳ `java.lang.ref.SoftReference` |     63 |   1.3 MB | ██████████▍      |
+| `java.lang.Object[]`              |     28 |   2.8 KB | ▏                |
+
+**`breeze.linalg.Vector[]`**
+
+| Holder Class                                              | Count | Retained |                  |
+| --------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.LinkedHashMap$Entry`                           |     7 | 937.9 KB | ████████████████ |
+| `org.apache.spark.storage.memory.DeserializedMemoryEntry` |     2 | 644.6 KB | ██████████▉      |
+|   ↳ `java.util.LinkedHashMap$Entry`                       |     7 | 937.9 KB | ████████████████ |
+
+**`char[]`**
+
+| Holder Class                                                                 | Count | Retained |                  |
+| ---------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.ArrayList`                                                        |   547 |   2.1 MB | ████████████████ |
+| `org.sparkproject.jetty.http.pathmap.PathMappings`                           |   252 | 529.6 KB | ███▊             |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                               |   256 | 267.9 KB | █▉               |
+|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                       |   252 | 529.6 KB | ███▊             |
+|   ↳ `java.lang.Class`                                                        |     3 |  14.3 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping` |     1 |  12.4 KB | ▏                |
+| `org.sparkproject.jetty.util.ArrayTrie`                                      |     9 | 160.3 KB | █▏               |
+|   ↳ `java.lang.Class`                                                        |     9 | 237.7 KB | █▋               |
+| `java.util.ImmutableCollections$SetN`                                        |   165 | 148.6 KB | █                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`   |    36 | 144.8 KB | █                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`              |     1 |  75.3 KB | ▌                |
+| `char[][]`                                                                   |   381 |  51.3 KB | ▎                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTrie`                                  |     6 |  55.1 KB | ▍                |
+|   ↳ `char[][][]`                                                             |   103 |   7.2 KB | ▏                |
+| `java.lang.ref.SoftReference`                                                |     3 |  49.6 KB | ▎                |
+| `java.lang.invoke.LambdaForm$Name`                                           | 1,665 |  48.1 KB | ▎                |
+
+**`breeze.linalg.DenseVector$mcD$sp`**
+
+| Holder Class                                                  |  Count | Retained |                  |
+| ------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `org.apache.spark.storage.memory.DeserializedMemoryEntry`     |      2 | 644.6 KB | ████████████████ |
+| `breeze.linalg.Vector[]`                                      | 15,000 | 585.9 KB | ██████████████▌  |
+|   ↳ `org.apache.spark.storage.memory.DeserializedMemoryEntry` |      2 | 644.6 KB | ████████████████ |
+| `org.apache.spark.mllib.clustering.ExpectationSum`            |      1 |    856 B | ▏                |
+| `breeze.linalg.DenseVector[]`                                 |      6 |    816 B | ▏                |
+|   ↳ `org.apache.spark.mllib.clustering.ExpectationSum`        |      1 |    856 B | ▏                |
+
+**`java.lang.invoke.MethodType`**
+
+| Holder Class                                      | Count | Retained |                  |
+| ------------------------------------------------- | ----: | -------: | ---------------- |
+| `(GC Root)`                                       | 3,989 | 582.6 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node`     | 4,164 | 140.2 KB | ███▊             |
+| `jdk.internal.util.WeakReferenceKey`              |   175 |  10.0 KB | ▎                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node` | 4,164 | 140.2 KB | ███▊             |
+
+**`org.sparkproject.jetty.util.ArrayTernaryTrie`**
+
 | Holder Class                                                                                     | Count | Retained |                  |
 | ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `java.util.zip.ZipFile$Source`                                                                   |   382 |   1.4 MB | ████████████████ |
-| `io.netty.buffer.PoolArena$DirectArena`                                                          |   303 | 145.2 KB | █▌               |
-| `io.netty.buffer.PoolArena$HeapArena`                                                            |   303 | 145.2 KB | █▌               |
-| `int[][]`                                                                                        | 4,397 | 139.2 KB | █▌               |
-|   ↳ `java.lang.Class`                                                                            |   176 | 159.4 KB | █▊               |
-| `java.lang.Class`                                                                                | 2,882 |  69.6 KB | ▊                |
+| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB | ████████████████ |
+| `org.sparkproject.jetty.http.pathmap.PathMappings`                                               |   252 | 529.6 KB | █████▍           |
+|   ↳ `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                            |    56 | 363.6 KB | ███▊             |
+|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |    28 | 182.8 KB | █▉               |
+| `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                                |    56 | 363.6 KB | ███▊             |
+| `org.sparkproject.jetty.servlet.ServletHandler`                                                  |    28 | 182.8 KB | █▉               |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB | ▍                |
+| `java.lang.Class`                                                                                |     3 |  14.3 KB | ▏                |
 |   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▍                |
 |   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
@@ -1221,106 +1299,322 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
 |   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
-| `jdk.internal.math.FDBigInteger`                                                                 |   341 |  24.2 KB | ▎                |
-|   ↳ `jdk.internal.math.FDBigInteger[]`                                                           |   340 |  34.8 KB | ▍                |
-|   ↳ `java.lang.Object[]`                                                                         |     1 |     48 B | ▏                |
-| `org.apache.xbean.asm9.ClassReader`                                                              |     2 |  19.4 KB | ▏                |
-|   ↳ `java.lang.Thread`                                                                           |     1 | 200.4 KB | ██▏              |
-| `com.fasterxml.jackson.core.sym.ByteQuadsCanonicalizer$TableInfo`                                |     2 |   4.0 KB | ▏                |
-|   ↳ `java.util.concurrent.atomic.AtomicReference`                                                |     2 |   5.1 KB | ▏                |
-| `java.util.regex.Pattern$BnM`                                                                    |    12 |   3.4 KB | ▏                |
-|   ↳ `java.util.regex.Pattern`                                                                    |     6 |   3.6 KB | ▏                |
-| `java.lang.Object[]`                                                                             |    14 |   3.0 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            | 6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                                        |   547 |   2.1 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                                                        |   165 | 148.6 KB | █▋               |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |    36 | 144.8 KB | █▌               |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |   256 | 140.0 KB | █▌               |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |     1 |  75.3 KB | ▊                |
-|   ↳ `java.lang.Object[]`                                                                         |   446 |  62.4 KB | ▋                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           | 1,665 |  48.1 KB | ▌                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |    60 |  42.6 KB | ▍                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |     1 |  32.0 KB | ▎                |
+| `java.util.concurrent.atomic.AtomicReference`                                                    |     1 |  13.8 KB | ▏                |
+| `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping`                         |     1 |  12.4 KB | ▏                |
+|   ↳ `java.util.concurrent.atomic.AtomicReference`                                                |     1 |  13.8 KB | ▏                |
+| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB | ▏                |
+| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB | ▏                |
 
-**`java.lang.ref.SoftReference`**
+**`org.sparkproject.jetty.http.pathmap.PathMappings`**
 
-| Holder Class                                           |  Count | Retained |                  |
-| ------------------------------------------------------ | -----: | -------: | ---------------- |
-| `java.util.jar.JarFile`                                |     63 |   1.3 MB | ████████████████ |
-| `java.lang.ThreadLocal$ThreadLocalMap$Entry`           |      4 |  66.0 KB | ▊                |
-|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`     |    559 |  97.5 KB | █▏               |
-| `java.lang.ref.SoftReference[]`                        |    535 |  60.7 KB | ▋                |
-|   ↳ `java.lang.invoke.MethodTypeForm`                  |  1,038 | 137.7 KB | █▌               |
-| `sun.util.locale.BaseLocale$Key`                       |  1,044 |  40.8 KB | ▍                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |  1,044 |  73.4 KB | ▊                |
-| `jdk.internal.loader.ClassLoaders$BootClassLoader`     |      1 |  10.3 KB | ▏                |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |      1 |  10.3 KB | ▏                |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |      1 |  10.3 KB | ▏                |
-| `sun.security.util.CryptoAlgorithmConstraints`         |      1 |    664 B | ▏                |
-|   ↳ `java.lang.Class`                                  |      1 |    688 B | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`          |      1 |    224 B | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`    | 34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |  8,033 | 626.6 KB | ███████▎         |
-| `org.apache.spark.broadcast.TorrentBroadcast`          |      2 |     80 B | ▏                |
+| Holder Class                                               | Count | Retained |                  |
+| ---------------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.sparkproject.jetty.util.IncludeExclude`               |    56 | 364.4 KB | ████████████████ |
+| `org.sparkproject.jetty.http.pathmap.PathSpecSet`          |    56 | 363.6 KB | ███████████████▉ |
+|   ↳ `org.sparkproject.jetty.util.IncludeExclude`           |    56 | 364.4 KB | ████████████████ |
+| `org.sparkproject.jetty.servlet.ServletContextHandler`     |    29 | 251.2 KB | ███████████      |
+| `org.sparkproject.jetty.servlet.ServletHandler`            |    28 | 182.8 KB | ████████         |
+|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler` |    29 | 251.2 KB | ███████████      |
 
-**`double[]`**
-
-| Holder Class                                                                                     |  Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | -----: | -------: | ---------------- |
-| `java.util.LinkedHashMap`                                                                        | 15,000 |   1.4 MB | ████████████████ |
-|   ↳ `org.apache.spark.storage.memory.MemoryStore`                                                |      1 |   2.3 MB | ████████████████ |
-|   ↳ `java.util.jar.Attributes`                                                                   |  5,841 | 561.6 KB | ██████▍          |
-|   ↳ `java.util.LinkedHashSet`                                                                    |     67 | 147.5 KB | █▋               |
-|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`                                         |    102 |  23.8 KB | ▎                |
-|   ↳ `java.lang.reflect.Method`                                                                   |     71 |  18.1 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`                                        |      1 |   8.0 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager`                            |      1 |   6.2 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`                               |      2 |   3.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Field`                                                                    |      3 |   1.1 KB | ▏                |
-|   ↳ `java.util.Collections$SingletonMap`                                                         |      2 |   1.1 KB | ▏                |
-| `java.lang.Class`                                                                                |     21 |  41.4 KB | ▍                |
-|   ↳ `java.lang.Object[]`                                                                         |  5,148 |   1.5 MB | ████████████████ |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |    847 |  45.3 KB | ▌                |
-|   ↳ `java.net.URLClassLoader`                                                                    |     10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |    472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |     24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |      1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |      1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |      1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |      1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |      1 |     48 B | ▏                |
-| `java.lang.Object[]`                                                                             |  1,024 |  32.0 KB | ▎                |
-|   ↳ `java.lang.Class`                                                                            |  6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                                        |    547 |   2.1 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                                                        |    165 | 148.6 KB | █▋               |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`                   |     36 | 144.8 KB | █▋               |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                                               |    256 | 140.0 KB | █▌               |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                              |      1 |  75.3 KB | ▊                |
-|   ↳ `java.lang.Object[]`                                                                         |    446 |  62.4 KB | ▋                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                                           |  1,665 |  48.1 KB | ▌                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                                           |     60 |  42.6 KB | ▍                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                                             |      1 |  32.0 KB | ▎                |
-| `org.apache.spark.mllib.linalg.DenseMatrix`                                                      |     12 |   9.6 KB | ▏                |
-|   ↳ `org.apache.spark.mllib.stat.distribution.MultivariateGaussian`                              |     12 |   9.9 KB | ▏                |
-| `breeze.linalg.DenseMatrix$mcD$sp`                                                               |      6 |   4.8 KB | ▏                |
-|   ↳ `breeze.linalg.DenseMatrix[]`                                                                |      6 |   5.0 KB | ▏                |
-| `org.apache.spark.mllib.linalg.DenseVector`                                                      |     12 |   1.1 KB | ▏                |
-|   ↳ `org.apache.spark.mllib.linalg.Vector[]`                                                     | 15,000 | 234.4 KB | ██▋              |
-|   ↳ `org.apache.spark.mllib.stat.distribution.MultivariateGaussian`                              |     12 |   1.3 KB | ▏                |
-| `breeze.linalg.DenseVector$mcD$sp`                                                               |      6 |    576 B | ▏                |
-|   ↳ `breeze.linalg.Vector[]`                                                                     | 15,000 | 585.9 KB | ██████▋          |
-|   ↳ `breeze.linalg.DenseVector[]`                                                                |      6 |    816 B | ▏                |
-| `double[][]`                                                                                     |     15 |    480 B | ▏                |
-|   ↳ `java.lang.Class`                                                                            |      4 |   8.6 KB | ▏                |
-| `(GC Root)`                                                                                      |      1 |     64 B | ▏                |
-| `org.apache.spark.mllib.clustering.ExpectationSum`                                               |      1 |     64 B | ▏                |
-|   ↳ `java.lang.Thread`                                                                           |      1 |   6.0 KB | ▏                |
-
-**`java.util.jar.JarFile`**
+**`org.sparkproject.jetty.server.handler.ContextHandlerCollection`**
 
 | Holder Class | Count | Retained |                  |
 | ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |   181 |   1.4 MB | ████████████████ |
+| `(GC Root)`  |     1 | 477.1 KB | ████████████████ |
+
+**`org.sparkproject.jetty.server.handler.gzip.GzipHandler`**
+
+| Holder Class                                                     | Count | Retained |                  |
+| ---------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    28 | 462.2 KB | ████████████████ |
+
+**`java.lang.invoke.MemberName`**
+
+| Holder Class                                                               |  Count | Retained |                  |
+| -------------------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.lang.Class`                                                          |  6,051 |   3.9 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                            | 34,752 |   2.9 MB | ███████████▉     |
+| `java.util.ArrayList`                                                      |    547 |   2.1 MB | ████████▊        |
+| `java.lang.invoke.DirectMethodHandle`                                      |  2,334 | 275.4 KB | █                |
+|   ↳ `java.lang.Object[]`                                                   |  1,973 | 321.1 KB | █▎               |
+|   ↳ `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`                 |    292 |  39.3 KB | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                        |     16 |   1.5 KB | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                       |      7 |    672 B | ▏                |
+|   ↳ `java.lang.Class`                                                      |      3 |    656 B | ▏                |
+|   ↳ `java.lang.invoke.MethodType`                                          |     10 |    400 B | ▏                |
+|   ↳ `java.util.ImmutableCollections$List12`                                |      4 |    384 B | ▏                |
+|   ↳ `java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle`              |      3 |    224 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LI`                        |      1 |    152 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLLL`                      |      1 |    128 B | ▏                |
+| `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | ▌                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | ▌                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | ▌                |
+| `java.lang.invoke.LambdaFormEditor$Transform`                              |     80 |  93.3 KB | ▍                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                          |  2,137 |  83.5 KB | ▎                |
+|   ↳ `java.lang.Object[]`                                                   |    995 | 184.8 KB | ▋                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                        |     41 |   5.8 KB | ▏                |
+|   ↳ `java.util.HashMap$Node`                                               |     11 |   3.2 KB | ▏                |
+|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`                 |     18 |   2.5 KB | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                       |      1 |    144 B | ▏                |
+| `java.lang.invoke.LambdaForm$Name`                                         |  2,193 |  78.3 KB | ▎                |
+
+**`org.sparkproject.jetty.util.IncludeExclude`**
+
+| Holder Class                                                         | Count | Retained |                  |
+| -------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.sparkproject.jetty.server.handler.ContextHandlerCollection`     |    28 | 462.2 KB | ████████████████ |
+| `org.sparkproject.jetty.server.handler.gzip.GzipHandler`             |   112 | 446.7 KB | ███████████████▍ |
+|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    28 | 462.2 KB | ████████████████ |
+
+**`jdk.internal.loader.ClassLoaders$AppClassLoader`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 | 432.0 KB | ████████████████ |
+
+**`jdk.internal.loader.ClassLoaders$PlatformClassLoader`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 | 402.4 KB | ████████████████ |
+
+**`java.lang.String[]`**
+
+| Holder Class                                                                 | Count | Retained |                  |
+| ---------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap`                                     |   408 |   3.4 MB | ████████████████ |
+| `java.util.HashMap`                                                          |   716 |   2.2 MB | ██████████▍      |
+| `java.util.ArrayList`                                                        |   547 |   2.1 MB | ██████████▏      |
+| `java.util.LinkedHashMap`                                                    | 3,021 |   1.3 MB | ██████▍          |
+| `org.sparkproject.jetty.http.pathmap.PathMappings`                           |   252 | 529.6 KB | ██▍              |
+| `org.apache.xbean.asm9.ClassReader`                                          |     1 | 181.0 KB | ▊                |
+|   ↳ `java.lang.Thread`                                                       |     1 | 200.4 KB | ▉                |
+| `java.util.ImmutableCollections$SetN`                                        |   165 | 148.6 KB | ▋                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`   |    36 | 144.8 KB | ▋                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                               |   256 | 140.4 KB | ▋                |
+|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                       |   252 | 529.6 KB | ██▍              |
+|   ↳ `java.lang.Class`                                                        |     3 |  14.3 KB | ▏                |
+|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping` |     1 |  12.4 KB | ▏                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`              |     1 |  75.3 KB | ▎                |
+
+**`java.util.concurrent.locks.ReentrantLock`**
+
+| Holder Class                                          | Count | Retained |                  |
+| ----------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Object[]`                                  | 5,149 |   1.5 MB | ████████████████ |
+| `io.netty.buffer.PoolSubpage[]`                       | 7,878 | 923.2 KB | █████████▌       |
+| `io.netty.buffer.PoolSubpage`                         | 7,878 | 369.3 KB | ███▊             |
+|   ↳ `io.netty.buffer.PoolSubpage[]`                   | 7,878 | 923.2 KB | █████████▌       |
+| `java.lang.invoke.DirectMethodHandle$Constructor`     |   847 |  45.3 KB | ▍                |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool` |     1 |  32.4 KB | ▎                |
+| `java.util.WeakHashMap`                               |   239 |  24.3 KB | ▎                |
+| `com.fasterxml.jackson.databind.util.LRUMap`          |    13 |  15.1 KB | ▏                |
+| `java.net.URLClassLoader`                             |    10 |   9.4 KB | ▏                |
+| `java.lang.invoke.MemberName`                         |   472 |   8.9 KB | ▏                |
+| `io.netty.buffer.PoolArena$DirectArena`               |   101 |   4.7 KB | ▏                |
+
+**`java.lang.invoke.DirectMethodHandle`**
+
+| Holder Class                                                                   | Count | Retained |                  |
+| ------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `java.util.ArrayList`                                                          |   547 |   2.1 MB | ████████████████ |
+| `java.lang.Object[]`                                                           | 1,973 | 321.1 KB | ██▎              |
+|   ↳ `java.lang.Class`                                                          | 6,044 |   3.9 MB | ████████████████ |
+|   ↳ `java.util.ArrayList`                                                      |   547 |   2.1 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB | █                |
+|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB | █                |
+|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB | █                |
+|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB | ▌                |
+|   ↳ `java.lang.Object[]`                                                       |   446 |  62.4 KB | ▍                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB | ▎                |
+|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB | ▎                |
+|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB | ▏                |
+| `java.util.ImmutableCollections$SetN`                                          |   165 | 148.6 KB | █                |
+| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`     |    36 | 144.8 KB | █                |
+| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                 |   256 | 140.0 KB | █                |
+| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                |     1 |  75.3 KB | ▌                |
+| `java.lang.invoke.LambdaForm$Name`                                             | 1,665 |  48.1 KB | ▎                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                              |   858 |  46.4 KB | ▎                |
+| `java.util.concurrent.atomic.AtomicReferenceArray`                             |    60 |  42.6 KB | ▎                |
+| `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`                         |   292 |  39.3 KB | ▎                |
+|   ↳ `java.lang.Object[]`                                                       |   292 |  53.6 KB | ▍                |
+
+**`org.sparkproject.jetty.http.pathmap.PathSpecSet`**
+
+| Holder Class                                                 | Count | Retained |                  |
+| ------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `org.sparkproject.jetty.server.handler.gzip.GzipHandler`     |   112 | 446.7 KB | ████████████████ |
+| `org.sparkproject.jetty.util.IncludeExclude`                 |    56 | 364.4 KB | █████████████    |
+|   ↳ `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |   112 | 446.7 KB | ████████████████ |
+
+**`org.sparkproject.jetty.servlet.ServletContextHandler`**
+
+| Holder Class                  | Count | Retained |                  |
+| ----------------------------- | ----: | -------: | ---------------- |
+| `(GC Root)`                   |    28 | 303.0 KB | ████████████████ |
+| `org.apache.spark.ui.SparkUI` |     1 |   4.0 KB | ▏                |
+
+**`jdk.internal.util.ReferencedKeySet`**
+
+| Holder Class                                                                                     | Count | Retained |                  |
+| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB | ████████████████ |
+| `java.lang.Class`                                                                                |     1 | 302.5 KB | ███▏             |
+|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▍                |
+|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
+|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
+|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
+|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
+|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
+|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB | ▍                |
+| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB | ▏                |
+| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB | ▏                |
+| `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                               |     1 |    200 B | ▏                |
+| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                       |     1 |    192 B | ▏                |
+| `breeze.generic.MMRegistry2$$Lambda+0x00007b0ac0991000`                                          |     1 |     48 B | ▏                |
+| `breeze.linalg.diag$$anon$2$$Lambda+0x00007b0ac099b738`                                          |     1 |     48 B | ▏                |
+| `breeze.linalg.support.TensorValues$$$Lambda+0x00007b0ac09d5000`                                 |     1 |     48 B | ▏                |
+
+**`jdk.internal.util.ReferencedKeyMap`**
+
+| Holder Class                         | Count | Retained |                  |
+| ------------------------------------ | ----: | -------: | ---------------- |
+| `java.lang.Class`                    |     1 | 302.5 KB | ████████████████ |
+| `jdk.internal.util.ReferencedKeySet` |     1 | 302.5 KB | ███████████████▉ |
+|   ↳ `java.lang.Class`                |     1 | 302.5 KB | ████████████████ |
+
+**`org.apache.spark.status.ElementTrackingStore`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 | 301.7 KB | ████████████████ |
+
+**`org.apache.spark.util.kvstore.InMemoryStore`**
+
+| Holder Class                                   | Count | Retained |                  |
+| ---------------------------------------------- | ----: | -------: | ---------------- |
+| `org.apache.spark.status.ElementTrackingStore` |     1 | 301.1 KB | ████████████████ |
+
+**`org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`**
+
+| Holder Class                                       | Count | Retained |                  |
+| -------------------------------------------------- | ----: | -------: | ---------------- |
+| `org.apache.spark.status.ElementTrackingStore`     |     1 | 301.1 KB | ████████████████ |
+| `org.apache.spark.util.kvstore.InMemoryStore`      |     1 | 301.1 KB | ███████████████▉ |
+|   ↳ `org.apache.spark.status.ElementTrackingStore` |     1 | 301.1 KB | ████████████████ |
+
+**`java.util.concurrent.locks.ReentrantLock$NonfairSync`**
+
+| Holder Class                                                                  | Count | Retained |                  |
+| ----------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `io.netty.buffer.PoolSubpage`                                                 | 7,878 | 369.3 KB | ████████████████ |
+| `java.util.concurrent.locks.ReentrantLock`                                    | 8,119 | 253.8 KB | ██████████▉      |
+|   ↳ `io.netty.buffer.PoolSubpage`                                             | 7,878 | 369.3 KB | ████████████████ |
+|   ↳ `io.netty.buffer.PoolArena$HeapArena`                                     |   101 |   4.7 KB | ▏                |
+|   ↳ `io.netty.buffer.PoolArena$DirectArena`                                   |   101 |   4.7 KB | ▏                |
+|   ↳ `java.lang.ref.ReferenceQueue`                                            |   285 |   4.5 KB | ▏                |
+|   ↳ `com.fasterxml.jackson.databind.util.internal.PrivateMaxEntriesMap`       |    13 |    624 B | ▏                |
+|   ↳ `jdk.internal.misc.InternalLock`                                          |    12 |    576 B | ▏                |
+|   ↳ `java.util.concurrent.LinkedBlockingQueue`                                |    36 |    576 B | ▏                |
+|   ↳ `org.apache.logging.log4j.core.config.AwaitCompletionReliabilityStrategy` |    19 |    304 B | ▏                |
+|   ↳ `java.util.concurrent.ThreadPoolExecutor`                                 |    17 |    272 B | ▏                |
+|   ↳ `java.lang.Class`                                                         |     4 |    192 B | ▏                |
+| `java.lang.Object[]`                                                          | 1,014 |  71.3 KB | ███              |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                         |     1 |  32.4 KB | █▍               |
+| `org.sparkproject.guava.util.concurrent.Striped$PaddedLock`                   | 1,014 |  31.7 KB | █▎               |
+|   ↳ `java.lang.Object[]`                                                      | 1,014 |  71.3 KB | ███              |
+|   ↳ `org.apache.spark.storage.BlockInfoManager`                               |    10 |    400 B | ▏                |
+| `org.sparkproject.guava.collect.MapMakerInternalMap$Segment[]`                |    12 |  24.8 KB | █                |
+| `java.util.WeakHashMap`                                                       |   239 |  24.3 KB | █                |
+| `java.lang.ref.ReferenceQueue`                                                |   281 |   8.8 KB | ▍                |
+|   ↳ `java.util.WeakHashMap`                                                   |   239 |  24.3 KB | █                |
+|   ↳ `org.sparkproject.guava.collect.MapMakerInternalMap$Segment`              |    12 |   1.2 KB | ▏                |
+|   ↳ `org.sparkproject.guava.cache.LocalCache$Segment`                         |     4 |    416 B | ▏                |
+|   ↳ `java.lang.Class`                                                         |     3 |    312 B | ▏                |
+|   ↳ `java.lang.WeakPairMap`                                                   |     3 |    312 B | ▏                |
+|   ↳ `sun.util.locale.provider.LocaleResources`                                |     2 |    208 B | ▏                |
+|   ↳ `com.sun.jmx.mbeanserver.MBeanIntrospector$MBeanInfoMap`                  |     2 |    208 B | ▏                |
+|   ↳ `com.sun.jmx.mbeanserver.WeakIdentityHashMap`                             |     2 |    208 B | ▏                |
+|   ↳ `com.sun.jmx.mbeanserver.MBeanIntrospector$PerInterfaceMap`               |     2 |    208 B | ▏                |
+|   ↳ `java.lang.ClassValue$ClassValueMap`                                      |     1 |    104 B | ▏                |
+| `org.sparkproject.guava.cache.LocalCache$Segment[]`                           |    21 |   6.2 KB | ▎                |
+| `io.netty.buffer.PoolArena$DirectArena`                                       |   101 |   4.7 KB | ▏                |
+
+**`org.apache.spark.util.kvstore.InMemoryStore$InstanceList`**
+
+| Holder Class                                        |  Count | Retained |                  |
+| --------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 34,752 |   2.9 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node`       |     12 | 297.3 KB | █▌               |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 34,752 |   2.9 MB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   |  8,033 | 626.6 KB | ███▍             |
+
+**`org.apache.spark.mllib.linalg.Vector[]`**
+
+| Holder Class                                              | Count | Retained |                  |
+| --------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.LinkedHashMap$Entry`                           |     7 | 937.9 KB | ████████████████ |
+| `org.apache.spark.storage.memory.DeserializedMemoryEntry` |     2 | 293.0 KB | ████▉            |
+|   ↳ `java.util.LinkedHashMap$Entry`                       |     7 | 937.9 KB | ████████████████ |
+
+**`java.lang.invoke.LambdaForm`**
+
+| Holder Class                                        | Count | Retained |                  |
+| --------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Object[]`                                | 7,143 |   1.9 MB | ████████████████ |
+| `java.util.jar.JarFile`                             |    63 |   1.3 MB | ███████████▏     |
+| `(GC Root)`                                         |   417 | 214.1 KB | █▊               |
+| `java.lang.invoke.LambdaFormEditor$Transform`       |    80 |  93.3 KB | ▊                |
+|   ↳ `java.lang.invoke.LambdaForm`                   |    88 |  54.7 KB | ▍                |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform[]` |    43 |  44.8 KB | ▎                |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`        |     4 |  66.0 KB | ▌                |
+| `java.lang.ref.SoftReference[]`                     |   535 |  60.7 KB | ▍                |
+| `java.lang.invoke.LambdaForm`                       |    88 |  54.7 KB | ▍                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`   |   858 |  46.4 KB | ▍                |
+| `java.lang.invoke.LambdaFormEditor$Transform[]`     |    43 |  44.8 KB | ▎                |
+| `sun.util.locale.BaseLocale$Key`                    | 1,044 |  40.8 KB | ▎                |
+
+**`org.sparkproject.jetty.servlet.ServletHandler`**
+
+| Holder Class                                           | Count | Retained |                  |
+| ------------------------------------------------------ | ----: | -------: | ---------------- |
+| `org.sparkproject.jetty.servlet.ServletContextHandler` |    29 | 251.2 KB | ████████████████ |
+|   ↳ `org.apache.spark.ui.SparkUI`                      |     1 |   4.0 KB | ▎                |
+| `org.apache.spark.ui.SparkUI`                          |     1 |   4.0 KB | ▎                |
+
+**`io.netty.channel.nio.NioEventLoop`**
+
+| Holder Class                                                 | Count | Retained |                  |
+| ------------------------------------------------------------ | ----: | -------: | ---------------- |
+| `io.netty.channel.nio.NioEventLoopGroup`                     |    16 | 225.9 KB | ████████████████ |
+|   ↳ `org.apache.spark.network.client.TransportClientFactory` |     2 | 114.1 KB | ████████         |
+| `org.apache.spark.network.client.TransportClientFactory`     |     2 | 114.1 KB | ████████         |
+| `(GC Root)`                                                  |     2 |  19.4 KB | █▎               |
+
+**`com.codahale.metrics.Timer`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     7 | 243.8 KB | ████████████████ |
+
+**`com.codahale.metrics.Histogram`**
+
+| Holder Class                 | Count | Retained |                  |
+| ---------------------------- | ----: | -------: | ---------------- |
+| `com.codahale.metrics.Timer` |     7 | 241.1 KB | ████████████████ |
+| `(GC Root)`                  |     4 |   1.3 KB | ▏                |
+
+**`com.codahale.metrics.ExponentiallyDecayingReservoir`**
+
+| Holder Class                     | Count | Retained |                  |
+| -------------------------------- | ----: | -------: | ---------------- |
+| `com.codahale.metrics.Histogram` |    11 | 241.8 KB | ████████████████ |
+|   ↳ `com.codahale.metrics.Timer` |     7 | 241.1 KB | ███████████████▉ |
+| `com.codahale.metrics.Timer`     |     7 | 241.1 KB | ███████████████▉ |
 
 ### Retained Size Distribution
 
@@ -1473,272 +1767,272 @@ _Per-thread call stacks and retained heap. A thread keeps everything on its stac
 
 ### Thread Overview
 
-_Name, shallow/retained heap, max single-local retained, context class loader, daemon flag, priority, and thread state for every recorded thread._
+_Name, shallow/retained heap, max single-local retained, TL root count, context class loader, daemon flag, priority, and thread state for every recorded thread._
 
-| Name                                                                                                       | Shallow | Retained | Max Local Retained | Context Class Loader                                           | Daemon | Priority | State                                                  |                  |
-| ---------------------------------------------------------------------------------------------------------- | ------: | -------: | -----------------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ | ---------------- |
-| [main](#thread-1)                                                                                          |   104 B | 787.2 KB |             2.6 MB | `java/net/URLClassLoader @ 0x80f000a0`                         | No     |        5 | [alive, runnable]                                      | ████████████████ |
-| [Reference Handler](#thread-2)                                                                             |   104 B |    200 B |                0 B | `—`                                                            | Yes    |       10 | [alive, runnable]                                      | ▏                |
-| [Finalizer](#thread-3)                                                                                     |   112 B |    208 B |               40 B | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
-| [Common-Cleaner](#thread-6)                                                                                |   112 B |    168 B |              128 B | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [process reaper](#thread-7)                                                                                |   112 B |    168 B |              368 B | `—`                                                            | Yes    |       10 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [rpc-boss-3-1](#thread-8)                                                                                  |   112 B |   1.9 KB |             9.7 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [dispatcher-event-loop-0](#thread-9)                                                                       |   104 B |    600 B |              896 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [dispatcher-event-loop-1](#thread-10)                                                                      |   104 B |    568 B |              896 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [dispatcher-event-loop-2](#thread-11)                                                                      |   104 B |    568 B |              896 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [dispatcher-event-loop-3](#thread-12)                                                                      |   104 B |    664 B |              896 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-0](#thread-13)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-1](#thread-14)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-2](#thread-15)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-3](#thread-16)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-4](#thread-17)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-5](#thread-18)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-6](#thread-19)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [map-output-dispatcher-7](#thread-20)                                                                      |   104 B |    472 B |             1.0 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [dispatcher-BlockManagerMaster](#thread-21)                                                                |   104 B |    600 B |              808 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [dispatcher-BlockManagerEndpoint1](#thread-22)                                                             |   104 B |    368 B |              808 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [RemoteBlock-temp-file-clean-thread](#thread-23)                                                           |   112 B |    392 B |              160 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [SparkUI-95](#thread-24)                                                                                   |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-96](#thread-25)                                                                                   |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-97](#thread-26)                                                                                   |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-98](#thread-27)                                                                                   |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-99](#thread-28)                                                                                   |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-100](#thread-29)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-101](#thread-30)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-102](#thread-31)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-103](#thread-32)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-104](#thread-33)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-105](#thread-34)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-106](#thread-35)                                                                                  |   104 B |    568 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [SparkUI-107-acceptor-0@20ce74ae-ServerConnector@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-36) |   104 B |    480 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [SparkUI-108-acceptor-1@3c6edbbe-ServerConnector@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-37) |   104 B |    504 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, runnable]                                      | ▏                |
-| [SparkUI-109-acceptor-2@57a9bcb1-ServerConnector@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-38) |   104 B |    480 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [SparkUI-110-acceptor-3@7af09392-Spark@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-39)           |   104 B |    480 B |            33.5 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [dispatcher-HeartbeatReceiver](#thread-40)                                                                 |   104 B |    368 B |              808 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [heartbeat-receiver-event-loop-thread](#thread-41)                                                         |   104 B |    512 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [netty-rpc-env-timeout](#thread-42)                                                                        |   104 B |    360 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [task-starvation-timer](#thread-43)                                                                        |   112 B |    392 B |              552 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
-| [task-abort-timer](#thread-44)                                                                             |   112 B |    392 B |              552 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
-| [dag-scheduler-event-loop](#thread-45)                                                                     |   112 B |    968 B |               64 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [driver-heartbeater](#thread-46)                                                                           |   104 B |    456 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [executor-kill-mark-cleanup](#thread-47)                                                                   |   104 B |    464 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [executor-heartbeater](#thread-48)                                                                         |   104 B |    456 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [shuffle-boss-6-1](#thread-49)                                                                             |   112 B |   1.9 KB |             9.7 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
-| [Spark Context Cleaner](#thread-50)                                                                        |   112 B |    544 B |             3.9 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [context-cleaner-periodic-gc](#thread-51)                                                                  |   104 B |    464 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [spark-listener-group-appStatus](#thread-52)                                                               |   112 B |    560 B |              328 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [spark-listener-group-executorManagement](#thread-53)                                                      |   112 B |    704 B |              328 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [element-tracking-store-worker](#thread-54)                                                                |   104 B |    496 B |              504 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [spark-listener-group-shared](#thread-55)                                                                  |   112 B |    560 B |              344 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [org.apache.hadoop.fs.FileSystem$Statistics$StatisticsDataReferenceCleaner](#thread-56)                    |   104 B |    920 B |              128 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [Executor task launch worker for task 1.0 in stage 34.0 (TID 67)](#thread-57)                              |   112 B |  18.4 KB |              440 B | `@ 0x814b4190`                                                 | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▎                |
-| [ForkJoinPool.commonPool-worker-1](#thread-58)                                                             |   112 B |    376 B |             1.7 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-2](#thread-59)                                                             |   112 B |    376 B |             1.7 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [task-result-getter-0](#thread-60)                                                                         |   104 B |    576 B |              664 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [Executor task launch worker for task 0.0 in stage 34.0 (TID 66)](#thread-61)                              |   112 B |   1.5 KB |              440 B | `@ 0x814b4190`                                                 | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [task-result-getter-1](#thread-62)                                                                         |   104 B |    576 B |              664 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-0](#thread-63)                                                    |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-1](#thread-64)                                                    |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-2](#thread-65)                                                    |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-0](#thread-66)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [task-result-getter-2](#thread-67)                                                                         |   104 B |    576 B |              664 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [block-manager-ask-thread-pool-1](#thread-68)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [task-result-getter-3](#thread-69)                                                                         |   104 B |    576 B |              664 B | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-3](#thread-70)                                                    |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-4](#thread-71)                                                    |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-5](#thread-72)                                                    |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-2](#thread-73)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-3](#thread-74)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-6](#thread-75)                                                    |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-7](#thread-76)                                                    |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-8](#thread-77)                                                    |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-4](#thread-78)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-5](#thread-79)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-9](#thread-80)                                                    |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-10](#thread-81)                                                   |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-11](#thread-82)                                                   |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-6](#thread-83)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-7](#thread-84)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-12](#thread-85)                                                   |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-13](#thread-86)                                                   |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-14](#thread-87)                                                   |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-8](#thread-88)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-9](#thread-89)                                                              |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-15](#thread-90)                                                   |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-16](#thread-91)                                                   |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-17](#thread-92)                                                   |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-10](#thread-93)                                                             |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-11](#thread-94)                                                             |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-18](#thread-95)                                                   |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-19](#thread-96)                                                   |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-20](#thread-97)                                                   |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-12](#thread-98)                                                             |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-13](#thread-99)                                                             |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-21](#thread-100)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-22](#thread-101)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-23](#thread-102)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-14](#thread-103)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-15](#thread-104)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-24](#thread-105)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-25](#thread-106)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-26](#thread-107)                                                  |   104 B |    808 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-16](#thread-108)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-17](#thread-109)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-27](#thread-110)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-28](#thread-111)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-29](#thread-112)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-18](#thread-113)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-19](#thread-114)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-30](#thread-115)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-31](#thread-116)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-32](#thread-117)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-20](#thread-118)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-21](#thread-119)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-33](#thread-120)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-34](#thread-121)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-35](#thread-122)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-22](#thread-123)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-23](#thread-124)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-36](#thread-125)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-37](#thread-126)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-38](#thread-127)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-24](#thread-128)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-25](#thread-129)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-39](#thread-130)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-40](#thread-131)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-41](#thread-132)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-26](#thread-133)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-27](#thread-134)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-42](#thread-135)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-43](#thread-136)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-44](#thread-137)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-28](#thread-138)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-29](#thread-139)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-45](#thread-140)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-46](#thread-141)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-47](#thread-142)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-30](#thread-143)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-31](#thread-144)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-48](#thread-145)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-49](#thread-146)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-50](#thread-147)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-32](#thread-148)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-33](#thread-149)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-51](#thread-150)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-52](#thread-151)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-53](#thread-152)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-34](#thread-153)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-35](#thread-154)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-54](#thread-155)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-55](#thread-156)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-56](#thread-157)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-36](#thread-158)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-37](#thread-159)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-57](#thread-160)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-58](#thread-161)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-59](#thread-162)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-38](#thread-163)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-39](#thread-164)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-60](#thread-165)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-61](#thread-166)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-62](#thread-167)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-40](#thread-168)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-41](#thread-169)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-63](#thread-170)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-64](#thread-171)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-65](#thread-172)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-42](#thread-173)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-43](#thread-174)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-66](#thread-175)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-67](#thread-176)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-68](#thread-177)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-69](#thread-178)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-44](#thread-179)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-45](#thread-180)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-70](#thread-181)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-71](#thread-182)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-72](#thread-183)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-46](#thread-184)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-73](#thread-185)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-47](#thread-186)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-74](#thread-187)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-48](#thread-188)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-49](#thread-189)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-75](#thread-190)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-76](#thread-191)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-77](#thread-192)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-50](#thread-193)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-51](#thread-194)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-78](#thread-195)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-79](#thread-196)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-80](#thread-197)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-52](#thread-198)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-53](#thread-199)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-81](#thread-200)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-82](#thread-201)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-83](#thread-202)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-54](#thread-203)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-55](#thread-204)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-84](#thread-205)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-85](#thread-206)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-86](#thread-207)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-56](#thread-208)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-57](#thread-209)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-87](#thread-210)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-88](#thread-211)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-89](#thread-212)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-58](#thread-213)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-59](#thread-214)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-90](#thread-215)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-91](#thread-216)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-92](#thread-217)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-60](#thread-218)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-61](#thread-219)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-93](#thread-220)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-94](#thread-221)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-95](#thread-222)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-62](#thread-223)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-63](#thread-224)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-96](#thread-225)                                                  |   104 B |    520 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-97](#thread-226)                                                  |   104 B |    384 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-98](#thread-227)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-64](#thread-228)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-65](#thread-229)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-storage-async-thread-pool-99](#thread-230)                                                  |   104 B |    552 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-66](#thread-231)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-67](#thread-232)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-68](#thread-233)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-69](#thread-234)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-70](#thread-235)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-71](#thread-236)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-72](#thread-237)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-73](#thread-238)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-74](#thread-239)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-75](#thread-240)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-76](#thread-241)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-77](#thread-242)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-78](#thread-243)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-79](#thread-244)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-80](#thread-245)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-81](#thread-246)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-82](#thread-247)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-83](#thread-248)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-84](#thread-249)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-85](#thread-250)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-86](#thread-251)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-87](#thread-252)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-88](#thread-253)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-89](#thread-254)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-90](#thread-255)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-91](#thread-256)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-92](#thread-257)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-93](#thread-258)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-94](#thread-259)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-95](#thread-260)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-96](#thread-261)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-97](#thread-262)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-98](#thread-263)                                                            |   104 B |    368 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [block-manager-ask-thread-pool-99](#thread-264)                                                            |   104 B |    504 B |             4.6 KB | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| Name                                                                                                       | Shallow | Retained | Max Local Retained | TL Roots | Context Class Loader                                           | Daemon | Priority | State                                                  |                  |
+| ---------------------------------------------------------------------------------------------------------- | ------: | -------: | -----------------: | -------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ | ---------------- |
+| [main](#thread-1)                                                                                          |   104 B | 787.2 KB |             2.6 MB |      207 | `java/net/URLClassLoader @ 0x80f000a0`                         | No     |        5 | [alive, runnable]                                      | ████████████████ |
+| [Reference Handler](#thread-2)                                                                             |   104 B |    200 B |                0 B |        — | `—`                                                            | Yes    |       10 | [alive, runnable]                                      | ▏                |
+| [Finalizer](#thread-3)                                                                                     |   112 B |    208 B |               40 B |        7 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
+| [Common-Cleaner](#thread-6)                                                                                |   112 B |    168 B |              128 B |       12 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [process reaper](#thread-7)                                                                                |   112 B |    168 B |              368 B |       16 | `—`                                                            | Yes    |       10 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [rpc-boss-3-1](#thread-8)                                                                                  |   112 B |   1.9 KB |             9.7 KB |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [dispatcher-event-loop-0](#thread-9)                                                                       |   104 B |    600 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [dispatcher-event-loop-1](#thread-10)                                                                      |   104 B |    568 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [dispatcher-event-loop-2](#thread-11)                                                                      |   104 B |    568 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [dispatcher-event-loop-3](#thread-12)                                                                      |   104 B |    664 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-0](#thread-13)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-1](#thread-14)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-2](#thread-15)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-3](#thread-16)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-4](#thread-17)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-5](#thread-18)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-6](#thread-19)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [map-output-dispatcher-7](#thread-20)                                                                      |   104 B |    472 B |             1.0 KB |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [dispatcher-BlockManagerMaster](#thread-21)                                                                |   104 B |    600 B |              808 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [dispatcher-BlockManagerEndpoint1](#thread-22)                                                             |   104 B |    368 B |              808 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [RemoteBlock-temp-file-clean-thread](#thread-23)                                                           |   112 B |    392 B |              160 B |        8 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [SparkUI-95](#thread-24)                                                                                   |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-96](#thread-25)                                                                                   |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-97](#thread-26)                                                                                   |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-98](#thread-27)                                                                                   |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-99](#thread-28)                                                                                   |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-100](#thread-29)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-101](#thread-30)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-102](#thread-31)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-103](#thread-32)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-104](#thread-33)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-105](#thread-34)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-106](#thread-35)                                                                                  |   104 B |    568 B |            33.5 KB |       25 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [SparkUI-107-acceptor-0@20ce74ae-ServerConnector@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-36) |   104 B |    480 B |            33.5 KB |       22 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [SparkUI-108-acceptor-1@3c6edbbe-ServerConnector@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-37) |   104 B |    504 B |            33.5 KB |       21 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, runnable]                                      | ▏                |
+| [SparkUI-109-acceptor-2@57a9bcb1-ServerConnector@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-38) |   104 B |    480 B |            33.5 KB |       22 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [SparkUI-110-acceptor-3@7af09392-Spark@2e098ec7{HTTP/1.1, (http/1.1)}{0.0.0.0:4040}](#thread-39)           |   104 B |    480 B |            33.5 KB |       22 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        3 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [dispatcher-HeartbeatReceiver](#thread-40)                                                                 |   104 B |    368 B |              808 B |       18 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [heartbeat-receiver-event-loop-thread](#thread-41)                                                         |   104 B |    512 B |              504 B |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [netty-rpc-env-timeout](#thread-42)                                                                        |   104 B |    360 B |              504 B |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [task-starvation-timer](#thread-43)                                                                        |   112 B |    392 B |              552 B |        3 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
+| [task-abort-timer](#thread-44)                                                                             |   112 B |    392 B |              552 B |        3 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
+| [dag-scheduler-event-loop](#thread-45)                                                                     |   112 B |    968 B |               64 B |        7 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [driver-heartbeater](#thread-46)                                                                           |   104 B |    456 B |              504 B |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [executor-kill-mark-cleanup](#thread-47)                                                                   |   104 B |    464 B |              504 B |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [executor-heartbeater](#thread-48)                                                                         |   104 B |    456 B |              504 B |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [shuffle-boss-6-1](#thread-49)                                                                             |   112 B |   1.9 KB |             9.7 KB |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
+| [Spark Context Cleaner](#thread-50)                                                                        |   112 B |    544 B |             3.9 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [context-cleaner-periodic-gc](#thread-51)                                                                  |   104 B |    464 B |              504 B |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [spark-listener-group-appStatus](#thread-52)                                                               |   112 B |    560 B |              328 B |       22 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [spark-listener-group-executorManagement](#thread-53)                                                      |   112 B |    704 B |              328 B |       22 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [element-tracking-store-worker](#thread-54)                                                                |   104 B |    496 B |              504 B |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [spark-listener-group-shared](#thread-55)                                                                  |   112 B |    560 B |              344 B |       22 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [org.apache.hadoop.fs.FileSystem$Statistics$StatisticsDataReferenceCleaner](#thread-56)                    |   104 B |    920 B |              128 B |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [Executor task launch worker for task 1.0 in stage 34.0 (TID 67)](#thread-57)                              |   112 B |  18.4 KB |              440 B |       17 | `@ 0x814b4190`                                                 | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▎                |
+| [ForkJoinPool.commonPool-worker-1](#thread-58)                                                             |   112 B |    376 B |             1.7 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-2](#thread-59)                                                             |   112 B |    376 B |             1.7 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [task-result-getter-0](#thread-60)                                                                         |   104 B |    576 B |              664 B |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [Executor task launch worker for task 0.0 in stage 34.0 (TID 66)](#thread-61)                              |   112 B |   1.5 KB |              440 B |       16 | `@ 0x814b4190`                                                 | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [task-result-getter-1](#thread-62)                                                                         |   104 B |    576 B |              664 B |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-0](#thread-63)                                                    |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-1](#thread-64)                                                    |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-2](#thread-65)                                                    |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-0](#thread-66)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [task-result-getter-2](#thread-67)                                                                         |   104 B |    576 B |              664 B |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [block-manager-ask-thread-pool-1](#thread-68)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [task-result-getter-3](#thread-69)                                                                         |   104 B |    576 B |              664 B |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-3](#thread-70)                                                    |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-4](#thread-71)                                                    |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-5](#thread-72)                                                    |   104 B |    520 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-2](#thread-73)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-3](#thread-74)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-6](#thread-75)                                                    |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-7](#thread-76)                                                    |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-8](#thread-77)                                                    |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-4](#thread-78)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-5](#thread-79)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-9](#thread-80)                                                    |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-10](#thread-81)                                                   |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-11](#thread-82)                                                   |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-6](#thread-83)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-7](#thread-84)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-12](#thread-85)                                                   |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-13](#thread-86)                                                   |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-14](#thread-87)                                                   |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-8](#thread-88)                                                              |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-9](#thread-89)                                                              |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-15](#thread-90)                                                   |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-16](#thread-91)                                                   |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-17](#thread-92)                                                   |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-10](#thread-93)                                                             |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-11](#thread-94)                                                             |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-18](#thread-95)                                                   |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-19](#thread-96)                                                   |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-20](#thread-97)                                                   |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-12](#thread-98)                                                             |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-13](#thread-99)                                                             |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-21](#thread-100)                                                  |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-22](#thread-101)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-23](#thread-102)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-14](#thread-103)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-15](#thread-104)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-24](#thread-105)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-25](#thread-106)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-26](#thread-107)                                                  |   104 B |    808 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-16](#thread-108)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-17](#thread-109)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-27](#thread-110)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-28](#thread-111)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-29](#thread-112)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-18](#thread-113)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-19](#thread-114)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-30](#thread-115)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-31](#thread-116)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-32](#thread-117)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-20](#thread-118)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-21](#thread-119)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-33](#thread-120)                                                  |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-34](#thread-121)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-35](#thread-122)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-22](#thread-123)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-23](#thread-124)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-36](#thread-125)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-37](#thread-126)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-38](#thread-127)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-24](#thread-128)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-25](#thread-129)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-39](#thread-130)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-40](#thread-131)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-41](#thread-132)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-26](#thread-133)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-27](#thread-134)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-42](#thread-135)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-43](#thread-136)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-44](#thread-137)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-28](#thread-138)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-29](#thread-139)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-45](#thread-140)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-46](#thread-141)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-47](#thread-142)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-30](#thread-143)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-31](#thread-144)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-48](#thread-145)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-49](#thread-146)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-50](#thread-147)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-32](#thread-148)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-33](#thread-149)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-51](#thread-150)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-52](#thread-151)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-53](#thread-152)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-34](#thread-153)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-35](#thread-154)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-54](#thread-155)                                                  |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-55](#thread-156)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-56](#thread-157)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-36](#thread-158)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-37](#thread-159)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-57](#thread-160)                                                  |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-58](#thread-161)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-59](#thread-162)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-38](#thread-163)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-39](#thread-164)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-60](#thread-165)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-61](#thread-166)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-62](#thread-167)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-40](#thread-168)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-41](#thread-169)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-63](#thread-170)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-64](#thread-171)                                                  |   104 B |    520 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-65](#thread-172)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-42](#thread-173)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-43](#thread-174)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-66](#thread-175)                                                  |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-67](#thread-176)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-68](#thread-177)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-69](#thread-178)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-44](#thread-179)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-45](#thread-180)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-70](#thread-181)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-71](#thread-182)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-72](#thread-183)                                                  |   104 B |    520 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-46](#thread-184)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-73](#thread-185)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-47](#thread-186)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-74](#thread-187)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-48](#thread-188)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-49](#thread-189)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-75](#thread-190)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-76](#thread-191)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-77](#thread-192)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-50](#thread-193)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-51](#thread-194)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-78](#thread-195)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-79](#thread-196)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-80](#thread-197)                                                  |   104 B |    520 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-52](#thread-198)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-53](#thread-199)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-81](#thread-200)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-82](#thread-201)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-83](#thread-202)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-54](#thread-203)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-55](#thread-204)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-84](#thread-205)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-85](#thread-206)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-86](#thread-207)                                                  |   104 B |    520 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-56](#thread-208)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-57](#thread-209)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-87](#thread-210)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-88](#thread-211)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-89](#thread-212)                                                  |   104 B |    520 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-58](#thread-213)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-59](#thread-214)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-90](#thread-215)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-91](#thread-216)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-92](#thread-217)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-60](#thread-218)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-61](#thread-219)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-93](#thread-220)                                                  |   104 B |    552 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-94](#thread-221)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-95](#thread-222)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-62](#thread-223)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-63](#thread-224)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-96](#thread-225)                                                  |   104 B |    520 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-97](#thread-226)                                                  |   104 B |    384 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-98](#thread-227)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-64](#thread-228)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-65](#thread-229)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-storage-async-thread-pool-99](#thread-230)                                                  |   104 B |    552 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-66](#thread-231)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-67](#thread-232)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-68](#thread-233)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-69](#thread-234)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-70](#thread-235)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-71](#thread-236)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-72](#thread-237)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-73](#thread-238)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-74](#thread-239)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-75](#thread-240)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-76](#thread-241)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-77](#thread-242)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-78](#thread-243)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-79](#thread-244)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-80](#thread-245)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-81](#thread-246)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-82](#thread-247)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-83](#thread-248)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-84](#thread-249)                                                            |   104 B |    504 B |             4.6 KB |       13 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-85](#thread-250)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-86](#thread-251)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-87](#thread-252)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-88](#thread-253)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-89](#thread-254)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-90](#thread-255)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-91](#thread-256)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-92](#thread-257)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-93](#thread-258)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-94](#thread-259)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-95](#thread-260)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-96](#thread-261)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-97](#thread-262)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-98](#thread-263)                                                            |   104 B |    368 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [block-manager-ask-thread-pool-99](#thread-264)                                                            |   104 B |    504 B |             4.6 KB |       14 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting with timeout, parked]         | ▏                |
 
 <a id="thread-1"></a>
 
@@ -13756,6 +14050,8 @@ _… 5 more classes (5 objects, 200 B shallow, 50.8 KB retained)._
 #### Only Softly Retained
 
 _Referents reachable only through soft references — no strong path. GC clears these under memory pressure._
+
+_**60.2 KB** only softly retained — would be freed under OOM pressure (GC clears all soft references before throwing OutOfMemoryError)._
 
 | Class                                    | Objects | Shallow | Retained |                  |
 | ---------------------------------------- | ------: | ------: | -------: | ---------------- |

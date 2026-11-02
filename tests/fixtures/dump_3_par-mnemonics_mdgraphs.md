@@ -61,11 +61,12 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **Heap Shape:** deep — long dominator chains suggest nested collections or linked structures; the depth histogram shows the distribution; use the Big Drops table to find the retaining objects — 90% of objects within depth 9, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
 - **One Leak or Many:** the single biggest object, `java.util.concurrent.ForkJoinWorkerThread`, retains 46.3% and the top 10 retain 89.9% of the heap; 7 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Thread Pinning:** thread `ForkJoinPool.commonPool-worker-16` retains 8.9 MB (46.3% of heap) via 316 thread-local GC root references — a running thread is pinning a disproportionate share of the heap. Inspect the thread's stack frames and ThreadLocal values. See [Threads](#threads).
-- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. See [Off-Heap NIO](#off-heap-nio).
+- **Off-Heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause: repeatedly allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode. See [Off-Heap NIO](#off-heap-nio).
 - **Fixed per-Object Header Overhead:** 5.9 MB (30.9% of heap) consumed by JVM object headers alone (517,791 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Empty-Collection Cemetery:** 2,950 of 3,982 tracked collections (74.1%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
-- **Map Entry Objects Dominate Live Set:** 115,624 map-entry objects (`HashMap$Node` / `ConcurrentHashMap$Node` / `LinkedHashMap$Entry`) account for 22.3% of all 517,791 live objects. This means the heap is filled with accumulated key–value pairs — the maps holding them are not being cleared, evicted, or GC'd. Common causes: a cache without an eviction policy; thread-locals that accumulate a map entry per processed item and are never cleared; a batch job that builds in-memory indexes without releasing them between iterations. Identify the owning `HashMap` instances via the Biggest Collections section and trace them up the dominator tree to find the GC root preventing collection. See [Biggest Collections](#biggest-collections).
+- **Map Entry Objects Dominate Live Set:** 115,624 map-entry objects (`HashMap$Node` / `ConcurrentHashMap$Node` / `LinkedHashMap$Entry`) account for 22.3% of all 517,791 live objects. This means the heap is filled with accumulated key–value pairs — the maps holding them are not being cleared, evicted, or GC'd. The immediate dominator chain is `java.util.HashMap → java.util.HashMap$Node[] → map entries` (imdom analysis: `java.util.HashMap$Node[]` holds 85,284 entries retaining 13.3 MB, itself dominated by `java.util.HashMap`). Follow this chain to find the GC root keeping these maps live. The map entries predominantly hold `java.lang.String` as values (105,668, retaining 9.5 MB). Common causes: a cache without an eviction policy; thread-locals that accumulate a map entry per processed item and are never cleared; a batch job that builds in-memory indexes without releasing them between iterations. Identify the owning `HashMap` instances via the Biggest Collections section. To see the full upstream retention chain (e.g. `HashMap → HashMap$Node[] → HashMap$Node`), use the ⛓ Retention Chains tab in the Top Consumers section. See [Biggest Collections](#biggest-collections).
 - **Component Retention Imbalance:** Component `<boot>` retains 97.6% of heap (115.7 MB) while the next largest component (`java/net/URLClassLoader`) retains only 2.2%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
+- **Thread Pool Saturation:** 28 of 30 threads (93%) are WAITING or BLOCKED — the thread pool appears saturated. Possible causes: slow downstream calls monopolising all pool threads (thread starvation), monitor deadlock, or executor self-submit deadlock. Check the Threads section for the common frame shared by stuck threads and look for a blocked-on resource (semaphore, DB call, HTTP request, synchronized method). See [Threads](#threads).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
@@ -76,6 +77,15 @@ _Automated signals pointing to where memory concentrates and what to investigate
 | ------------------------------------------ | ----------: |
 | [Under-filled Object Arrays](#collections) |      1.3 MB |
 | [Under-filled Collections](#collections)   |    988.3 KB |
+
+
+### Waste by Source
+
+Reclaimable bytes broken down by waste category and rule:
+
+| Category            | Rule                                                        | Reclaimable |
+| ------------------- | ----------------------------------------------------------- | ----------: |
+| Per-Object Overhead | [Fixed per-Object Header Overhead](#object-header-overhead) |      5.9 MB |
 
 ## System Overview
 
@@ -15551,28 +15561,68 @@ _All top-level dominators ranked by retained heap — every object directly held
 
 _Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._
 
-|  # | Class                                           | Instances | Retained |                  |
-| -: | ----------------------------------------------- | --------: | -------: | ---------------- |
-|  1 | `java.util.HashMap$Node[]`                      |       422 |  14.1 MB | ████████████████ |
-|  2 | `java.util.HashMap`                             |       422 |  14.0 MB | ███████████████▉ |
-|  3 | `java.util.HashMap$Node`                        |   108,445 |  13.3 MB | ███████████████  |
-|  4 | `java.util.HashSet`                             |       255 |  13.1 MB | ██████████████▊  |
-|  5 | `java.util.stream.ReduceOps$3ReducingSink`      |        25 |  13.0 MB | ██████████████▊  |
-|  6 | `java.lang.String`                              |   120,581 |  10.5 MB | ███████████▉     |
-|  7 | `java.util.concurrent.ForkJoinWorkerThread`     |        26 |   8.9 MB | ██████████       |
-|  8 | `byte[]`                                        |   121,297 |   8.3 MB | █████████▍       |
-|  9 | `java.util.stream.ReduceOps$ReduceTask`         |         9 |   4.2 MB | ████▊            |
-| 10 | `java.lang.Class`                               |     2,345 |   3.5 MB | ███▉             |
-| 11 | `java.lang.Object[]`                            |     2,410 |   2.9 MB | ███▎             |
-| 12 | `java.lang.Object`                              |   133,001 |   2.0 MB | ██▎              |
-| 13 | `java.lang.ref.SoftReference`                   |       149 | 605.3 KB | ▋                |
-| 14 | `java.util.jar.JarFile`                         |         7 | 592.8 KB | ▋                |
-| 15 | `java.util.jar.Manifest`                        |         6 | 590.2 KB | ▋                |
-| 16 | `java.util.concurrent.ConcurrentHashMap`        |       118 | 527.4 KB | ▌                |
-| 17 | `java.util.concurrent.ConcurrentHashMap$Node[]` |        93 | 525.0 KB | ▌                |
-| 18 | `java.util.zip.ZipFile$Source`                  |         7 | 446.2 KB | ▍                |
-| 19 | `java.util.concurrent.ConcurrentHashMap$Node`   |     6,000 | 395.1 KB | ▍                |
-| 20 | `java.util.LinkedHashMap`                       |     2,935 | 338.1 KB | ▎                |
+|  # | Class                                                  | Instances | Retained |                  |
+| -: | ------------------------------------------------------ | --------: | -------: | ---------------- |
+|  1 | `java.util.HashMap$Node[]`                             |       422 |  14.1 MB | ████████████████ |
+|  2 | `java.util.HashMap`                                    |       422 |  14.0 MB | ███████████████▉ |
+|  3 | `java.util.HashMap$Node`                               |   108,445 |  13.3 MB | ███████████████  |
+|  4 | `java.util.HashSet`                                    |       255 |  13.1 MB | ██████████████▊  |
+|  5 | `java.util.stream.ReduceOps$3ReducingSink`             |        25 |  13.0 MB | ██████████████▊  |
+|  6 | `java.lang.String`                                     |   120,581 |  10.5 MB | ███████████▉     |
+|  7 | `java.util.concurrent.ForkJoinWorkerThread`            |        26 |   8.9 MB | ██████████       |
+|  8 | `byte[]`                                               |   121,297 |   8.3 MB | █████████▍       |
+|  9 | `java.util.stream.ReduceOps$ReduceTask`                |         9 |   4.2 MB | ████▊            |
+| 10 | `java.lang.Class`                                      |     2,345 |   3.5 MB | ███▉             |
+| 11 | `java.lang.Object[]`                                   |     2,410 |   2.9 MB | ███▎             |
+| 12 | `java.lang.Object`                                     |   133,001 |   2.0 MB | ██▎              |
+| 13 | `java.lang.ref.SoftReference`                          |       149 | 605.3 KB | ▋                |
+| 14 | `java.util.jar.JarFile`                                |         7 | 592.8 KB | ▋                |
+| 15 | `java.util.jar.Manifest`                               |         6 | 590.2 KB | ▋                |
+| 16 | `java.util.concurrent.ConcurrentHashMap`               |       118 | 527.4 KB | ▌                |
+| 17 | `java.util.concurrent.ConcurrentHashMap$Node[]`        |        93 | 525.0 KB | ▌                |
+| 18 | `java.util.zip.ZipFile$Source`                         |         7 | 446.2 KB | ▍                |
+| 19 | `java.util.concurrent.ConcurrentHashMap$Node`          |     6,000 | 395.1 KB | ▍                |
+| 20 | `java.util.LinkedHashMap`                              |     2,935 | 338.1 KB | ▎                |
+| 21 | `java.lang.Thread`                                     |        27 | 308.3 KB | ▎                |
+| 22 | `java.util.jar.Attributes`                             |     2,895 | 238.3 KB | ▎                |
+| 23 | `org.renaissance.core.ModuleLoader`                    |         2 | 147.6 KB | ▏                |
+| 24 | `java.util.LinkedHashMap$Entry`                        |     1,179 | 145.1 KB | ▏                |
+| 25 | `java.util.LinkedHashSet`                              |        38 | 144.5 KB | ▏                |
+| 26 | `java.time.zone.TzdbZoneRulesProvider`                 |         1 | 118.2 KB | ▏                |
+| 27 | `int[]`                                                |       899 | 106.8 KB | ▏                |
+| 28 | `byte[][]`                                             |         1 |  94.1 KB | ▏                |
+| 29 | `java.util.ImmutableCollections$SetN`                  |       149 |  91.5 KB | ▏                |
+| 30 | `java.lang.invoke.MethodType`                          |       692 |  85.6 KB | ▏                |
+| 31 | `java.util.ArrayList`                                  |       607 |  81.9 KB | ▏                |
+| 32 | `java.net.URLClassLoader`                              |         2 |  80.8 KB | ▏                |
+| 33 | `org.renaissance.core.BenchmarkSuite`                  |         1 |  75.3 KB | ▏                |
+| 34 | `java.util.Optional`                                   |         4 |  73.9 KB | ▏                |
+| 35 | `java.lang.Module`                                     |        70 |  65.0 KB | ▏                |
+| 36 | `sun.util.cldr.CLDRLocaleProviderAdapter`              |         1 |  61.6 KB | ▏                |
+| 37 | `java.lang.invoke.MemberName`                          |       814 |  58.0 KB | ▏                |
+| 38 | `char[]`                                               |       223 |  55.7 KB | ▏                |
+| 39 | `sun.security.provider.Sun`                            |         1 |  53.7 KB | ▏                |
+| 40 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |  53.0 KB | ▏                |
+| 41 | `java.lang.invoke.LambdaForm`                          |       140 |  50.3 KB | ▏                |
+| 42 | `jdk.internal.util.ReferencedKeySet`                   |         1 |  48.7 KB | ▏                |
+| 43 | `jdk.internal.util.ReferencedKeyMap`                   |         1 |  48.7 KB | ▏                |
+| 44 | `java.lang.module.ModuleDescriptor`                    |        62 |  40.0 KB | ▏                |
+| 45 | `java.lang.invoke.MethodTypeForm`                      |       171 |  38.3 KB | ▏                |
+| 46 | `jdk.internal.math.FDBigInteger[]`                     |         1 |  36.2 KB | ▏                |
+| 47 | `jdk.internal.math.FDBigInteger`                       |       341 |  34.9 KB | ▏                |
+| 48 | `java.io.PrintStream`                                  |         2 |  34.6 KB | ▏                |
+| 49 | `java.lang.ref.SoftReference[]`                        |       274 |  32.9 KB | ▏                |
+| 50 | `java.lang.invoke.LambdaForm$Name[]`                   |       145 |  32.8 KB | ▏                |
+| 51 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |  32.8 KB | ▏                |
+| 52 | `java.io.BufferedWriter`                               |         2 |  32.2 KB | ▏                |
+| 53 | `java.lang.String[]`                                   |       450 |  31.6 KB | ▏                |
+| 54 | `sun.text.resources.cldr.FormatData`                   |         1 |  28.3 KB | ▏                |
+| 55 | `java.lang.invoke.LambdaForm$Name`                     |       406 |  28.2 KB | ▏                |
+| 56 | `java.lang.invoke.DirectMethodHandle`                  |       197 |  26.7 KB | ▏                |
+| 57 | `java.util.Collections$UnmodifiableSet`                |        10 |  24.3 KB | ▏                |
+| 58 | `jdk.internal.util.WeakReferenceKey`                   |       709 |  22.4 KB | ▏                |
+| 59 | `java.lang.invoke.DirectMethodHandle$Constructor`      |       132 |  20.4 KB | ▏                |
+| 60 | `sun.util.resources.Bundles$BundleReference`           |         3 |  20.1 KB | ▏                |
 
 #### Who Holds Each Class?
 
@@ -15580,26 +15630,28 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 **`java.util.HashMap$Node[]`**
 
-| Holder Class                                               | Count | Retained |                  |
-| ---------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.HashMap`                                        |   358 |  14.1 MB | ████████████████ |
-|   ↳ `java.util.HashSet`                                    |   255 |  13.1 MB | ██████████████▉  |
-|   ↳ `java.util.jar.Manifest`                               |     6 | 577.5 KB | ▋                |
-|   ↳ `org.renaissance.core.ModuleLoader`                    |     2 | 147.6 KB | ▏                |
-|   ↳ `java.lang.Thread`                                     |     1 | 137.0 KB | ▏                |
-|   ↳ `java.lang.Module`                                     |    56 |  48.4 KB | ▏                |
-|   ↳ `java.lang.Class`                                      |    21 |  37.0 KB | ▏                |
-|   ↳ `sun.text.resources.cldr.FormatData`                   |     1 |  28.3 KB | ▏                |
-|   ↳ `sun.text.resources.cldr.FormatData_en`                |     1 |  19.9 KB | ▏                |
-|   ↳ `java.security.Provider$Service`                       |    42 |  13.3 KB | ▏                |
-|   ↳ `java.lang.ModuleLayer`                                |     1 |   4.2 KB | ▏                |
-| `java.util.concurrent.ForkJoinWorkerThread`                |    18 |  74.0 KB | ▏                |
-| `java.util.LinkedHashMap`                                  |    45 |   9.5 KB | ▏                |
-|   ↳ `java.util.jar.Attributes`                             | 2,895 | 193.1 KB | ▏                |
-|   ↳ `java.util.LinkedHashSet`                              |    38 | 143.9 KB | ▏                |
-|   ↳ `java.util.Collections$SingletonMap`                   |     2 |   1.1 KB | ▏                |
-| `org.renaissance.jdk.streams.MnemonicsCoderWithStream$1`   |     1 |    336 B | ▏                |
-|   ↳ `org.renaissance.jdk.streams.MnemonicsCoderWithStream` |     1 |    400 B | ▏                |
+| Holder Class                                | Count | Retained |                  |
+| ------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.HashMap`                         |   358 |  14.1 MB | ████████████████ |
+|   ↳ `java.util.HashSet`                     |   255 |  13.1 MB | ██████████████▉  |
+|   ↳ `java.util.jar.Manifest`                |     6 | 577.5 KB | ▋                |
+|   ↳ `org.renaissance.core.ModuleLoader`     |     2 | 147.6 KB | ▏                |
+|   ↳ `java.lang.Thread`                      |     1 | 137.0 KB | ▏                |
+|   ↳ `java.lang.Module`                      |    56 |  48.4 KB | ▏                |
+|   ↳ `java.lang.Class`                       |    21 |  37.0 KB | ▏                |
+|   ↳ `sun.text.resources.cldr.FormatData`    |     1 |  28.3 KB | ▏                |
+|   ↳ `sun.text.resources.cldr.FormatData_en` |     1 |  19.9 KB | ▏                |
+|   ↳ `java.security.Provider$Service`        |    42 |  13.3 KB | ▏                |
+|   ↳ `java.lang.ModuleLayer`                 |     1 |   4.2 KB | ▏                |
+| `java.util.HashSet`                         |   255 |  13.1 MB | ██████████████▉  |
+| `java.util.jar.Manifest`                    |     6 | 577.5 KB | ▋                |
+| `java.util.jar.Attributes`                  | 2,895 | 193.1 KB | ▏                |
+| `org.renaissance.core.ModuleLoader`         |     2 | 147.6 KB | ▏                |
+| `java.util.LinkedHashSet`                   |    38 | 143.9 KB | ▏                |
+| `java.lang.Thread`                          |     1 | 137.0 KB | ▏                |
+| `java.util.concurrent.ForkJoinWorkerThread` |    18 |  74.0 KB | ▏                |
+| `java.lang.Module`                          |    56 |  48.4 KB | ▏                |
+| `java.lang.Class`                           |    21 |  37.0 KB | ▏                |
 
 **`java.util.HashMap`**
 
@@ -15615,6 +15667,8 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.nio.file.attribute.PosixFilePermissions$1`                                  |     2 |    480 B | ▏                |
 |   ↳ `jdk.internal.jimage.ImageReader$SharedImageReader`                               |     1 |    176 B | ▏                |
 |   ↳ `java.util.concurrent.ForkJoinWorkerThread`                                       |     1 |     64 B | ▏                |
+| `java.util.stream.ReduceOps$3ReducingSink`                                            |    23 |  13.0 MB | ███████████████▉ |
+| `java.lang.ref.SoftReference`                                                         |     6 | 590.2 KB | ▋                |
 | `java.util.jar.Manifest`                                                              |     6 | 577.5 KB | ▋                |
 |   ↳ `java.lang.ref.SoftReference`                                                     |     6 | 590.2 KB | ▋                |
 | `org.renaissance.core.ModuleLoader`                                                   |     2 | 147.6 KB | ▏                |
@@ -15622,12 +15676,14 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.lang.Thread`                                                                |     1 |  73.8 KB | ▏                |
 | `java.lang.Thread`                                                                    |     1 | 137.0 KB | ▏                |
 |   ↳ `java.lang.Object[]`                                                              |     2 |    576 B | ▏                |
+| `java.util.Optional`                                                                  |     1 |  73.8 KB | ▏                |
 | `java.lang.Module`                                                                    |    56 |  48.4 KB | ▏                |
 |   ↳ `java.util.HashMap$Node`                                                          |     4 |   1.7 KB | ▏                |
 |   ↳ `java.net.URLClassLoader`                                                         |     2 |     96 B | ▏                |
 |   ↳ `java.lang.Class`                                                                 |     1 |     48 B | ▏                |
 |   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`                                |     1 |     48 B | ▏                |
 |   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                            |     1 |     48 B | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                                       |    31 |  41.9 KB | ▏                |
 | `java.lang.Class`                                                                     |    21 |  37.0 KB | ▏                |
 |   ↳ `java.lang.Object[]`                                                              |   393 |  32.3 KB | ▏                |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                 |    68 |   2.1 KB | ▏                |
@@ -15639,40 +15695,38 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                                      |     1 |     48 B | ▏                |
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                                      |     1 |     48 B | ▏                |
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                                      |     1 |     48 B | ▏                |
-| `sun.text.resources.cldr.FormatData`                                                  |     1 |  28.3 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                   |     1 |  28.3 KB | ▏                |
-| `sun.text.resources.cldr.FormatData_en`                                               |     1 |  19.9 KB | ▏                |
-|   ↳ `sun.util.resources.Bundles$BundleReference`                                      |     1 |  20.0 KB | ▏                |
-| `java.security.Provider$Service`                                                      |    42 |  13.3 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                                   |    30 |  13.6 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                                     |    25 |   5.0 KB | ▏                |
-| `java.lang.ModuleLayer`                                                               |     1 |   4.2 KB | ▏                |
 
 **`java.util.HashMap$Node`**
 
 | Holder Class                                                 |  Count | Retained |                  |
 | ------------------------------------------------------------ | -----: | -------: | ---------------- |
-| `java.util.HashMap$Node[]`                                   | 85,284 |  13.3 MB | ████████████████ |
+| `java.util.HashMap`                                          |    358 |  14.1 MB | ████████████████ |
+| `java.util.HashMap$Node[]`                                   | 85,284 |  13.3 MB | ███████████████  |
 |   ↳ `java.util.HashMap`                                      |    358 |  14.1 MB | ████████████████ |
 |   ↳ `java.util.concurrent.ForkJoinWorkerThread`              |     18 |  74.0 KB | ▏                |
 |   ↳ `java.util.LinkedHashMap`                                |     45 |   9.5 KB | ▏                |
 |   ↳ `org.renaissance.jdk.streams.MnemonicsCoderWithStream$1` |      1 |    336 B | ▏                |
-| `java.util.HashMap$Node`                                     | 23,143 |   3.4 MB | ████             |
-|   ↳ `java.util.HashMap$Node[]`                               | 85,284 |  13.3 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                 | 23,143 |   3.4 MB | ████             |
+| `java.util.HashMap$Node`                                     | 23,143 |   3.4 MB | ███▊             |
+|   ↳ `java.util.HashMap$Node[]`                               | 85,284 |  13.3 MB | ███████████████  |
+|   ↳ `java.util.HashMap$Node`                                 | 23,143 |   3.4 MB | ███▊             |
 |   ↳ `java.util.concurrent.ForkJoinWorkerThread`              |     18 |   2.7 KB | ▏                |
+| `java.util.LinkedHashMap`                                    |     45 |   9.5 KB | ▏                |
 | `java.util.concurrent.ForkJoinWorkerThread`                  |     18 |   2.7 KB | ▏                |
+| `org.renaissance.jdk.streams.MnemonicsCoderWithStream$1`     |      1 |    336 B | ▏                |
 
 **`java.util.HashSet`**
 
 | Holder Class                                                                      |  Count | Retained |                  |
 | --------------------------------------------------------------------------------- | -----: | -------: | ---------------- |
-| `java.util.stream.ReduceOps$3ReducingSink`                                        |     23 |  13.0 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ForkJoinWorkerThread`                                   |     21 |   8.8 MB | ██████████▊      |
-|   ↳ `java.util.stream.ReduceOps$ReduceTask`                                       |      4 |   4.2 MB | █████▏           |
+| `java.util.HashMap$Node[]`                                                        | 85,284 |  13.3 MB | ████████████████ |
+| `java.util.stream.ReduceOps$3ReducingSink`                                        |     23 |  13.0 MB | ███████████████▋ |
+|   ↳ `java.util.concurrent.ForkJoinWorkerThread`                                   |     21 |   8.8 MB | ██████████▌      |
+|   ↳ `java.util.stream.ReduceOps$ReduceTask`                                       |      4 |   4.2 MB | █████            |
+| `java.util.stream.ReduceOps$ReduceTask`                                           |      4 |   4.2 MB | █████            |
+| `java.lang.Object[]`                                                              |    393 |  32.3 KB | ▏                |
 | `java.util.HashMap$Node`                                                          |    140 |  28.3 KB | ▏                |
 |   ↳ `java.util.HashMap$Node[]`                                                    | 85,284 |  13.3 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                                      | 23,143 |   3.4 MB | ████▏            |
+|   ↳ `java.util.HashMap$Node`                                                      | 23,143 |   3.4 MB | ████             |
 |   ↳ `java.util.concurrent.ForkJoinWorkerThread`                                   |     18 |   2.7 KB | ▏                |
 | `java.util.Collections$UnmodifiableSet`                                           |      5 |  24.0 KB | ▏                |
 |   ↳ `java.lang.Class`                                                             |      5 |  23.5 KB | ▏                |
@@ -15685,24 +15739,10 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.lang.Class`                                                             |      1 |     48 B | ▏                |
 |   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`                            |      1 |     48 B | ▏                |
 |   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                        |      1 |     48 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                                 |     68 |   2.1 KB | ▏                |
+| `java.util.stream.ReferencePipeline$3`                                            |     18 |   1.5 KB | ▏                |
 | `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007c8494128dc0` |     18 |   1.1 KB | ▏                |
 |   ↳ `java.util.stream.ReferencePipeline$3`                                        |     18 |   1.5 KB | ▏                |
-| `java.lang.Class`                                                                 |      2 |    496 B | ▏                |
-|   ↳ `java.lang.Object[]`                                                          |    393 |  32.3 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                             |     68 |   2.1 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                 |     59 |   1.0 KB | ▏                |
-|   ↳ `java.lang.Class`                                                             |     18 |    432 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`                   |      1 |     48 B | ▏                |
-|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`                       |      1 |     48 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`                   |      1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                                  |      1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                                  |      1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                                  |      1 |     48 B | ▏                |
-| `java.nio.file.attribute.PosixFilePermissions$1`                                  |      2 |    480 B | ▏                |
-|   ↳ `java.lang.Class`                                                             |      2 |    512 B | ▏                |
-| `jdk.internal.jimage.ImageReader$SharedImageReader`                               |      1 |    176 B | ▏                |
-| `(GC Root)`                                                                       |      1 |     64 B | ▏                |
-| `java.util.concurrent.ForkJoinWorkerThread`                                       |      1 |     64 B | ▏                |
 
 **`java.util.stream.ReduceOps$3ReducingSink`**
 
@@ -15716,11 +15756,14 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 | Holder Class                                                    |   Count | Retained |                  |
 | --------------------------------------------------------------- | ------: | -------: | ---------------- |
-| `java.util.HashMap$Node`                                        | 105,668 |   9.5 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node[]`                                  |  85,284 |  13.3 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                    |  23,143 |   3.4 MB | █████▋           |
+| `java.util.HashMap$Node[]`                                      |  85,324 |  13.3 MB | ████████████████ |
+| `java.util.HashMap$Node`                                        | 105,668 |   9.5 MB | ███████████▍     |
+|   ↳ `java.util.HashMap$Node[]`                                  |  85,284 |  13.3 MB | ███████████████▉ |
+|   ↳ `java.util.HashMap$Node`                                    |  23,143 |   3.4 MB | ████             |
 |   ↳ `java.util.concurrent.ForkJoinWorkerThread`                 |      18 |   2.7 KB | ▏                |
-| `(GC Root)`                                                     |   8,924 | 591.7 KB | ▉                |
+| `(GC Root)`                                                     |   8,924 | 591.7 KB | ▋                |
+| `java.util.concurrent.ConcurrentHashMap`                        |      92 | 524.5 KB | ▌                |
+| `java.util.LinkedHashMap`                                       |   1,179 | 145.1 KB | ▏                |
 | `java.lang.Class`                                               |   1,720 | 106.7 KB | ▏                |
 |   ↳ `java.lang.Object[]`                                        |     393 |  32.3 KB | ▏                |
 |   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |      68 |   2.1 KB | ▏                |
@@ -15734,8 +15777,10 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |       1 |     48 B | ▏                |
 | `java.util.LinkedHashMap$Entry`                                 |   1,125 |  98.1 KB | ▏                |
 |   ↳ `java.util.LinkedHashMap`                                   |   1,179 | 145.1 KB | ▏                |
+| `java.util.ImmutableCollections$SetN`                           |     149 |  90.1 KB | ▏                |
+| `java.util.ArrayList`                                           |     588 |  67.6 KB | ▏                |
 | `java.lang.Object[]`                                            |   1,195 |  59.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |   1,080 |   2.6 MB | ████▍            |
+|   ↳ `java.lang.Class`                                           |   1,080 |   2.6 MB | ███▏             |
 |   ↳ `java.util.ImmutableCollections$SetN`                       |     149 |  90.1 KB | ▏                |
 |   ↳ `java.util.ArrayList`                                       |     588 |  67.6 KB | ▏                |
 |   ↳ `java.lang.Object[]`                                        |     114 |  53.1 KB | ▏                |
@@ -15745,36 +15790,6 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.lang.OutOfMemoryError`                                |       4 |   2.7 KB | ▏                |
 |   ↳ `java.util.ImmutableCollections$ListN`                      |      31 |   1.5 KB | ▏                |
 |   ↳ `java.util.IdentityHashMap`                                 |       3 |   1.4 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                   |     691 |  44.7 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`             |   4,747 | 397.6 KB | ▋                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |   1,252 |  93.4 KB | ▏                |
-| `java.lang.invoke.MethodType`                                   |     281 |  29.9 KB | ▏                |
-|   ↳ `jdk.internal.util.WeakReferenceKey`                        |       6 |    240 B | ▏                |
-| `java.lang.invoke.MemberName`                                   |     287 |  18.0 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle`                       |     170 |  18.5 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm`                               |     138 |  11.0 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |     258 |  10.1 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Special`               |      67 |   7.8 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                 |     104 |   5.5 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |      10 |    400 B | ▏                |
-|   ↳ `java.lang.Object[]`                                        |       6 |    336 B | ▏                |
-|   ↳ `java.lang.invoke.MemberName[]`                             |       4 |    224 B | ▏                |
-|   ↳ `java.lang.invoke.MethodType`                               |       1 |     56 B | ▏                |
-|   ↳ `java.lang.Thread`                                          |       1 |     56 B | ▏                |
-| `java.lang.String[]`                                            |     252 |  14.5 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |      23 |  17.5 KB | ▏                |
-|   ↳ `java.util.HashMap$Node`                                    |      82 |   4.5 KB | ▏                |
-|   ↳ `sun.security.util.KnownOIDs`                               |     264 |   4.4 KB | ▏                |
-|   ↳ `java.util.Arrays$ArrayList`                                |       1 |   2.4 KB | ▏                |
-|   ↳ `java.util.HashMap$Node[]`                                  |      40 |   1.7 KB | ▏                |
-|   ↳ `java.lang.String[][]`                                      |      25 |    600 B | ▏                |
-|   ↳ `java.lang.Thread`                                          |       1 |    128 B | ▏                |
-|   ↳ `sun.nio.cs.UTF_8`                                          |       1 |     24 B | ▏                |
-|   ↳ `sun.security.util.KnownOIDs$2`                             |       1 |     16 B | ▏                |
-|   ↳ `sun.security.util.KnownOIDs$1`                             |       1 |     16 B | ▏                |
-| `java.net.URI`                                                  |     129 |   7.5 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |       3 |    576 B | ▏                |
-|   ↳ `jdk.internal.module.ModuleReferenceImpl`                   |       1 |    200 B | ▏                |
 
 **`java.util.concurrent.ForkJoinWorkerThread`**
 
@@ -15784,45 +15799,32 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 **`byte[]`**
 
-| Holder Class                                                    |   Count | Retained |                  |
-| --------------------------------------------------------------- | ------: | -------: | ---------------- |
-| `java.lang.String`                                              | 120,467 |   7.7 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                                    | 105,668 |   9.5 MB | ████████████████ |
-|   ↳ `java.lang.Class`                                           |   1,720 | 106.7 KB | ▏                |
-|   ↳ `java.util.LinkedHashMap$Entry`                             |   1,125 |  98.1 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                        |   1,195 |  59.9 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |     691 |  44.7 KB | ▏                |
-|   ↳ `java.lang.invoke.MethodType`                               |     281 |  29.9 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                               |     287 |  18.0 KB | ▏                |
-|   ↳ `java.lang.String[]`                                        |     252 |  14.5 KB | ▏                |
-|   ↳ `java.net.URI`                                              |     129 |   7.5 KB | ▏                |
-|   ↳ `java.security.Provider$UString`                            |      68 |   3.7 KB | ▏                |
-| `java.util.zip.ZipFile$Source`                                  |       7 | 384.6 KB | ▊                |
-| `byte[][]`                                                      |     345 |  92.8 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |       1 |  94.1 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                   |     229 |  59.6 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`             |   4,747 | 397.6 KB | ▊                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |   1,252 |  93.4 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`                 |     116 |  33.2 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap`                    |      92 | 524.5 KB | █                |
-| `(GC Root)`                                                     |      74 |   3.6 KB | ▏                |
-| `java.nio.HeapByteBuffer`                                       |       4 |   1.6 KB | ▏                |
-|   ↳ `sun.nio.cs.StreamEncoder`                                  |       3 |   1.7 KB | ▏                |
-| `java.lang.Class`                                               |      17 |   1.3 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                        |     393 |  32.3 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |      68 |   2.1 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                               |      59 |   1.0 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |      18 |    432 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |       1 |     48 B | ▏                |
-|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |       1 |     48 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |       1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |       1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |       1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |       1 |     48 B | ▏                |
-| `sun.security.provider.NativePRNG$RandomIO`                     |       3 |    816 B | ▏                |
-|   ↳ `java.lang.Class`                                           |       3 |   1.9 KB | ▏                |
-| `java.io.BufferedOutputStream`                                  |       2 |    288 B | ▏                |
-|   ↳ `java.io.PrintStream`                                       |       2 |    528 B | ▏                |
+| Holder Class                                        |   Count | Retained |                  |
+| --------------------------------------------------- | ------: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`                          |  85,284 |  13.3 MB | ████████████████ |
+| `java.lang.String`                                  | 120,467 |   7.7 MB | █████████▎       |
+|   ↳ `java.util.HashMap$Node`                        | 105,668 |   9.5 MB | ███████████▍     |
+|   ↳ `java.lang.Class`                               |   1,720 | 106.7 KB | ▏                |
+|   ↳ `java.util.LinkedHashMap$Entry`                 |   1,125 |  98.1 KB | ▏                |
+|   ↳ `java.lang.Object[]`                            |   1,195 |  59.9 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   |     691 |  44.7 KB | ▏                |
+|   ↳ `java.lang.invoke.MethodType`                   |     281 |  29.9 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                   |     287 |  18.0 KB | ▏                |
+|   ↳ `java.lang.String[]`                            |     252 |  14.5 KB | ▏                |
+|   ↳ `java.net.URI`                                  |     129 |   7.5 KB | ▏                |
+|   ↳ `java.security.Provider$UString`                |      68 |   3.7 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap`            |      92 | 524.5 KB | ▌                |
+| `java.util.zip.ZipFile$Source`                      |       7 | 384.6 KB | ▍                |
+| `java.util.LinkedHashMap$Entry`                     |   1,125 |  98.1 KB | ▏                |
+| `byte[][]`                                          |     345 |  92.8 KB | ▏                |
+|   ↳ `java.lang.Class`                               |       1 |  94.1 KB | ▏                |
+| `java.lang.Object[]`                                |   1,588 |  92.2 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`       |     229 |  59.6 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` |   4,747 | 397.6 KB | ▍                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   |   1,252 |  93.4 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     |     116 |  33.2 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap`        |      92 | 524.5 KB | ▌                |
+| `java.lang.invoke.MethodType`                       |     281 |  29.9 KB | ▏                |
 
 **`java.util.stream.ReduceOps$ReduceTask`**
 
@@ -15834,54 +15836,28 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 **`java.lang.Class`**
 
-| Holder Class                                                    | Count | Retained |                  |
-| --------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `(GC Root)`                                                     | 1,656 |   3.4 MB | ████████████████ |
-| `java.lang.Object[]`                                            |   393 |  32.3 KB | ▏                |
-|   ↳ `java.lang.Class`                                           | 1,080 |   2.6 MB | ████████████▎    |
-|   ↳ `java.util.ImmutableCollections$SetN`                       |   149 |  90.1 KB | ▍                |
-|   ↳ `java.util.ArrayList`                                       |   588 |  67.6 KB | ▎                |
-|   ↳ `java.lang.Object[]`                                        |   114 |  53.1 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                          |   311 |   8.6 KB | ▏                |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                 |    77 |   7.5 KB | ▏                |
-|   ↳ `java.util.ImmutableCollections$MapN`                       |     6 |   6.6 KB | ▏                |
-|   ↳ `java.lang.OutOfMemoryError`                                |     4 |   2.7 KB | ▏                |
-|   ↳ `java.util.ImmutableCollections$ListN`                      |    31 |   1.5 KB | ▏                |
-|   ↳ `java.util.IdentityHashMap`                                 |     3 |   1.4 KB | ▏                |
-| `java.lang.invoke.DirectMethodHandle$Constructor`               |    68 |   2.1 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                        |   125 |  19.8 KB | ▏                |
-|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`      |     1 |    144 B | ▏                |
-| `java.lang.invoke.MemberName`                                   |    59 |   1.0 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle`                       |   170 |  18.5 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm`                               |   138 |  11.0 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |   258 |  10.1 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Special`               |    67 |   7.8 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$NamedFunction`                 |   104 |   5.5 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |    10 |    400 B | ▏                |
-|   ↳ `java.lang.Object[]`                                        |     6 |    336 B | ▏                |
-|   ↳ `java.lang.invoke.MemberName[]`                             |     4 |    224 B | ▏                |
-|   ↳ `java.lang.invoke.MethodType`                               |     1 |     56 B | ▏                |
-|   ↳ `java.lang.Thread`                                          |     1 |     56 B | ▏                |
-| `java.lang.Class`                                               |    18 |    432 B | ▏                |
-|   ↳ `java.lang.Object[]`                                        |   393 |  32.3 KB | ▏                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |    68 |   2.1 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                               |    59 |   1.0 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |    18 |    432 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |     1 |     48 B | ▏                |
-|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |     1 |     48 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |     1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |     1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |     1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |     1 |     48 B | ▏                |
-| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`     |     1 |     48 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`              |     1 |     64 B | ▏                |
-| `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`     |     1 |     48 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`              |     1 |     64 B | ▏                |
-| `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`         |     1 |     48 B | ▏                |
-|   ↳ `java.lang.Class`                                           |     1 |     64 B | ▏                |
-| `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                    |     1 |     48 B | ▏                |
-| `scopt.OptionDef$$Lambda+0x00007c84940f1000`                    |     1 |     48 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_L`              |     1 |     64 B | ▏                |
+| Holder Class                                    | Count | Retained |                  |
+| ----------------------------------------------- | ----: | -------: | ---------------- |
+| `(GC Root)`                                     | 1,656 |   3.4 MB | ████████████████ |
+| `java.util.ImmutableCollections$SetN`           |   149 |  90.1 KB | ▍                |
+| `java.util.ArrayList`                           |   588 |  67.6 KB | ▎                |
+| `java.lang.Object[]`                            |   393 |  32.3 KB | ▏                |
+|   ↳ `java.lang.Class`                           | 1,080 |   2.6 MB | ████████████▎    |
+|   ↳ `java.util.ImmutableCollections$SetN`       |   149 |  90.1 KB | ▍                |
+|   ↳ `java.util.ArrayList`                       |   588 |  67.6 KB | ▎                |
+|   ↳ `java.lang.Object[]`                        |   114 |  53.1 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`          |   311 |   8.6 KB | ▏                |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList` |    77 |   7.5 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$MapN`       |     6 |   6.6 KB | ▏                |
+|   ↳ `java.lang.OutOfMemoryError`                |     4 |   2.7 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$ListN`      |    31 |   1.5 KB | ▏                |
+|   ↳ `java.util.IdentityHashMap`                 |     3 |   1.4 KB | ▏                |
+| `java.lang.invoke.DirectMethodHandle`           |   170 |  18.5 KB | ▏                |
+| `java.lang.invoke.LambdaForm`                   |   139 |  11.1 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name`              |   311 |   8.6 KB | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Special`   |    67 |   7.8 KB | ▏                |
+| `java.util.concurrent.CopyOnWriteArrayList`     |    77 |   7.5 KB | ▏                |
+| `java.util.ImmutableCollections$MapN`           |     6 |   6.6 KB | ▏                |
 
 **`java.lang.Object[]`**
 
@@ -15918,6 +15894,7 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.util.logging.LogManager$RootLogger`                      |     1 |    208 B | ▏                |
 |   ↳ `scala.collection.convert.JavaCollectionWrappers$JListWrapper` |     1 |    176 B | ▏                |
 |   ↳ `java.lang.module.ModuleDescriptor$Version`                    |     3 |    152 B | ▏                |
+| `sun.util.cldr.CLDRLocaleProviderAdapter`                          |     1 |  60.3 KB | ▎                |
 | `java.lang.Object[]`                                               |   114 |  53.1 KB | ▎                |
 |   ↳ `java.lang.Class`                                              | 1,080 |   2.6 MB | ████████████████ |
 |   ↳ `java.util.ImmutableCollections$SetN`                          |   149 |  90.1 KB | ▌                |
@@ -15929,82 +15906,53 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.lang.OutOfMemoryError`                                   |     4 |   2.7 KB | ▏                |
 |   ↳ `java.util.ImmutableCollections$ListN`                         |    31 |   1.5 KB | ▏                |
 |   ↳ `java.util.IdentityHashMap`                                    |     3 |   1.4 KB | ▏                |
-| `java.lang.invoke.LambdaForm$Name`                                 |   311 |   8.6 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm$Name[]`                           |   371 |  26.7 KB | ▏                |
-|   ↳ `java.lang.invoke.LambdaForm`                                  |     4 |    128 B | ▏                |
-| `java.util.concurrent.CopyOnWriteArrayList`                        |    77 |   7.5 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                  |    71 |   9.3 KB | ▏                |
-|   ↳ `java.util.logging.Logger$ConfigurationData`                   |     4 |   1.1 KB | ▏                |
-|   ↳ `java.lang.Class`                                              |     1 |     64 B | ▏                |
-|   ↳ `java.util.logging.LogManager`                                 |     1 |     56 B | ▏                |
-| `java.util.ImmutableCollections$MapN`                              |     6 |   6.6 KB | ▏                |
-|   ↳ `java.lang.module.Configuration`                               |     2 |   4.6 KB | ▏                |
-|   ↳ `java.lang.Class`                                              |     2 |   1.1 KB | ▏                |
-|   ↳ `jdk.internal.module.SystemModuleFinders$SystemModuleFinder`   |     1 |   1.0 KB | ▏                |
-| `java.lang.OutOfMemoryError`                                       |     4 |   2.7 KB | ▏                |
-|   ↳ `java.lang.OutOfMemoryError[]`                                 |    12 |   3.6 KB | ▏                |
-| `java.util.ImmutableCollections$ListN`                             |    31 |   1.5 KB | ▏                |
-|   ↳ `java.lang.module.ModuleDescriptor$Provides`                   |    12 |    792 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$SpeciesData`               |    12 |    696 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Specializer$Factory`       |     3 |    288 B | ▏                |
-|   ↳ `java.lang.Runtime$Version`                                    |     1 |     56 B | ▏                |
-|   ↳ `java.lang.Class`                                              |     1 |     40 B | ▏                |
+| `java.util.HashMap$Node`                                           |   483 |  37.7 KB | ▏                |
+| `java.net.URLClassLoader`                                          |     2 |  31.2 KB | ▏                |
+| `java.lang.module.ModuleDescriptor`                                |    92 |  28.1 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name[]`                               |   371 |  26.7 KB | ▏                |
 
 **`java.lang.Object`**
 
-| Holder Class                                                    |   Count | Retained |                  |
-| --------------------------------------------------------------- | ------: | -------: | ---------------- |
-| `java.lang.Object[]`                                            | 131,072 |   2.0 MB | ████████████████ |
-|   ↳ `java.lang.Class`                                           |   1,080 |   2.6 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                       |     149 |  90.1 KB | ▋                |
-|   ↳ `java.util.ArrayList`                                       |     588 |  67.6 KB | ▌                |
-|   ↳ `java.lang.Object[]`                                        |     114 |  53.1 KB | ▍                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                          |     311 |   8.6 KB | ▏                |
-|   ↳ `java.util.concurrent.CopyOnWriteArrayList`                 |      77 |   7.5 KB | ▏                |
-|   ↳ `java.util.ImmutableCollections$MapN`                       |       6 |   6.6 KB | ▏                |
-|   ↳ `java.lang.OutOfMemoryError`                                |       4 |   2.7 KB | ▏                |
-|   ↳ `java.util.ImmutableCollections$ListN`                      |      31 |   1.5 KB | ▏                |
-|   ↳ `java.util.IdentityHashMap`                                 |       3 |   1.4 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                   |   1,748 |  27.3 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`             |   4,747 | 397.6 KB | ███              |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |   1,252 |  93.4 KB | ▋                |
-| `java.util.concurrent.CopyOnWriteArrayList`                     |      77 |   1.2 KB | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`               |      71 |   9.3 KB | ▏                |
-|   ↳ `java.util.logging.Logger$ConfigurationData`                |       4 |   1.1 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |       1 |     64 B | ▏                |
-|   ↳ `java.util.logging.LogManager`                              |       1 |     56 B | ▏                |
-| `java.lang.Thread`                                              |      27 |    432 B | ▏                |
-|   ↳ `java.lang.Object[]`                                        |       2 |    576 B | ▏                |
-| `java.util.concurrent.ForkJoinWorkerThread`                     |      26 |    416 B | ▏                |
-| `java.lang.Class`                                               |      14 |    224 B | ▏                |
-|   ↳ `java.lang.Object[]`                                        |     393 |  32.3 KB | ▎                |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |      68 |   2.1 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                               |      59 |   1.0 KB | ▏                |
-|   ↳ `java.lang.Class`                                           |      18 |    432 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |       1 |     48 B | ▏                |
-|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |       1 |     48 B | ▏                |
-|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |       1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |       1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |       1 |     48 B | ▏                |
-|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |       1 |     48 B | ▏                |
-| `sun.security.provider.NativePRNG$RandomIO`                     |       9 |    144 B | ▏                |
-|   ↳ `java.lang.Class`                                           |       3 |   1.9 KB | ▏                |
-| `java.io.RandomAccessFile`                                      |       7 |    112 B | ▏                |
-| `(GC Root)`                                                     |       3 |     48 B | ▏                |
-| `java.io.FileInputStream`                                       |       3 |     48 B | ▏                |
+| Holder Class                                        |   Count | Retained |                  |
+| --------------------------------------------------- | ------: | -------: | ---------------- |
+| `java.lang.Object[]`                                | 131,072 |   2.0 MB | ████████████████ |
+|   ↳ `java.lang.Class`                               |   1,080 |   2.6 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`           |     149 |  90.1 KB | ▋                |
+|   ↳ `java.util.ArrayList`                           |     588 |  67.6 KB | ▌                |
+|   ↳ `java.lang.Object[]`                            |     114 |  53.1 KB | ▍                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`              |     311 |   8.6 KB | ▏                |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList`     |      77 |   7.5 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$MapN`           |       6 |   6.6 KB | ▏                |
+|   ↳ `java.lang.OutOfMemoryError`                    |       4 |   2.7 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$ListN`          |      31 |   1.5 KB | ▏                |
+|   ↳ `java.util.IdentityHashMap`                     |       3 |   1.4 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     |   4,747 | 397.6 KB | ███              |
+| `java.util.ImmutableCollections$SetN`               |     149 |  90.1 KB | ▋                |
+| `java.util.ArrayList`                               |     588 |  67.6 KB | ▌                |
+| `java.util.concurrent.ConcurrentHashMap$Node`       |   1,748 |  27.3 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` |   4,747 | 397.6 KB | ███              |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   |   1,252 |  93.4 KB | ▋                |
+| `java.lang.invoke.LambdaForm$Name`                  |     311 |   8.6 KB | ▏                |
+| `java.util.ImmutableCollections$MapN`               |       6 |   6.6 KB | ▏                |
+| `java.lang.OutOfMemoryError`                        |       4 |   2.7 KB | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`   |      68 |   2.1 KB | ▏                |
+| `java.util.ImmutableCollections$ListN`              |      31 |   1.5 KB | ▏                |
 
 **`java.lang.ref.SoftReference`**
 
 | Holder Class                                           | Count | Retained |                  |
 | ------------------------------------------------------ | ----: | -------: | ---------------- |
 | `java.util.jar.JarFile`                                |     6 | 590.4 KB | ████████████████ |
+| `java.lang.invoke.MethodTypeForm`                      |   274 |  32.9 KB | ▉                |
 | `java.lang.ref.SoftReference[]`                        |   129 |  12.6 KB | ▎                |
 |   ↳ `java.lang.invoke.MethodTypeForm`                  |   274 |  32.9 KB | ▉                |
+| `java.util.concurrent.ConcurrentHashMap$Node`          |    10 |    720 B | ▏                |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    536 B | ▏                |
 | `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |    536 B | ▏                |
 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |    536 B | ▏                |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    536 B | ▏                |
 | `sun.util.locale.BaseLocale$Key`                       |    10 |    400 B | ▏                |
 |   ↳ `java.util.concurrent.ConcurrentHashMap$Node`      |    10 |    720 B | ▏                |
+| `java.lang.Class`                                      |     1 |    304 B | ▏                |
 | `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    280 B | ▏                |
 |   ↳ `java.lang.Class`                                  |     1 |    304 B | ▏                |
 
@@ -16018,7 +15966,8 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 | Holder Class                                               | Count | Retained |                  |
 | ---------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.lang.ref.SoftReference`                              |     6 | 590.2 KB | ████████████████ |
+| `java.util.jar.JarFile`                                    |     6 | 590.4 KB | ████████████████ |
+| `java.lang.ref.SoftReference`                              |     6 | 590.2 KB | ███████████████▉ |
 |   ↳ `java.util.jar.JarFile`                                |     6 | 590.4 KB | ████████████████ |
 |   ↳ `java.lang.ref.SoftReference[]`                        |   129 |  12.6 KB | ▎                |
 |   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |    536 B | ▏                |
@@ -16026,14 +15975,22 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    536 B | ▏                |
 |   ↳ `sun.util.locale.BaseLocale$Key`                       |    10 |    400 B | ▏                |
 |   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    280 B | ▏                |
+| `java.lang.ref.SoftReference[]`                            |   129 |  12.6 KB | ▎                |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     1 |    536 B | ▏                |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`         |     1 |    536 B | ▏                |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     1 |    536 B | ▏                |
+| `sun.util.locale.BaseLocale$Key`                           |    10 |    400 B | ▏                |
+| `sun.security.util.CryptoAlgorithmConstraints`             |     1 |    280 B | ▏                |
 
 **`java.util.concurrent.ConcurrentHashMap`**
 
 | Holder Class                                                    | Count | Retained |                  |
 | --------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.lang.Class`                                               |    27 | 117.5 KB | ████████████████ |
-|   ↳ `java.lang.Object[]`                                        |   393 |  32.3 KB | ████▍            |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |    68 |   2.1 KB | ▎                |
+| `java.util.jar.JarFile`                                         |     6 | 590.4 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                 | 4,747 | 397.6 KB | ██████████▊      |
+| `java.lang.Class`                                               |    27 | 117.5 KB | ███▏             |
+|   ↳ `java.lang.Object[]`                                        |   393 |  32.3 KB | ▉                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |    68 |   2.1 KB | ▏                |
 |   ↳ `java.lang.invoke.MemberName`                               |    59 |   1.0 KB | ▏                |
 |   ↳ `java.lang.Class`                                           |    18 |    432 B | ▏                |
 |   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |     1 |     48 B | ▏                |
@@ -16042,20 +15999,15 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |     1 |     48 B | ▏                |
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |     1 |     48 B | ▏                |
 |   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |     1 |     48 B | ▏                |
-| `java.time.zone.TzdbZoneRulesProvider`                          |     1 | 115.7 KB | ███████████████▊ |
-|   ↳ `java.lang.Class`                                           |     1 | 118.2 KB | ████████████████ |
-| `sun.security.provider.Sun`                                     |     3 |  53.2 KB | ███████▏         |
-| `jdk.internal.util.ReferencedKeyMap`                            |     1 |  48.1 KB | ██████▌          |
-|   ↳ `jdk.internal.util.ReferencedKeySet`                        |     1 |  48.7 KB | ██████▋          |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`               |     7 |  46.5 KB | ██████▎          |
-| `java.net.URLClassLoader`                                       |     8 |  44.3 KB | ██████           |
-| `(GC Root)`                                                     |     2 |  34.1 KB | ████▋            |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`          |     7 |  31.8 KB | ████▎            |
-| `jdk.internal.module.ServicesCatalog`                           |     4 |  12.4 KB | █▋               |
-|   ↳ `java.lang.ModuleLayer`                                     |     1 |   7.5 KB | █                |
-| `java.util.Properties`                                          |     4 |   8.4 KB | █▏               |
-|   ↳ `java.lang.Class`                                           |     3 |   6.9 KB | ▉                |
-|   ↳ `java.util.logging.LogManager`                              |     1 |   1.6 KB | ▏                |
+| `java.time.zone.TzdbZoneRulesProvider`                          |     1 | 115.7 KB | ███▏             |
+|   ↳ `java.lang.Class`                                           |     1 | 118.2 KB | ███▏             |
+| `sun.security.provider.Sun`                                     |     3 |  53.2 KB | █▍               |
+| `jdk.internal.util.ReferencedKeySet`                            |     1 |  48.7 KB | █▎               |
+| `jdk.internal.util.ReferencedKeyMap`                            |     1 |  48.1 KB | █▎               |
+|   ↳ `jdk.internal.util.ReferencedKeySet`                        |     1 |  48.7 KB | █▎               |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`               |     7 |  46.5 KB | █▎               |
+| `java.net.URLClassLoader`                                       |     8 |  44.3 KB | █▏               |
+| `(GC Root)`                                                     |     2 |  34.1 KB | ▉                |
 
 **`java.util.concurrent.ConcurrentHashMap$Node[]`**
 
@@ -16072,7 +16024,15 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `jdk.internal.module.ServicesCatalog`                  |     4 |  12.4 KB | ▍                |
 |   ↳ `java.util.Properties`                                 |     4 |   8.4 KB | ▎                |
 |   ↳ `java.security.Permissions`                            |     8 |   3.3 KB | ▏                |
-| `(GC Root)`                                                |     1 |   4.2 KB | ▏                |
+| `java.lang.Class`                                          |    27 | 117.5 KB | ███▌             |
+| `java.time.zone.TzdbZoneRulesProvider`                     |     1 | 115.7 KB | ███▌             |
+| `sun.security.provider.Sun`                                |     3 |  53.2 KB | █▌               |
+| `jdk.internal.util.ReferencedKeyMap`                       |     1 |  48.1 KB | █▍               |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     7 |  46.5 KB | █▍               |
+| `java.net.URLClassLoader`                                  |     8 |  44.3 KB | █▎               |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     7 |  31.8 KB | ▉                |
+| `jdk.internal.module.ServicesCatalog`                      |     4 |  12.4 KB | ▍                |
+| `java.util.Properties`                                     |     4 |   8.4 KB | ▎                |
 
 **`java.util.zip.ZipFile$Source`**
 
@@ -16084,26 +16044,720 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 
 | Holder Class                                        | Count | Retained |                  |
 | --------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 4,747 | 397.6 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap`            |    92 | 524.5 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 4,747 | 397.6 KB | ████████████▏    |
 |   ↳ `java.util.concurrent.ConcurrentHashMap`        |    92 | 524.5 KB | ████████████████ |
-| `java.util.concurrent.ConcurrentHashMap$Node`       | 1,252 |  93.4 KB | ███▊             |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 4,747 | 397.6 KB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   | 1,252 |  93.4 KB | ███▊             |
+| `java.util.concurrent.ConcurrentHashMap$Node`       | 1,252 |  93.4 KB | ██▊              |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 4,747 | 397.6 KB | ████████████▏    |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   | 1,252 |  93.4 KB | ██▊              |
 | `(GC Root)`                                         |     1 |     80 B | ▏                |
 
 **`java.util.LinkedHashMap`**
 
 | Holder Class                                            | Count | Retained |                  |
 | ------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.jar.Attributes`                              | 2,895 | 193.1 KB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`                            | 2,889 | 225.7 KB | ████████████████ |
-|   ↳ `java.util.jar.Manifest`                            |     6 |  12.6 KB | █                |
-| `java.util.LinkedHashSet`                               |    38 | 143.9 KB | ███████████▉     |
-|   ↳ `java.util.HashMap$Node`                            |    36 | 144.1 KB | ███████████▉     |
+| `java.util.HashMap$Node`                                | 2,925 | 369.8 KB | ████████████████ |
+| `java.util.jar.Attributes`                              | 2,895 | 193.1 KB | ████████▎        |
+|   ↳ `java.util.HashMap$Node`                            | 2,889 | 225.7 KB | █████████▊       |
+|   ↳ `java.util.jar.Manifest`                            |     6 |  12.6 KB | ▌                |
+| `java.util.LinkedHashSet`                               |    38 | 143.9 KB | ██████▏          |
+|   ↳ `java.util.HashMap$Node`                            |    36 | 144.1 KB | ██████▏          |
 |   ↳ `sun.security.provider.Sun`                         |     1 |    328 B | ▏                |
 |   ↳ `sun.security.jca.ProviderList$1`                   |     1 |     80 B | ▏                |
+| `java.util.jar.Manifest`                                |     6 |  12.6 KB | ▌                |
+| `java.time.format.DateTimeTextProvider$LocaleStore`     |     2 |   1.2 KB | ▏                |
 | `java.util.Collections$SingletonMap`                    |     2 |   1.1 KB | ▏                |
 |   ↳ `java.time.format.DateTimeTextProvider$LocaleStore` |     2 |   1.2 KB | ▏                |
+| `sun.security.provider.Sun`                             |     1 |    328 B | ▏                |
+| `sun.security.jca.ProviderList$1`                       |     1 |     80 B | ▏                |
+
+**`java.lang.Thread`**
+
+| Holder Class                                | Count | Retained |                  |
+| ------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                           | 1,080 |   2.6 MB | ████████████████ |
+| `(GC Root)`                                 |    25 | 307.7 KB | █▊               |
+| `java.util.ImmutableCollections$SetN`       |   149 |  90.1 KB | ▌                |
+| `java.util.ArrayList`                       |   588 |  67.6 KB | ▍                |
+| `java.lang.invoke.LambdaForm$Name`          |   311 |   8.6 KB | ▏                |
+| `java.util.concurrent.CopyOnWriteArrayList` |    77 |   7.5 KB | ▏                |
+| `java.util.ImmutableCollections$MapN`       |     6 |   6.6 KB | ▏                |
+| `java.lang.OutOfMemoryError`                |     4 |   2.7 KB | ▏                |
+| `java.util.ImmutableCollections$ListN`      |    31 |   1.5 KB | ▏                |
+| `java.util.IdentityHashMap`                 |     3 |   1.4 KB | ▏                |
+
+**`java.util.jar.Attributes`**
+
+| Holder Class                                    |  Count | Retained |                  |
+| ----------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`                      | 85,284 |  13.3 MB | ████████████████ |
+| `java.lang.ref.SoftReference`                   |      6 | 590.2 KB | ▋                |
+| `java.util.HashMap$Node`                        |  2,889 | 225.7 KB | ▎                |
+|   ↳ `java.util.HashMap$Node[]`                  | 85,284 |  13.3 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                    | 23,143 |   3.4 MB | ████             |
+|   ↳ `java.util.concurrent.ForkJoinWorkerThread` |     18 |   2.7 KB | ▏                |
+| `java.util.jar.Manifest`                        |      6 |  12.6 KB | ▏                |
+|   ↳ `java.lang.ref.SoftReference`               |      6 | 590.2 KB | ▋                |
+| `java.util.concurrent.ForkJoinWorkerThread`     |     18 |   2.7 KB | ▏                |
+
+**`org.renaissance.core.ModuleLoader`**
+
+| Holder Class                              | Count | Retained |                  |
+| ----------------------------------------- | ----: | -------: | ---------------- |
+| `org.renaissance.core.BenchmarkSuite`     |     1 |  73.8 KB | ████████████████ |
+| `java.lang.Thread`                        |     1 |  73.8 KB | ███████████████▉ |
+|   ↳ `java.lang.Object[]`                  |     2 |    576 B | ▏                |
+| `java.util.Optional`                      |     1 |  73.8 KB | ███████████████▉ |
+|   ↳ `org.renaissance.core.BenchmarkSuite` |     1 |  73.8 KB | ████████████████ |
+|   ↳ `java.lang.Runtime$Version`           |     2 |     32 B | ▏                |
+| `java.lang.Object[]`                      |     2 |    576 B | ▏                |
+| `java.lang.Runtime$Version`               |     2 |     32 B | ▏                |
+
+**`java.util.LinkedHashMap$Entry`**
+
+| Holder Class                             | Count | Retained |                  |
+| ---------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.jar.Attributes`               | 2,895 | 193.1 KB | ████████████████ |
+| `java.util.LinkedHashMap`                | 1,179 | 145.1 KB | ████████████     |
+|   ↳ `java.util.jar.Attributes`           | 2,895 | 193.1 KB | ████████████████ |
+|   ↳ `java.util.LinkedHashSet`            |    38 | 143.9 KB | ███████████▉     |
+|   ↳ `java.util.Collections$SingletonMap` |     2 |   1.1 KB | ▏                |
+| `java.util.LinkedHashSet`                |    38 | 143.9 KB | ███████████▉     |
+| `java.util.Collections$SingletonMap`     |     2 |   1.1 KB | ▏                |
+
+**`java.util.LinkedHashSet`**
+
+| Holder Class                                    |  Count | Retained |                  |
+| ----------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`                      | 85,284 |  13.3 MB | ████████████████ |
+| `java.util.HashMap$Node`                        |     36 | 144.1 KB | ▏                |
+|   ↳ `java.util.HashMap$Node[]`                  | 85,284 |  13.3 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                    | 23,143 |   3.4 MB | ████             |
+|   ↳ `java.util.concurrent.ForkJoinWorkerThread` |     18 |   2.7 KB | ▏                |
+| `java.util.concurrent.ForkJoinWorkerThread`     |     18 |   2.7 KB | ▏                |
+| `java.lang.Class`                               |      1 |    656 B | ▏                |
+| `sun.security.provider.Sun`                     |      1 |    328 B | ▏                |
+| `sun.security.jca.ProviderList$1`               |      1 |     80 B | ▏                |
+|   ↳ `java.lang.Class`                           |      1 |    656 B | ▏                |
+
+**`java.time.zone.TzdbZoneRulesProvider`**
+
+| Holder Class                                                              | Count | Retained |                  |
+| ------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                                         |     1 | 118.2 KB | ████████████████ |
+|   ↳ `java.lang.Object[]`                                                  |   393 |  32.3 KB | ████▎            |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                     |    68 |   2.1 KB | ▎                |
+|   ↳ `java.lang.invoke.MemberName`                                         |    59 |   1.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                                     |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`           |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`               |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`           |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                          |     1 |     48 B | ▏                |
+| `java.lang.Object[]`                                                      |   393 |  32.3 KB | ████▎            |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                         |    68 |   2.1 KB | ▎                |
+| `java.lang.invoke.MemberName`                                             |    59 |   1.0 KB | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dc778` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dd6a0` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de018` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de990` |     1 |     48 B | ▏                |
+
+**`int[]`**
+
+| Holder Class                                                    | Count | Retained |                  |
+| --------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.ImmutableCollections$SetN`                           |   149 |  90.1 KB | ████████████████ |
+| `java.util.ArrayList`                                           |   588 |  67.6 KB | ████████████     |
+| `java.util.zip.ZipFile$Source`                                  |    14 |  61.0 KB | ██████████▊      |
+| `jdk.internal.math.FDBigInteger[]`                              |   341 |  34.8 KB | ██████▏          |
+| `jdk.internal.math.FDBigInteger`                                |   341 |  24.2 KB | ████▎            |
+|   ↳ `jdk.internal.math.FDBigInteger[]`                          |   340 |  34.8 KB | ██████▏          |
+|   ↳ `java.lang.Object[]`                                        |     1 |     48 B | ▏                |
+| `java.lang.Class`                                               |   454 |  18.2 KB | ███▏             |
+|   ↳ `java.lang.Object[]`                                        |   393 |  32.3 KB | █████▋           |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |    68 |   2.1 KB | ▍                |
+|   ↳ `java.lang.invoke.MemberName`                               |    59 |   1.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                           |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |     1 |     48 B | ▏                |
+| `java.lang.invoke.LambdaForm$Name`                              |   311 |   8.6 KB | █▌               |
+| `java.util.concurrent.CopyOnWriteArrayList`                     |    77 |   7.5 KB | █▎               |
+| `java.util.ImmutableCollections$MapN`                           |     6 |   6.6 KB | █▏               |
+| `java.math.BigInteger[]`                                        |    70 |   4.0 KB | ▋                |
+
+**`byte[][]`**
+
+| Holder Class                                                              | Count | Retained |                  |
+| ------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                                         |     1 |  94.1 KB | ████████████████ |
+|   ↳ `java.lang.Object[]`                                                  |   393 |  32.3 KB | █████▍           |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                     |    68 |   2.1 KB | ▎                |
+|   ↳ `java.lang.invoke.MemberName`                                         |    59 |   1.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                                     |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`           |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`               |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`           |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                          |     1 |     48 B | ▏                |
+| `java.lang.Object[]`                                                      |   393 |  32.3 KB | █████▍           |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                         |    68 |   2.1 KB | ▎                |
+| `java.lang.invoke.MemberName`                                             |    59 |   1.0 KB | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dc778` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dd6a0` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de018` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de990` |     1 |     48 B | ▏                |
+
+**`java.util.ImmutableCollections$SetN`**
+
+| Holder Class                                      | Count | Retained |                  |
+| ------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.ImmutableCollections$SetN`             |   149 |  90.1 KB | ████████████████ |
+| `java.util.ArrayList`                             |   588 |  67.6 KB | ████████████     |
+| `sun.util.cldr.CLDRLocaleProviderAdapter`         |     1 |  60.3 KB | ██████████▋      |
+|   ↳ `java.lang.Class`                             |     1 |  61.6 KB | ██████████▉      |
+| `java.lang.module.ModuleDescriptor`               |    92 |  28.1 KB | ████▉            |
+| `java.lang.invoke.LambdaForm$Name`                |   311 |   8.6 KB | █▌               |
+| `java.util.concurrent.CopyOnWriteArrayList`       |    77 |   7.5 KB | █▎               |
+| `java.util.ImmutableCollections$MapN`             |     6 |   6.6 KB | █▏               |
+| `java.lang.OutOfMemoryError`                      |     4 |   2.7 KB | ▍                |
+| `java.lang.invoke.DirectMethodHandle$Constructor` |    68 |   2.1 KB | ▍                |
+| `java.lang.module.ModuleDescriptor$Exports`       |    26 |   2.1 KB | ▎                |
+|   ↳ `java.lang.Object[]`                          |   327 |  10.3 KB | █▊               |
+|   ↳ `java.util.ImmutableCollections$Set12`        |    40 |   1.0 KB | ▏                |
+
+**`java.lang.invoke.MethodType`**
+
+| Holder Class                                      | Count | Retained |                  |
+| ------------------------------------------------- | ----: | -------: | ---------------- |
+| `(GC Root)`                                       |   686 |  85.6 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node`     |   692 |  21.9 KB | ████             |
+| `jdk.internal.util.ReferencedKeyMap`              |    17 |    544 B | ▏                |
+| `jdk.internal.util.WeakReferenceKey`              |     6 |    240 B | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node` |   692 |  21.9 KB | ████             |
+|   ↳ `jdk.internal.util.ReferencedKeyMap`          |    17 |    544 B | ▏                |
+
+**`java.util.ArrayList`**
+
+| Holder Class                                          |  Count | Retained |                  |
+| ----------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`                            | 85,284 |  13.3 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`       |  4,777 | 411.3 KB | ▍                |
+| `java.util.HashMap$Node`                              |    483 |  37.7 KB | ▏                |
+|   ↳ `java.util.HashMap$Node[]`                        | 85,284 |  13.3 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                          | 23,143 |   3.4 MB | ████             |
+|   ↳ `java.util.concurrent.ForkJoinWorkerThread`       |     18 |   2.7 KB | ▏                |
+| `java.net.URLClassLoader`                             |      2 |  31.2 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$AppClassLoader`     |      1 |   4.9 KB | ▏                |
+| `java.util.concurrent.ConcurrentHashMap$Node`         |     56 |   4.8 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`   |  4,747 | 397.6 KB | ▍                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`     |  1,252 |  93.4 KB | ▏                |
+| `java.security.Provider$Service`                      |     30 |   1.5 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`   |     30 |  13.6 KB | ▏                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`     |     25 |   5.0 KB | ▏                |
+| `jdk.internal.loader.URLClassPath`                    |      6 |    440 B | ▏                |
+|   ↳ `java.net.URLClassLoader`                         |      2 |   3.8 KB | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader` |      1 |    696 B | ▏                |
+| `java.util.concurrent.ForkJoinWorkerThread`           |     18 |    432 B | ▏                |
+| `java.util.logging.LogManager$RootLogger`             |      1 |    208 B | ▏                |
+
+**`java.net.URLClassLoader`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     2 |  80.8 KB | ████████████████ |
+
+**`org.renaissance.core.BenchmarkSuite`**
+
+| Holder Class             | Count | Retained |                  |
+| ------------------------ | ----: | -------: | ---------------- |
+| `java.lang.Thread`       |     1 |  75.3 KB | ████████████████ |
+|   ↳ `java.lang.Object[]` |     2 |    576 B | ▏                |
+| `java.lang.Object[]`     |     2 |    576 B | ▏                |
+
+**`java.util.Optional`**
+
+| Holder Class                          | Count | Retained |                  |
+| ------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Thread`                    |     1 |  75.3 KB | ████████████████ |
+| `org.renaissance.core.BenchmarkSuite` |     1 |  73.8 KB | ███████████████▋ |
+|   ↳ `java.lang.Thread`                |     1 |  75.3 KB | ████████████████ |
+| `java.lang.Class`                     |     1 |    120 B | ▏                |
+| `java.lang.Runtime$Version`           |     2 |     32 B | ▏                |
+|   ↳ `java.lang.Class`                 |     1 |    120 B | ▏                |
+| `(GC Root)`                           |     1 |     16 B | ▏                |
+
+**`java.lang.Module`**
+
+| Holder Class                                                    |  Count | Retained |                  |
+| --------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.HashMap$Node[]`                                      | 85,284 |  13.3 MB | ████████████████ |
+| `(GC Root)`                                                     |     61 |  63.1 KB | ▏                |
+| `java.lang.Object[]`                                            |    393 |  32.3 KB | ▏                |
+| `java.util.concurrent.ForkJoinWorkerThread`                     |     18 |   2.7 KB | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`               |     68 |   2.1 KB | ▏                |
+| `java.util.HashMap$Node`                                        |      4 |   1.7 KB | ▏                |
+|   ↳ `java.util.HashMap$Node[]`                                  | 85,284 |  13.3 MB | ████████████████ |
+|   ↳ `java.util.HashMap$Node`                                    | 23,143 |   3.4 MB | ████             |
+|   ↳ `java.util.concurrent.ForkJoinWorkerThread`                 |     18 |   2.7 KB | ▏                |
+| `java.lang.invoke.MemberName`                                   |     59 |   1.0 KB | ▏                |
+| `java.net.URLClassLoader`                                       |      2 |     96 B | ▏                |
+| `java.lang.Class`                                               |      1 |     48 B | ▏                |
+|   ↳ `java.lang.Object[]`                                        |    393 |  32.3 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |     68 |   2.1 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                               |     59 |   1.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                           |     18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |      1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |      1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |      1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |      1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |      1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |      1 |     48 B | ▏                |
+| `jdk.internal.loader.ClassLoaders$BootClassLoader`              |      1 |     48 B | ▏                |
+
+**`sun.util.cldr.CLDRLocaleProviderAdapter`**
+
+| Holder Class                                                              | Count | Retained |                  |
+| ------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                                         |     1 |  61.6 KB | ████████████████ |
+|   ↳ `java.lang.Object[]`                                                  |   393 |  32.3 KB | ████████▍        |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                     |    68 |   2.1 KB | ▌                |
+|   ↳ `java.lang.invoke.MemberName`                                         |    59 |   1.0 KB | ▎                |
+|   ↳ `java.lang.Class`                                                     |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`           |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`               |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`           |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                          |     1 |     48 B | ▏                |
+| `java.lang.Object[]`                                                      |   393 |  32.3 KB | ████████▍        |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                         |    68 |   2.1 KB | ▌                |
+| `java.lang.invoke.MemberName`                                             |    59 |   1.0 KB | ▎                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dc778` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dd6a0` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de018` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de990` |     1 |     48 B | ▏                |
+
+**`java.lang.invoke.MemberName`**
+
+| Holder Class                                               | Count | Retained |                  |
+| ---------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                          | 1,086 |   2.6 MB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`            | 4,747 | 397.6 KB | ██▎              |
+| `java.util.ImmutableCollections$SetN`                      |   149 |  90.1 KB | ▌                |
+| `java.util.ArrayList`                                      |   588 |  67.6 KB | ▍                |
+| `java.lang.invoke.DirectMethodHandle`                      |   170 |  18.5 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                   |   121 |  19.9 KB | ▏                |
+|   ↳ `java.lang.invoke.MethodHandleImpl$AsVarargsCollector` |    22 |   3.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                      |     1 |    296 B | ▏                |
+|   ↳ `java.util.ImmutableCollections$List12`                |     2 |    192 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$SpeciesData`       |     1 |     96 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`        |     1 |     80 B | ▏                |
+|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLJ`       |     1 |     80 B | ▏                |
+|   ↳ `java.lang.invoke.MethodType`                          |     1 |     40 B | ▏                |
+|   ↳ `java.lang.Thread`                                     |     1 |     40 B | ▏                |
+| `java.lang.invoke.LambdaForm$Name`                         |   420 |  15.5 KB | ▏                |
+| `java.lang.invoke.LambdaFormEditor$Transform`              |    12 |  11.0 KB | ▏                |
+| `java.lang.invoke.LambdaForm`                              |   138 |  11.0 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform`          |    12 |  11.0 KB | ▏                |
+|   ↳ `java.lang.ref.SoftReference`                          |    20 |   7.5 KB | ▏                |
+|   ↳ `java.lang.invoke.LambdaForm[]`                        |     1 |    480 B | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle`                  |     2 |    424 B | ▏                |
+|   ↳ `java.lang.Class`                                      |     1 |    232 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`          |   258 |  10.1 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                   |   125 |  19.8 KB | ▏                |
+|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor` |     1 |    144 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Special`              |    67 |   7.8 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                   |    67 |  11.0 KB | ▏                |
+
+**`char[]`**
+
+| Holder Class                                                    | Count | Retained |                  |
+| --------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Object[]`                                            |   393 |  32.3 KB | ████████████████ |
+| `java.io.PrintStream`                                           |     2 |  32.2 KB | ███████████████▉ |
+| `java.io.BufferedWriter`                                        |     2 |  32.0 KB | ███████████████▊ |
+|   ↳ `java.io.PrintStream`                                       |     2 |  32.2 KB | ███████████████▉ |
+| `java.lang.Class`                                               |    10 |  18.7 KB | █████████▎       |
+|   ↳ `java.lang.Object[]`                                        |   393 |  32.3 KB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |    68 |   2.1 KB | █                |
+|   ↳ `java.lang.invoke.MemberName`                               |    59 |   1.0 KB | ▌                |
+|   ↳ `java.lang.Class`                                           |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |     1 |     48 B | ▏                |
+| `char[][][]`                                                    |   105 |   7.2 KB | ███▌             |
+| `char[][]`                                                      |   206 |   4.8 KB | ██▍              |
+|   ↳ `char[][][]`                                                |   103 |   7.2 KB | ███▌             |
+| `java.lang.invoke.DirectMethodHandle$Constructor`               |    68 |   2.1 KB | █                |
+| `java.lang.invoke.MemberName`                                   |    59 |   1.0 KB | ▌                |
+| `jdk.internal.math.FloatingDecimal$BinaryToASCIIBuffer`         |     4 |    192 B | ▏                |
+|   ↳ `java.lang.Class`                                           |     2 |    272 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`     |     1 |     48 B | ▏                |
+
+**`sun.security.provider.Sun`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 |  53.7 KB | ████████████████ |
+
+**`jdk.internal.loader.ClassLoaders$AppClassLoader`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 |  53.0 KB | ████████████████ |
+
+**`java.lang.invoke.LambdaForm`**
+
+| Holder Class                                               | Count | Retained |                  |
+| ---------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.jar.JarFile`                                    |     6 | 590.4 KB | ████████████████ |
+| `java.lang.Object[]`                                       |   514 |  52.2 KB | █▍               |
+| `(GC Root)`                                                |   104 |  41.9 KB | █▏               |
+| `java.lang.ref.SoftReference[]`                            |   129 |  12.6 KB | ▎                |
+| `java.lang.invoke.LambdaForm`                              |    21 |  12.0 KB | ▎                |
+| `java.lang.invoke.LambdaFormEditor$Transform`              |    12 |  11.0 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaForm`                          |    21 |  12.0 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform[]`        |     2 |     96 B | ▏                |
+| `java.lang.ref.SoftReference`                              |    20 |   7.5 KB | ▏                |
+|   ↳ `java.util.jar.JarFile`                                |     6 | 590.4 KB | ████████████████ |
+|   ↳ `java.lang.ref.SoftReference[]`                        |   129 |  12.6 KB | ▎                |
+|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |    536 B | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |    536 B | ▏                |
+|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |    536 B | ▏                |
+|   ↳ `sun.util.locale.BaseLocale$Key`                       |    10 |    400 B | ▏                |
+|   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    280 B | ▏                |
+| `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`     |    22 |   3.0 KB | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`          |    68 |   2.1 KB | ▏                |
+| `java.lang.invoke.MemberName`                              |    59 |   1.0 KB | ▏                |
+
+**`jdk.internal.util.ReferencedKeySet`**
+
+| Holder Class                                                              | Count | Retained |                  |
+| ------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                                                         |     1 |  48.7 KB | ████████████████ |
+|   ↳ `java.lang.Object[]`                                                  |   393 |  32.3 KB | ██████████▌      |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                     |    68 |   2.1 KB | ▋                |
+|   ↳ `java.lang.invoke.MemberName`                                         |    59 |   1.0 KB | ▎                |
+|   ↳ `java.lang.Class`                                                     |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`           |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`               |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`           |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                          |     1 |     48 B | ▏                |
+| `java.lang.Object[]`                                                      |   393 |  32.3 KB | ██████████▌      |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                         |    68 |   2.1 KB | ▋                |
+| `java.lang.invoke.MemberName`                                             |    59 |   1.0 KB | ▎                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dc778` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dd6a0` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de018` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de990` |     1 |     48 B | ▏                |
+
+**`jdk.internal.util.ReferencedKeyMap`**
+
+| Holder Class                         | Count | Retained |                  |
+| ------------------------------------ | ----: | -------: | ---------------- |
+| `java.lang.Class`                    |     1 |  48.7 KB | ████████████████ |
+| `jdk.internal.util.ReferencedKeySet` |     1 |  48.7 KB | ███████████████▉ |
+|   ↳ `java.lang.Class`                |     1 |  48.7 KB | ████████████████ |
+
+**`java.lang.module.ModuleDescriptor`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |    62 |  40.0 KB | ████████████████ |
+
+**`java.lang.invoke.MethodTypeForm`**
+
+| Holder Class                             | Count | Retained |                  |
+| ---------------------------------------- | ----: | -------: | ---------------- |
+| `(GC Root)`                              |   107 |  29.0 KB | ████████████████ |
+| `java.lang.invoke.MethodType`            |    64 |   9.3 KB | █████▏           |
+|   ↳ `jdk.internal.util.WeakReferenceKey` |     6 |    240 B | ▏                |
+| `jdk.internal.util.WeakReferenceKey`     |     6 |    240 B | ▏                |
+
+**`jdk.internal.math.FDBigInteger[]`**
+
+| Holder Class                                    | Count | Retained |                  |
+| ----------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                               | 1,080 |   2.6 MB | ████████████████ |
+| `java.util.ImmutableCollections$SetN`           |   149 |  90.1 KB | ▌                |
+| `java.util.ArrayList`                           |   588 |  67.6 KB | ▍                |
+| `java.lang.Object[]`                            |     1 |  36.2 KB | ▏                |
+|   ↳ `java.lang.Class`                           | 1,080 |   2.6 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`       |   149 |  90.1 KB | ▌                |
+|   ↳ `java.util.ArrayList`                       |   588 |  67.6 KB | ▍                |
+|   ↳ `java.lang.Object[]`                        |   114 |  53.1 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`          |   311 |   8.6 KB | ▏                |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList` |    77 |   7.5 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$MapN`       |     6 |   6.6 KB | ▏                |
+|   ↳ `java.lang.OutOfMemoryError`                |     4 |   2.7 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$ListN`      |    31 |   1.5 KB | ▏                |
+|   ↳ `java.util.IdentityHashMap`                 |     3 |   1.4 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name`              |   311 |   8.6 KB | ▏                |
+| `java.util.concurrent.CopyOnWriteArrayList`     |    77 |   7.5 KB | ▏                |
+| `java.util.ImmutableCollections$MapN`           |     6 |   6.6 KB | ▏                |
+| `java.lang.OutOfMemoryError`                    |     4 |   2.7 KB | ▏                |
+| `java.util.ImmutableCollections$ListN`          |    31 |   1.5 KB | ▏                |
+| `java.util.IdentityHashMap`                     |     3 |   1.4 KB | ▏                |
+
+**`jdk.internal.math.FDBigInteger`**
+
+| Holder Class                                | Count | Retained |                  |
+| ------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                           | 1,080 |   2.6 MB | ████████████████ |
+| `java.util.ImmutableCollections$SetN`       |   149 |  90.1 KB | ▌                |
+| `java.util.ArrayList`                       |   588 |  67.6 KB | ▍                |
+| `jdk.internal.math.FDBigInteger[]`          |   340 |  34.8 KB | ▏                |
+|   ↳ `java.lang.Object[]`                    |     1 |  36.2 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name`          |   311 |   8.6 KB | ▏                |
+| `java.util.concurrent.CopyOnWriteArrayList` |    77 |   7.5 KB | ▏                |
+| `java.util.ImmutableCollections$MapN`       |     6 |   6.6 KB | ▏                |
+| `java.lang.OutOfMemoryError`                |     4 |   2.7 KB | ▏                |
+| `java.util.ImmutableCollections$ListN`      |    31 |   1.5 KB | ▏                |
+| `java.util.IdentityHashMap`                 |     3 |   1.4 KB | ▏                |
+
+**`java.io.PrintStream`**
+
+| Holder Class                                                              | Count | Retained |                  |
+| ------------------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Object[]`                                                      |   393 |  32.3 KB | ████████████████ |
+| `java.lang.Class`                                                         |     1 |  17.3 KB | ████████▌        |
+|   ↳ `java.lang.Object[]`                                                  |   393 |  32.3 KB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                     |    68 |   2.1 KB | █                |
+|   ↳ `java.lang.invoke.MemberName`                                         |    59 |   1.0 KB | ▌                |
+|   ↳ `java.lang.Class`                                                     |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`           |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`               |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`           |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                          |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                          |     1 |     48 B | ▏                |
+| `(GC Root)`                                                               |     1 |  17.3 KB | ████████▌        |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                         |    68 |   2.1 KB | █                |
+| `java.lang.invoke.MemberName`                                             |    59 |   1.0 KB | ▌                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c8494116280`               |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dc778` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940dd6a0` |     1 |     48 B | ▏                |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007c84940de018` |     1 |     48 B | ▏                |
+
+**`java.lang.ref.SoftReference[]`**
+
+| Holder Class                      | Count | Retained |                  |
+| --------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.invoke.MethodTypeForm` |   274 |  32.9 KB | ████████████████ |
+|   ↳ `java.lang.invoke.MethodType` |    64 |   9.3 KB | ████▌            |
+| `java.lang.invoke.MethodType`     |    64 |   9.3 KB | ████▌            |
+
+**`java.lang.invoke.LambdaForm$Name[]`**
+
+| Holder Class                                      | Count | Retained |                  |
+| ------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.invoke.LambdaForm`                     |   140 |  31.7 KB | ████████████████ |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform` |    12 |  11.0 KB | █████▌           |
+|   ↳ `java.lang.ref.SoftReference`                 |    20 |   7.5 KB | ███▊             |
+|   ↳ `java.lang.invoke.LambdaForm[]`               |     1 |    480 B | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle`         |     2 |    424 B | ▏                |
+|   ↳ `java.lang.Class`                             |     1 |    232 B | ▏                |
+| `java.lang.invoke.LambdaFormEditor$Transform`     |    12 |  11.0 KB | █████▌           |
+| `java.lang.ref.SoftReference`                     |    20 |   7.5 KB | ███▊             |
+| `java.lang.Class`                                 |     2 |   1.4 KB | ▋                |
+| `java.lang.invoke.LambdaForm$Name[][]`            |     5 |   1.1 KB | ▌                |
+|   ↳ `java.lang.Class`                             |     1 |   1.2 KB | ▌                |
+| `java.lang.invoke.LambdaForm[]`                   |     1 |    480 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle`             |     2 |    424 B | ▏                |
+
+**`jdk.internal.loader.ClassLoaders$PlatformClassLoader`**
+
+| Holder Class | Count | Retained |                  |
+| ------------ | ----: | -------: | ---------------- |
+| `(GC Root)`  |     1 |  32.8 KB | ████████████████ |
+
+**`java.io.BufferedWriter`**
+
+| Holder Class          | Count | Retained |                  |
+| --------------------- | ----: | -------: | ---------------- |
+| `java.io.PrintStream` |     2 |  32.2 KB | ████████████████ |
+|   ↳ `java.lang.Class` |     1 |  17.3 KB | ████████▌        |
+| `java.lang.Class`     |     1 |  17.3 KB | ████████▌        |
+
+**`java.lang.String[]`**
+
+| Holder Class                                                    |  Count | Retained |                  |
+| --------------------------------------------------------------- | -----: | -------: | ---------------- |
+| `java.util.HashMap`                                             |    358 |  14.1 MB | ████████████████ |
+| `java.util.concurrent.ForkJoinWorkerThread`                     |     36 |  76.6 KB | ▏                |
+| `java.lang.Object[]`                                            |    395 |  32.9 KB | ▏                |
+| `java.lang.Class`                                               |     23 |  17.5 KB | ▏                |
+|   ↳ `java.lang.Object[]`                                        |    393 |  32.3 KB | ▏                |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |     68 |   2.1 KB | ▏                |
+|   ↳ `java.lang.invoke.MemberName`                               |     59 |   1.0 KB | ▏                |
+|   ↳ `java.lang.Class`                                           |     18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |      1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |      1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |      1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |      1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |      1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |      1 |     48 B | ▏                |
+| `java.util.LinkedHashMap`                                       |     45 |   9.5 KB | ▏                |
+| `java.util.HashMap$Node`                                        |     82 |   4.5 KB | ▏                |
+|   ↳ `java.util.HashMap$Node[]`                                  | 85,284 |  13.3 MB | ███████████████  |
+|   ↳ `java.util.HashMap$Node`                                    | 23,143 |   3.4 MB | ███▊             |
+|   ↳ `java.util.concurrent.ForkJoinWorkerThread`                 |     18 |   2.7 KB | ▏                |
+| `sun.security.util.KnownOIDs`                                   |    264 |   4.4 KB | ▏                |
+|   ↳ `java.lang.Class`                                           |    264 |  14.7 KB | ▏                |
+| `java.time.zone.TzdbZoneRulesProvider`                          |      1 |   2.4 KB | ▏                |
+| `java.util.Arrays$ArrayList`                                    |      1 |   2.4 KB | ▏                |
+|   ↳ `java.time.zone.TzdbZoneRulesProvider`                      |      1 |   2.4 KB | ▏                |
+|   ↳ `org.renaissance.jdk.streams.MnemonicsCoderWithStream`      |      1 |     24 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`               |     68 |   2.1 KB | ▏                |
+
+**`sun.text.resources.cldr.FormatData`**
+
+| Holder Class                                    | Count | Retained |                  |
+| ----------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap`        |    92 | 524.5 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node[]` |     1 |  28.3 KB | ▊                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap`    |    92 | 524.5 KB | ████████████████ |
+
+**`java.lang.invoke.LambdaForm$Name`**
+
+| Holder Class                                      | Count | Retained |                  |
+| ------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.invoke.LambdaForm$Name[]`              |   371 |  26.7 KB | ████████████████ |
+|   ↳ `java.lang.invoke.LambdaForm`                 |   140 |  31.7 KB | ████████████████ |
+|   ↳ `java.lang.invoke.LambdaForm$Name[][]`        |     5 |   1.1 KB | ▋                |
+| `java.lang.invoke.LambdaFormEditor$Transform`     |    12 |  11.0 KB | ██████▌          |
+| `java.lang.ref.SoftReference`                     |    20 |   7.5 KB | ████▌            |
+| `(GC Root)`                                       |    31 |   1.4 KB | ▊                |
+| `java.lang.invoke.LambdaForm$Name[][]`            |     5 |   1.1 KB | ▋                |
+| `java.lang.invoke.LambdaForm[]`                   |     1 |    480 B | ▎                |
+| `java.lang.invoke.DirectMethodHandle`             |     2 |    424 B | ▏                |
+| `java.lang.Class`                                 |     1 |    232 B | ▏                |
+| `java.lang.invoke.LambdaForm`                     |     4 |    128 B | ▏                |
+|   ↳ `java.lang.invoke.LambdaFormEditor$Transform` |    12 |  11.0 KB | ██████▌          |
+|   ↳ `java.lang.ref.SoftReference`                 |    20 |   7.5 KB | ████▌            |
+|   ↳ `java.lang.invoke.LambdaForm[]`               |     1 |    480 B | ▎                |
+|   ↳ `java.lang.invoke.DirectMethodHandle`         |     2 |    424 B | ▏                |
+|   ↳ `java.lang.Class`                             |     1 |    232 B | ▏                |
+
+**`java.lang.invoke.DirectMethodHandle`**
+
+| Holder Class                                           | Count | Retained |                  |
+| ------------------------------------------------------ | ----: | -------: | ---------------- |
+| `java.util.ImmutableCollections$SetN`                  |   149 |  90.1 KB | ████████████████ |
+| `java.util.ArrayList`                                  |   588 |  67.6 KB | ████████████     |
+| `java.lang.Object[]`                                   |   121 |  19.9 KB | ███▌             |
+|   ↳ `java.lang.Class`                                  | 1,080 |   2.6 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`              |   149 |  90.1 KB | ████████████████ |
+|   ↳ `java.util.ArrayList`                              |   588 |  67.6 KB | ████████████     |
+|   ↳ `java.lang.Object[]`                               |   114 |  53.1 KB | █████████▍       |
+|   ↳ `java.lang.invoke.LambdaForm$Name`                 |   311 |   8.6 KB | █▌               |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList`        |    77 |   7.5 KB | █▎               |
+|   ↳ `java.util.ImmutableCollections$MapN`              |     6 |   6.6 KB | █▏               |
+|   ↳ `java.lang.OutOfMemoryError`                       |     4 |   2.7 KB | ▍                |
+|   ↳ `java.util.ImmutableCollections$ListN`             |    31 |   1.5 KB | ▎                |
+|   ↳ `java.util.IdentityHashMap`                        |     3 |   1.4 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name`                     |   311 |   8.6 KB | █▌               |
+| `java.util.concurrent.CopyOnWriteArrayList`            |    77 |   7.5 KB | █▎               |
+| `java.util.ImmutableCollections$MapN`                  |     6 |   6.6 KB | █▏               |
+| `(GC Root)`                                            |    46 |   3.0 KB | ▌                |
+| `java.lang.invoke.MethodHandleImpl$AsVarargsCollector` |    22 |   3.0 KB | ▌                |
+|   ↳ `java.lang.Object[]`                               |    22 |   4.0 KB | ▋                |
+| `java.lang.OutOfMemoryError`                           |     4 |   2.7 KB | ▍                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`      |    68 |   2.1 KB | ▍                |
+
+**`java.util.Collections$UnmodifiableSet`**
+
+| Holder Class                                                    | Count | Retained |                  |
+| --------------------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Object[]`                                            |   393 |  32.3 KB | ████████████████ |
+| `java.lang.Class`                                               |     5 |  23.5 KB | ███████████▌     |
+|   ↳ `java.lang.Object[]`                                        |   393 |  32.3 KB | ████████████████ |
+|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`           |    68 |   2.1 KB | █                |
+|   ↳ `java.lang.invoke.MemberName`                               |    59 |   1.0 KB | ▌                |
+|   ↳ `java.lang.Class`                                           |    18 |    432 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c8494116280` |     1 |     48 B | ▏                |
+|   ↳ `scala.collection.ArrayOps$$$Lambda+0x00007c84940fc2b0`     |     1 |     48 B | ▏                |
+|   ↳ `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678` |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940fd950`                |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940d2a28`                |     1 |     48 B | ▏                |
+|   ↳ `scopt.OptionDef$$Lambda+0x00007c84940f1000`                |     1 |     48 B | ▏                |
+| `java.lang.invoke.DirectMethodHandle$Constructor`               |    68 |   2.1 KB | █                |
+| `java.lang.invoke.MemberName`                                   |    59 |   1.0 KB | ▌                |
+| `java.util.HashMap$Node`                                        |     3 |    792 B | ▍                |
+| `com.sun.management.internal.PlatformMBeanProviderImpl$1`       |     1 |    256 B | ▏                |
+|   ↳ `java.util.HashMap$Node`                                    |     1 |    272 B | ▏                |
+| `com.sun.management.internal.PlatformMBeanProviderImpl$3`       |     1 |    256 B | ▏                |
+|   ↳ `java.util.HashMap$Node`                                    |     1 |    272 B | ▏                |
+| `com.sun.management.internal.PlatformMBeanProviderImpl$2`       |     1 |    224 B | ▏                |
+|   ↳ `java.util.HashMap$Node`                                    |     1 |    248 B | ▏                |
+| `(GC Root)`                                                     |     2 |     96 B | ▏                |
+| `org.renaissance.harness.Config$$Lambda+0x00007c84940fc678`     |     1 |     48 B | ▏                |
+
+**`jdk.internal.util.WeakReferenceKey`**
+
+| Holder Class                                        | Count | Retained |                  |
+| --------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 4,747 | 397.6 KB | ████████████████ |
+| `jdk.internal.util.ReferencedKeySet`                |     1 |  48.7 KB | █▉               |
+| `java.util.concurrent.ConcurrentHashMap$Node`       |   692 |  21.9 KB | ▉                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 4,747 | 397.6 KB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   | 1,252 |  93.4 KB | ███▊             |
+| `jdk.internal.util.ReferencedKeyMap`                |    17 |    544 B | ▏                |
+|   ↳ `jdk.internal.util.ReferencedKeySet`            |     1 |  48.7 KB | █▉               |
+
+**`java.lang.invoke.DirectMethodHandle$Constructor`**
+
+| Holder Class                                    | Count | Retained |                  |
+| ----------------------------------------------- | ----: | -------: | ---------------- |
+| `java.lang.Class`                               | 1,080 |   2.6 MB | ████████████████ |
+| `java.util.ImmutableCollections$SetN`           |   149 |  90.1 KB | ▌                |
+| `java.util.ArrayList`                           |   588 |  67.6 KB | ▍                |
+| `java.lang.Object[]`                            |   125 |  19.8 KB | ▏                |
+|   ↳ `java.lang.Class`                           | 1,080 |   2.6 MB | ████████████████ |
+|   ↳ `java.util.ImmutableCollections$SetN`       |   149 |  90.1 KB | ▌                |
+|   ↳ `java.util.ArrayList`                       |   588 |  67.6 KB | ▍                |
+|   ↳ `java.lang.Object[]`                        |   114 |  53.1 KB | ▎                |
+|   ↳ `java.lang.invoke.LambdaForm$Name`          |   311 |   8.6 KB | ▏                |
+|   ↳ `java.util.concurrent.CopyOnWriteArrayList` |    77 |   7.5 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$MapN`       |     6 |   6.6 KB | ▏                |
+|   ↳ `java.lang.OutOfMemoryError`                |     4 |   2.7 KB | ▏                |
+|   ↳ `java.util.ImmutableCollections$ListN`      |    31 |   1.5 KB | ▏                |
+|   ↳ `java.util.IdentityHashMap`                 |     3 |   1.4 KB | ▏                |
+| `java.lang.invoke.LambdaForm$Name`              |   311 |   8.6 KB | ▏                |
+| `java.util.concurrent.CopyOnWriteArrayList`     |    77 |   7.5 KB | ▏                |
+| `java.util.ImmutableCollections$MapN`           |     6 |   6.6 KB | ▏                |
+| `java.lang.OutOfMemoryError`                    |     4 |   2.7 KB | ▏                |
+| `java.util.ImmutableCollections$ListN`          |    31 |   1.5 KB | ▏                |
+| `java.util.IdentityHashMap`                     |     3 |   1.4 KB | ▏                |
+
+**`sun.util.resources.Bundles$BundleReference`**
+
+| Holder Class                                        | Count | Retained |                  |
+| --------------------------------------------------- | ----: | -------: | ---------------- |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 4,747 | 397.6 KB | ████████████████ |
+| `java.util.concurrent.ConcurrentHashMap$Node`       |     3 |  20.1 KB | ▊                |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 4,747 | 397.6 KB | ████████████████ |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   | 1,252 |  93.4 KB | ███▊             |
 
 ### Retained Size Distribution
 
@@ -16236,40 +16890,40 @@ _Per-thread call stacks and retained heap. A thread keeps everything on its stac
 
 ### Thread Overview
 
-_Name, shallow/retained heap, max single-local retained, context class loader, daemon flag, priority, and thread state for every recorded thread._
+_Name, shallow/retained heap, max single-local retained, TL root count, context class loader, daemon flag, priority, and thread state for every recorded thread._
 
-| Name                                            | Shallow | Retained | Max Local Retained | Context Class Loader                                           | Daemon | Priority | State                                                  |                  |
-| ----------------------------------------------- | ------: | -------: | -----------------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ | ---------------- |
-| [main](#thread-1)                               |   104 B | 301.5 KB |             4.2 MB | `java/net/URLClassLoader @ 0xc040b670`                         | No     |        5 | [alive, waiting, waiting indefinitely, parked]         | ▌                |
-| [Reference Handler](#thread-2)                  |   104 B |    200 B |                0 B | `—`                                                            | Yes    |       10 | [alive, runnable]                                      | ▏                |
-| [Finalizer](#thread-3)                          |   112 B |    208 B |               40 B | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
-| [Common-Cleaner](#thread-6)                     |   112 B |    168 B |              128 B | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-1](#thread-7)   |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-2](#thread-8)   |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-3](#thread-9)   |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-4](#thread-10)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-5](#thread-11)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-6](#thread-12)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-7](#thread-13)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-8](#thread-14)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-9](#thread-15)  |   112 B |    240 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-10](#thread-16) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-11](#thread-17) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-12](#thread-18) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-13](#thread-19) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-14](#thread-20) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-15](#thread-21) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-16](#thread-22) |   112 B |   8.9 MB |             2.8 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, runnable]                                      | ████████████████ |
-| [ForkJoinPool.commonPool-worker-17](#thread-23) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-18](#thread-24) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-19](#thread-25) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-20](#thread-26) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-21](#thread-27) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-22](#thread-28) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-23](#thread-29) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-24](#thread-30) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-25](#thread-31) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
-| [ForkJoinPool.commonPool-worker-26](#thread-32) |   112 B |    248 B |             1.0 KB | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| Name                                            | Shallow | Retained | Max Local Retained | TL Roots | Context Class Loader                                           | Daemon | Priority | State                                                  |                  |
+| ----------------------------------------------- | ------: | -------: | -----------------: | -------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ | ---------------- |
+| [main](#thread-1)                               |   104 B | 301.5 KB |             4.2 MB |       98 | `java/net/URLClassLoader @ 0xc040b670`                         | No     |        5 | [alive, waiting, waiting indefinitely, parked]         | ▌                |
+| [Reference Handler](#thread-2)                  |   104 B |    200 B |                0 B |        — | `—`                                                            | Yes    |       10 | [alive, runnable]                                      | ▏                |
+| [Finalizer](#thread-3)                          |   112 B |    208 B |               40 B |        7 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
+| [Common-Cleaner](#thread-6)                     |   112 B |    168 B |              128 B |       12 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-1](#thread-7)   |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-2](#thread-8)   |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-3](#thread-9)   |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-4](#thread-10)  |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-5](#thread-11)  |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-6](#thread-12)  |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-7](#thread-13)  |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-8](#thread-14)  |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-9](#thread-15)  |   112 B |    240 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-10](#thread-16) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-11](#thread-17) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-12](#thread-18) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-13](#thread-19) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-14](#thread-20) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-15](#thread-21) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-16](#thread-22) |   112 B |   8.9 MB |             2.8 KB |      316 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, runnable]                                      | ████████████████ |
+| [ForkJoinPool.commonPool-worker-17](#thread-23) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-18](#thread-24) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-19](#thread-25) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-20](#thread-26) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-21](#thread-27) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-22](#thread-28) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-23](#thread-29) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-24](#thread-30) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-25](#thread-31) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
+| [ForkJoinPool.commonPool-worker-26](#thread-32) |   112 B |    248 B |             1.0 KB |        7 | `jdk/internal/loader/ClassLoaders$AppClassLoader @ 0xffeecf48` | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
 
 <a id="thread-1"></a>
 
@@ -17469,6 +18123,8 @@ _220 reference instances._
 #### Only Softly Retained
 
 _Referents reachable only through soft references — no strong path. GC clears these under memory pressure._
+
+_**1.4 KB** only softly retained — would be freed under OOM pressure (GC clears all soft references before throwing OutOfMemoryError)._
 
 | Class                            | Objects | Shallow | Retained |                  |
 | -------------------------------- | ------: | ------: | -------: | ---------------- |
