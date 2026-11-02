@@ -767,7 +767,7 @@ If all you need is a class histogram, [`hprof-slurp`](https://github.com/agourla
 
 ## Performance
 
-Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`b5306da`](https://github.com/parttimenerd/hprof-analyzer/commit/b5306da), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak. The `heap report` / MCP `load_dump` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable.
+Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`b5306da`](https://github.com/parttimenerd/hprof-analyzer/commit/b5306da), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak.
 
 | Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
 |----------|-----------|------------|-----------|-----------|----------|------------|-----------|
