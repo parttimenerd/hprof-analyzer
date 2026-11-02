@@ -207,6 +207,15 @@ pub struct InspectObjectParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FindIncomingReferencesParams {
+    /// Dense object index to look up incoming references for. Obtain from:
+    /// (a) @objectId column in a query result, (b) 'index' in browse_dominators.
+    pub object_index: u64,
+    /// Max references to return (default 50, max 200).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RedactParams {
     /// Absolute path to the input .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
     pub input: String,
@@ -864,8 +873,8 @@ impl HprofMcpServer {
             "retained_bytes": retained[idx],
             "_hint": format!(
                 "To see what this {} retains: browse_dominators({{\"object_index\":{}}}). \
-                 To find objects that reference it: query with @inbounds (requires with_graph=true on load_dump).",
-                class_name, idx
+                 To find objects that reference it: find_incoming_references({{\"object_index\": {}}}) (requires with_graph=true on load_dump).",
+                class_name, idx, idx
             ),
         });
 
@@ -921,6 +930,75 @@ impl HprofMcpServer {
         if let Some(refs) = inbound_refs {
             result["inbound_refs"] = serde_json::json!(refs);
         }
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Show all objects that hold a direct reference TO the specified object.
+    #[tool(
+        description = "Find all objects that hold a direct reference to the specified object \
+                          (MAT's \"List Objects with incoming References\"). \
+                          Requires that the dump was loaded with load_dump({with_graph: true}); \
+                          returns an error with instructions otherwise. \
+                          Each result row has: src_idx (dense index of the referrer), \
+                          src_class, field_name (field on src that points to this object), \
+                          src_shallow, src_retained. \
+                          Use src_idx with browse_dominators to follow the retainer chain upward. \
+                          Typical workflow: find a suspicious object with query/browse_dominators, \
+                          then call find_incoming_references to see which field of which class holds it alive."
+    )]
+    async fn find_incoming_references(
+        &self,
+        Parameters(p): Parameters<FindIncomingReferencesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        let graph = sess.report.obj_graph_flat.as_ref().ok_or_else(|| {
+            McpError::invalid_params(
+                "Incoming reference data not available — the dump was not loaded with with_graph=true. \
+                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
+                None,
+            )
+        })?;
+
+        let idx = p.object_index as u32;
+        let limit = p.limit.unwrap_or(50).min(200);
+
+        let refs: Vec<serde_json::Value> = graph
+            .inbound_edges
+            .get(&idx)
+            .map(|edges| {
+                edges
+                    .iter()
+                    .take(limit)
+                    .map(|e| {
+                        serde_json::json!({
+                            "src_idx": e.src_idx,
+                            "src_class": e.src_class,
+                            "field_name": e.field_name,
+                            "src_shallow": e.src_shallow,
+                            "src_retained": e.src_retained,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let result = serde_json::json!({
+            "object_index": p.object_index,
+            "incoming_reference_count": refs.len(),
+            "refs": refs,
+            "_hint": format!(
+                "Each 'src_idx' is a dense object index. Use browse_dominators({{\"object_index\": <src_idx>}}) \
+                 to explore what retains the referrer, or inspect_object({{\"object_index\": <src_idx>}}) for its class/size. \
+                 To follow the full chain upward: browse_dominators on each src_idx until you reach a GC root."
+            ),
+        });
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

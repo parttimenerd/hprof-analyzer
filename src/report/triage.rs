@@ -243,6 +243,26 @@ const SCHEDULED_TASK_FLOOR: u64 = 10_000;
 /// Hibernate persistence-context entity count floor.
 const HIBERNATE_SESSION_ENTITY_FLOOR: u64 = 10_000;
 
+/// Retained/shallow ratio above which a collection instance is considered "dense" (holding much
+/// more than it costs). A ratio of 10× means the collection shallow footprint is 1/10 of what
+/// it keeps alive — characteristic of a large accumulator.
+const STATIC_COLL_RETAINED_RATIO: u64 = 10;
+/// Minimum retained bytes for a collection class to be worth flagging.
+const STATIC_COLL_RETAINED_FLOOR: u64 = 64 * 1024 * 1024;
+/// Minimum instance count of the collection class before ratio check applies.
+const STATIC_COLL_INSTANCE_FLOOR: u64 = 100;
+
+/// Minimum number of pooled threads with non-trivial TL retained bytes for the
+/// spread-TL rule to fire. Distinguishes a pool from one anomalous thread.
+const TL_POOL_SPREAD_MIN_THREADS: usize = 5;
+/// Per-thread TL retained floor (bytes) for the spread-TL rule.
+const TL_POOL_SPREAD_PER_THREAD_FLOOR: u64 = 1024 * 1024; // 1 MB
+/// Combined TL retained floor (bytes) across all qualifying threads.
+const TL_POOL_SPREAD_COMBINED_FLOOR: u64 = 32 * 1024 * 1024; // 32 MB
+
+/// File/stream handle instance count floor before the unclosed-resource rule fires.
+const RESOURCE_HANDLE_FLOOR: u64 = 500;
+
 // ── Framework ─────────────────────────────────────────────────────────────────
 
 /// A single OOM-triage rule. Reads the finished report; returns `Some` when the
@@ -380,6 +400,9 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(ShutdownHookAccumulation),
         Box::new(ThreadPoolSaturation),
         Box::new(NativeHeapFragmentation),
+        Box::new(StaticCollectionAccumulation),
+        Box::new(ThreadLocalSpreadLeak),
+        Box::new(UnclosedResourceLeak),
     ]
 }
 
@@ -4107,6 +4130,194 @@ impl Rule for NativeHeapFragmentation {
     }
 }
 
+/// Static collection accumulation. Reads `overview.histogram`. Fires when a well-known
+/// collection class (ArrayList, HashMap, LinkedList, CopyOnWriteArrayList, etc.) has a
+/// retained/shallow ratio above `STATIC_COLL_RETAINED_RATIO`, meaning the collection's
+/// shallow cost is small but it retains far more — characteristic of one or a few large
+/// accumulators held by a static field or long-lived singleton.
+struct StaticCollectionAccumulation;
+impl Rule for StaticCollectionAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        const COLLECTION_CLASSES: &[&str] = &[
+            "java.util.ArrayList",
+            "java.util.LinkedList",
+            "java.util.HashMap",
+            "java.util.LinkedHashMap",
+            "java.util.concurrent.ConcurrentHashMap",
+            "java.util.concurrent.CopyOnWriteArrayList",
+            "java.util.HashSet",
+            "java.util.LinkedHashSet",
+            "java.util.TreeMap",
+            "java.util.TreeSet",
+            "java.util.ArrayDeque",
+            "java.util.PriorityQueue",
+        ];
+        // Find the collection class with the highest retained/shallow ratio.
+        let best = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                h.instances >= STATIC_COLL_INSTANCE_FLOOR
+                    && h.shallow > 0
+                    && h.retained >= STATIC_COLL_RETAINED_FLOOR
+                    && COLLECTION_CLASSES
+                        .iter()
+                        .any(|&c| h.pretty_class == c || h.pretty_class.starts_with(c))
+                    && h.retained / h.shallow >= STATIC_COLL_RETAINED_RATIO
+            })
+            .max_by_key(|h| h.retained)?;
+
+        let ratio = best.retained / best.shallow.max(1);
+        Some(signal_cls(
+            "static-collection-accumulation",
+            TriageSeverity::Warning,
+            "Collection Accumulator (Static / Long-Lived)",
+            format!(
+                "{} live `{}` instances retain {} ({}× their own shallow size of {}) — \
+                 a small number of large collections are keeping most of that heap alive. \
+                 Common causes: a static `{}` that grows without eviction, or a long-lived \
+                 singleton cache with unbounded growth. \
+                 Check `get_report({{section:\"leaks\"}})` to find which object holds the \
+                 largest instance, and whether it is rooted in a static field or GC root.",
+                fmt_count(best.instances),
+                best.pretty_class,
+                format_bytes(best.retained),
+                ratio,
+                format_bytes(best.shallow),
+                best.pretty_class,
+            ),
+            Some(("system-overview", "Class Histogram")),
+            &best.pretty_class,
+        ))
+    }
+}
+
+/// ThreadLocal spread across a worker pool. Reads `threads.threads`. Fires when many
+/// pooled threads each hold a non-trivial amount of retained heap via thread-locals
+/// (each thread's share may be below the `ThreadPinning` threshold), but their combined
+/// contribution is large — the classic "pool never calls remove()" pattern where the
+/// leak is distributed evenly so no single thread stands out.
+///
+/// This rule targets the small-per-thread, many-threads variant;
+/// `ThreadLocalPoolAccumulation` targets the large-per-thread variant.
+struct ThreadLocalSpreadLeak;
+impl Rule for ThreadLocalSpreadLeak {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let qualifying: Vec<&crate::report::ThreadInfo> = r
+            .threads
+            .threads
+            .iter()
+            .filter(|t| t.local_root_count > 0 && t.retained >= TL_POOL_SPREAD_PER_THREAD_FLOOR)
+            .collect();
+
+        if qualifying.len() < TL_POOL_SPREAD_MIN_THREADS {
+            return None;
+        }
+
+        let combined: u64 = qualifying.iter().map(|t| t.retained).sum();
+        if combined < TL_POOL_SPREAD_COMBINED_FLOOR {
+            return None;
+        }
+
+        // Only fire on cases where per-thread share is below the ThreadPinning threshold —
+        // if any individual thread already exceeds 20%, ThreadPinning will handle it.
+        let total = r.leaks.total_shallow;
+        let max_individual_pct = qualifying
+            .iter()
+            .map(|t| pct_of(t.retained, total.max(1)))
+            .fold(0.0_f64, f64::max);
+        if max_individual_pct >= THREAD_PIN_PCT {
+            return None; // ThreadPinning covers this already
+        }
+
+        // Also skip if ThreadLocalPoolAccumulation's higher-threshold would fire.
+        if qualifying
+            .iter()
+            .any(|t| pct_of(t.retained, total.max(1)) >= THREAD_LOCAL_POOL_MIN_PCT)
+            && qualifying.len() >= THREAD_LOCAL_POOL_MIN_THREADS
+        {
+            return None; // ThreadLocalPoolAccumulation will name it more precisely
+        }
+
+        let n = qualifying.len();
+        let example_name = qualifying[0]
+            .name
+            .as_deref()
+            .or(qualifying[0].class_name.as_deref())
+            .unwrap_or("<unknown>");
+
+        Some(signal(
+            "thread-local-spread-leak",
+            TriageSeverity::Warning,
+            "Thread-Local Leak Spread Across Worker Pool",
+            format!(
+                "{} threads (e.g. `{}`) each retain {} or more via thread-locals, totaling \
+                 {} — the leak is distributed evenly so no single thread stands out as a \
+                 hotspot. Typical cause: a `static ThreadLocal<T>` is set per-task but \
+                 `remove()` is never called, leaving the value alive as long as the thread \
+                 lives in the pool. Fix: call `threadLocal.remove()` in a `finally` block at \
+                 the end of every task, or use `ThreadLocal.withInitial` + explicit cleanup \
+                 in a pool decorator (e.g. Spring's `TaskDecorator`).",
+                n,
+                example_name,
+                format_bytes(TL_POOL_SPREAD_PER_THREAD_FLOOR),
+                format_bytes(combined),
+            ),
+            Some(("threads", "Threads")),
+        ))
+    }
+}
+
+/// Unclosed file / stream / JDBC resource leak. Reads `overview.histogram`. Fires when a
+/// class whose name suggests a file, stream, or JDBC statement/result handle accumulates
+/// beyond a reasonable threshold — resources acquired but never closed.
+struct UnclosedResourceLeak;
+impl Rule for UnclosedResourceLeak {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let row = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                let c = &h.pretty_class;
+                !c.ends_with("[]")
+                    && !c.contains("Weak")
+                    && !c.contains("Reference")
+                    && !c.contains("Buffered") // BufferedInputStream wrappers are normal
+                    && (c.contains("FileInputStream")
+                        || c.contains("FileOutputStream")
+                        || c.contains("FileDescriptor")
+                        || c.contains("FileChannel")
+                        || c == "java.io.InputStream"
+                        || c == "java.io.OutputStream"
+                        || c.contains("Statement")
+                        || c.contains("ResultSet"))
+                    && h.instances >= RESOURCE_HANDLE_FLOOR
+            })
+            .max_by_key(|h| h.instances)?;
+
+        Some(signal_cls(
+            "unclosed-resource-leak",
+            TriageSeverity::Warning,
+            "Unclosed File / Stream / JDBC Resource",
+            format!(
+                "{} live `{}` objects — exceeds a reasonable number of open handles. \
+                 Resources acquired inside loops or request handlers but never closed leave \
+                 OS file descriptors and native memory allocated until GC collects the wrapper. \
+                 Fix: wrap all acquisitions in try-with-resources (`try (var x = open(...)) {{...}}`), \
+                 or enable leak detection in your connection pool or HTTP client. \
+                 On Java 9+ you can run with `-Djdk.tracePinnedThreads=full` to log \
+                 pinning in virtual-thread contexts.",
+                fmt_count(row.instances),
+                row.pretty_class,
+            ),
+            Some(("system-overview", "System Overview")),
+            &row.pretty_class,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6148,5 +6359,134 @@ mod tests {
             .eval(&r)
             .expect("10 loaders must fire at Warning");
         assert_eq!(s2.severity, TriageSeverity::Warning);
+    }
+
+    #[test]
+    fn static_collection_accumulation_fires_on_high_ratio() {
+        let mut r = base_report();
+        // ArrayList with retained 100× its own shallow — classic static accumulator.
+        r.overview.histogram = vec![HistRow {
+            pretty_class: "java.util.ArrayList".into(),
+            instances: 500,
+            shallow: 1_000_000,
+            retained: 200_000_000, // 200× ratio, 200 MB
+            max_instance_shallow: 2000,
+            incoming_ref_count: 0,
+            loader_id: 0,
+            loader_label: None,
+            root_path: None,
+            category: String::new(),
+        }];
+        let s = StaticCollectionAccumulation
+            .eval(&r)
+            .expect("200× ratio at 200 MB must fire");
+        assert_eq!(s.id, "static-collection-accumulation");
+        assert!(s.detail.contains("ArrayList"));
+
+        // Low ratio (2×): silent.
+        r.overview.histogram[0].retained = 2_000_000;
+        assert!(StaticCollectionAccumulation.eval(&r).is_none());
+
+        // Below instance floor: silent.
+        r.overview.histogram[0].retained = 200_000_000;
+        r.overview.histogram[0].instances = 50; // < STATIC_COLL_INSTANCE_FLOOR
+        assert!(StaticCollectionAccumulation.eval(&r).is_none());
+
+        // Below retained floor: silent.
+        r.overview.histogram[0].instances = 500;
+        r.overview.histogram[0].retained = 10_000_000; // < STATIC_COLL_RETAINED_FLOOR
+        assert!(StaticCollectionAccumulation.eval(&r).is_none());
+
+        // Non-collection class: silent.
+        r.overview.histogram[0].retained = 200_000_000;
+        r.overview.histogram[0].pretty_class = "com.example.Widget".into();
+        assert!(StaticCollectionAccumulation.eval(&r).is_none());
+    }
+
+    #[test]
+    fn thread_local_spread_leak_fires_across_many_threads() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1_000_000_000; // 1 GB heap
+
+        // 10 pool threads, each retaining 5 MB via TL — total 50 MB, each 0.5% of heap
+        // (below THREAD_LOCAL_POOL_MIN_PCT=5% so ThreadLocalPoolAccumulation won't fire).
+        r.threads.threads = (0..10)
+            .map(|i| ThreadInfo {
+                thread_serial: i,
+                name: Some(format!("pool-worker-{}", i)),
+                local_root_count: 3,
+                retained: 5 * 1024 * 1024, // 5 MB each
+                ..ThreadInfo::default()
+            })
+            .collect();
+        let s = ThreadLocalSpreadLeak
+            .eval(&r)
+            .expect("10 threads × 5 MB = 50 MB total must fire");
+        assert_eq!(s.id, "thread-local-spread-leak");
+        assert!(s.detail.contains("10"));
+
+        // Fewer than TL_POOL_SPREAD_MIN_THREADS (5): silent.
+        r.threads.threads.truncate(4);
+        assert!(ThreadLocalSpreadLeak.eval(&r).is_none());
+
+        // Per-thread below 1 MB floor: silent.
+        r.threads.threads = (0..10)
+            .map(|i| ThreadInfo {
+                thread_serial: i,
+                local_root_count: 1,
+                retained: 100_000, // 100 KB — below floor
+                ..ThreadInfo::default()
+            })
+            .collect();
+        assert!(ThreadLocalSpreadLeak.eval(&r).is_none());
+    }
+
+    #[test]
+    fn unclosed_resource_leak_fires_on_file_streams() {
+        let mut r = base_report();
+
+        // FileInputStream accumulation.
+        r.overview.histogram = vec![hist_row(
+            "java.io.FileInputStream",
+            RESOURCE_HANDLE_FLOOR,
+            40_000,
+        )];
+        let s = UnclosedResourceLeak
+            .eval(&r)
+            .expect("FileInputStream at floor must fire");
+        assert_eq!(s.id, "unclosed-resource-leak");
+        assert!(s.detail.contains("FileInputStream"));
+
+        // JDBC Statement accumulation.
+        r.overview.histogram = vec![hist_row(
+            "com.mysql.jdbc.StatementImpl",
+            RESOURCE_HANDLE_FLOOR,
+            40_000,
+        )];
+        let s2 = UnclosedResourceLeak
+            .eval(&r)
+            .expect("Statement at floor must fire");
+        assert_eq!(s2.id, "unclosed-resource-leak");
+
+        // ResultSet accumulation.
+        r.overview.histogram = vec![hist_row(
+            "com.mysql.jdbc.ResultSetImpl",
+            RESOURCE_HANDLE_FLOOR,
+            40_000,
+        )];
+        let s3 = UnclosedResourceLeak.eval(&r).expect("ResultSet must fire");
+        assert_eq!(s3.id, "unclosed-resource-leak");
+
+        // Below floor: silent.
+        r.overview.histogram = vec![hist_row(
+            "java.io.FileInputStream",
+            RESOURCE_HANDLE_FLOOR - 1,
+            10_000,
+        )];
+        assert!(UnclosedResourceLeak.eval(&r).is_none());
+
+        // Unrelated class: silent.
+        r.overview.histogram = vec![hist_row("com.example.Service", 10_000, 100_000)];
+        assert!(UnclosedResourceLeak.eval(&r).is_none());
     }
 }
