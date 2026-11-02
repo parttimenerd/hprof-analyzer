@@ -819,6 +819,10 @@
       "description": "One row of \"Biggest Classes\".",
       "type": "object",
       "properties": {
+        "category": {
+          "description": "Classification: `\"jdk\"`, `\"framework\"`, `\"other\"`, or a user-defined\ncategory name. Matches `HistRow.category`. Empty string on pre-v11 JSON\n(treat as `\"other\"`).",
+          "type": "string"
+        },
         "holders": {
           "description": "Top immediate-dominator classes for instances of this class, sorted by\nretained desc. Each entry shows which class holds the most retained bytes\nof this class. Empty when idom data is unavailable.",
           "type": "array",
@@ -2211,11 +2215,11 @@
           "minimum": 0
         },
         "via_class": {
-          "description": "When this is a synthesised two-hop holder (dominator of a direct\ndominator), names the intermediate class. For example, if the chain is\n`HashMap → HashMap$Node[] → HashMap$Node`, the `HashMap` HolderRow for\n`HashMap$Node` has `via_class = Some(\"HashMap$Node[]\")`. Additive.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Intermediate classes on a multi-hop synthesised holder chain, ordered\nfrom the direct dominator toward the target. Empty for direct holders.\nFor example, if the chain is `HashMap → HashMap$Node[] → HashMap$Node`,\nthe `HashMap` HolderRow for `HashMap$Node` has\n`via_class = [\"HashMap$Node[]\"]`. Three-hop example:\n`A → B → C → Target` → `via_class = [\"B\", \"C\"]` on the `A` row.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -4704,6 +4708,9 @@
       "description": "One row of the unreachable-objects histogram: objects that are not\ndominated by the virtual root (`idom == u32::MAX`), grouped by class.\nAdditive; not parity-compared. Sorted by shallow descending, capped.",
       "type": "object",
       "properties": {
+        "category": {
+          "type": "string"
+        },
         "objects": {
           "type": "integer",
           "format": "uint64",
