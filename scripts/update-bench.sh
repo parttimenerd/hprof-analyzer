@@ -41,6 +41,10 @@ fi
 TMPDIR_BENCH="$(mktemp -d -t hprof-bench.XXXXXX)"
 trap 'rm -rf "$TMPDIR_BENCH"' EXIT
 
+# Stable log directory for mid-run inspection (not cleaned on exit).
+LOG_DIR="/tmp/hprof-bench-logs"
+mkdir -p "$LOG_DIR"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -84,9 +88,10 @@ run_hprof() {
   local dump="$1" tag="$2" extra_flags="${3:-}"
   local out="$TMPDIR_BENCH/${tag}.md"
   local log="$TMPDIR_BENCH/${tag}.log"
+  local stable_log="$LOG_DIR/${tag}.log"
   /usr/bin/time -v bash -c \
     "$BIN '$dump' '$out' --verbose $extra_flags 2>&1" \
-    > "$log" 2>&1 || true
+    2>&1 | tee "$stable_log" > "$log" || true
   parse_time_log "$log"
 }
 
