@@ -673,6 +673,7 @@ pub fn build_model(
         top_level_list,
         overview.total_shallow,
         &classifier,
+        opts.force_unreachable_dominator,
     );
     t_bm!("top_consumers");
     let threads = build_thread_overview(g, overview.total_shallow);
@@ -4736,6 +4737,7 @@ fn build_top_consumers(
     mut top_level: Vec<u32>,
     total_shallow: u64,
     classifier: &crate::classify::Classifier,
+    three_hop: bool,
 ) -> TopConsumers {
     let undef = u32::MAX;
     let n = g.n;
@@ -5048,6 +5050,7 @@ fn build_top_consumers(
     let mut gc_root_accum: Vec<(u64, u64)> = vec![(0, 0); holder_window]; // (count, retained_sum)
 
     if !g.idom.is_empty() && !g.class_idx.is_empty() {
+        t_tc!("holder_pre_pass1");
         // Pass 1
         for obj in 0..n {
             let ci = g.class_idx[obj] as usize;
@@ -5084,6 +5087,7 @@ fn build_top_consumers(
             e.0 += 1;
             e.1 += g.retained[obj];
         }
+        t_tc!("holder_pass1");
 
         // Collect the set of level-1 holder class indices for Pass 2
         let mut holder_flag: Vec<usize> = vec![usize::MAX; class_count];
@@ -5123,40 +5127,49 @@ fn build_top_consumers(
             e.0 += 1;
             e.1 += g.retained[obj];
         }
+        t_tc!("holder_pass2");
 
         // Collect level-2 holder class indices for Pass 3.
+        // Only needed when three_hop is enabled (--full-analysis); skip the
+        // allocation and O(n) scan in basic mode to save ~10–15s on large dumps.
         let mut level2_flag: Vec<bool> = vec![false; class_count];
-        for map in &level2_accum {
-            for &hci2 in map.keys() {
-                if hci2 < class_count {
-                    level2_flag[hci2] = true;
+        if three_hop {
+            for map in &level2_accum {
+                for &hci2 in map.keys() {
+                    if hci2 < class_count {
+                        level2_flag[hci2] = true;
+                    }
                 }
             }
         }
 
         // level3_accum[holder_ci] = HashMap<idom3_ci, (count, retained_sum)>
         // Pass 3: same structure as Pass 2 but scans level-2 holder classes.
+        // Skipped when three_hop=false (basic analysis) to avoid a full O(n) scan.
         let mut level3_accum: Vec<std::collections::HashMap<usize, (u64, u64)>> =
             vec![std::collections::HashMap::new(); class_count];
 
-        // Pass 3
-        for obj in 0..n {
-            let ci = g.class_idx[obj] as usize;
-            if ci >= class_count || !level2_flag[ci] {
-                continue;
+        if three_hop {
+            // Pass 3
+            for obj in 0..n {
+                let ci = g.class_idx[obj] as usize;
+                if ci >= class_count || !level2_flag[ci] {
+                    continue;
+                }
+                let par = g.idom[obj];
+                if par == undef || par == vroot || par as usize >= n {
+                    continue;
+                }
+                let par_ci = g.class_idx[par as usize] as usize;
+                if par_ci >= class_count {
+                    continue;
+                }
+                let e = level3_accum[ci].entry(par_ci).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += g.retained[obj];
             }
-            let par = g.idom[obj];
-            if par == undef || par == vroot || par as usize >= n {
-                continue;
-            }
-            let par_ci = g.class_idx[par as usize] as usize;
-            if par_ci >= class_count {
-                continue;
-            }
-            let e = level3_accum[ci].entry(par_ci).or_insert((0, 0));
-            e.0 += 1;
-            e.1 += g.retained[obj];
         }
+        t_tc!("holder_pass3");
 
         // Build level-2 HolderRows per holder class
         let build_level2 = |hci: usize| -> Vec<crate::report::HolderRow> {
