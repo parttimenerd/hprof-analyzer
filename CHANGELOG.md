@@ -69,31 +69,37 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Performance
 
-- **4 GB RSS reduction in `heap report` / MCP `load_dump` slow path** — the
-  `analyze_with_cache` slow path previously captured `hprof_offsets` (a 2.56 GB
-  `Vec<u64>`) during the main pass1 run AND immediately cloned a `Pass1Snapshot`
-  (1.28 GB `IdMap` offsets), leaving all three alive simultaneously throughout the
-  full analysis pipeline. On the 34 GB reference dump this pushed the `heap report`
-  path to ~24 GB peak RSS.
+- **~5 GB RSS reduction in `heap report` / MCP `load_dump` slow path** — two
+  fixes combined bring `heap report` peak RSS from ~24.6 GB to ~19.5 GB on the
+  34 GB reference dump:
 
-  Fix: pass1 now runs with `capture_hprof_offsets = false` for the main analysis.
-  `pass1.bin` is written and the snapshot is dropped before the analysis pipeline
-  starts (pass1 is then *moved* in, never cloned). After analysis completes, a
-  separate short pass1 run writes `offsets.bin`. The `CachedSession.pass1` field
-  is populated by reading the just-written cache file rather than from a live clone.
-  Net cost: ~20–40 s extra wall time for the offsets pass. Peak RSS improvement:
-  ~24 GB → ~15 GB on the 34 GB reference dump.
+  1. The `analyze_with_cache` slow path previously captured `hprof_offsets` (a
+     2.56 GB `Vec<u64>`) during the main pass1 run AND immediately cloned a
+     `Pass1Snapshot` (1.28 GB `IdMap` offsets), leaving all three alive
+     simultaneously. Fix: pass1 runs with `capture_hprof_offsets = false` for
+     the main analysis; a separate short pass1 run writes `offsets.bin` after
+     analysis completes. Net cost: ~20–40 s extra wall time for the offsets pass.
 
-- **~8 GB RSS reduction in direct-path basic analysis on large dumps** — the
+  2. `analyze_to_report_inner_with_cache` previously held the forward CSR
+     (~7–8 GB) through `compress_parent_pre` and then called `build_from_fwd`
+     unconditionally. Fix: when `total_inb > 1B` and object-graph/field-stats
+     modes are inactive, the fwd CSR is dropped before `compress_parent_pre`
+     and `build_mat_scan` rescans the file for inbound edges instead.
+
+  Measured on 34 GB reference dump (commit b5306da): 24.59 GB → **19.52 GB**
+  peak RSS, wall time 16:15.
+
+- **~0.5 GB RSS reduction in direct-path basic analysis on large dumps** — the
   forward CSR (`fwd_targets` + `fwd_offsets`, ~7–8 GB on a 34 GB dump) was held
   alive through `compress_parent_pre` even though the rescan-inbound path drops it
-  immediately at the inbound dispatch that follows. The overlap created the ~15 GB
-  peak: fwd CSR + `parent_pre` (~1.3 GB) + `rpo.dfn` (~1.3 GB) all coexisted.
+  immediately at the inbound dispatch that follows. The overlap created a peak where
+  fwd CSR + `parent_pre` (~1.3 GB) + `rpo.dfn` (~1.3 GB) all coexisted.
 
   Fix: when all of `--mat-caches`, `--obj-graph`, `--field-stats`, and the
   retain-forward/inbound flags are inactive AND `total_inb > 1B` (confirms the
   rescan path), the fwd CSR is dropped right after `unreachable_retained` — before
-  `compress_parent_pre`. Expected peak RSS on 34 GB dump: ~15 GB → ~7 GB.
+  `compress_parent_pre`. Measured on 34 GB reference dump: 14.57 GB → **14.12 GB**
+  peak RSS, wall time 14:08.
 
 ### Fixed
 
