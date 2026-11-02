@@ -3260,8 +3260,6 @@ function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow
 // pairs, but class-level holder aggregation (HolderRow) sums them correctly.
 function RetentionChainsView({ rows, total }: { rows: import("./types").ClassRow[]; total: number }) {
   const [fmtB] = useFmtBytes();
-  // Only show classes that have at least one two-hop (via_class) holder — those are the
-  // cases where the Sankey is misleading and this view adds unique value.
   const chainsClasses = rows.filter(c => c.holders?.some(h => h.via_class?.length));
   if (chainsClasses.length === 0) {
     return (
@@ -3272,61 +3270,81 @@ function RetentionChainsView({ rows, total }: { rows: import("./types").ClassRow
       </div>
     );
   }
+  // Pill node in a chain diagram
+  const ChainNode = ({ label, role }: { label: string; role: "holder" | "via" | "target" }) => {
+    const bg = role === "holder"
+      ? "var(--accent, #4a90d9)"
+      : role === "via"
+      ? "var(--border)"
+      : "var(--fg)";
+    const fg = role === "via" ? "var(--fg)" : "#fff";
+    const opacity = role === "via" ? 0.85 : 1;
+    return (
+      <code style={{
+        background: bg, color: fg, opacity,
+        padding: "0.15rem 0.55rem", borderRadius: 99,
+        fontSize: "0.82rem", fontWeight: role === "target" ? 700 : role === "holder" ? 600 : 400,
+        whiteSpace: "nowrap", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", display: "inline-block",
+      }} title={label}>{label}</code>
+    );
+  };
+  const Arrow = () => (
+    <span style={{ color: "var(--muted)", fontSize: "0.9rem", margin: "0 0.1rem", userSelect: "none" }}>→</span>
+  );
   return (
     <div>
       <p className="subtitle" style={{ marginBottom: "1rem" }}>
-        For each class where the dominator Sankey misses the full picture (retained heap is split
-        across millions of per-instance pairs), this view shows the class-level aggregated retention
-        chain. <strong>Holder retained</strong> = total retained of instances of this class that are
-        dominated through that upstream holder, summed across all instances.
+        Class-level aggregated retention chains — shows which upstream containers own each class's
+        retained heap. Unlike the dominator Sankey (which splits retained across millions of per-instance
+        pairs), this view aggregates across all instances of a class.
       </p>
       {chainsClasses.map(cls => {
-        const twoHopHolders = cls.holders?.filter(h => h.via_class?.length) ?? [];
+        const multiHopHolders = cls.holders?.filter(h => h.via_class?.length) ?? [];
         const directHolders = cls.holders?.filter(h => !h.via_class?.length) ?? [];
+        const heapPct = (cls.retained / total * 100).toFixed(1);
         return (
           <div key={cls.pretty_class} style={{
-            marginBottom: "1.4rem", padding: "0.8rem 1rem",
+            marginBottom: "1.4rem", padding: "0.9rem 1rem",
             border: "1px solid var(--border)", borderRadius: 6,
             background: "var(--card-bg, var(--bg))",
           }}>
             {/* Target class header */}
-            <div style={{ display: "flex", alignItems: "baseline", gap: "0.6rem", marginBottom: "0.6rem" }}>
+            <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
               <code style={{ fontWeight: 700, fontSize: "1rem" }}>{cls.pretty_class}</code>
               <span className="muted" style={{ fontSize: "0.82rem" }}>
-                {fmtCount(cls.instances)} instances · {fmtB(cls.retained)} retained
-                ({(cls.retained / total * 100).toFixed(1)}% of heap)
+                {fmtCount(cls.instances)} instances · {fmtB(cls.retained)} retained · {heapPct}% of heap
               </span>
             </div>
 
-            {/* Two-hop chains */}
-            {twoHopHolders.length > 0 && (
-              <div style={{ marginBottom: "0.5rem" }}>
-                <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginBottom: "0.3rem", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>
-                  Multi-hop upstream holders
-                </div>
-                {twoHopHolders.map(h => {
+            {/* Multi-hop chains */}
+            {multiHopHolders.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "0.5rem" }}>
+                {multiHopHolders.map(h => {
                   const pct = cls.retained > 0 ? (h.retained / cls.retained * 100) : 0;
-                  const barWidth = Math.max(2, Math.round(pct));
+                  // via_class is stored innermost-first (closest to target): reverse for display
+                  const viaReversed = [...(h.via_class ?? [])].reverse();
                   return (
-                    <div key={h.holder_class + (h.via_class?.join("") ?? "")} style={{ marginBottom: "0.5rem" }}>
-                      {/* Chain: holder → via[0] → ... → via[n-1] → class */}
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.3rem", flexWrap: "wrap", fontSize: "0.9rem" }}>
-                        <code style={{ fontWeight: 600 }}>{h.holder_class}</code>
-                        {(h.via_class ?? []).map(v => (
+                    <div key={h.holder_class + (h.via_class?.join("") ?? "")}>
+                      {/* Chain diagram */}
+                      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.15rem", marginBottom: "0.35rem" }}>
+                        <ChainNode label={h.holder_class} role="holder" />
+                        {viaReversed.map(v => (
                           <React.Fragment key={v}>
-                            <span className="muted">→</span>
-                            <code style={{ color: "var(--muted)", fontSize: "0.82rem" }}>{v}</code>
+                            <Arrow />
+                            <ChainNode label={v} role="via" />
                           </React.Fragment>
                         ))}
-                        <span className="muted">→</span>
-                        <code style={{ fontSize: "0.82rem" }}>{cls.pretty_class}</code>
-                        <span className="muted" style={{ fontSize: "0.82rem" }}>
-                          · {fmtCount(h.count)} holders · {fmtB(h.retained)} ({pct.toFixed(1)}%)
-                        </span>
+                        <Arrow />
+                        <ChainNode label={cls.pretty_class} role="target" />
                       </div>
-                      {/* Retention bar */}
-                      <div style={{ marginTop: "0.2rem", height: 5, background: "var(--border)", borderRadius: 3, width: "100%", maxWidth: 360 }}>
-                        <div style={{ height: "100%", width: `${barWidth}%`, background: "var(--accent, #4a90d9)", borderRadius: 3 }} />
+                      {/* Retention bar + stats */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                        <div style={{ flex: 1, maxWidth: 280, height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.max(2, pct)}%`, background: "var(--accent, #4a90d9)", borderRadius: 4 }} />
+                        </div>
+                        <span style={{ fontSize: "0.78rem", color: "var(--muted)", whiteSpace: "nowrap" }}>
+                          {fmtCount(h.count)} holders · {fmtB(h.retained)} · <strong style={{ color: "var(--fg)" }}>{pct.toFixed(1)}%</strong> of class
+                        </span>
                       </div>
                     </div>
                   );
@@ -3336,15 +3354,15 @@ function RetentionChainsView({ rows, total }: { rows: import("./types").ClassRow
 
             {/* Direct holders (for context) */}
             {directHolders.length > 0 && (
-              <details style={{ fontSize: "0.82rem" }}>
-                <summary style={{ cursor: "pointer", color: "var(--muted)", marginTop: "0.2rem" }}>
+              <details style={{ fontSize: "0.82rem", marginTop: multiHopHolders.length > 0 ? "0.4rem" : 0 }}>
+                <summary style={{ cursor: "pointer", color: "var(--muted)", userSelect: "none" }}>
                   Direct holders ({directHolders.length})
                 </summary>
-                <div style={{ paddingLeft: "1rem", marginTop: "0.3rem" }}>
+                <div style={{ paddingLeft: "1rem", marginTop: "0.3rem", display: "flex", flexDirection: "column", gap: "0.15rem" }}>
                   {directHolders.map(h => {
                     const pct = cls.retained > 0 ? (h.retained / cls.retained * 100).toFixed(1) : "?";
                     return (
-                      <div key={h.holder_class} style={{ marginBottom: "0.15rem" }}>
+                      <div key={h.holder_class}>
                         ↳ <code>{h.holder_class}</code>
                         <span className="muted"> — {fmtCount(h.count)} instances, {fmtB(h.retained)} ({pct}%)</span>
                       </div>
@@ -6494,20 +6512,55 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
 
       {domView === "flame" && (
         <div>
-          <p className="subtitle">Dominated shallow heap by dominator class — each tile represents a class that immediately dominates the shown amount of heap. Tile area ∝ dominated shallow bytes. Click a tile to zoom.</p>
-          {idoms.length === 0 ? (
-            <p className="subtitle">No immediate dominator data available.</p>
-          ) : (
-            <ZoomableTreemap<{ label: string; value: number; children: never[] }>
-              root={{ label: "(all dominators)", value: idoms.reduce((s, r) => s + r.dominated_shallow, 0), children: [] as never[] }}
-              getChildren={(n) => (n.label === "(all dominators)" ? idoms.map(r => ({ label: r.dominator_class, value: r.dominated_shallow, children: [] as never[] })) : [])}
-              getValue={(n) => n.value}
-              getLabel={(n) => n.label}
-              fmt={formatBytes}
-              fmtExact={fmtExactBytes}
-              height={420}
-            />
-          )}
+          <p className="subtitle">
+            Icicle flamegraph of dominated retained heap by class. Each row is one hop in the
+            dominator tree; width = fraction of total retained dominated through that class.
+            Click a cell to zoom into its subtree. Built from class-level dominator pairs.
+          </p>
+          {pairs.length === 0 ? (
+            <p className="subtitle">No dominator pair data — regenerate the report to populate.</p>
+          ) : (() => {
+            // Build a class-level dominator tree from pairs for the icicle.
+            // pairs[i] = { dominator_class, dominated_class, dominated_retained }
+            // We root at a virtual "(heap)" node and treat each dominator_class as a parent.
+            // Aggregate retained per class: retained[cls] = sum of dominated_retained where cls is dominated_class.
+            interface FNode { label: string; retained: number; children: FNode[]; }
+            const retainedByClass = new Map<string, number>();
+            const childrenOf = new Map<string, Map<string, number>>();
+            for (const p of pairs) {
+              retainedByClass.set(p.dominated_class, (retainedByClass.get(p.dominated_class) ?? 0) + p.dominated_retained);
+              if (!childrenOf.has(p.dominator_class)) childrenOf.set(p.dominator_class, new Map());
+              const kids = childrenOf.get(p.dominator_class)!;
+              kids.set(p.dominated_class, (kids.get(p.dominated_class) ?? 0) + p.dominated_retained);
+            }
+            // Find roots: classes that appear as dominator but not as dominated child of another class
+            const allDominated = new Set(pairs.map(p => p.dominated_class));
+            const roots: FNode[] = [];
+            const buildNode = (label: string, retainedOverride?: number): FNode => {
+              const kids = childrenOf.get(label);
+              const children: FNode[] = kids
+                ? [...kids.entries()].map(([lbl, ret]) => buildNode(lbl, ret)).sort((a, b) => b.retained - a.retained)
+                : [];
+              return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children };
+            };
+            for (const [dom] of childrenOf) {
+              if (!allDominated.has(dom)) roots.push(buildNode(dom));
+            }
+            roots.sort((a, b) => b.retained - a.retained);
+            const heapTotal = roots.reduce((s, r) => s + r.retained, 0);
+            const fRoot: FNode = { label: "(heap)", retained: heapTotal, children: roots };
+            return (
+              <ZoomableTreemap<FNode>
+                root={fRoot}
+                getChildren={(n) => n.children}
+                getValue={(n) => n.retained}
+                getLabel={(n) => n.label}
+                fmt={formatBytes}
+                fmtExact={fmtExactBytes}
+                height={480}
+              />
+            );
+          })()}
         </div>
       )}
 
