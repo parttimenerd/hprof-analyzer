@@ -123,7 +123,7 @@ const LISTENER_FLOOR: u64 = 10_000;
 const PARSER_FLOOR: u64 = 100_000;
 /// Parser-output shallow bytes floor: fires even at low instance count if
 /// the total shallow size is large (e.g. 1000 large DOM trees).
-const PARSER_SHALLOW_FLOOR: u64 = 32 * 1024 * 1024; // 32 MB
+const PARSER_SHALLOW_FLOOR: u64 = 8 * 1024 * 1024; // 8 MB
 /// String instance count + JNI global count that together signal intern() abuse.
 const INTERNED_STRING_FLOOR: u64 = 2_000_000;
 const INTERNED_JNI_FLOOR: u64 = 1_000;
@@ -338,6 +338,7 @@ fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(EventListenerAccumulation),
         Box::new(ParserOutputAccumulation),
         Box::new(InternedStringBloat),
+        Box::new(BigNumberAccumulation),
         Box::new(DuplicateStrings),
         Box::new(CharArraySlack),
         Box::new(OverCapacityCollections),
@@ -836,7 +837,7 @@ impl Rule for ClassloaderLeak {
         if dup.total_retained < 524_288 {
             return None;
         }
-        if dup.loader_count < 5 {
+        if dup.loader_count < 10 {
             return Some(signal_cls(
                 "classloader-leak",
                 TriageSeverity::Info,
@@ -1755,6 +1756,7 @@ impl Rule for StaticFieldAnchor {
 struct SessionScopeLeak;
 impl Rule for SessionScopeLeak {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        // Path 1: many session instances in histogram.
         let row = r
             .overview
             .histogram
@@ -1765,19 +1767,55 @@ impl Rule for SessionScopeLeak {
                     && !c.contains("[]")
                     && h.instances >= SESSION_FLOOR
             })
-            .max_by_key(|h| h.instances)?;
-        Some(signal_cls(
-            "session-scope-leak",
-            TriageSeverity::Warning,
-            "Session-Scope Leak",
-            format!(
-                "{} live `{}` instances — session objects accumulating without invalidation; check that sessions are expired/invalidated on logout and that an idle-timeout is configured.",
-                fmt_count(row.instances),
-                row.pretty_class,
-            ),
-            Some(("system-overview", "System Overview")),
-            &row.pretty_class,
-        ))
+            .max_by_key(|h| h.instances);
+        if let Some(row) = row {
+            return Some(signal_cls(
+                "session-scope-leak",
+                TriageSeverity::Warning,
+                "Session-Scope Leak",
+                format!(
+                    "{} live `{}` instances — session objects accumulating without invalidation; check that sessions are expired/invalidated on logout and that an idle-timeout is configured.",
+                    fmt_count(row.instances),
+                    row.pretty_class,
+                ),
+                Some(("system-overview", "System Overview")),
+                &row.pretty_class,
+            ));
+        }
+        // Path 2: few large sessions dominating heap via leak_suspects.
+        const SESSION_RETAINED_FLOOR: u64 = 256 * 1024 * 1024;
+        let suspect_retained: u64 = r
+            .leaks
+            .suspects
+            .iter()
+            .filter(|s| s.pretty_class.contains("Session") || s.pretty_class.contains("session"))
+            .map(|s| s.retained)
+            .sum();
+        if suspect_retained >= SESSION_RETAINED_FLOOR {
+            let class_name = r
+                .leaks
+                .suspects
+                .iter()
+                .filter(|s| {
+                    s.pretty_class.contains("Session") || s.pretty_class.contains("session")
+                })
+                .max_by_key(|s| s.retained)
+                .map(|s| s.pretty_class.as_str())
+                .unwrap_or("Session");
+            return Some(signal_cls(
+                "session-scope-leak",
+                TriageSeverity::Warning,
+                "Session-Scope Leak (Fat Sessions)",
+                format!(
+                    "`{}` retains {} — session-scoped objects holding large per-session state accumulate when sessions are not invalidated. Reduce per-session payload (push state to DB/Redis), set a short idle timeout, and verify logout calls `session.invalidate()`.",
+                    class_name,
+                    format_bytes(suspect_retained),
+                ),
+                Some(("leak-suspects", "Leak Suspects")),
+                class_name,
+            ));
+        }
+        None
     }
 }
 
@@ -1948,6 +1986,57 @@ impl Rule for InternedStringBloat {
                 "{} live `java.lang.String` instances with {} JNI Global roots — the intern table may be growing without bound from calls to `String.intern()` on dynamic or user-supplied values. Replace with a bounded cache (e.g. Guava `Interner` or `ConcurrentHashMap`) and avoid `intern()` on strings that are not truly constants.",
                 fmt_count(string_count),
                 fmt_count(jni_global_count),
+            ),
+            Some(("system-overview", "System Overview")),
+        ))
+    }
+}
+
+const BIG_NUMBER_INSTANCE_FLOOR: u64 = 5_000_000;
+const BIG_NUMBER_SHALLOW_PCT: f64 = 5.0;
+
+/// BigDecimal / BigInteger accumulation. Reads `overview.histogram`. Fires when
+/// the combined instance count or shallow-heap share of `BigDecimal`/`BigInteger`
+/// is very high — common in financial or scientific request handlers that create
+/// many throwaway BigDecimal instances per request.
+struct BigNumberAccumulation;
+impl Rule for BigNumberAccumulation {
+    fn eval(&self, r: &Report) -> Option<TriageSignal> {
+        let heap = r.overview.total_shallow;
+        let total_instances: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                h.pretty_class == "java.math.BigDecimal" || h.pretty_class == "java.math.BigInteger"
+            })
+            .map(|h| h.instances)
+            .sum();
+        let total_shallow: u64 = r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| {
+                h.pretty_class == "java.math.BigDecimal" || h.pretty_class == "java.math.BigInteger"
+            })
+            .map(|h| h.shallow)
+            .sum();
+        let shallow_pct = if heap > 0 {
+            (total_shallow as f64 / heap as f64) * 100.0
+        } else {
+            0.0
+        };
+        if total_instances < BIG_NUMBER_INSTANCE_FLOOR && shallow_pct < BIG_NUMBER_SHALLOW_PCT {
+            return None;
+        }
+        Some(signal(
+            "big-number-accumulation",
+            TriageSeverity::Warning,
+            "BigDecimal / BigInteger Accumulation",
+            format!(
+                "{} `BigDecimal`/`BigInteger` instances ({:.1}% of heap shallow) — large-scale BigDecimal usage is memory-intensive; each instance allocates a backing `BigInteger` and `int[]`. Consider replacing with `long` scaled by a fixed divisor, caching commonly-used constants (`BigDecimal.ZERO`/`ONE`), or a specialized decimal library.",
+                fmt_count(total_instances),
+                shallow_pct,
             ),
             Some(("system-overview", "System Overview")),
         ))
@@ -3801,6 +3890,8 @@ impl Rule for ExecutorSelfSubmitDeadlock {
                     || c.ends_with("CompletableFuture$AsyncSupply")
                     || c.ends_with("CompletableFuture$AsyncRun")
                     || c.ends_with("ForkJoinTask$RunnableExecuteAction")
+                    || c.ends_with("RecursiveTask")
+                    || c.ends_with("RecursiveAction")
             })
             .map(|h| h.instances)
             .sum();
@@ -3867,19 +3958,44 @@ impl Rule for ShutdownHookAccumulation {
             })
             .map(|h| h.instances)
             .sum();
-        if hook_instances < SHUTDOWN_HOOK_FLOOR {
-            return None;
+        if hook_instances >= SHUTDOWN_HOOK_FLOOR {
+            return Some(signal(
+                "shutdown-hook-accumulation",
+                TriageSeverity::Warning,
+                "Shutdown Hook Accumulation",
+                format!(
+                    "{} `ApplicationShutdownHooks` / shutdown-hook related objects — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` object in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead).",
+                    fmt_count(hook_instances),
+                ),
+                Some(("threads", "Threads")),
+            ));
         }
-        Some(signal(
-            "shutdown-hook-accumulation",
-            TriageSeverity::Warning,
-            "Shutdown Hook Accumulation",
-            format!(
-                "{} `ApplicationShutdownHooks` / shutdown-hook related objects — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` object in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead).",
-                fmt_count(hook_instances),
-            ),
-            Some(("threads", "Threads")),
-        ))
+        // Also fire on high Thread count when ApplicationShutdownHooks is present in histogram.
+        let has_shutdown_hooks_class = r
+            .overview
+            .histogram
+            .iter()
+            .any(|h| h.pretty_class.contains("ApplicationShutdownHooks"));
+        let thread_count = r
+            .overview
+            .histogram
+            .iter()
+            .find(|h| h.pretty_class == "java.lang.Thread")
+            .map(|h| h.instances)
+            .unwrap_or(0);
+        if has_shutdown_hooks_class && thread_count >= SHUTDOWN_HOOK_FLOOR {
+            return Some(signal(
+                "shutdown-hook-accumulation",
+                TriageSeverity::Warning,
+                "Shutdown Hook Accumulation",
+                format!(
+                    "{} `java.lang.Thread` instances with `ApplicationShutdownHooks` present — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead).",
+                    fmt_count(thread_count),
+                ),
+                Some(("threads", "Threads")),
+            ));
+        }
+        None
     }
 }
 
@@ -5929,5 +6045,108 @@ mod tests {
             NativeHeapFragmentation.eval(&r).is_none(),
             "count below FRAG_DBB_COUNT_FLOOR must be silent"
         );
+    }
+
+    #[test]
+    fn parser_shallow_floor_lowered() {
+        let mut r = base_report();
+        // 10 MB >= 8 MB new floor but below old 32 MB floor; 50 instances below PARSER_FLOOR.
+        r.overview.histogram.push(hist_row(
+            "com.sun.org.apache.xerces.internal.dom.DeferredDocumentImpl",
+            50,
+            10 * 1024 * 1024,
+        ));
+        let s = ParserOutputAccumulation
+            .eval(&r)
+            .expect("10 MB shallow must fire with 8 MB floor");
+        assert_eq!(s.id, "parser-output-accumulation");
+    }
+
+    #[test]
+    fn fjp_task_accumulation_fires() {
+        let mut r = base_report();
+        r.overview
+            .histogram
+            .push(hist_row("com.example.MyRecursiveTask", 20_001, 1024 * 1024));
+        for i in 0..30 {
+            r.threads.threads.push(ThreadInfo {
+                retained: 0,
+                local_root_count: 0,
+                name: Some(format!("ForkJoinPool.commonPool-worker-{}", i)),
+                thread_state: "WAITING".into(),
+                ..Default::default()
+            });
+        }
+        for i in 0..10 {
+            r.threads.threads.push(ThreadInfo {
+                retained: 0,
+                local_root_count: 0,
+                name: Some(format!("main-{}", i)),
+                thread_state: "RUNNABLE".into(),
+                ..Default::default()
+            });
+        }
+        let s = ExecutorSelfSubmitDeadlock
+            .eval(&r)
+            .expect("RecursiveTask above floor with waiting threads must fire");
+        assert_eq!(s.id, "executor-self-submit-deadlock");
+    }
+
+    #[test]
+    fn shutdown_hook_thread_count_fires() {
+        let mut r = base_report();
+        // ApplicationShutdownHooks present (count=1 triggers path 2)
+        r.overview
+            .histogram
+            .push(hist_row("java.lang.ApplicationShutdownHooks", 1, 64));
+        // Many Thread instances (>= SHUTDOWN_HOOK_FLOOR = 200)
+        r.overview
+            .histogram
+            .push(hist_row("java.lang.Thread", 300, 1024 * 300));
+        let s = ShutdownHookAccumulation
+            .eval(&r)
+            .expect("Thread count + ApplicationShutdownHooks must fire");
+        assert_eq!(s.id, "shutdown-hook-accumulation");
+        assert!(s.detail.contains("Thread"), "should mention Thread");
+    }
+
+    #[test]
+    fn big_number_accumulation_fires() {
+        let mut r = base_report();
+        r.overview.total_shallow = 1024 * 1024 * 1024;
+        r.overview.histogram.push(hist_row(
+            "java.math.BigDecimal",
+            6_000_000,
+            60 * 1024 * 1024,
+        ));
+        let s = BigNumberAccumulation
+            .eval(&r)
+            .expect("6M BigDecimal instances must fire");
+        assert_eq!(s.id, "big-number-accumulation");
+        assert!(BigNumberAccumulation.eval(&base_report()).is_none());
+    }
+
+    #[test]
+    fn classloader_warning_threshold_10() {
+        use crate::report::model::DuplicateClass;
+        let mut r = base_report();
+        r.overview.duplicate_classes.push(DuplicateClass {
+            pretty_class: "com.example.Plugin".into(),
+            loader_count: 7,
+            total_retained: 600_000,
+            total_instances: 0,
+            loaders: vec![],
+            per_loader: vec![],
+        });
+        let s = ClassloaderLeak
+            .eval(&r)
+            .expect("7 loaders must fire at Info");
+        assert_eq!(s.severity, TriageSeverity::Info);
+
+        r.overview.duplicate_classes[0].loader_count = 10;
+        let s2 = ClassloaderLeak
+            .eval(&r)
+            .expect("10 loaders must fire at Warning");
+        assert_eq!(s2.severity, TriageSeverity::Warning);
     }
 }
