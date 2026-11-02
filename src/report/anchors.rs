@@ -55,6 +55,8 @@ pub enum SectionId {
     FrameworkAnalysis,
     TopRetainers,
     CollectionWasteBudget,
+    CollectionRetainedHeap,
+    ResourceHandles,
 }
 
 impl SectionId {
@@ -94,6 +96,8 @@ impl SectionId {
             SectionId::FrameworkAnalysis => "framework-analysis",
             SectionId::TopRetainers => "top-retainers",
             SectionId::CollectionWasteBudget => "collection-waste-budget",
+            SectionId::CollectionRetainedHeap => "collection-retained-heap",
+            SectionId::ResourceHandles => "resource-handles",
         }
     }
 
@@ -133,6 +137,8 @@ impl SectionId {
             SectionId::FrameworkAnalysis => "Framework Analysis",
             SectionId::TopRetainers => "Top Retainers",
             SectionId::CollectionWasteBudget => "Collection Waste Budget",
+            SectionId::CollectionRetainedHeap => "Collection Retained Heap",
+            SectionId::ResourceHandles => "Resource Handles",
         }
     }
 
@@ -193,6 +199,12 @@ mod tests {
         SectionId::DominatorDepth,
         SectionId::LeakIndicators,
         SectionId::Glossary,
+        SectionId::ThreadLocalAnalysis,
+        SectionId::FrameworkAnalysis,
+        SectionId::TopRetainers,
+        SectionId::CollectionWasteBudget,
+        SectionId::CollectionRetainedHeap,
+        SectionId::ResourceHandles,
     ];
 
     #[test]

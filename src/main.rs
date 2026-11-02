@@ -576,7 +576,8 @@ enum HeapCmd {
         dump: String,
         /// Section to print: leaks, top, threads, overview, triage, waste, indicators,
         /// retainers, arrays, collections, references, dominators, components, alloc_sites,
-        /// thread_locals, framework, field_stats, categories, or all (default).
+        /// thread_locals, framework, field_stats, categories, static-collections, resources,
+        /// or all (default).
         #[arg(long, value_name = "SECTION", value_parser = [
             PossibleValue::new("triage").help("Severity-tagged signals; best first call for diagnosis"),
             PossibleValue::new("leaks").help("Leak suspects with root paths and dominator tree"),
@@ -596,6 +597,8 @@ enum HeapCmd {
             PossibleValue::new("framework").help("Framework-specific analysis"),
             PossibleValue::new("field_stats").help("Field statistics"),
             PossibleValue::new("categories").help("JDK/framework/application (or custom) class category rollup"),
+            PossibleValue::new("static-collections").help("Collection classes (ArrayList/HashMap/…) with retained/shallow ratio"),
+            PossibleValue::new("resources").help("File/stream/JDBC resource handle instance counts"),
             PossibleValue::new("all").help("All sections (default)"),
         ])]
         section: Option<String>,

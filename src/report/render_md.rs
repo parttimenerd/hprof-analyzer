@@ -311,6 +311,8 @@ pub fn render_markdown(r: &Report) -> String {
     }
     render_retention_concentration(&r.overview, &mut out);
     render_dominator_depth(&r.overview, &mut out);
+    render_static_collections(&r.overview, &mut out);
+    render_resource_handles(&r.overview, &mut out);
     render_leak_indicators(&r.leak_indicators, &mut out);
     render_custom_queries(&r.queries, &mut out);
     render_glossary(&mut out);
@@ -542,6 +544,54 @@ fn render_toc(r: &Report, out: &mut String) {
     }
     if depth_stats(&r.overview.dominator_depth_histogram).is_some() {
         out.push_str(&SectionId::DominatorDepth.toc_bullet());
+    }
+    // New sections: always present if there are matching histogram rows.
+    {
+        const COLL_NAMES: &[&str] = &[
+            "ArrayList",
+            "HashMap",
+            "LinkedList",
+            "ConcurrentHashMap",
+            "CopyOnWriteArrayList",
+            "HashSet",
+            "LinkedHashSet",
+            "TreeMap",
+            "TreeSet",
+            "ArrayDeque",
+            "PriorityQueue",
+            "LinkedHashMap",
+            "Hashtable",
+            "Vector",
+        ];
+        let has_colls = r.overview.histogram.iter().any(|h| {
+            !h.pretty_class.ends_with("[]") && COLL_NAMES.iter().any(|n| h.pretty_class.contains(n))
+        });
+        if has_colls {
+            out.push_str(&SectionId::CollectionRetainedHeap.toc_bullet());
+        }
+    }
+    {
+        const RESOURCE_NAMES: &[&str] = &[
+            "FileInputStream",
+            "FileOutputStream",
+            "FileDescriptor",
+            "FileChannel",
+            "Statement",
+            "ResultSet",
+            "Connection",
+            "Socket",
+        ];
+        let has_resources = r.overview.histogram.iter().any(|h| {
+            let c = &h.pretty_class;
+            !c.ends_with("[]")
+                && !c.contains("Weak")
+                && !c.contains("Reference")
+                && !c.contains("Buffered")
+                && RESOURCE_NAMES.iter().any(|n| c.contains(n))
+        });
+        if has_resources {
+            out.push_str(&SectionId::ResourceHandles.toc_bullet());
+        }
     }
     out.push_str(&SectionId::Glossary.toc_bullet());
     out.push('\n');
@@ -4564,6 +4614,132 @@ Fix the biggest category first for the highest impact. Figures are approximate._
         format!("**{}**", fmt_count(total_objects)),
         String::new(),
     ]);
+    t.render(out);
+    out.push('\n');
+}
+
+/// Render the "Static Collections" section: collection classes ranked by retained
+/// heap, showing the retained/shallow ratio to surface accumulation. A ratio >> 1
+/// means the collection is holding large objects — worth investigating in Leak
+/// Suspects or the Dominator Tree.
+pub(crate) fn render_static_collections(o: &crate::report::SystemOverview, out: &mut String) {
+    use crate::md::{Align, Table};
+    const COLL_NAMES: &[&str] = &[
+        "ArrayList",
+        "HashMap",
+        "LinkedList",
+        "ConcurrentHashMap",
+        "CopyOnWriteArrayList",
+        "HashSet",
+        "LinkedHashSet",
+        "TreeMap",
+        "TreeSet",
+        "ArrayDeque",
+        "PriorityQueue",
+        "LinkedHashMap",
+        "Hashtable",
+        "Vector",
+    ];
+    let mut rows: Vec<&crate::report::HistRow> = o
+        .histogram
+        .iter()
+        .filter(|h| {
+            let c = &h.pretty_class;
+            !c.ends_with("[]") && COLL_NAMES.iter().any(|n| c.contains(n))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    rows.sort_by_key(|h| std::cmp::Reverse(h.retained));
+
+    out.push_str("## Collection Retained Heap\n\n");
+    out.push_str(
+        "_Collection classes ranked by retained heap. \
+        **Ratio** = retained ÷ shallow: a ratio >> 1 means the instances hold many other \
+        objects alive — a sign of accumulation. \
+        Check Leak Suspects or the Dominator Tree for the largest instances._\n\n",
+    );
+    let mut t = Table::new(
+        &["Class", "Instances", "Shallow", "Retained", "Ratio"],
+        &[
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
+    for h in &rows {
+        let ratio = if h.shallow > 0 {
+            h.retained as f64 / h.shallow as f64
+        } else {
+            0.0
+        };
+        t.row([
+            format!("`{}`", h.pretty_class),
+            fmt_count(h.instances),
+            format_bytes(h.shallow),
+            format_bytes(h.retained),
+            format!("{:.1}×", ratio),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+/// Render the "Resource Handles" section: file/stream/JDBC handle classes ranked
+/// by instance count. High counts suggest resources acquired but never closed.
+pub(crate) fn render_resource_handles(o: &crate::report::SystemOverview, out: &mut String) {
+    use crate::md::{Align, Table};
+    const RESOURCE_NAMES: &[&str] = &[
+        "FileInputStream",
+        "FileOutputStream",
+        "FileDescriptor",
+        "FileChannel",
+        "Statement",
+        "ResultSet",
+        "Connection",
+        "Socket",
+        "java.io.InputStream",
+        "java.io.OutputStream",
+    ];
+    let mut rows: Vec<&crate::report::HistRow> = o
+        .histogram
+        .iter()
+        .filter(|h| {
+            let c = &h.pretty_class;
+            !c.ends_with("[]")
+                && !c.contains("Weak")
+                && !c.contains("Reference")
+                && !c.contains("Buffered")
+                && RESOURCE_NAMES.iter().any(|n| c.contains(n))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    rows.sort_by_key(|h| std::cmp::Reverse(h.instances));
+
+    out.push_str("## Resource Handles\n\n");
+    out.push_str(
+        "_File, stream, and JDBC resource handle classes ranked by instance count. \
+        High counts suggest resources acquired but never closed. \
+        Fix: wrap acquisitions in **try-with-resources**. \
+        See the Triage section for `connection-leak` and `unclosed-resource-leak` signals._\n\n",
+    );
+    let mut t = Table::new(
+        &["Class", "Instances", "Shallow", "Retained"],
+        &[Align::Left, Align::Right, Align::Right, Align::Right],
+    );
+    for h in &rows {
+        t.row([
+            format!("`{}`", h.pretty_class),
+            fmt_count(h.instances),
+            format_bytes(h.shallow),
+            format_bytes(h.retained),
+        ]);
+    }
     t.render(out);
     out.push('\n');
 }

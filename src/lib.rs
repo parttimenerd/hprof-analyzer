@@ -677,6 +677,8 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
         "framework" => render_md::render_framework_analysis(&r.framework_analysis, &mut out),
         "field_stats" => render_md::render_fields_by_size(&r.fields_by_size, false, &mut out),
         "categories" => render_md::render_category_rollup(&r.category_rollup, "##", &mut out),
+        "static-collections" => render_md::render_static_collections(&r.overview, &mut out),
+        "resources" => render_md::render_resource_handles(&r.overview, &mut out),
         _ => return render_md::render_markdown(r),
     }
     out
