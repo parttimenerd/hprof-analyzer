@@ -1674,6 +1674,22 @@ pub struct ReferencesAnalysis {
     pub phantom: Option<ReferenceStats>,
 }
 
+/// Root-path attribution for a large DirectByteBuffer. Mirrors the `RootPathStep`
+/// pattern used by leak suspects to trace who owns a buffer through the dominator tree.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct NioBufferOwner {
+    /// Off-heap capacity of this DirectByteBuffer in bytes.
+    pub capacity: u64,
+    /// 1-based object index (for cross-referencing with browse_dominators).
+    pub obj_index_1based: usize,
+    /// Display class name of the buffer object.
+    pub display_class: String,
+    /// Retained heap bytes of this object (on-heap cost of keeping it alive).
+    pub retained: u64,
+    /// Dominator-tree path from this object up to a GC root.
+    pub root_path: Vec<RootPathStep>,
+}
+
 /// Scalar indicators of common Java leak patterns. All fields are always
 /// computed; zero when the corresponding objects are absent.
 #[derive(
@@ -1689,6 +1705,20 @@ pub struct LeakIndicators {
     /// Sum of `capacity` fields across all live `DirectByteBuffer` instances,
     /// representing total off-heap memory tracked by live NIO buffers.
     pub direct_byte_buffer_capacity_sum: u64,
+    /// Count of live `DirectByteBuffer` instances. Paired with
+    /// `direct_byte_buffer_capacity_sum` to compute average buffer capacity.
+    /// 0 when no DirectByteBuffers are present or the class was not found.
+    #[serde(default)]
+    pub direct_byte_buffer_count: u64,
+    /// Capacity distribution of live DirectByteBuffers across 8 buckets:
+    /// `[<1 KB, 1–4 KB, 4–16 KB, 16–64 KB, 64–256 KB, 256 KB–1 MB, 1–16 MB, ≥16 MB]`.
+    /// All zeros when no DirectByteBuffers are present.
+    #[serde(default)]
+    pub direct_byte_buffer_cap_buckets: [u64; 8],
+    /// Top NIO buffer owners (dense_idx, capacity) sorted by capacity descending.
+    /// At most 20 entries. Empty when no DirectByteBuffers are present.
+    #[serde(default)]
+    pub nio_buffer_owners: Vec<NioBufferOwner>,
 }
 
 /// Severity of a fired OOM-triage signal. Currently carried for future HTML

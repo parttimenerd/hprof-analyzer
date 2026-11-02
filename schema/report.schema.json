@@ -164,7 +164,19 @@
       "$ref": "#/$defs/LeakIndicators",
       "default": {
         "anonymous_class_count": 0,
+        "direct_byte_buffer_cap_buckets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
         "direct_byte_buffer_capacity_sum": 0,
+        "direct_byte_buffer_count": 0,
+        "nio_buffer_owners": [],
         "thread_local_null_key_count": 0
       }
     },
@@ -2379,11 +2391,47 @@
           "format": "uint64",
           "minimum": 0
         },
+        "direct_byte_buffer_cap_buckets": {
+          "description": "Capacity distribution of live DirectByteBuffers across 8 buckets:\n`[<1 KB, 1–4 KB, 4–16 KB, 16–64 KB, 64–256 KB, 256 KB–1 MB, 1–16 MB, ≥16 MB]`.\nAll zeros when no DirectByteBuffers are present.",
+          "type": "array",
+          "default": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "maxItems": 8,
+          "minItems": 8
+        },
         "direct_byte_buffer_capacity_sum": {
           "description": "Sum of `capacity` fields across all live `DirectByteBuffer` instances,\nrepresenting total off-heap memory tracked by live NIO buffers.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "direct_byte_buffer_count": {
+          "description": "Count of live `DirectByteBuffer` instances. Paired with\n`direct_byte_buffer_capacity_sum` to compute average buffer capacity.\n0 when no DirectByteBuffers are present or the class was not found.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "nio_buffer_owners": {
+          "description": "Top NIO buffer owners (dense_idx, capacity) sorted by capacity descending.\nAt most 20 entries. Empty when no DirectByteBuffers are present.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NioBufferOwner"
+          }
         },
         "thread_local_null_key_count": {
           "description": "Count of `ThreadLocal$ThreadLocalMap$Entry` instances whose referent\n(the ThreadLocal key) has been cleared — the classic thread-local leak signal.",
@@ -2538,6 +2586,48 @@
         "object_count",
         "retained",
         "children"
+      ]
+    },
+    "NioBufferOwner": {
+      "description": "Root-path attribution for a large DirectByteBuffer. Mirrors the `RootPathStep`\npattern used by leak suspects to trace who owns a buffer through the dominator tree.",
+      "type": "object",
+      "properties": {
+        "capacity": {
+          "description": "Off-heap capacity of this DirectByteBuffer in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "display_class": {
+          "description": "Display class name of the buffer object.",
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "description": "1-based object index (for cross-referencing with browse_dominators).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "description": "Retained heap bytes of this object (on-heap cost of keeping it alive).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_path": {
+          "description": "Dominator-tree path from this object up to a GC root.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RootPathStep"
+          }
+        }
+      },
+      "required": [
+        "capacity",
+        "obj_index_1based",
+        "display_class",
+        "retained",
+        "root_path"
       ]
     },
     "ObjGraphEdge": {

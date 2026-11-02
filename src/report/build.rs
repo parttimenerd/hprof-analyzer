@@ -697,6 +697,8 @@ pub fn build_model(
     let references = build_references(g);
     t_bm!("references");
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
+    let nio_buffer_owners = build_nio_buffer_owners(g, opts.root_path_max_depth);
+    t_bm!("nio_buffer_owners");
     // g.idom is not used after build_references. Free it now (~2 GB on large dumps)
     // before collection/attribution/framework sections run.
     crate::trace::drop_vec(std::mem::take(&mut g.idom));
@@ -761,7 +763,7 @@ pub fn build_model(
         fields_by_size,
         biggest_collections,
         collection_contents,
-        leak_indicators: build_leak_indicators(g),
+        leak_indicators: build_leak_indicators(g, nio_buffer_owners),
         waste_summary: None,
         waste_breakdown: Vec::new(),
         triage: Vec::new(),
@@ -956,7 +958,74 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
     })
 }
 
-fn build_leak_indicators(g: &Graph) -> LeakIndicators {
+/// Walk the dominator tree for each of the top-N largest DirectByteBuffers and
+/// return a `NioBufferOwner` per buffer, tracing who holds it up to a GC root.
+/// Must be called while `g.idom` is still live (before the post-references drop).
+fn build_nio_buffer_owners(g: &Graph, root_path_max_depth: usize) -> Vec<NioBufferOwner> {
+    if g.direct_byte_buffer_top_records.is_empty() || g.idom.is_empty() {
+        return vec![];
+    }
+    let n = g.idom.len();
+    let vroot = n as u32;
+    let undef = u32::MAX;
+
+    // Build root_type_of: dense_idx → root type byte (lower = more specific).
+    let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+    for (idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
+        root_type_of
+            .entry(*idx)
+            .and_modify(|e| *e = (*e).min(ty))
+            .or_insert(ty);
+    }
+
+    let mut records = g.direct_byte_buffer_top_records.clone();
+    records.sort_unstable_by_key(|b| std::cmp::Reverse(b.1));
+    records.truncate(20);
+
+    let mut owners = Vec::with_capacity(records.len());
+    for (dense_idx, capacity) in records {
+        let idx = dense_idx as usize;
+        if idx >= n {
+            continue;
+        }
+        let display_class = class_display(g, idx);
+        let retained = g.retained.get(idx).copied().unwrap_or(0);
+
+        let mut root_path: Vec<RootPathStep> = Vec::new();
+        let mut cur = idx;
+        let mut depth = 0usize;
+        loop {
+            let idom = g.idom[cur];
+            let is_root = idom == vroot;
+            let root_type_label = root_type_of
+                .get(&(cur as u32))
+                .and_then(|&ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
+            root_path.push(RootPathStep {
+                obj_index_1based: cur + 1,
+                display_class: class_display(g, cur),
+                retained: g.retained.get(cur).copied().unwrap_or(0),
+                root_type_label,
+                field_edge: None,
+            });
+            if is_root || idom == undef || depth >= root_path_max_depth {
+                break;
+            }
+            cur = idom as usize;
+            depth += 1;
+        }
+
+        owners.push(NioBufferOwner {
+            capacity,
+            obj_index_1based: idx + 1,
+            display_class,
+            retained,
+            root_path,
+        });
+    }
+    owners
+}
+
+fn build_leak_indicators(g: &Graph, nio_buffer_owners: Vec<NioBufferOwner>) -> LeakIndicators {
     // 1. Anonymous/generated class count — one entry per distinct class in class_names.
     let anonymous_class_count = g
         .class_names
@@ -972,13 +1041,18 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
     // forward edge that would defeat an "any live target" heuristic.
     let thread_local_null_key_count = g.thread_local_null_key_count;
 
-    // 3. DirectByteBuffer capacity sum — already computed in pass2.
+    // 3. DirectByteBuffer capacity sum + count + distribution — computed in pass2.
     let direct_byte_buffer_capacity_sum = g.direct_byte_buffer_capacity_sum;
+    let direct_byte_buffer_count = g.direct_byte_buffer_count;
+    let direct_byte_buffer_cap_buckets = g.direct_byte_buffer_cap_buckets;
 
     LeakIndicators {
         anonymous_class_count,
         thread_local_null_key_count,
         direct_byte_buffer_capacity_sum,
+        direct_byte_buffer_count,
+        direct_byte_buffer_cap_buckets,
+        nio_buffer_owners,
     }
 }
 
