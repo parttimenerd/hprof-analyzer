@@ -200,6 +200,20 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         needs_retained: true,
         oql: "SELECT @objectId AS idx, classof(x) AS class, @retainedHeapSize AS ret FROM INSTANCEOF javax.servlet.http.HttpSession x ORDER BY ret DESC LIMIT 30",
     },
+    NamedQuery {
+        name: "static-collections",
+        display: "Collection classes by retained size (spots high retained/shallow ratio)",
+        group: "Exploration",
+        needs_retained: true,
+        oql: "SELECT classof(x) AS class, COUNT(*) AS n, SUM(@usedHeapSize) AS total_shallow, SUM(@retainedHeapSize) AS total_retained FROM INSTANCEOF java.util.Collection x GROUP BY classof(x) ORDER BY total_retained DESC LIMIT 20",
+    },
+    NamedQuery {
+        name: "unclosed-resources",
+        display: "File / stream / JDBC resource handle instance counts",
+        group: "Exploration",
+        needs_retained: false,
+        oql: "SELECT classof(x) AS class, COUNT(*) AS n, SUM(@usedHeapSize) AS total_shallow FROM INSTANCEOF java.io.Closeable x GROUP BY classof(x) ORDER BY n DESC LIMIT 30",
+    },
 ];
 
 #[cfg(test)]
@@ -209,7 +223,7 @@ mod tests {
 
     #[test]
     fn all_26_queries_defined() {
-        assert_eq!(NAMED_QUERIES.len(), 26);
+        assert_eq!(NAMED_QUERIES.len(), 28);
     }
 
     #[test]

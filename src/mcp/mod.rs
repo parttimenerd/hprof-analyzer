@@ -128,6 +128,8 @@ pub struct GetReportParams {
     ///   "packages"       — biggest_packages tree (which package dominates memory)
     ///   "culprits"       — primary_culprits: top-N synthesized likely culprit objects
     ///   "self-referential" — classes with many instances of themselves (list/trie node leaks)
+    ///   "static-collections" — collection classes with instances/shallow/retained/ratio; high ratio = accumulation
+    ///   "resources"      — file/stream/JDBC handle classes by instance count; high count = unclosed leak
     ///
     /// Default "all" (everything — very large, avoid in LLM workflows).
     pub section: Option<String>,
@@ -174,6 +176,8 @@ pub struct QueryParams {
     ///   "classloader-instances"   — live ClassLoader instances with retained sizes (*)
     ///   "big-decimal-instances"   — BigDecimal accumulation by type
     ///   "http-sessions"           — HTTP Session objects by retained size (*)
+    ///   "static-collections"      — Collection subclasses grouped by type: count/shallow/retained (*)
+    ///   "unclosed-resources"      — Closeable subclasses by instance count (spots unclosed handles)
     ///  (*) = needs full analysis; always available after load_dump
     ///
     /// OQL EXAMPLES (for custom queries):
@@ -438,6 +442,8 @@ impl HprofMcpServer {
                           \n  \"packages\"     — biggest_packages tree (which package dominates memory)\
                           \n  \"culprits\"     — top-N synthesized likely culprit objects\
                           \n  \"self-referential\" — classes with many self-referential instances (list/trie node leaks)\
+                          \n  \"static-collections\" — collection classes (ArrayList/HashMap/…) with instances/shallow/retained/ratio; high ratio reveals accumulation\
+                          \n  \"resources\"    — file/stream/JDBC handle classes with instance counts; high counts reveal unclosed-resource leaks\
                           \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\", \"categories\"\
                           \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
                           \n  \"all\"          — everything merged (very large — avoid in LLM workflows)")]
@@ -558,6 +564,82 @@ impl HprofMcpServer {
             "packages" => serde_json::to_string_pretty(&r.top.biggest_packages),
             "culprits" => serde_json::to_string_pretty(&r.primary_culprits),
             "self-referential" => serde_json::to_string_pretty(&r.self_referential_classes),
+            "static-collections" => {
+                const COLL_NAMES: &[&str] = &[
+                    "ArrayList", "HashMap", "LinkedList", "ConcurrentHashMap",
+                    "CopyOnWriteArrayList", "HashSet", "LinkedHashSet", "TreeMap", "TreeSet",
+                    "ArrayDeque", "PriorityQueue", "LinkedHashMap", "Hashtable", "Vector",
+                ];
+                let mut rows: Vec<serde_json::Value> = r
+                    .overview
+                    .histogram
+                    .iter()
+                    .filter(|h| {
+                        let c = &h.pretty_class;
+                        !c.ends_with("[]") && COLL_NAMES.iter().any(|n| c.contains(n))
+                    })
+                    .map(|h| {
+                        let ratio = if h.shallow > 0 { h.retained as f64 / h.shallow as f64 } else { 0.0 };
+                        serde_json::json!({
+                            "class": h.pretty_class,
+                            "instances": h.instances,
+                            "shallow_bytes": h.shallow,
+                            "retained_bytes": h.retained,
+                            "retained_to_shallow_ratio": (ratio * 10.0).round() / 10.0,
+                        })
+                    })
+                    .collect();
+                rows.sort_by(|a, b| {
+                    let ra = a["retained_bytes"].as_u64().unwrap_or(0);
+                    let rb = b["retained_bytes"].as_u64().unwrap_or(0);
+                    rb.cmp(&ra)
+                });
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "_hint": "retained_to_shallow_ratio >> 1 indicates the collection holds large objects. \
+                              Use query({oql:\"static-collections\"}) for a grouped OQL view, or \
+                              check get_report({section:\"leaks\"}) to see which object holds the biggest instance.",
+                    "collection_classes": rows,
+                }))
+            }
+            "resources" => {
+                const RESOURCE_NAMES: &[&str] = &[
+                    "FileInputStream", "FileOutputStream", "FileDescriptor", "FileChannel",
+                    "Statement", "ResultSet", "Connection", "Socket",
+                    "java.io.InputStream", "java.io.OutputStream",
+                ];
+                let mut rows: Vec<serde_json::Value> = r
+                    .overview
+                    .histogram
+                    .iter()
+                    .filter(|h| {
+                        let c = &h.pretty_class;
+                        !c.ends_with("[]")
+                            && !c.contains("Weak")
+                            && !c.contains("Reference")
+                            && !c.contains("Buffered")
+                            && RESOURCE_NAMES.iter().any(|n| c.contains(n))
+                    })
+                    .map(|h| {
+                        serde_json::json!({
+                            "class": h.pretty_class,
+                            "instances": h.instances,
+                            "shallow_bytes": h.shallow,
+                            "retained_bytes": h.retained,
+                        })
+                    })
+                    .collect();
+                rows.sort_by(|a, b| {
+                    let ia = a["instances"].as_u64().unwrap_or(0);
+                    let ib = b["instances"].as_u64().unwrap_or(0);
+                    ib.cmp(&ia)
+                });
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "_hint": "High instance counts suggest resources acquired but never closed. \
+                              Fix: wrap in try-with-resources. Use query({oql:\"unclosed-resources\"}) \
+                              for a focused OQL view, or check triage for connection-leak / unclosed-resource-leak signals.",
+                    "resource_classes": rows,
+                }))
+            }
             section => {
                 if section != "all" {
                     return Err(McpError::invalid_params(
@@ -566,7 +648,8 @@ impl HprofMcpServer {
                              leaks, top, threads, overview, triage, waste, indicators, retainers, \
                              arrays, collections, references, dominators, components, alloc_sites, \
                              thread_locals, framework, field_stats, categories, gc-roots, \
-                             classloaders, strings, packages, culprits, self-referential, all",
+                             classloaders, strings, packages, culprits, self-referential, \
+                             static-collections, resources, all",
                             section
                         ),
                         None,
@@ -620,7 +703,7 @@ impl HprofMcpServer {
     /// appear as "ClassName@index" — use the index with inspect_object or browse_dominators.
     #[tool(description = "Run an OQL query OR a built-in view by name. \
                        SHORTCUT: pass a view name like \"top-retained-by-class\" instead of writing OQL. \
-                       All 26 view names are listed in the oql parameter description — use them directly. \
+                       All 28 view names are listed in the oql parameter description — use them directly. \
                        Returns {columns, rows, truncated, row_count, view_name?}. \
                        Rows are plain JSON. Objects appear as 'ClassName@index' — the number after '@' is object_index. \
                        Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object. \
@@ -1164,9 +1247,9 @@ impl HprofMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
     }
 
-    /// List the 26 built-in named query views, grouped by category.
+    /// List the 28 built-in named query views, grouped by category.
     #[tool(
-        description = "List all 26 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained, Exploration). \
+        description = "List all 28 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained, Exploration). \
                        Each entry has: name, display (human label), group, needs_retained (bool), oql (full SQL for reference). \
                        SHORTCUT: pass the 'name' directly to query() — query({\"oql\":\"leak-suspects\"}) runs the view by name. \
                        No need to copy the SQL. 'needs_retained' views always work after load_dump."

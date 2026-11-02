@@ -472,7 +472,7 @@ Step 1: get_session_info({})
   → If loaded=false: go to step 2
 
 Shortcut at any time: list_views({})
-  → Shows all 26 built-in named queries. No dump needed.
+  → Shows all 28 built-in named queries. No dump needed.
     Use names DIRECTLY: query({"oql": "top-retained-by-class"}) — no copy-paste of SQL needed.
 
 Step 2: load_dump({"path": "/absolute/path/to/dump.hprof"})
@@ -490,7 +490,7 @@ Step 5: get_histogram({"limit": 20})
   → Confirms which classes dominate. Pick the top class and run step 6.
 
 Step 6: query({"oql": "top-retained-by-class"})  ← VIEW NAME (no SQL needed)
-  → Top classes by retained size. All 26 view names: list_views({})
+  → Top classes by retained size. All 28 view names: list_views({})
 
   Or custom OQL:
   query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> ORDER BY ret DESC LIMIT 10"})
