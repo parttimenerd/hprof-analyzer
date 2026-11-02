@@ -831,17 +831,43 @@ impl HprofSession {
                     .unwrap_or("GC_ROOT");
 
                 // path is target→root order; reverse to root→target for display
-                let path_json: Vec<serde_json::Value> = path
+                let reversed: Vec<u32> = path.iter().rev().copied().collect();
+                let path_json: Vec<serde_json::Value> = reversed
                     .iter()
-                    .rev()
-                    .map(|&idx| {
+                    .enumerate()
+                    .map(|(pos, &idx)| {
                         let i = idx as usize;
+                        // field_name = field on this node (parent) that points to the next
+                        // hop (child). The last node in the path has no next hop.
+                        let field_name: String = if pos + 1 < reversed.len() {
+                            let child = reversed[pos + 1];
+                            if i + 1 < exp.fwd_offsets.len() {
+                                let start = exp.fwd_offsets[i] as usize;
+                                let end = exp.fwd_offsets[i + 1] as usize;
+                                h.fwd_slice(start, end)
+                                    .ok()
+                                    .and_then(|slice| {
+                                        slice.iter().position(|&t| t == child).and_then(|rel| {
+                                            exp.fwd_field_name_idx
+                                                .as_ref()
+                                                .and_then(|idx_arr| idx_arr.get(start + rel).copied())
+                                                .and_then(|ni| exp.field_name_pool.get(ni as usize))
+                                                .map(|s| s.clone())
+                                        })
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
                         serde_json::json!({
                             "dense_idx": idx,
                             "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
                             "shallow": h.get_shallow(i) as u64,
                             "retained": h.get_retained(i),
-                            "field_name": "",
+                            "field_name": field_name,
                         })
                     })
                     .collect();
@@ -1125,16 +1151,41 @@ impl HprofSession {
                     .map(gc_root_type_label)
                     .unwrap_or("GC_ROOT");
 
-                let path_json: Vec<serde_json::Value> = path
+                let reversed_path: Vec<u32> = path.iter().rev().copied().collect();
+                let path_json: Vec<serde_json::Value> = reversed_path
                     .iter()
-                    .rev()
-                    .map(|&idx| {
+                    .enumerate()
+                    .map(|(pos, &idx)| {
                         let i = idx as usize;
+                        let field_name: String = if pos + 1 < reversed_path.len() {
+                            let child = reversed_path[pos + 1];
+                            if i + 1 < exp.fwd_offsets.len() {
+                                let start = exp.fwd_offsets[i] as usize;
+                                let end = exp.fwd_offsets[i + 1] as usize;
+                                h.fwd_slice(start, end)
+                                    .ok()
+                                    .and_then(|slice| {
+                                        slice.iter().position(|&t| t == child).and_then(|rel| {
+                                            exp.fwd_field_name_idx
+                                                .as_ref()
+                                                .and_then(|idx_arr| idx_arr.get(start + rel).copied())
+                                                .and_then(|ni| exp.field_name_pool.get(ni as usize))
+                                                .map(|s| s.clone())
+                                        })
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
                         serde_json::json!({
                             "dense_idx": idx,
                             "display_class": exp.class_names_by_idx.get(i).cloned().unwrap_or_default(),
                             "shallow": h.get_shallow(i) as u64,
                             "retained": h.get_retained(i),
+                            "field_name": field_name,
                         })
                     })
                     .collect();

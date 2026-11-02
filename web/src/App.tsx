@@ -10219,7 +10219,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                                 denseIdx: step.dense_idx,
                                 displayClass: step.display_class ?? `obj#${step.dense_idx}`,
                                 retained: step.retained ?? 0,
-                                fieldName: undefined,
+                                fieldName: step.field_name || undefined,
                                 isFirst: si === 0,
                                 isCurrent: si === arr.length - 1,
                               }))}
@@ -12482,7 +12482,10 @@ function InspectorGCRootPage({ idx, cls, onNavigate }: {
   const [path, setPath] = React.useState<any[] | null>(null);
   React.useEffect(() => {
     if (!wasm?.gc_root_path) return;
-    try { setPath(JSON.parse(wasm.gc_root_path(idx))); } catch {}
+    try {
+      const p = JSON.parse(wasm.gc_root_path(idx));
+      setPath(Array.isArray(p) ? p : (p?.path ?? null));
+    } catch {}
   }, [idx]);
   return (
     <div className="inspector-page">
