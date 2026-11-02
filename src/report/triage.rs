@@ -510,6 +510,116 @@ fn root_path_owner_hint(s: &crate::report::model::Suspect) -> String {
     format!(" held by `{}` via {} root", holder, root_type)
 }
 
+/// For a class-group suspect, use the imdom pairs to build a one-sentence
+/// "held by X (→ Y)" hint. Returns an empty string when no useful holder is found.
+fn imdom_holder_hint(class_name: &str, r: &Report) -> String {
+    // Find the top imdom pair where dominated_class == class_name.
+    // That gives us the immediate dominator (direct holder).
+    let top_holder = r
+        .dominator_analysis
+        .immediate_dominators
+        .pairs
+        .iter()
+        .filter(|p| p.dominated_class == class_name && p.dominator_class != "GC Root")
+        .max_by_key(|p| p.dominated_retained);
+    let Some(holder_pair) = top_holder else {
+        return String::new();
+    };
+    // Also look one level up: who dominates the holder class?
+    let holder_of_holder = r
+        .dominator_analysis
+        .immediate_dominators
+        .pairs
+        .iter()
+        .filter(|p| {
+            p.dominated_class == holder_pair.dominator_class
+                && p.dominator_class != holder_pair.dominator_class
+                && p.dominator_class != "GC Root"
+        })
+        .max_by_key(|p| p.dominated_retained);
+    match holder_of_holder {
+        Some(p2) => format!(
+            " dominated by `{}` → `{}`",
+            p2.dominator_class, holder_pair.dominator_class
+        ),
+        None => format!(" dominated by `{}`", holder_pair.dominator_class),
+    }
+}
+
+/// Returns the dominant non-JDK value type stored in `HashMap$Node` entries, if
+/// detectable from the histogram alone. The heuristic: a non-stdlib class whose
+/// live instance count is ≥ MAP_VALUE_RATIO of the `HashMap$Node` count most
+/// likely corresponds to one value object per map entry (1-to-1 correspondence).
+/// Returns at most the top match, or `None` when nothing stands out.
+fn map_entry_value_hint(r: &Report) -> Option<String> {
+    const MAP_VALUE_RATIO: f64 = 0.70; // ≥70% of HashMap$Node count ⇒ 1-to-1 candidate
+    const MAP_ENTRY_CLASSES: &[&str] = &[
+        "java.util.HashMap$Node",
+        "java.util.concurrent.ConcurrentHashMap$Node",
+        "java.util.LinkedHashMap$Entry",
+    ];
+    const NON_APP_PREFIXES: &[&str] = &[
+        "java.", "javax.", "jdk.", "sun.", "com.sun.", "scala.", "kotlin.",
+    ];
+
+    // Sum the total map-entry instance count.
+    let entry_total: u64 = r
+        .overview
+        .histogram
+        .iter()
+        .filter(|row| MAP_ENTRY_CLASSES.iter().any(|&e| row.pretty_class == e))
+        .map(|row| row.instances)
+        .sum();
+    if entry_total == 0 {
+        return None;
+    }
+
+    let threshold = (entry_total as f64 * MAP_VALUE_RATIO) as u64;
+
+    // Scan the top histogram entries (sorted by retained desc) for a non-stdlib
+    // class at ~1-to-1 instance count with the map entries.
+    r.overview
+        .histogram
+        .iter()
+        .take(50) // only consider top-50 by retained — value type must be significant
+        .find(|row| {
+            // Exclude arrays and JDK types; we want application-level value classes.
+            if row.pretty_class.ends_with("[]") {
+                return false;
+            }
+            if NON_APP_PREFIXES
+                .iter()
+                .any(|&p| row.pretty_class.starts_with(p))
+            {
+                return false;
+            }
+            // Must also not itself be a map-entry type.
+            if MAP_ENTRY_CLASSES.iter().any(|&e| row.pretty_class == e) {
+                return false;
+            }
+            row.instances >= threshold
+        })
+        .map(|row| row.pretty_class.clone())
+}
+
+/// When `class_name` is a map-entry class and a dominant value type is detectable,
+/// returns a sentence like " Each entry stores a `Foo` value." — ready to append.
+fn map_entry_value_suffix(class_name: &str, r: &Report) -> String {
+    const MAP_ENTRY_CLASSES: &[&str] = &[
+        "java.util.HashMap$Node",
+        "java.util.concurrent.ConcurrentHashMap$Node",
+        "java.util.LinkedHashMap$Entry",
+    ];
+    if !MAP_ENTRY_CLASSES.contains(&class_name) {
+        return String::new();
+    }
+    map_entry_value_hint(r)
+        .map(|vt| {
+            format!(" Each entry stores a `{vt}` value — these are the objects accumulating.")
+        })
+        .unwrap_or_default()
+}
+
 /// Small `TriageSignal` builder for the common linked case.
 fn signal(
     id: &str,
@@ -565,16 +675,18 @@ impl Rule for HeadlineRetainer {
             } else {
                 "a class group"
             };
+            let value_hint = map_entry_value_suffix(&c.class_name, r);
             return Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Critical,
                 "Headline Retainer",
                 format!(
-                    "`{}` ({}) retains {} ({:.1}% of reachable heap).",
+                    "`{}` ({}) retains {} ({:.1}% of reachable heap).{}",
                     c.class_name,
                     kind,
                     format_bytes(c.retained),
                     c.retained_pct,
+                    value_hint,
                 ),
                 Some(("leak-suspects", "Leak Suspects")),
                 &c.class_name,
@@ -586,16 +698,18 @@ impl Rule for HeadlineRetainer {
             } else {
                 "a class group"
             };
+            let value_hint = map_entry_value_suffix(&s.pretty_class, r);
             Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Critical,
                 "Headline Retainer",
                 format!(
-                    "`{}` ({}) retains {} ({:.1}% of reachable heap).",
+                    "`{}` ({}) retains {} ({:.1}% of reachable heap).{}",
                     s.pretty_class,
                     kind,
                     format_bytes(s.retained),
                     pct_of(s.retained, total),
+                    value_hint,
                 ),
                 Some(("leak-suspects", "Leak Suspects")),
                 &s.pretty_class,
@@ -669,7 +783,9 @@ impl Rule for Concentration {
             } else if s.is_single {
                 root_path_owner_hint(s)
             } else {
-                String::new()
+                // For class-group suspects, use the imdom pairs to find who
+                // directly dominates the most instances of this class.
+                imdom_holder_hint(&c.class_name, r)
             };
             // Suppress when there's no owner detail to add: HeadlineRetainer
             // already stated "X retains Y%" with the same class; repeating it
@@ -2912,6 +3028,7 @@ impl Rule for WorkerPoolRetention {
              objects are being pooled, cached, or accumulated without a release path."
         };
 
+        let value_suffix = map_entry_value_suffix(cls, r);
         let per_instance = format_bytes(suspect.retained / suspect.instance_count);
         Some(signal_cls(
             "worker-pool-retention",
@@ -2919,7 +3036,7 @@ impl Rule for WorkerPoolRetention {
             "Worker-Pool Object Retention",
             format!(
                 "{} instances of `{}` together retain {} ({:.1}% of heap), ~{} each —\
-                 no single instance dominates, but the pool as a whole is the leak.{worker_hint} \
+                 no single instance dominates, but the pool as a whole is the leak.{value_suffix}{worker_hint} \
                  Check whether completed tasks are being recycled or whether task-local \
                  data is being cleared on return to the pool.",
                 suspect.instance_count,
@@ -3177,18 +3294,25 @@ impl Rule for MapEntryDominance {
             return None;
         }
 
-        // If any leak suspect's class looks like a Map, name it so users have a
-        // concrete starting point instead of just "check Biggest Collections".
+        // If any leak suspect's class looks like a Map (but is not itself a map-entry
+        // class), name it so users have a concrete starting point.
+        let is_map_entry = |c: &str| {
+            c.ends_with("HashMap$Node")
+                || c.ends_with("ConcurrentHashMap$Node")
+                || c.ends_with("LinkedHashMap$Entry")
+                || c.ends_with("HashMap$Node[]")
+        };
         let suspect_hint = r
             .leaks
             .suspects
             .iter()
             .find(|s| {
                 let c = &s.pretty_class;
-                c.contains("HashMap")
-                    || c.contains("Map")
-                    || c.contains("Cache")
-                    || c.contains("Registry")
+                !is_map_entry(c)
+                    && (c.contains("HashMap")
+                        || c.contains("Map")
+                        || c.contains("Cache")
+                        || c.contains("Registry"))
             })
             .map(|s| {
                 format!(
@@ -3199,6 +3323,103 @@ impl Rule for MapEntryDominance {
             })
             .unwrap_or_default();
 
+        // Use imdom pairs to identify who directly dominates the map-entry objects.
+        // The top pair whose dominated_class is a map-entry type tells us what
+        // class actually holds (is the immediate dominator of) those entries —
+        // this is much more actionable than just "check Biggest Collections".
+        let entry_class_names: &[&str] = &[
+            "HashMap$Node",
+            "ConcurrentHashMap$Node",
+            "LinkedHashMap$Entry",
+        ];
+        let is_entry_class = |name: &str| {
+            entry_class_names
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+        };
+        let imdom_hint = {
+            // Find the top pair (by dominated_retained) where dominated_class is a
+            // map-entry type. This reveals the "holder" without requiring the
+            // holder count to fit within HOLDER_CAP on the BiggestClasses row.
+            let top_holder = r
+                .dominator_analysis
+                .immediate_dominators
+                .pairs
+                .iter()
+                .filter(|p| is_entry_class(&p.dominated_class))
+                .max_by_key(|p| p.dominated_retained);
+            match top_holder {
+                Some(p) if p.dominator_class != "GC Root" => {
+                    // Also look for a second distinct dominator (chain: holder → entry → value)
+                    // by finding the top pair where the dominated_class == top holder class.
+                    let holder_of_holder = r
+                        .dominator_analysis
+                        .immediate_dominators
+                        .pairs
+                        .iter()
+                        .filter(|p2| {
+                            p2.dominated_class == p.dominator_class
+                                && p2.dominator_class != p.dominator_class
+                        })
+                        .max_by_key(|p2| p2.dominated_retained);
+                    match holder_of_holder {
+                        Some(p2) if p2.dominator_class != "GC Root" => format!(
+                            " The immediate dominator chain is `{} → {} → map entries` \
+                             (imdom analysis: `{}` holds {} entries retaining {}, itself \
+                             dominated by `{}`). Follow this chain to find the GC root \
+                             keeping these maps live.",
+                            p2.dominator_class,
+                            p.dominator_class,
+                            p.dominator_class,
+                            fmt_count(p.pair_count),
+                            format_bytes(p.dominated_retained),
+                            p2.dominator_class,
+                        ),
+                        _ => format!(
+                            " Imdom analysis shows `{}` directly dominates {} map-entry \
+                             objects (retaining {}). Use the Dominator Analysis → Ref Edges \
+                             view to trace `{}` up to the GC root.",
+                            p.dominator_class,
+                            fmt_count(p.pair_count),
+                            format_bytes(p.dominated_retained),
+                            p.dominator_class,
+                        ),
+                    }
+                }
+                _ => String::new(),
+            }
+        };
+
+        // Also check what the map-entry VALUES point to (the "value" side of the
+        // key→value pair). Find top pair where dominator_class is a map-entry type
+        // — this reveals the value class being accumulated inside these maps.
+        let value_hint = {
+            let top_value = r
+                .dominator_analysis
+                .immediate_dominators
+                .pairs
+                .iter()
+                .filter(|p| is_entry_class(&p.dominator_class))
+                .max_by_key(|p| p.dominated_retained);
+            match top_value {
+                Some(p) => format!(
+                    " The map entries predominantly hold `{}` as values ({}, retaining {}).",
+                    p.dominated_class,
+                    fmt_count(p.pair_count),
+                    format_bytes(p.dominated_retained),
+                ),
+                // Imdom data is sparse (pairs capped at 20K) — fall back to histogram heuristic.
+                None => map_entry_value_hint(r)
+                    .map(|vt| {
+                        format!(
+                            " The map entries predominantly hold `{vt}` as values \
+                             (histogram: similar instance count to map entries)."
+                        )
+                    })
+                    .unwrap_or_default(),
+            }
+        };
+
         Some(signal(
             "map-entry-dominance",
             TriageSeverity::Warning,
@@ -3207,7 +3428,7 @@ impl Rule for MapEntryDominance {
                 "{} map-entry objects (`HashMap$Node` / `ConcurrentHashMap$Node` / \
                  `LinkedHashMap$Entry`) account for {:.1}% of all {} live objects. \
                  This means the heap is filled with accumulated key–value pairs — the \
-                 maps holding them are not being cleared, evicted, or GC'd. \
+                 maps holding them are not being cleared, evicted, or GC'd.{imdom_hint}{value_hint} \
                  Common causes: a cache without an eviction policy; thread-locals that \
                  accumulate a map entry per processed item and are never cleared; a \
                  batch job that builds in-memory indexes without releasing them between \
@@ -5681,6 +5902,101 @@ mod tests {
             .expect("25% map entries must fire on pct");
         assert_eq!(s.id, "map-entry-dominance");
         assert!(s.detail.contains("25.0%"));
+    }
+
+    #[test]
+    fn map_entry_value_hint_detects_1to1_value_type() {
+        let mut r = base_report();
+        r.overview.total_objects = 700_000_000;
+        // Simulate the sc33bsub pattern: 320M HashMap$Node + 319M SimpleValueResolver.
+        r.overview.histogram = vec![
+            hist_row("java.util.HashMap$Node", 320_000_000, 14_000_000_000),
+            hist_row(
+                "com.example.mvel.SimpleValueResolver",
+                319_000_000,
+                5_000_000_000,
+            ),
+            hist_row("java.util.HashMap$Node[]", 1_700_000, 2_500_000_000),
+            hist_row("java.lang.String", 8_000_000, 200_000_000),
+        ];
+        // The histogram-based heuristic should fire on SimpleValueResolver.
+        let hint = map_entry_value_hint(&r);
+        assert_eq!(
+            hint.as_deref(),
+            Some("com.example.mvel.SimpleValueResolver"),
+            "should detect 1-to-1 value type"
+        );
+
+        // JDK classes must not be returned even if instance-count matches.
+        r.overview.histogram[1].pretty_class = "java.lang.Object".into();
+        assert!(
+            map_entry_value_hint(&r).is_none(),
+            "java.lang.Object must not be returned as value type"
+        );
+
+        // Only 50% of map entry count: below threshold.
+        r.overview.histogram[1].pretty_class = "com.example.Foo".into();
+        r.overview.histogram[1].instances = 160_000_000; // 50% of 320M
+        assert!(
+            map_entry_value_hint(&r).is_none(),
+            "50% ratio must not fire (threshold is 70%)"
+        );
+    }
+
+    #[test]
+    fn map_entry_dominance_names_value_type_from_histogram_fallback() {
+        let mut r = base_report();
+        r.overview.total_objects = 700_000_000;
+        r.overview.histogram = vec![
+            hist_row("java.util.HashMap$Node", 320_000_000, 14_000_000_000),
+            hist_row(
+                "com.example.mvel.SimpleValueResolver",
+                319_000_000,
+                5_000_000_000,
+            ),
+            hist_row("java.lang.String", 8_000_000, 200_000_000),
+        ];
+        // No imdom pairs → falls back to histogram heuristic.
+        let s = MapEntryDominance
+            .eval(&r)
+            .expect("320M map entry objects must fire");
+        assert_eq!(s.id, "map-entry-dominance");
+        assert!(
+            s.detail.contains("SimpleValueResolver"),
+            "detail should name the value type via histogram fallback: {}",
+            s.detail
+        );
+    }
+
+    #[test]
+    fn headline_retainer_names_value_type_for_map_entry_suspect() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 21_000_000_000;
+        r.overview.histogram = vec![
+            hist_row("java.util.HashMap$Node", 320_000_000, 14_000_000_000),
+            hist_row(
+                "com.example.mvel.SimpleValueResolver",
+                319_000_000,
+                5_000_000_000,
+            ),
+            hist_row("java.lang.String", 8_000_000, 200_000_000),
+        ];
+        r.leaks.suspects = vec![crate::report::model::Suspect {
+            is_single: false,
+            pretty_class: "java.util.HashMap$Node".into(),
+            instance_count: 320_000_000,
+            retained: 14_000_000_000,
+            ..Default::default()
+        }];
+        let s = HeadlineRetainer
+            .eval(&r)
+            .expect("must fire on class-group suspect");
+        assert_eq!(s.id, "headline-retainer");
+        assert!(
+            s.detail.contains("SimpleValueResolver"),
+            "headline-retainer should name value type: {}",
+            s.detail
+        );
     }
 
     #[test]
