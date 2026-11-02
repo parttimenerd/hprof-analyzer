@@ -1867,7 +1867,12 @@ impl Rule for ConnectionLeak {
             TriageSeverity::Warning,
             "Connection / Socket Leak",
             format!(
-                "{} live `{}` objects — exceeds any reasonable pool or connection limit. Wrap acquisitions in try-with-resources, or enable connection-pool leak detection (e.g. HikariCP `leakDetectionThreshold`, c3p0 `unreturnedConnectionTimeout`).",
+                "{} live `{}` objects — exceeds any reasonable pool or connection limit. \
+                 Wrap acquisitions in try-with-resources, or enable connection-pool leak \
+                 detection (e.g. HikariCP `leakDetectionThreshold`, c3p0 \
+                 `unreturnedConnectionTimeout`). \
+                 To see all resource handle counts: get_report({{section:\"resources\"}}) \
+                 or query({{oql:\"unclosed-resources\"}}).",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
@@ -4258,7 +4263,10 @@ impl Rule for ThreadLocalSpreadLeak {
                  `remove()` is never called, leaving the value alive as long as the thread \
                  lives in the pool. Fix: call `threadLocal.remove()` in a `finally` block at \
                  the end of every task, or use `ThreadLocal.withInitial` + explicit cleanup \
-                 in a pool decorator (e.g. Spring's `TaskDecorator`).",
+                 in a pool decorator (e.g. Spring's `TaskDecorator`). \
+                 To identify the value types: get_report({{section:\"thread_locals\"}}) (requires \
+                 --find-duplicates) or query({{oql:\"retained-threads\"}}) to rank threads by \
+                 retained size.",
                 n,
                 example_name,
                 format_bytes(TL_POOL_SPREAD_PER_THREAD_FLOOR),
@@ -4308,7 +4316,9 @@ impl Rule for UnclosedResourceLeak {
                  Fix: wrap all acquisitions in try-with-resources (`try (var x = open(...)) {{...}}`), \
                  or enable leak detection in your connection pool or HTTP client. \
                  On Java 9+ you can run with `-Djdk.tracePinnedThreads=full` to log \
-                 pinning in virtual-thread contexts.",
+                 pinning in virtual-thread contexts. \
+                 To see all resource-handle counts: get_report({{section:\"resources\"}}) \
+                 or query({{oql:\"unclosed-resources\"}}).",
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
