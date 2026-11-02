@@ -346,6 +346,10 @@ function Nav({ report }: { report: Report }) {
   if (report.collection_attribution) addData("container-attribution", "Container Attribution");
   if (report.fields_by_size) addData("fields-by-retained-size", "Fields by Size");
   if (report.top_retainers?.length) addData("top-retainers", "Top Retainers");
+  const collRetainedRows = report.overview.histogram.filter(h => !h.pretty_class.endsWith("[]") && COLL_NAMES.some(n => h.pretty_class.includes(n)));
+  if (collRetainedRows.length > 0) addData("collection-retained-heap", "Collection Retained Heap");
+  const resourceRows = report.overview.histogram.filter(h => { const c = h.pretty_class; return !c.endsWith("[]") && !c.includes("Weak") && !c.includes("Reference") && !c.includes("Buffered") && RESOURCE_NAMES.some(n => c.includes(n)); });
+  if (resourceRows.length > 0) addData("resource-handles", "Resource Handles");
   if (report.biggest_collections) addData("biggest-collections", "Biggest Collections");
   if (report.collection_contents) addData("collection-contents-by-type", "Collection Contents");
   addData("references", "References");
@@ -4525,6 +4529,68 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
         {hasRetained && <span style={{ width: useKB ? "130px" : "110px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalRetained)}>{fmtB(totalRetained)}</span></span>}
       </div>
     </>
+  );
+}
+
+// ── Collection Retained Heap ──────────────────────────────────────────────────
+// Collection classes ranked by retained heap with retained/shallow ratio.
+// Mirrors render_md.rs::render_static_collections.
+const COLL_NAMES = ["ArrayList","HashMap","LinkedList","ConcurrentHashMap","CopyOnWriteArrayList","HashSet","LinkedHashSet","TreeMap","TreeSet","ArrayDeque","PriorityQueue","LinkedHashMap","Hashtable","Vector"];
+function CollectionRetainedHeapSection({ histogram }: { histogram: HistRow[] }) {
+  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const rows = histogram
+    .filter(h => !h.pretty_class.endsWith("[]") && COLL_NAMES.some(n => h.pretty_class.includes(n)))
+    .sort((a, b) => b.retained - a.retained);
+  if (rows.length === 0) return null;
+  type Row = HistRow & { ratio: number };
+  const data: Row[] = rows.map(h => ({ ...h, ratio: h.shallow > 0 ? h.retained / h.shallow : 0 }));
+  const cols: TableColumn<Row>[] = [
+    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
+    { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
+    { id: "ratio", name: "Ratio", right: true, width: "80px", cell: (r) => r.ratio >= 10 ? <strong style={{ color: "var(--warn, #c84)" }}>{r.ratio.toFixed(1)}×</strong> : <span>{r.ratio.toFixed(1)}×</span>, selector: (r) => r.ratio, sortable: true },
+  ];
+  return (
+    <section id="collection-retained-heap">
+      <h2>Collection Retained Heap</h2>
+      <p className="subtitle">
+        Collection classes ranked by retained heap. <strong>Ratio</strong> = retained ÷ shallow: a ratio <strong style={{ color: "var(--warn, #c84)" }}>≫ 1</strong> means
+        the instances collectively hold large object graphs alive — a sign of accumulation. Check Leak Suspects or the Dominator Tree for the largest instances.
+      </p>
+      <StdTable columns={cols} data={data} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" defaultSortAsc={false} />
+    </section>
+  );
+}
+
+// ── Resource Handles ──────────────────────────────────────────────────────────
+// File, stream, and JDBC resource handle classes ranked by instance count.
+// Mirrors render_md.rs::render_resource_handles.
+const RESOURCE_NAMES = ["FileInputStream","FileOutputStream","FileDescriptor","FileChannel","Statement","ResultSet","Connection","Socket","java.io.InputStream","java.io.OutputStream"];
+function ResourceHandlesSection({ histogram }: { histogram: HistRow[] }) {
+  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const rows = histogram
+    .filter(h => {
+      const c = h.pretty_class;
+      return !c.endsWith("[]") && !c.includes("Weak") && !c.includes("Reference") && !c.includes("Buffered") && RESOURCE_NAMES.some(n => c.includes(n));
+    })
+    .sort((a, b) => b.instances - a.instances);
+  if (rows.length === 0) return null;
+  const cols: TableColumn<HistRow>[] = [
+    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
+    { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
+  ];
+  return (
+    <section id="resource-handles">
+      <h2>Resource Handles</h2>
+      <p className="subtitle">
+        File, stream, and JDBC resource handle classes ranked by instance count. High counts suggest resources acquired but never closed.
+        Fix: wrap acquisitions in <code>try-with-resources</code>. See Memory Triage for <code>connection-leak</code> and <code>unclosed-resource-leak</code> signals.
+      </p>
+      <StdTable columns={cols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="instances" defaultSortAsc={false} />
+    </section>
   );
 }
 
@@ -12571,6 +12637,8 @@ export default function App({ report }: { report: Report }) {
       {report.top_retainers && report.top_retainers.length > 0 && (
         <TopRetainersSection rows={report.top_retainers} />
       )}
+      <CollectionRetainedHeapSection histogram={report.overview.histogram} />
+      <ResourceHandlesSection histogram={report.overview.histogram} />
       {report.biggest_collections && <BiggestCollectionsSection data={report.biggest_collections} />}
       {report.collection_contents && <CollectionContentsSection data={report.collection_contents} />}
       <ReferencesSection data={report.references} />
