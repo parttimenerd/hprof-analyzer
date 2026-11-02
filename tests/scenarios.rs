@@ -534,6 +534,62 @@ fn check_linked_list_chain(report: &Report) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 18: sankey_imdom_chain — ImmDomPair two-hop holder chain
+//   Reproducer for "Who Holds This Class?" Sankey: verifies that the
+//   immediate-dominator pairs correctly populate the intermediate class
+//   (Substatement) as a holder of TargetClass, not just the top-level
+//   GC-root container.
+// ---------------------------------------------------------------------------
+
+fn build_sankey_imdom_chain() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_sankey_imdom_chain(&mut b, 50);
+    b.build()
+}
+
+fn check_sankey_imdom_chain(report: &Report) {
+    let pairs = &report.dominator_analysis.immediate_dominators.pairs;
+
+    assert!(
+        !pairs.is_empty(),
+        "ImmDomPairs must be non-empty for the sankey_imdom_chain scenario"
+    );
+
+    // The (Substatement → TargetClass) pair must exist: Substatement is the
+    // *immediate* dominator of every TargetClass object in this dump.
+    let sub_to_target = pairs.iter().find(|p| {
+        p.dominator_class.contains("Substatement") && p.dominated_class.contains("TargetClass")
+    });
+    assert!(
+        sub_to_target.is_some(),
+        "Expected ImmDomPair (Substatement → TargetClass) to exist.\n\
+         Sankey 'Who Holds TargetClass?' left-side must show Substatement.\n\
+         Actual pairs: {:?}",
+        pairs
+            .iter()
+            .take(10)
+            .map(|p| (&p.dominator_class, &p.dominated_class))
+            .collect::<Vec<_>>()
+    );
+
+    // The (Container → Substatement) pair must also exist.
+    let container_to_sub = pairs.iter().find(|p| {
+        p.dominator_class.contains("Container") && p.dominated_class.contains("Substatement")
+    });
+    assert!(
+        container_to_sub.is_some(),
+        "Expected ImmDomPair (Container → Substatement) to exist.\n\
+         Sankey 'Who Holds Substatement?' left-side must show Container.\n\
+         Actual pairs: {:?}",
+        pairs
+            .iter()
+            .take(10)
+            .map(|p| (&p.dominator_class, &p.dominated_class))
+            .collect::<Vec<_>>()
+    );
+}
+
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
 }
@@ -641,6 +697,12 @@ const SCENARIOS: &[Scenario] = &[
         build: build_linked_list_chain,
         check: check_linked_list_chain,
     },
+    Scenario {
+        name: "sankey_imdom_chain",
+        opts: default_opts,
+        build: build_sankey_imdom_chain,
+        check: check_sankey_imdom_chain,
+    },
 ];
 
 #[test]
@@ -733,6 +795,11 @@ fn scenario_linked_list_chain() {
     run_scenario(&SCENARIOS[16]);
 }
 
+#[test]
+fn scenario_sankey_imdom_chain() {
+    run_scenario(&SCENARIOS[17]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -741,7 +808,7 @@ fn scenario_linked_list_chain() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        17,
+        18,
         "update this test when adding scenarios"
     );
 }

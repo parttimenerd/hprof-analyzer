@@ -1037,6 +1037,70 @@ pub fn build_linked_list_chain(b: &mut HeapBuilder) {
     b.root_sticky_class(holder);
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 18: sankey_imdom_chain — ImmDomPair two-hop chain reproduced
+// ---------------------------------------------------------------------------
+
+/// Build a three-level ownership chain for the "Who Holds This Class?" Sankey
+/// reproducer:
+///
+///   Container (static root) --field--> Substatement --field--> TargetClass
+///
+/// Each Container holds exactly one Substatement; each Substatement holds
+/// exactly one TargetClass. With N=50 triples, the report's ImmDomPair table
+/// must contain:
+///   - (Substatement → TargetClass): Substatement is the *immediate* dominator
+///     of all TargetClass objects.
+///   - (Container → Substatement): Container is the immediate dominator of all
+///     Substatement objects.
+///
+/// This verifies that the Sankey's "expand left" step — filtering pairs by
+/// `dominated_class === target` — will find the correct intermediate class
+/// (Substatement) as a holder of TargetClass when the dominator relationship
+/// is genuinely direct.
+pub fn build_sankey_imdom_chain(b: &mut HeapBuilder, n: usize) {
+    // TargetClass: the leaf class (what the Sankey is centred on).
+    let target_class = b.class("scenarios/TargetClass", &[("v", T_INT)]);
+    // Substatement: intermediate holder with one field pointing at a TargetClass.
+    let sub_class = b.class("scenarios/Substatement", &[("target", T_OBJECT)]);
+    // Container: top-level holder — holds a Substatement + next Container
+    // (forms a singly-linked list so all N containers are reachable from
+    // the static root without needing an explicit array record).
+    let container_class = b.class(
+        "scenarios/Container",
+        &[("sub", T_OBJECT), ("next", T_OBJECT)],
+    );
+
+    // Build leaf-to-root: create leaves first, then link containers back.
+    let mut prev_container: u64 = 0;
+    let mut head_container: u64 = 0;
+    for i in 0..n {
+        // Leaf
+        let mut d = Vec::new();
+        int_field(&mut d, i as i32);
+        let target_id = b.instance(target_class, &d);
+
+        // Substatement → TargetClass
+        let mut d = Vec::new();
+        obj_field(&mut d, target_id);
+        let sub_id = b.instance(sub_class, &d);
+
+        // Container → Substatement, Container.next → previous container
+        let mut d = Vec::new();
+        obj_field(&mut d, sub_id);
+        obj_field(&mut d, prev_container);
+        let container_id = b.instance(container_class, &d);
+
+        prev_container = container_id;
+        head_container = container_id;
+    }
+
+    // Anchor the head (last-created, with the longest .next chain) via a
+    // static field so all containers — and hence all Substatements and
+    // TargetClass objects — are reachable from the GC root.
+    b.class_with_static_root("scenarios/ChainRoot", "root", head_container, &[]);
+}
+
 /// Build a heap consisting almost entirely of zero-filled `byte[]` arrays large
 /// enough to clear CONSTARR_FLOOR (8 MiB total shallow). The
 /// `constant-value-arrays` rule fires when constant-valued primitive arrays
