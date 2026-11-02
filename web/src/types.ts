@@ -358,6 +358,7 @@ export interface HolderRow {
   count: number;
   retained: number;
   level2?: HolderRow[];
+  via_class?: string;
 }
 
 export interface ClassRow {
@@ -500,6 +501,10 @@ export interface ImmDomPair {
 export interface ImmediateDominators {
   rows: ImmediateDominatorRow[];
   pairs?: ImmDomPair[];
+  /** True when pairs was truncated to the 20K cap. */
+  pairs_truncated?: boolean;
+  /** Total distinct pairs before truncation (0 when not truncated). */
+  pairs_total_count?: number;
 }
 
 // Always-on dominator-tree analysis: Big Drops + Immediate Dominators.

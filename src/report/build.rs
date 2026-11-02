@@ -5133,6 +5133,7 @@ fn build_top_consumers(
                             count: cnt,
                             retained: ret,
                             level2: vec![],
+                            via_class: None,
                         })
                     } else {
                         None
@@ -5149,22 +5150,71 @@ fn build_top_consumers(
                 .collect();
             v.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
             if let Some(row) = biggest_classes_holders.get_mut(rank) {
+                // Build the full (uncapped) level-1 list so the two-hop pass
+                // below can reference all direct holders when bubbling up.
+                let level1_hcis: std::collections::HashSet<usize> =
+                    v.iter().map(|&(hci, ..)| hci).collect();
+
                 *row = v
-                    .into_iter()
-                    .take(HOLDER_CAP)
-                    .filter_map(|(hci, cnt, ret)| {
+                    .iter()
+                    .filter_map(|&(hci, cnt, ret)| {
                         if hci < g.class_names.len() {
                             Some(crate::report::HolderRow {
                                 holder_class: pretty_class_name(&g.class_names[hci]),
                                 count: cnt,
                                 retained: ret,
                                 level2: build_level2(hci),
+                                via_class: None,
                             })
                         } else {
                             None
                         }
                     })
                     .collect();
+
+                // Pass 2.5: bubble up level-2 holders that are NOT already a
+                // direct (level-1) holder. This surfaces two-hop upstream owners
+                // (e.g. `HashMap` for a class dominated by `HashMap$Node[]`)
+                // that would otherwise be invisible in the holder breakdown.
+                // two_hop[hci2] = (total_count, total_retained, best_via_hci, best_via_retained)
+                let mut two_hop: std::collections::HashMap<usize, (u64, u64, usize, u64)> =
+                    std::collections::HashMap::new();
+                for &(hci, ..) in &v {
+                    if hci >= class_count {
+                        continue;
+                    }
+                    for (&hci2, &(cnt2, ret2)) in &level2_accum[hci] {
+                        if level1_hcis.contains(&hci2) {
+                            continue; // already a direct holder
+                        }
+                        let e = two_hop.entry(hci2).or_insert((0, 0, hci, 0));
+                        e.0 += cnt2;
+                        e.1 += ret2;
+                        if ret2 > e.3 {
+                            e.2 = hci;
+                            e.3 = ret2;
+                        }
+                    }
+                }
+                for (hci2, (cnt2, ret2, via_hci, _)) in two_hop {
+                    if hci2 < g.class_names.len() && via_hci < g.class_names.len() {
+                        row.push(crate::report::HolderRow {
+                            holder_class: pretty_class_name(&g.class_names[hci2]),
+                            count: cnt2,
+                            retained: ret2,
+                            level2: vec![],
+                            via_class: Some(pretty_class_name(&g.class_names[via_hci])),
+                        });
+                    }
+                }
+
+                row.sort_unstable_by(|a, b| {
+                    b.retained
+                        .cmp(&a.retained)
+                        .then(a.holder_class.cmp(&b.holder_class))
+                });
+                row.truncate(HOLDER_CAP);
+
                 // BUG-2 fix: append the synthetic "(GC Root)" holder (if this
                 // class has any directly-GC-root-held instances), then
                 // re-sort by retained desc and re-cap so it lands in its
@@ -5176,6 +5226,7 @@ fn build_top_consumers(
                         count: gc_cnt,
                         retained: gc_ret,
                         level2: vec![],
+                        via_class: None,
                     });
                     row.sort_unstable_by(|a, b| {
                         b.retained

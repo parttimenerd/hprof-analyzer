@@ -3224,8 +3224,8 @@ function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow
               <code style={{ fontWeight: 600 }}>{cls.pretty_class}</code>
               <div style={{ paddingLeft: "1.2rem" }}>
                 {(cls.holders ?? []).map(h => (
-                  <div key={h.holder_class} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline" }}>
-                    <span>↳ <code>{h.holder_class}</code></span>
+                  <div key={h.holder_class + (h.via_class ?? "")} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline" }}>
+                    <span>↳ <code>{h.holder_class}</code>{h.via_class && <span className="muted" style={{ fontSize: "0.8rem" }}> via <code>{h.via_class}</code></span>}</span>
                     <span className="muted">({fmtCount(h.count)}, {fmtB(h.retained)})</span>
                     {h.level2 && h.level2.length > 0 && (
                       <span className="muted" style={{ fontSize: "0.8rem" }}>
@@ -6192,6 +6192,8 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
   const idoms = data?.immediate_dominators?.rows ?? [];
   const pairs = data?.immediate_dominators?.pairs ?? [];
+  const pairsTruncated = data?.immediate_dominators?.pairs_truncated ?? false;
+  const pairsTotalCount = data?.immediate_dominators?.pairs_total_count ?? 0;
   const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap" | "flame" | "ref">("tables");
 
   // Navigator state lifted so tables can drive it.
@@ -6346,6 +6348,11 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
           <p className="subtitle">
             Select a class — <strong>left</strong> shows its <em>immediate dominators</em> (the classes whose instances directly gate its memory in the dominator tree); <strong>right</strong> shows what it dominates (making it unreachable reclaims all that memory). A wide right side means this class retains a large portion of the heap. Click any node or row to refocus.{typeRefGraph?.length ? <> For raw field-level references (who holds a reference to this class, not who dominates it), switch to the <button className="trg-link-btn" onClick={() => setDomView("ref")}>🔗 Ref Edges</button> view.</> : <em> Note: intermediate reference-chain classes are shown in the Inspector's "GC Root Path" panel.</em>}
           </p>
+          {pairsTruncated && (
+            <p className="subtitle" style={{ background: "var(--warn-bg, #fff3cd)", border: "1px solid var(--warn-border, #ffc107)", borderRadius: 4, padding: "0.4rem 0.7rem", marginBottom: "0.5rem" }}>
+              ⚠️ <strong>Sankey is incomplete</strong> — this heap has {pairsTotalCount.toLocaleString()} distinct (dominator, dominated) class pairs; only the top 20,000 by retained bytes are shown. Classes with many instances each holding little memory may have no visible dominator in this view. Use the OOM Triage → Map Entry Dominance signal and the Ref Edges view for the full picture.
+            </p>
+          )}
           <WhoHoldsSankey
             pairs={pairs}
             initialTarget={effectiveNavTarget}

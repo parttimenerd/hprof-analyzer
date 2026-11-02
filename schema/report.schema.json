@@ -2209,6 +2209,13 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "via_class": {
+          "description": "When this is a synthesised two-hop holder (dominator of a direct\ndominator), names the intermediate class. For example, if the chain is\n`HashMap → HashMap$Node[] → HashMap$Node`, the `HashMap` HolderRow for\n`HashMap$Node` has `via_class = Some(\"HashMap$Node[]\")`. Additive.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

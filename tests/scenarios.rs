@@ -535,7 +535,62 @@ fn check_linked_list_chain(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 18: sankey_imdom_chain — ImmDomPair two-hop holder chain
+// Scenario 19: two_hop_holders — two-hop holder bubble-up in biggest_classes
+// ---------------------------------------------------------------------------
+
+fn build_two_hop_holders() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    // Reuse the sankey chain: Container → Substatement → TargetClass.
+    // TargetClass's direct holder is Substatement; Container is the two-hop holder.
+    heap_builder::build_sankey_imdom_chain(&mut b, 20);
+    b.build()
+}
+
+fn check_two_hop_holders(report: &Report) {
+    let target_row = report
+        .top
+        .biggest_classes
+        .iter()
+        .find(|r| r.pretty_class.contains("TargetClass"))
+        .expect("TargetClass must appear in biggest_classes");
+
+    assert!(
+        !target_row.holders.is_empty(),
+        "TargetClass must have at least one holder entry"
+    );
+
+    // The direct (level-1) holder is Substatement.
+    let direct = target_row
+        .holders
+        .iter()
+        .find(|h| h.holder_class.contains("Substatement") && h.via_class.is_none());
+    assert!(
+        direct.is_some(),
+        "Substatement must appear as a direct holder of TargetClass.\nActual holders: {:#?}",
+        target_row.holders
+    );
+
+    // The two-hop holder: Container must appear with via_class mentioning Substatement.
+    let two_hop = target_row
+        .holders
+        .iter()
+        .find(|h| h.holder_class.contains("Container") && h.via_class.is_some());
+    assert!(
+        two_hop.is_some(),
+        "Container must appear as a two-hop holder of TargetClass (via Substatement).\nActual holders: {:#?}",
+        target_row.holders
+    );
+    let two_hop = two_hop.unwrap();
+    assert!(
+        two_hop
+            .via_class
+            .as_deref()
+            .is_some_and(|v| v.contains("Substatement")),
+        "via_class for Container holder must mention Substatement. Got: {:?}",
+        two_hop.via_class
+    );
+}
+
 //   Reproducer for "Who Holds This Class?" Sankey: verifies that the
 //   immediate-dominator pairs correctly populate the intermediate class
 //   (Substatement) as a holder of TargetClass, not just the top-level
@@ -703,6 +758,12 @@ const SCENARIOS: &[Scenario] = &[
         build: build_sankey_imdom_chain,
         check: check_sankey_imdom_chain,
     },
+    Scenario {
+        name: "two_hop_holders",
+        opts: default_opts,
+        build: build_two_hop_holders,
+        check: check_two_hop_holders,
+    },
 ];
 
 #[test]
@@ -800,6 +861,11 @@ fn scenario_sankey_imdom_chain() {
     run_scenario(&SCENARIOS[17]);
 }
 
+#[test]
+fn scenario_two_hop_holders() {
+    run_scenario(&SCENARIOS[18]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -808,7 +874,7 @@ fn scenario_sankey_imdom_chain() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        18,
+        19,
         "update this test when adding scenarios"
     );
 }

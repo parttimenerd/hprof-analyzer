@@ -880,6 +880,12 @@ pub struct HolderRow {
     /// holder is a GC root or level-2 data was not available.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub level2: Vec<HolderRow>,
+    /// When this is a synthesised two-hop holder (dominator of a direct
+    /// dominator), names the intermediate class. For example, if the chain is
+    /// `HashMap → HashMap$Node[] → HashMap$Node`, the `HashMap` HolderRow for
+    /// `HashMap$Node` has `via_class = Some("HashMap$Node[]")`. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via_class: Option<String>,
 }
 
 /// One row of "Biggest Classes".

@@ -1118,3 +1118,28 @@ pub fn build_constant_value_arrays(b: &mut HeapBuilder) {
     }
     b.class_with_static_root("ConstArrayHolder", "arrays", first_id, &[]);
 }
+
+/// Build a heap that exercises two-hop holder detection in `build_top_consumers`.
+///
+/// Chain: `Container → Leaf[]` (obj array) → `Leaf`
+///
+/// `Leaf`'s direct (level-1) holder is the `Leaf[]` array class.
+/// `Container` holds the array, so it is the two-hop holder of `Leaf` and
+/// must appear in `biggest_classes[Leaf].holders` with `via_class = "Leaf[]"`.
+pub fn build_two_hop_holders(b: &mut HeapBuilder, n: usize) {
+    let leaf_class = b.class("scenarios/Leaf", &[("v", T_INT)]);
+    let container_class = b.class("scenarios/Container", &[("arr", T_OBJECT)]);
+
+    // n Leaf instances, all held in one Container's array
+    let mut leaf_ids: Vec<u64> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut d = Vec::new();
+        int_field(&mut d, i as i32);
+        leaf_ids.push(b.instance(leaf_class, &d));
+    }
+    let arr_id = b.obj_array(leaf_class, &leaf_ids);
+    let mut d = Vec::new();
+    obj_field(&mut d, arr_id);
+    let container_id = b.instance(container_class, &d);
+    b.class_with_static_root("scenarios/TwoHopRoot", "root", container_id, &[]);
+}
