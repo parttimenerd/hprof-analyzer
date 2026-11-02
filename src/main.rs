@@ -2509,6 +2509,15 @@ fn analyze_to_report_inner(
         )?;
     }
     t_pipe!("unreachable_retained done");
+
+    // Mirror of the early-drop in run(): for large dumps taking the rescan-inbound
+    // path that have no features needing the fwd CSR before inbound dispatch, drop
+    // it now to remove ~7-8 GB from the compress_parent_pre peak window.
+    if !opts.obj_graph && !opts.field_stats && inbound.total_inb > 1_000_000_000 {
+        drop(std::mem::take(&mut g.fwd_targets));
+        drop(std::mem::take(&mut g.fwd_offsets));
+    }
+
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
