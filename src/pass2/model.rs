@@ -5,8 +5,38 @@
 use std::{
     cmp::Reverse,
     collections::HashMap,
+    hash::BuildHasherDefault,
     io::{self, ErrorKind},
 };
+
+/// Fast identity-like hasher for u32/u64 integer keys.
+/// Fibonacci-multiplicative hash — avoids SipHash overhead in hot loops.
+#[derive(Default)]
+struct FastIntHasher(u64);
+impl std::hash::Hasher for FastIntHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut v = 0u64;
+        for &b in bytes {
+            v = v.wrapping_shl(8) | b as u64;
+        }
+        self.0 = v.wrapping_mul(0x9e3779b97f4a7c15);
+    }
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0 = (i as u64).wrapping_mul(0x9e3779b97f4a7c15);
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i.wrapping_mul(0x9e3779b97f4a7c15);
+    }
+}
+type FastU32Map<V> = HashMap<u32, V, BuildHasherDefault<FastIntHasher>>;
+type FastU64Map<V> = HashMap<u64, V, BuildHasherDefault<FastIntHasher>>;
 
 use crate::{reader::HprofReader, types::tags, vbyte};
 
@@ -616,9 +646,9 @@ pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairField
         return (HashMap::new(), HashMap::new());
     }
     let has_names = g.fwd_field_name_idx.is_some() && g.field_name_pool.is_some();
-    let mut pair_map: HashMap<(u32, u32), u64> = HashMap::new();
-    // Per-pair field-name tally: (src_ci, dst_ci) → HashMap<name_idx, count>
-    let mut field_tally: HashMap<(u32, u32), HashMap<u16, u32>> = HashMap::new();
+    let mut pair_map: FastU64Map<u64> = FastU64Map::default();
+    // Per-pair field-name tally: packed u64 key → HashMap<name_idx, count>
+    let mut field_tally: FastU64Map<HashMap<u16, u32>> = FastU64Map::default();
 
     for src_idx in 0..n {
         let start = g.fwd_offsets[src_idx] as usize;
@@ -636,7 +666,8 @@ pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairField
                 continue;
             }
             let dst_ci = g.class_idx[dst_idx];
-            *pair_map.entry((src_ci, dst_ci)).or_insert(0) += 1;
+            let pair_key = (src_ci as u64) << 32 | dst_ci as u64;
+            *pair_map.entry(pair_key).or_insert(0) += 1;
             if has_names {
                 if let Some(name_idx) = g
                     .fwd_field_name_idx
@@ -646,7 +677,7 @@ pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairField
                 {
                     if name_idx != 0 {
                         *field_tally
-                            .entry((src_ci, dst_ci))
+                            .entry(pair_key)
                             .or_default()
                             .entry(name_idx)
                             .or_insert(0) += 1;
@@ -656,11 +687,12 @@ pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairField
         }
     }
 
-    // Convert field tally to sorted top-3 names
+    // Convert field tally to sorted top-3 names, unpack u64 keys
     let name_pool = g.field_name_pool.as_deref().unwrap_or(&[]);
     let pair_fields: std::collections::HashMap<(u32, u32), Vec<(String, u32)>> = field_tally
         .into_iter()
         .map(|(key, counts)| {
+            let unpacked = ((key >> 32) as u32, key as u32);
             let mut sorted: Vec<(String, u32)> = counts
                 .into_iter()
                 .filter_map(|(idx, cnt)| {
@@ -673,12 +705,17 @@ pub fn capture_type_ref_graph(g: &Graph) -> (HashMap<(u32, u32), u64>, PairField
                 .collect();
             sorted.sort_unstable_by_key(|a: &(String, u32)| Reverse(a.1));
             sorted.truncate(3);
-            (key, sorted)
+            (unpacked, sorted)
         })
         .filter(|(_, v)| !v.is_empty())
         .collect();
 
-    (pair_map, pair_fields)
+    let pair_map_out: HashMap<(u32, u32), u64> = pair_map
+        .into_iter()
+        .map(|(k, v)| (((k >> 32) as u32, k as u32), v))
+        .collect();
+
+    (pair_map_out, pair_fields)
 }
 
 /// Fused capture of the type-reference graph AND sparse per-object edge snapshot
@@ -708,8 +745,10 @@ pub fn capture_type_ref_and_obj_graph(
 
     // ── Type-ref accumulators ──────────────────────────────────────────────────
     let has_names = g.fwd_field_name_idx.is_some() && g.field_name_pool.is_some();
-    let mut pair_map: HashMap<(u32, u32), u64> = HashMap::new();
-    let mut field_tally: HashMap<(u32, u32), HashMap<u16, u32>> = HashMap::new();
+    // Use u64-packed key (src_ci<<32|dst_ci) + fast hasher to avoid SipHash
+    // overhead in the hot O(n×edges) loop — called for every edge in the heap.
+    let mut pair_map: FastU64Map<u64> = FastU64Map::default();
+    let mut field_tally: FastU64Map<HashMap<u16, u32>> = FastU64Map::default();
 
     // ── ObjGraph capture setup ─────────────────────────────────────────────────
     let mut cap = ObjGraphCapture::empty();
@@ -796,8 +835,7 @@ pub fn capture_type_ref_and_obj_graph(
     // One O(n × edges) scan over fwd-CSR. For each edge src→dst:
     //   • accumulate (src_ci, dst_ci) count for type-ref graph
     //   • if dst is captured, append src to inbound_acc[dst]
-    let mut inbound_acc: std::collections::HashMap<u32, Vec<(u32, u16)>> =
-        std::collections::HashMap::new();
+    let mut inbound_acc: FastU32Map<Vec<(u32, u16)>> = FastU32Map::default();
     for src_idx in 0..n {
         let start = g.fwd_offsets[src_idx] as usize;
         let end = g.fwd_offsets[src_idx + 1] as usize;
@@ -814,12 +852,13 @@ pub fn capture_type_ref_and_obj_graph(
             // — type-ref —
             if dst < class_idx.len() {
                 let dst_ci = class_idx[dst];
-                *pair_map.entry((src_ci, dst_ci)).or_insert(0) += 1;
+                let pair_key = (src_ci as u64) << 32 | dst_ci as u64;
+                *pair_map.entry(pair_key).or_insert(0) += 1;
                 if has_names {
                     if let Some(name_idx) = fwd_names.and_then(|v| v.get(pos)).copied() {
                         if name_idx != 0 {
                             *field_tally
-                                .entry((src_ci, dst_ci))
+                                .entry(pair_key)
                                 .or_default()
                                 .entry(name_idx)
                                 .or_insert(0) += 1;
@@ -854,6 +893,7 @@ pub fn capture_type_ref_and_obj_graph(
     let pair_fields: PairFieldTally = field_tally
         .into_iter()
         .map(|(key, counts)| {
+            let unpacked = ((key >> 32) as u32, key as u32);
             let mut sorted: Vec<(String, u32)> = counts
                 .into_iter()
                 .filter_map(|(idx, cnt)| {
@@ -866,12 +906,18 @@ pub fn capture_type_ref_and_obj_graph(
                 .collect();
             sorted.sort_unstable_by_key(|a: &(String, u32)| Reverse(a.1));
             sorted.truncate(3);
-            (key, sorted)
+            (unpacked, sorted)
         })
         .filter(|(_, v)| !v.is_empty())
         .collect();
 
-    (pair_map, pair_fields, cap)
+    // Unpack u64 keys back to (u32, u32) for the public interface.
+    let pair_map_out: HashMap<(u32, u32), u64> = pair_map
+        .into_iter()
+        .map(|(k, v)| (((k >> 32) as u32, k as u32), v))
+        .collect();
+
+    (pair_map_out, pair_fields, cap)
 }
 
 /// Sparse per-object edge snapshot for the click-through view.

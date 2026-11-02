@@ -3378,7 +3378,9 @@ impl Rule for MapEntryDominance {
                         _ => format!(
                             " Imdom analysis shows `{}` directly dominates {} map-entry \
                              objects (retaining {}). Use the Dominator Analysis → Ref Edges \
-                             view to trace `{}` up to the GC root.",
+                             view to trace `{}` up to the GC root \
+                             (if the Ref Edges tab is absent, regenerate with \
+                             `hprof-analyzer heap report --obj-graph`).",
                             p.dominator_class,
                             fmt_count(p.pair_count),
                             format_bytes(p.dominated_retained),
