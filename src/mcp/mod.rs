@@ -220,6 +220,27 @@ pub struct FindIncomingReferencesParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FindIncomingRefsByClassParams {
+    /// Class name to aggregate incoming references for.
+    /// Substring match: "String" matches "java.lang.String", "HashMap" matches both
+    /// "java.util.HashMap" and "java.util.LinkedHashMap".
+    pub class_name: String,
+    /// Max source-class rows to return (default 20, max 100).
+    pub limit: Option<usize>,
+}
+
+/// Parameters for `compare_dumps` — cross-dump regression detection.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CompareDumpsParams {
+    /// Absolute path to the baseline (older) .hprof file.
+    pub baseline: String,
+    /// Absolute path to the current (newer) .hprof file.
+    pub current: String,
+    /// Max growth-leader classes to return (default 20).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RedactParams {
     /// Absolute path to the input .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
     pub input: String,
@@ -1088,6 +1109,125 @@ impl HprofMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
+    /// Aggregate incoming references to all instances of a class, grouped by source class.
+    #[tool(
+        description = "For a given target class, find all objects that hold direct references \
+                          to ANY instance of that class, grouped by source class with summed counts \
+                          and retained sizes. \
+                          This is the per-class equivalent of find_incoming_references — MAT's \
+                          'List Objects with incoming References' aggregated across all instances. \
+                          Requires load_dump({with_graph: true}). \
+                          class_name is a substring match: 'String' matches 'java.lang.String'. \
+                          Returns rows sorted by ref_count descending: {src_class, ref_count, \
+                          total_src_retained, total_src_shallow}. \
+                          Use this to answer 'who keeps all X instances alive?' in one call."
+    )]
+    async fn find_incoming_references_by_class(
+        &self,
+        Parameters(p): Parameters<FindIncomingRefsByClassParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        let graph = sess.report.obj_graph_flat.as_ref().ok_or_else(|| {
+            McpError::invalid_params(
+                "Incoming reference data not available — the dump was not loaded with with_graph=true. \
+                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
+                None,
+            )
+        })?;
+
+        let limit = p.limit.unwrap_or(20).min(100);
+        let needle = p.class_name.to_lowercase();
+
+        // Find all nodes whose display_class contains the search term.
+        let target_indices: std::collections::HashSet<u32> = graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.display_class.to_lowercase().contains(&needle))
+            .map(|(idx, _)| *idx)
+            .collect();
+
+        if target_indices.is_empty() {
+            let result = serde_json::json!({
+                "class_name": p.class_name,
+                "matched_instances": 0,
+                "rows": [],
+                "_hint": format!(
+                    "No nodes with class matching {:?} found in the object graph. \
+                     The graph only contains significant nodes (retained >= {} bytes). \
+                     Try a broader class name or check spelling.",
+                    p.class_name,
+                    graph.sig_floor_bytes
+                ),
+            });
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            return Ok(CallToolResult::success(vec![ContentBlock::text(json)]));
+        }
+
+        // Aggregate inbound references across all matching target instances.
+        #[derive(Default)]
+        struct SrcAgg {
+            ref_count: u64,
+            total_src_retained: u64,
+            total_src_shallow: u64,
+        }
+        let mut by_src: std::collections::HashMap<String, SrcAgg> =
+            std::collections::HashMap::new();
+        let mut matched_instances = 0usize;
+
+        for idx in &target_indices {
+            if let Some(edges) = graph.inbound_edges.get(idx) {
+                matched_instances += 1;
+                for e in edges {
+                    let agg = by_src.entry(e.src_class.clone()).or_default();
+                    agg.ref_count += 1;
+                    agg.total_src_retained += e.src_retained;
+                    agg.total_src_shallow += e.src_shallow;
+                }
+            }
+        }
+
+        let mut rows: Vec<_> = by_src
+            .into_iter()
+            .map(|(src_class, agg)| {
+                serde_json::json!({
+                    "src_class": src_class,
+                    "ref_count": agg.ref_count,
+                    "total_src_retained": agg.total_src_retained,
+                    "total_src_shallow": agg.total_src_shallow,
+                })
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b["ref_count"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["ref_count"].as_u64().unwrap_or(0))
+        });
+        rows.truncate(limit);
+
+        let result = serde_json::json!({
+            "class_name": p.class_name,
+            "matched_instances": matched_instances,
+            "total_target_nodes": target_indices.len(),
+            "rows": rows,
+            "_note": if target_indices.len() > matched_instances {
+                format!("{} matched nodes had no captured inbound edges (may be below the inbound capture floor or not referenced by other significant objects)",
+                    target_indices.len() - matched_instances)
+            } else {
+                String::new()
+            },
+        });
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
     /// Return information about the currently loaded dump (path, heap size, object count).
     /// Call this to check if a dump is already loaded before calling load_dump.
     #[tool(
@@ -1245,6 +1385,197 @@ impl HprofMcpServer {
             mode_note = mode_note,
         );
         Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
+    }
+
+    /// Compare two heap dumps for regression detection.
+    #[tool(
+        description = "Compare two heap dumps (baseline vs current) for class-level retained-heap growth. \
+                       Loads both dumps (from disk cache if available, otherwise runs full analysis — \
+                       first load of each dump takes 5–15 min), then diffs their class histograms. \
+                       Returns: growth_leaders (classes whose retained heap grew most), \
+                       new_classes (classes absent in baseline, present in current), \
+                       net_delta_retained (total retained change), and grown_suspects (leak suspects \
+                       that grew or appeared). \
+                       Use for regression-detecting workflows: 'did this deployment make the heap worse?' \
+                       Equivalent to `hprof-analyzer compare reports r1.json r2.json` on the CLI."
+    )]
+    async fn compare_dumps(
+        &self,
+        Parameters(p): Parameters<CompareDumpsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let baseline_path = PathBuf::from(&p.baseline);
+        let current_path = PathBuf::from(&p.current);
+        let limit = p.limit.unwrap_or(20).min(100);
+
+        // Load both reports (potentially from cache).
+        let baseline_result = tokio::task::spawn_blocking({
+            let path = baseline_path.clone();
+            move || {
+                crate::analyze_with_cache(
+                    &path,
+                    &AnalyzeOptions::default(),
+                    CacheMode::Full,
+                    |_| {},
+                )
+            }
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let current_result = tokio::task::spawn_blocking({
+            let path = current_path.clone();
+            move || {
+                crate::analyze_with_cache(
+                    &path,
+                    &AnalyzeOptions::default(),
+                    CacheMode::Full,
+                    |_| {},
+                )
+            }
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let base_r = &baseline_result.report;
+        let curr_r = &current_result.report;
+
+        // Build class → (baseline_retained, baseline_instances) maps.
+        use std::collections::HashMap;
+        let mut base_map: HashMap<&str, (u64, u64)> = HashMap::new();
+        for h in &base_r.overview.histogram {
+            base_map.insert(&h.pretty_class, (h.retained, h.instances));
+        }
+        let mut curr_map: HashMap<&str, (u64, u64)> = HashMap::new();
+        for h in &curr_r.overview.histogram {
+            curr_map.insert(&h.pretty_class, (h.retained, h.instances));
+        }
+
+        // Growth leaders: in both dumps, sorted by delta_retained descending.
+        let mut growth_pairs: Vec<(&str, i64, u64, u64, u64, u64)> = curr_r
+            .overview
+            .histogram
+            .iter()
+            .filter_map(|h| {
+                let (base_ret, base_inst) = base_map
+                    .get(h.pretty_class.as_str())
+                    .copied()
+                    .unwrap_or((0, 0));
+                let delta = h.retained as i64 - base_ret as i64;
+                if delta > 0 {
+                    Some((
+                        h.pretty_class.as_str(),
+                        delta,
+                        base_ret,
+                        h.retained,
+                        base_inst,
+                        h.instances,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        growth_pairs.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+        let growth_leaders: Vec<serde_json::Value> = growth_pairs
+            .iter()
+            .take(limit)
+            .map(|(class, delta, base_ret, curr_ret, base_inst, curr_inst)| {
+                serde_json::json!({
+                    "class": class,
+                    "baseline_retained": base_ret,
+                    "current_retained": curr_ret,
+                    "delta_retained": delta,
+                    "baseline_instances": base_inst,
+                    "current_instances": curr_inst,
+                })
+            })
+            .collect();
+
+        // New classes: present in current, absent from baseline.
+        let mut new_classes: Vec<serde_json::Value> = curr_r
+            .overview
+            .histogram
+            .iter()
+            .filter(|h| !base_map.contains_key(h.pretty_class.as_str()))
+            .map(|h| {
+                serde_json::json!({
+                    "class": h.pretty_class,
+                    "current_retained": h.retained,
+                    "current_instances": h.instances,
+                })
+            })
+            .collect();
+        new_classes.sort_by(|a, b| {
+            b["current_retained"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["current_retained"].as_u64().unwrap_or(0))
+        });
+        new_classes.truncate(limit);
+
+        // Grown suspects: leak suspects in current that grew or are new.
+        let mut grown_suspects: Vec<serde_json::Value> = curr_r
+            .leaks
+            .suspects
+            .iter()
+            .filter_map(|s| {
+                let base_ret = base_map
+                    .get(s.pretty_class.as_str())
+                    .map(|(r, _)| *r)
+                    .unwrap_or(0);
+                let delta = s.retained as i64 - base_ret as i64;
+                if delta > 0 || base_ret == 0 {
+                    Some(serde_json::json!({
+                        "class": s.pretty_class,
+                        "baseline_retained": base_ret,
+                        "current_retained": s.retained,
+                        "delta_retained": delta,
+                        "is_new": base_ret == 0,
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        grown_suspects.sort_by(|a, b| {
+            b["delta_retained"]
+                .as_i64()
+                .unwrap_or(0)
+                .cmp(&a["delta_retained"].as_i64().unwrap_or(0))
+        });
+        grown_suspects.truncate(limit);
+
+        // Compute totals.
+        let base_total_retained: u64 = base_r.overview.histogram.iter().map(|h| h.retained).sum();
+        let curr_total_retained: u64 = curr_r.overview.histogram.iter().map(|h| h.retained).sum();
+        let net_delta = curr_total_retained as i64 - base_total_retained as i64;
+        let gross_growth: i64 = growth_pairs.iter().map(|(_, d, ..)| d).sum();
+        let base_total_objects: u64 = base_r.overview.histogram.iter().map(|h| h.instances).sum();
+        let curr_total_objects: u64 = curr_r.overview.histogram.iter().map(|h| h.instances).sum();
+
+        let result = serde_json::json!({
+            "baseline": p.baseline,
+            "current": p.current,
+            "net_delta_retained": net_delta,
+            "gross_growth_retained": gross_growth,
+            "delta_total_objects": curr_total_objects as i64 - base_total_objects as i64,
+            "growth_leaders": growth_leaders,
+            "new_classes": new_classes,
+            "grown_suspects": grown_suspects,
+            "_hint": "growth_leaders shows classes with the largest increase in retained bytes. \
+                      new_classes are classes added between dumps (possible new accumulation). \
+                      grown_suspects are leak suspects that grew or appeared. \
+                      To investigate a specific growing class: load_dump on the current dump, then \
+                      query({oql: \"SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> \
+                      ORDER BY ret DESC LIMIT 10\"}), then browse_dominators on the largest instances.",
+        });
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
     /// List the 28 built-in named query views, grouped by category.

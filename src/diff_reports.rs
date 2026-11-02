@@ -777,7 +777,13 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
 
 /// Thin wrapper: load every report path (version-checked, "-" = stdin), compute
 /// the N-way time-series diff, and render it in the requested format.
-pub fn run(paths: &[String], format: OutputFormat) -> io::Result<String> {
+/// `render_html` is called only when `format == Html`; pass `None` to make Html
+/// an error (e.g. when building without the native HTML renderer).
+pub fn run(
+    paths: &[String],
+    format: OutputFormat,
+    render_html: Option<fn(&SeriesDiffResult) -> String>,
+) -> io::Result<String> {
     if paths.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -795,7 +801,11 @@ pub fn run(paths: &[String], format: OutputFormat) -> io::Result<String> {
     let result = diff_series(&reports);
     Ok(match format {
         OutputFormat::Json => serde_json::to_string_pretty(&result).map_err(io::Error::other)?,
-        OutputFormat::Html => crate::html::render_diff_html(&result),
+        OutputFormat::Html => render_html
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "HTML rendering not available")
+            })
+            .map(|f| f(&result))?,
         OutputFormat::Md | OutputFormat::MdGraphs => render_md(&result),
     })
 }

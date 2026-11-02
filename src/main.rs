@@ -1148,7 +1148,11 @@ fn main() {
                         fail(format!("cannot open '{p}': no such file or directory"));
                     }
                 }
-                match diff_reports::run(&reports, resolve_format(format, None)) {
+                match diff_reports::run(
+                    &reports,
+                    resolve_format(format, None),
+                    Some(html::render_diff_html),
+                ) {
                     Ok(text) => {
                         if let Some(path) = output {
                             let bytes = text.into_bytes();
