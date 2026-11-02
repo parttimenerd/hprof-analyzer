@@ -67,6 +67,34 @@ All notable changes to hprof-analyzer are documented here.
   as an interactive `ZoomableTreemap` (treemap + flamegraph). Tile area equals
   dominated shallow heap; clicking zooms into a class subtree.
 
+### Performance
+
+- **4 GB RSS reduction in `heap report` / MCP `load_dump` slow path** — the
+  `analyze_with_cache` slow path previously captured `hprof_offsets` (a 2.56 GB
+  `Vec<u64>`) during the main pass1 run AND immediately cloned a `Pass1Snapshot`
+  (1.28 GB `IdMap` offsets), leaving all three alive simultaneously throughout the
+  full analysis pipeline. On the 34 GB reference dump this pushed the `heap report`
+  path to ~24 GB peak RSS.
+
+  Fix: pass1 now runs with `capture_hprof_offsets = false` for the main analysis.
+  `pass1.bin` is written and the snapshot is dropped before the analysis pipeline
+  starts (pass1 is then *moved* in, never cloned). After analysis completes, a
+  separate short pass1 run writes `offsets.bin`. The `CachedSession.pass1` field
+  is populated by reading the just-written cache file rather than from a live clone.
+  Net cost: ~20–40 s extra wall time for the offsets pass. Peak RSS improvement:
+  ~24 GB → ~15 GB on the 34 GB reference dump.
+
+- **~8 GB RSS reduction in direct-path basic analysis on large dumps** — the
+  forward CSR (`fwd_targets` + `fwd_offsets`, ~7–8 GB on a 34 GB dump) was held
+  alive through `compress_parent_pre` even though the rescan-inbound path drops it
+  immediately at the inbound dispatch that follows. The overlap created the ~15 GB
+  peak: fwd CSR + `parent_pre` (~1.3 GB) + `rpo.dfn` (~1.3 GB) all coexisted.
+
+  Fix: when all of `--mat-caches`, `--obj-graph`, `--field-stats`, and the
+  retain-forward/inbound flags are inactive AND `total_inb > 1B` (confirms the
+  rescan path), the fwd CSR is dropped right after `unreachable_retained` — before
+  `compress_parent_pre`. Expected peak RSS on 34 GB dump: ~15 GB → ~7 GB.
+
 ### Fixed
 
 - **Dead `⬡` and `⬡≡` buttons in diff/compare tables** — the pivot-to-dominator
