@@ -3641,6 +3641,14 @@ indicates native resources (file handles, off-heap buffers) not being released p
                 "_None found — no objects are exclusively reachable via this reference kind._\n\n",
             );
         } else {
+            if stats.kind == "Soft" {
+                let total: u64 = stats.only_weakly_retained.iter().map(|r| r.retained).sum();
+                out.push_str(&format!(
+                    "_**{}** only softly retained — would be freed under OOM pressure \
+(GC clears all soft references before throwing OutOfMemoryError)._\n\n",
+                    format_bytes(total),
+                ));
+            }
             render_class_table(&stats.only_weakly_retained, out);
         }
     }

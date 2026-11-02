@@ -4791,7 +4791,13 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
                   : "Referents reachable only through phantom references — finalized and enqueued for post-mortem cleanup via a ReferenceQueue."
             }</p>
             {(stats.only_weakly_retained ?? []).length > 0
-              ? <RefClassTable rows={stats.only_weakly_retained} />
+              ? <>
+                  {stats.kind === "Soft" && (() => {
+                    const total = (stats.only_weakly_retained ?? []).reduce((s, r) => s + r.retained, 0);
+                    return <p className="subtitle"><strong>{formatBytes(total)}</strong> only softly retained — would be freed under OOM pressure (GC clears all soft references before throwing OutOfMemoryError).</p>;
+                  })()}
+                  <RefClassTable rows={stats.only_weakly_retained} />
+                </>
               : <p className="subtitle">None found — no objects are exclusively reachable via this reference kind.</p>
             }
           </React.Fragment>
