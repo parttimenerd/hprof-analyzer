@@ -782,6 +782,20 @@ fn analyze_to_report_inner_with_cache(
         )?;
     }
 
+    // Early fwd CSR drop: for large dumps that will use the rescan-inbound path
+    // AND have no features that need the fwd CSR between here and inbound dispatch,
+    // drop fwd NOW — before compress_parent_pre — to remove ~7-8 GB from the peak.
+    // Guards: no graph cache (needs fwd clone), no field_stats (needs fwd copy),
+    // no obj_graph (captured below from live fwd), large enough for rescan path.
+    let use_rescan_inbound = !opts.obj_graph
+        && !opts.field_stats
+        && mode != cache::CacheMode::Graph
+        && inbound.total_inb > 1_000_000_000;
+    if use_rescan_inbound {
+        drop(std::mem::take(&mut g.fwd_targets));
+        drop(std::mem::take(&mut g.fwd_offsets));
+    }
+
     let mut rpo = rpo;
     let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
@@ -812,11 +826,17 @@ fn analyze_to_report_inner_with_cache(
     } else {
         None
     };
-    let (inb_block_off, inb_data) = inbound.build_from_fwd(
-        std::mem::take(&mut g.fwd_offsets),
-        std::mem::take(&mut g.fwd_targets),
-        &rpo.dfn,
-    )?;
+    let (inb_block_off, inb_data) = if use_rescan_inbound {
+        // fwd already dropped above; rescan HPROF to build inbound without
+        // coexisting fwd (~7-8 GB) and inb_flat (~6 GB).
+        inbound.build_mat_scan(&rpo.dfn, |_src, _fwd| Ok(()))?
+    } else {
+        inbound.build_from_fwd(
+            std::mem::take(&mut g.fwd_offsets),
+            std::mem::take(&mut g.fwd_targets),
+            &rpo.dfn,
+        )?
+    };
     progress("inbound", 1.0);
 
     let count = parent_pre_count;
