@@ -229,9 +229,55 @@ hprof-analyzer heap report heap.hprof --section leaks
 | `--mat <DIR>` | Emit Eclipse MAT-compatible binary index files into `DIR` alongside the normal analysis. |
 | `--query <OQL>` | Run an OQL query and embed results in the report. May be repeated. |
 | `--query-file <PATH>` | Read one OQL query per non-empty line from a file. |
+| `--category <NAME=PREFIX>` | Label classes whose package starts with PREFIX as NAME. Evaluated before the built-in `framework`/`jdk` categories. Repeatable; order matters (first match wins). See [Class categories](#class-categories). |
+| `--category-config <PATH>` | Path to a TOML file with `[[category]]` entries. Same format as `.hprof-analyzer.toml`. See [Class categories](#class-categories). |
 | `--progress auto\|always\|never` | Control the live progress line on stderr. Default: `auto` (terminal only). |
 
 > **Unreachable-forest dominator pass:** When more than 500 000 objects are unreachable (common on dumps taken mid-GC or post-collection), the iterative dominator pass over the garbage subgraph is skipped automatically. The Unreachable Objects report section then shows shallow heap by class instead of retained heap, and a note explains the skip. Use `--full-analysis` to force the full dominator pass regardless of object count.
+
+### Class categories
+
+Classes in the report are classified into named categories. The two built-in categories are `jdk` (standard library and JVM internals) and `framework` (common library namespaces). Any class that matches none of the configured categories falls into `other`. Your own application code sits in `other` by default — define a named category to label it:
+
+```sh
+# Label classes by package prefix (ad hoc, repeatable)
+hprof-analyzer heap.hprof report.html \
+    --category "app=com.example." \
+    --category "vendors=org.apache."
+```
+
+Or put the same configuration in `.hprof-analyzer.toml` (auto-discovered in the current directory or `$HOME/.config/hprof-analyzer/`) so you don't repeat it on every run:
+
+```toml
+# .hprof-analyzer.toml
+
+[[category]]
+name = "app"
+prefix = ["com.example.", "com.mycompany."]
+
+[[category]]
+name = "vendors"
+prefix = ["org.apache.", "com.google.guava."]
+
+# Regex matching is also supported
+[[category]]
+name = "generated"
+regex = ["\\$\\$EnhancerBy"]
+```
+
+Pass a standalone config file with `--category-config path/to/file.toml` if you prefer not to use auto-discovery.
+
+**Matching rules:**
+- Categories are checked in file order, before the built-in `framework` and `jdk` entries. First match wins.
+- List more-specific prefixes before broader ones: `com.example.thirdparty.` before `com.example.` or the broader entry always claims the class first.
+- A user-defined category can "steal" classes that would otherwise fall into a built-in — for example, putting `com.example.` before `jdk` lets you claim a vendored copy of a JDK class.
+
+Categories surface in three places in the HTML report:
+- **Heap by Category** table (System Overview) — shallow heap % split across all categories.
+- **Top Consumers** filter toolbar — All / App / Framework / JDK buttons filter the Biggest Classes tables, treemap, and Retention Chains tab.
+- **`ClassRow.category`** field in the JSON output — available for programmatic post-processing.
+
+The built-in `framework` category covers: `org.hibernate.`, `org.springframework.`, `io.netty.`, `com.zaxxer.hikari.`, `java.util.concurrent.ThreadPoolExecutor`. The built-in `jdk` category covers: `java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`, `scala.`, `kotlin.`.
 
 ### Tune the report size with `--detail`
 
