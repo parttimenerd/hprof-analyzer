@@ -3204,7 +3204,8 @@ function TopConsumersTreemap({ rows }: { rows: Array<{ pretty_class: string; ret
 }
 
 function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow[]; total: number }) {
-  const [open, setOpen] = React.useState(false);
+  const hasTwoHop = rows.some(c => c.holders?.some(h => h.via_class));
+  const [open, setOpen] = React.useState(hasTwoHop);
   const [fmtB] = useFmtBytes();
   const withHolders = rows.filter(c => c.holders && c.holders.length > 0);
   if (withHolders.length === 0) return null;
@@ -3215,25 +3216,34 @@ function BiggestClassHolders({ rows, total }: { rows: import("./types").ClassRow
         border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
         background: "transparent", color: "var(--fg)",
       }}>
-        {open ? "▾" : "▸"} Held by (immediate dominators)
+        {open ? "▾" : "▸"} Retention chains (who holds these classes)
       </button>
       {open && (
         <div style={{ marginTop: "0.5rem", fontSize: "0.84rem", lineHeight: 1.6 }}>
           {withHolders.map(cls => (
-            <div key={cls.pretty_class} style={{ marginBottom: "0.6rem" }}>
+            <div key={cls.pretty_class} style={{ marginBottom: "0.8rem" }}>
               <code style={{ fontWeight: 600 }}>{cls.pretty_class}</code>
-              <div style={{ paddingLeft: "1.2rem" }}>
-                {(cls.holders ?? []).map(h => (
-                  <div key={h.holder_class + (h.via_class ?? "")} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline" }}>
-                    <span>↳ <code>{h.holder_class}</code>{h.via_class && <span className="muted" style={{ fontSize: "0.8rem" }}> via <code>{h.via_class}</code></span>}</span>
-                    <span className="muted">({fmtCount(h.count)}, {fmtB(h.retained)})</span>
-                    {h.level2 && h.level2.length > 0 && (
-                      <span className="muted" style={{ fontSize: "0.8rem" }}>
-                        ← {h.level2.map(l2 => <span key={l2.holder_class}><code>{l2.holder_class}</code> ({fmtCount(l2.count)}) </span>)}
-                      </span>
-                    )}
-                  </div>
-                ))}
+              <span className="muted" style={{ marginLeft: "0.4rem", fontSize: "0.8rem" }}>
+                ({fmtCount(cls.instances)} instances, {fmtB(cls.retained)})
+              </span>
+              <div style={{ paddingLeft: "1.2rem", marginTop: "0.2rem" }}>
+                {(cls.holders ?? []).map(h => {
+                  const pct = cls.retained > 0 ? (h.retained / cls.retained * 100).toFixed(1) : "?";
+                  return (
+                    <div key={h.holder_class + (h.via_class ?? "")} style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "baseline", marginBottom: "0.1rem" }}>
+                      {h.via_class ? (
+                        <span>
+                          ↳ <code>{h.holder_class}</code>
+                          <span className="muted" style={{ fontSize: "0.8rem" }}> via </span>
+                          <code style={{ fontSize: "0.8rem" }}>{h.via_class}</code>
+                        </span>
+                      ) : (
+                        <span>↳ <code>{h.holder_class}</code></span>
+                      )}
+                      <span className="muted">({fmtCount(h.count)} instances, {fmtB(h.retained)}, {pct}% of class retained)</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}
