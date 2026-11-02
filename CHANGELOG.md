@@ -6,7 +6,35 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
-- **In-browser dump comparison** — a "Compare Reports" panel embedded in every
+- **Drop 2+ `.hprof` files to compare** — the browser app now accepts multiple
+  heap dump files at once (via drag-and-drop or file picker); it analyzes each
+  sequentially via WASM and renders the full diff automatically, no CLI step
+  needed. Per-file status rows show parse / load / analyze / report progress.
+
+- **Richer diff view** — the multi-dump comparison now includes:
+  - **Δ instances column** in the Growth Leaders, New Classes, Removed Classes,
+    Leak Suspects, and Spike tables — instance-count delta alongside retained-heap
+    delta, so both allocation growth and retention growth are visible at once.
+  - **Growth Leaders — Heap Footprint** section — side-by-side `FlatTreemap`
+    tiles comparing the baseline (r1) vs. final (rN) retained-heap distribution
+    of the top growth classes, giving an immediate visual of where memory moved.
+
+- **🔥 Flame view in Dominator Analysis** — a fourth view toggle ("🔥 Flame")
+  in the Dominator Analysis section renders the immediate-dominator class data
+  as an interactive `ZoomableTreemap` (treemap + flamegraph). Tile area equals
+  dominated shallow heap; clicking zooms into a class subtree.
+
+### Fixed
+
+- **Dead `⬡` and `⬡≡` buttons in diff/compare tables** — the pivot-to-dominator
+  (`⬡`) and list-instances (`⬡≡`) buttons appeared in diff table class-name
+  cells but did nothing: `PivotBtn` renders null when `HasDomDataCtx` is false
+  (always the case in the diff view, which has no loaded WASM session), and
+  `ListObjectsBtn` fires a `CustomEvent("inspect")` that no listener handles.
+  Both are now removed from `SeriesTable`, `SpikeTable`, and `TpfgDiffTable`.
+  The copy (⎘) and OQL (⌗) buttons remain — they work everywhere.
+
+
   single-dump HTML report lets users drag-and-drop two or more report JSON files
   and see the full diff rendered instantly, no CLI required. The diff covers
   Growth Leaders, New/Removed Classes, Transient Spikes, Suspect changes,

@@ -8,6 +8,7 @@ import {
   ConcentrationChart,
   ConcentrationStackedBar,
   DepthHistogramChart,
+  FlatTreemap,
   GcRootsChart,
   GcRootsRetainedChart,
   HeapCompositionChart,
@@ -6075,7 +6076,7 @@ function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: Dom
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
   const idoms = data?.immediate_dominators?.rows ?? [];
   const pairs = data?.immediate_dominators?.pairs ?? [];
-  const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap">("tables");
+  const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap" | "flame">("tables");
 
   // Navigator state lifted so tables can drive it.
   const [navTarget, setNavTarget] = React.useState<string | null>(null);
@@ -6123,13 +6124,13 @@ function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: Dom
       <p className="subtitle">An object <em>dominates</em> another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. <strong>Big Drops</strong> shows objects holding memory directly or across many small children. <strong>Immediate Dominators</strong> ranks classes by how much dominated shallow heap they gate. <strong>Graph</strong> shows a class-level dominator graph (top 50 classes by retained); <strong>Heatmap</strong> maps dominator → dominated by class.</p>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        {(["tables", "graph", "heatmap"] as const).map(v => (
+        {(["tables", "graph", "heatmap", "flame"] as const).map(v => (
           <button key={v} onClick={() => setDomView(v)} style={{
             padding: "0.25rem 0.85rem", fontSize: "0.88rem",
             border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
             background: domView === v ? "var(--accent)" : "transparent",
             color: domView === v ? "#fff" : "var(--fg)",
-          }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : "▦ Heatmap"}</button>
+          }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : v === "heatmap" ? "▦ Heatmap" : "🔥 Flame"}</button>
         ))}
       </div>
 
@@ -6245,6 +6246,25 @@ function DominatorAnalysisSection({ data, selfReferentialClasses }: { data?: Dom
 
       {domView === "heatmap" && (
         <RetentionHeatmapView pairs={pairs} />
+      )}
+
+      {domView === "flame" && (
+        <div>
+          <p className="subtitle">Dominated shallow heap by dominator class — each tile represents a class that immediately dominates the shown amount of heap. Tile area ∝ dominated shallow bytes. Click a tile to zoom.</p>
+          {idoms.length === 0 ? (
+            <p className="subtitle">No immediate dominator data available.</p>
+          ) : (
+            <ZoomableTreemap<{ label: string; value: number; children: never[] }>
+              root={{ label: "(all dominators)", value: idoms.reduce((s, r) => s + r.dominated_shallow, 0), children: [] as never[] }}
+              getChildren={(n) => (n.label === "(all dominators)" ? idoms.map(r => ({ label: r.dominator_class, value: r.dominated_shallow, children: [] as never[] })) : [])}
+              getValue={(n) => n.value}
+              getLabel={(n) => n.label}
+              fmt={formatBytes}
+              fmtExact={fmtExactBytes}
+              height={420}
+            />
+          )}
+        </div>
       )}
 
       {selfReferentialClasses && selfReferentialClasses.length > 0 && (
@@ -11158,7 +11178,7 @@ function SeriesTable({
   const n = labels.length;
   type SRow = SeriesClassRow | SeriesSuspectRow;
   const seriesCols: TableColumn<SRow>[] = [
-    { id: "name", name: nameLabel, grow: 1, cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "name", name: nameLabel, grow: 1, cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><OqlBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     ...(n >= 2 ? [{
       id: "trend",
       name: "Trend",
@@ -11196,6 +11216,15 @@ function SeriesTable({
       },
       sortable: true,
     },
+    ...((rows.length > 0 && "instances" in rows[0] && (rows[0] as SeriesClassRow).instances?.length > 0) ? [{
+      id: "deltaInst",
+      name: "Δ instances",
+      right: true,
+      width: "110px",
+      cell: (r: SRow) => ("delta_instances" in r && r.delta_instances != null ? fmtDeltaCount(r.delta_instances) : "—"),
+      selector: (r: SRow) => ("delta_instances" in r ? r.delta_instances ?? 0 : 0),
+      sortable: true,
+    } as TableColumn<SRow>] : []),
     ...(showNew ? [{
       id: "new",
       name: "New?",
@@ -11214,8 +11243,8 @@ function TpfgDiffTable({ rows, fmtB }: { rows: TypeEdgeDiff[]; fmtB: (n: number)
   const dc = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : ""}{n.toLocaleString()}</span>;
   const dw = (n: number) => <span style={{ color: n > 0 ? ok : n < 0 ? mu : undefined }}>{n > 0 ? "+" : n < 0 ? "−" : ""}{fmtB(Math.abs(n))}{n < 0 ? " ▼" : n > 0 ? " ▲" : ""}</span>;
   const cols: TableColumn<TypeEdgeDiff>[] = [
-    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <span className="copy-cell"><code title={r.src_class}>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span>, grow: 2, maxWidth: "320px" },
-    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <span className="copy-cell"><code title={r.dst_class}>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span>, grow: 2, maxWidth: "320px" },
+    { id: "src", name: "Source Class", selector: r => r.src_class, sortable: true, cell: r => <span className="copy-cell"><code title={r.src_class}>{r.src_class}</code><CopyBtn text={r.src_class} /><OqlBtn cls={r.src_class} /></span>, grow: 2, maxWidth: "320px" },
+    { id: "dst", name: "Target Class", selector: r => r.dst_class, sortable: true, cell: r => <span className="copy-cell"><code title={r.dst_class}>{r.dst_class}</code><CopyBtn text={r.dst_class} /><OqlBtn cls={r.dst_class} /></span>, grow: 2, maxWidth: "320px" },
     { id: "cf", name: "Edges (first)", selector: r => r.count_first, sortable: true, right: true, cell: r => r.count_first.toLocaleString() },
     { id: "cl", name: "Edges (last)", selector: r => r.count_last, sortable: true, right: true, cell: r => r.count_last.toLocaleString() },
     { id: "dc", name: "Δ Edges", selector: r => r.delta_count, sortable: true, right: true, cell: r => dc(r.delta_count) },
@@ -11300,7 +11329,7 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const spikeNameMaxW = `${Math.max(160, 1040 - 322 - labels.length * 140)}px`;
   const spikeCols: TableColumn<SeriesClassRow>[] = [
-    { id: "name", name: "Class", grow: 1, maxWidth: spikeNameMaxW, cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "name", name: "Class", grow: 1, maxWidth: spikeNameMaxW, cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><OqlBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     ...(labels.length >= 2 ? [{
       id: "trend",
       name: "Trend",
@@ -11336,6 +11365,42 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
     },
   ];
   return <StdTable columns={spikeCols} data={rows} searchKeys={["pretty_class"]} fmtBtn={kbBtn} defaultSortFieldId="peak" />;
+}
+
+// Side-by-side treemaps: baseline vs final distribution of the top growth leaders.
+function DiffFlameSection({ diff }: { diff: SeriesDiffResult }) {
+  const { labels, growth_leaders } = diff;
+  if (growth_leaders.length < 3 || labels.length < 2) return null;
+  const n = labels.length;
+  const firstSlices = growth_leaders
+    .filter(r => (r.retained[0] ?? 0) > 0)
+    .slice(0, 20)
+    .map(r => ({ name: r.pretty_class, value: r.retained[0] ?? 0 }));
+  const lastSlices = growth_leaders
+    .filter(r => (r.retained[n - 1] ?? 0) > 0)
+    .slice(0, 20)
+    .map(r => ({ name: r.pretty_class, value: r.retained[n - 1] ?? 0 }));
+  if (firstSlices.length === 0 && lastSlices.length === 0) return null;
+  return (
+    <section className="diff-section">
+      <h2>Growth Leaders — Heap Footprint</h2>
+      <p className="subtitle">Retained heap distribution of the top growth classes: baseline (r1) vs final (r{n}).</p>
+      <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+        {firstSlices.length > 0 && (
+          <div style={{ flex: "1 1 300px" }}>
+            <h3 style={{ fontSize: "0.9rem", marginBottom: "0.25rem" }}>r1 — {labels[0]}</h3>
+            <FlatTreemap data={firstSlices} fmt={formatBytes} height={200} />
+          </div>
+        )}
+        {lastSlices.length > 0 && (
+          <div style={{ flex: "1 1 300px" }}>
+            <h3 style={{ fontSize: "0.9rem", marginBottom: "0.25rem" }}>r{n} — {labels[n - 1]}</h3>
+            <FlatTreemap data={lastSlices} fmt={formatBytes} height={200} />
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }
 
 export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
@@ -11387,6 +11452,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         rows={diff.growth_leaders}
         emptyNote="No classes grew."
       />
+      <DiffFlameSection diff={diff} />
       {diff.spike_leaders.length > 0 ? (
         <section className="diff-section">
           <h2>Transient Spikes (Peak Above Baseline)</h2>
