@@ -365,6 +365,8 @@ export interface ClassRow {
   pretty_class: string;
   instances: number;
   retained: number;
+  /** "jdk" | "framework" | "other" | custom category. Empty/absent on pre-v11 reports. */
+  category?: string;
   holders?: HolderRow[];
 }
 

@@ -3474,20 +3474,32 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const hasTwoHopChains = t.biggest_classes.some(c => c.holders?.some(h => h.via_class?.length));
   const [topView, setTopView] = React.useState<"tables" | "treemap" | "chains">("tables");
-  const [clsKindFilter, setClsKindFilter] = React.useState<"all" | "app" | "jdk">("all");
+  const [clsKindFilter, setClsKindFilter] = React.useState<"all" | "app" | "jdk" | "framework">("all");
 
   React.useEffect(() => {
-    const handler = (e: Event) => setClsKindFilter((e as CustomEvent<"all" | "app" | "jdk">).detail);
+    const handler = (e: Event) => setClsKindFilter((e as CustomEvent<"all" | "app" | "jdk" | "framework">).detail);
     window.addEventListener("set-cls-kind-filter", handler);
     return () => window.removeEventListener("set-cls-kind-filter", handler);
   }, []);
 
+  // classCategory: use the backend-supplied category when present (reports ≥ v11),
+  // fall back to a name-prefix heuristic for older reports.
+  const classCategory = React.useCallback((c: import("./types").ClassRow): string => {
+    if (c.category) return c.category;
+    if (/^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/.test(c.pretty_class)) return "jdk";
+    return "other";
+  }, []);
+
   const filteredClasses = React.useMemo(() => {
     if (clsKindFilter === "all") return t.biggest_classes;
-    const isJdk = (name: string) =>
-      /^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/.test(name);
-    return t.biggest_classes.filter(c => clsKindFilter === "jdk" ? isJdk(c.pretty_class) : !isJdk(c.pretty_class));
-  }, [t.biggest_classes, clsKindFilter]);
+    return t.biggest_classes.filter(c => {
+      const cat = classCategory(c);
+      if (clsKindFilter === "jdk") return cat === "jdk";
+      if (clsKindFilter === "framework") return cat === "framework";
+      // "app" = everything that isn't jdk or framework
+      return cat !== "jdk" && cat !== "framework";
+    });
+  }, [t.biggest_classes, clsKindFilter, classCategory]);
 
   return (
     <section id="top-consumers">
@@ -3508,13 +3520,13 @@ function TopConsumersSection({ report }: { report: Report }) {
         <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />
         <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
           <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Classes:</span>
-          {(["all", "app", "jdk"] as const).map(v => (
+          {(["all", "app", "framework", "jdk"] as const).map(v => (
             <button key={v} onClick={() => setClsKindFilter(v)} style={{
               padding: "0.15rem 0.55rem", fontSize: "0.8rem",
               border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
               background: clsKindFilter === v ? "var(--accent)" : "transparent",
               color: clsKindFilter === v ? "#fff" : "var(--fg)",
-            }}>{v === "all" ? "All" : v === "app" ? "App" : "JDK"}</button>
+            }}>{v === "all" ? "All" : v === "app" ? "App" : v === "framework" ? "Framework" : "JDK"}</button>
           ))}
         </div>
       </div>

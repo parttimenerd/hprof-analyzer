@@ -896,6 +896,11 @@ pub struct ClassRow {
     pub pretty_class: String,
     pub instances: u64,
     pub retained: u64,
+    /// Classification: `"jdk"`, `"framework"`, `"other"`, or a user-defined
+    /// category name. Matches `HistRow.category`. Empty string on pre-v11 JSON
+    /// (treat as `"other"`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
     /// Top immediate-dominator classes for instances of this class, sorted by
     /// retained desc. Each entry shows which class holds the most retained bytes
     /// of this class. Empty when idom data is unavailable.

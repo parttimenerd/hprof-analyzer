@@ -652,6 +652,7 @@ mod tests {
             pretty_class: name.to_string(),
             instances: inst,
             retained: ret,
+            category: String::new(),
             holders: vec![],
         }
     }

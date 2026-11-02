@@ -672,6 +672,7 @@ pub fn build_model(
         &stack_held_via,
         top_level_list,
         overview.total_shallow,
+        &classifier,
     );
     t_bm!("top_consumers");
     let threads = build_thread_overview(g, overview.total_shallow);
@@ -4729,6 +4730,7 @@ fn build_top_consumers(
     stack_held_via: &std::collections::HashMap<u32, String>,
     mut top_level: Vec<u32>,
     total_shallow: u64,
+    classifier: &crate::classify::Classifier,
 ) -> TopConsumers {
     let undef = u32::MAX;
     let n = g.n;
@@ -5317,14 +5319,19 @@ fn build_top_consumers(
         .iter()
         .take(holder_window)
         .enumerate()
-        .map(|(rank, &ci)| ClassRow {
-            pretty_class: pretty_class_name(&g.class_names[ci]),
-            instances: class_count_map[ci],
-            retained: class_retained[ci],
-            holders: biggest_classes_holders
-                .get(rank)
-                .cloned()
-                .unwrap_or_default(),
+        .map(|(rank, &ci)| {
+            let pretty = pretty_class_name(&g.class_names[ci]);
+            let category = classifier.classify(&pretty).to_string();
+            ClassRow {
+                pretty_class: pretty,
+                instances: class_count_map[ci],
+                retained: class_retained[ci],
+                category,
+                holders: biggest_classes_holders
+                    .get(rank)
+                    .cloned()
+                    .unwrap_or_default(),
+            }
         })
         .collect();
     drop(class_retained);

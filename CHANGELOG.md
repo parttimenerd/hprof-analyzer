@@ -20,6 +20,19 @@ All notable changes to hprof-analyzer are documented here.
   `via_class` field on `HolderRow` is now `Vec<String>` (the full intermediate
   path) instead of `Option<String>`. Cache VERSION bumped to 11.
 
+- **`category` field on `ClassRow`** — each class in the Biggest Classes list now
+  carries a `category` string (`"jdk"`, `"framework"`, `"other"`) populated by
+  the existing classifier at report-build time. The UI uses this field for
+  accurate All / App / Framework / JDK filtering instead of a name-prefix
+  heuristic; older reports without the field fall back to the regex heuristic.
+
+- **App / Framework / JDK filter across all views** — the category filter toolbar
+  (All / App / Framework / JDK) now applies to all three Top Consumers tabs:
+  Tables, Treemap, and Retention Chains. Previously it only appeared on the
+  Tables view. A `Framework` button has been added alongside the existing App /
+  JDK buttons so third-party libraries can be isolated from both JDK classes and
+  application code.
+
 - **`--obj-graph` hot-path speedup** — the `capture_type_ref_and_obj_graph`
   inner loop (O(n×edges)) now uses a packed `u64` key and a Fibonacci-multiply
   integer hasher instead of SipHash on `(u32,u32)` tuples. Expected measurable
