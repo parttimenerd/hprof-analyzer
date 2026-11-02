@@ -222,7 +222,7 @@ mod tests {
     use crate::query::parse::parse;
 
     #[test]
-    fn all_26_queries_defined() {
+    fn all_28_queries_defined() {
         assert_eq!(NAMED_QUERIES.len(), 28);
     }
 

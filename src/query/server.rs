@@ -1442,13 +1442,13 @@ mod tests {
     }
 
     #[test]
-    fn named_queries_endpoint_returns_26() {
+    fn named_queries_endpoint_returns_28() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         let (status, body, ct) = state.route("GET", "/named-queries", "");
         assert_eq!(status, 200);
         assert_eq!(ct, "application/json");
         let arr: serde_json::Value = serde_json::from_str(&body).expect("json");
-        assert_eq!(arr.as_array().unwrap().len(), 26);
+        assert_eq!(arr.as_array().unwrap().len(), 28);
         assert_eq!(arr[0]["name"], "top-classes-by-count");
         assert!(arr[0]["oql"].as_str().unwrap().starts_with("SELECT"));
     }
