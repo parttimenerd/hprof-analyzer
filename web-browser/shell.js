@@ -4,22 +4,23 @@
 // fallback), and window._switchToWasm64 / window._hprofOnWasm64.
 
 // ── Theme management ──────────────────────────────────────────────────────────
-// Cycles auto → light → dark → auto, same as the React report viewer.
-// Persists in localStorage under the shared key "hprof-theme" so the shell,
-// report, and OQL pages all stay in sync.
+// Two-state toggle: light ↔ dark. Reads OS preference on first load (no stored
+// value) to pick the initial state; the user's choice is then always persisted
+// and data-theme is always set on <html>.
 const THEME_KEY = 'hprof-theme';
-const _THEME_CYCLE = { auto: 'light', light: 'dark', dark: 'auto' };
-const _THEME_GLYPHS = { auto: '◐', light: '☀', dark: '☾' };
+const _THEME_CYCLE = { light: 'dark', dark: 'light' };
+const _THEME_GLYPHS = { light: '☀', dark: '☾' };
 
 function _currentThemeMode() {
-  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (_) { return 'auto'; }
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch (_) {}
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function _isDark() {
-  const mode = _currentThemeMode();
-  if (mode === 'dark') return true;
-  if (mode === 'light') return false;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return _currentThemeMode() === 'dark';
 }
 
 function termTheme() {
@@ -42,9 +43,9 @@ function termTheme() {
 }
 
 function applyTheme(mode) {
-  const m = (mode === 'light' || mode === 'dark') ? mode : 'auto';
-  if (m === 'auto') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', m);
+  const m = (mode === 'light' || mode === 'dark') ? mode : 'light';
+  document.documentElement.setAttribute('data-theme', m);
+  try { localStorage.setItem(THEME_KEY, m); } catch (_) {}
   const glyph = _THEME_GLYPHS[m];
   const label = m.charAt(0).toUpperCase() + m.slice(1);
   for (const id of ['btn-theme-toggle', 'btn-theme-toggle-shell']) {
@@ -59,7 +60,7 @@ function applyTheme(mode) {
 })();
 
 window.addEventListener('storage', e => {
-  if (e.key === THEME_KEY) applyTheme(e.newValue || 'auto');
+  if (e.key === THEME_KEY && (e.newValue === 'light' || e.newValue === 'dark')) applyTheme(e.newValue);
 });
 
 function _bindThemeToggle(id) {
@@ -68,7 +69,6 @@ function _bindThemeToggle(id) {
   btn.addEventListener('click', () => {
     const cur = _currentThemeMode();
     const next = _THEME_CYCLE[cur] || 'light';
-    try { if (next === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, next); } catch (_) {}
     applyTheme(next);
   });
 }

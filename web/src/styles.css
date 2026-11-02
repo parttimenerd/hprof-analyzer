@@ -28,27 +28,7 @@
 .stack-frames li code { background: none; padding: 0; font-size: inherit; }
 tfoot tr { border-top: 2px solid var(--border); }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --bg: #0f1117;
-    --fg: #e2e4e9;
-    --muted: #8b92a0;
-    --border: #252830;
-    --card: #1a1d24;
-    --hover-bg: #222530;
-    --accent: #60a5fa;
-    --accent-soft: #1e3a5f;
-    --accent-border: #1d4ed8;
-    --warn-bg: #261d0e;
-    --warn-border: #92400e;
-    --ok: #4ade80;
-    --ok-bg: #052e16;
-    --ok-border: #166534;
-    --surface: #1a1d24;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15);
-    --shadow-md: 0 4px 6px rgba(0,0,0,0.3), 0 2px 4px rgba(0,0,0,0.18);
-  }
-}
+
 :root[data-theme="dark"] {
   --bg: #0f1117;
   --fg: #e2e4e9;
@@ -531,23 +511,18 @@ dialog.text-modal::backdrop {
 [data-theme="dark"] .rdt_TableRow code,
 [data-theme="dark"] .rdt_TableRow span { color: var(--fg) !important; }
 [data-theme="dark"] .rdt_headSeparator { --rdt-color-text-primary: var(--fg) !important; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --rdt-color-text-primary: var(--fg);
-    --rdt-color-text-secondary: var(--muted);
-    --rdt-color-striped-text: var(--fg);
-    --rdt-color-selected-text: var(--fg);
-    --rdt-color-highlight-text: var(--fg);
-    --rdt-color-btn: var(--muted);
-    --rdt-color-btn-disabled: var(--border);
-    --rdt-color-bg: #16181c;
-    --rdt-color-highlight: #2a2d34;
-    --rdt-color-selected: #2a2d34;
-    --rdt-color-striped: #1e2026;
-  }
-  :root:not([data-theme="light"]) .rdt_TableRow code,
-  :root:not([data-theme="light"]) .rdt_TableRow span { color: var(--fg) !important; }
-  :root:not([data-theme="light"]) .rdt_headSeparator { --rdt-color-text-primary: var(--fg) !important; }
+[data-theme="dark"] {
+  --rdt-color-text-primary: var(--fg);
+  --rdt-color-text-secondary: var(--muted);
+  --rdt-color-striped-text: var(--fg);
+  --rdt-color-selected-text: var(--fg);
+  --rdt-color-highlight-text: var(--fg);
+  --rdt-color-btn: var(--muted);
+  --rdt-color-btn-disabled: var(--border);
+  --rdt-color-bg: #16181c;
+  --rdt-color-highlight: #2a2d34;
+  --rdt-color-selected: #2a2d34;
+  --rdt-color-striped: #1e2026;
 }
 
 /* ── Keyboard shortcut key styling ── */
@@ -717,9 +692,6 @@ kbd {
   transition: background 0.5s;
 }
 [data-theme=dark] .hist-row-highlighted { background: #2d2a00 !important; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .hist-row-highlighted { background: #2d2a00 !important; }
-}
 
 /* ── TRG hover tooltip ───────────────────────────────────────────────────────── */
 .trg-tooltip {

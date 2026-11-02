@@ -27,43 +27,38 @@ import coseBilkent from "cytoscape-cose-bilkent";
 cytoscape.use(coseBilkent as cytoscape.Ext);
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
-// Cycles auto → light → dark → auto. Persists the choice in localStorage so it
-// survives page reloads. Uses data-theme on <html> so CSS vars override the OS
-// media query only when a manual choice is in effect.
-type ThemeMode = "auto" | "light" | "dark";
+// Two-state toggle: light ↔ dark. Reads OS preference on first load (no
+// stored value) to pick the initial state; after that the user's explicit
+// choice is always persisted and data-theme is always set on <html>.
+type ThemeMode = "light" | "dark";
 
-const CYCLE: Record<ThemeMode, ThemeMode> = { auto: "light", light: "dark", dark: "auto" };
-const GLYPHS: Record<ThemeMode, string> = { auto: "◐", light: "☀", dark: "☾" };
+const CYCLE: Record<ThemeMode, ThemeMode> = { light: "dark", dark: "light" };
+const GLYPHS: Record<ThemeMode, string> = { light: "☀", dark: "☾" };
+
+function _defaultTheme(): ThemeMode {
+  try {
+    const saved = localStorage.getItem("hprof-theme");
+    if (saved === "light" || saved === "dark") return saved;
+  } catch (_) { /* file:// storage may throw */ }
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 
 function applyMode(m: ThemeMode) {
-  if (m === "auto") {
-    document.documentElement.removeAttribute("data-theme");
-    try { localStorage.removeItem("hprof-theme"); } catch (_) { /* file:// storage may throw */ }
-  } else {
-    document.documentElement.dataset.theme = m;
-    try { localStorage.setItem("hprof-theme", m); } catch (_) { /* file:// storage may throw */ }
-  }
+  document.documentElement.dataset.theme = m;
+  try { localStorage.setItem("hprof-theme", m); } catch (_) { /* file:// storage may throw */ }
 }
 
 function ThemeToggle() {
-  const [mode, setMode] = React.useState<ThemeMode>("auto");
+  const [mode, setMode] = React.useState<ThemeMode>(_defaultTheme);
 
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("hprof-theme");
-      if (saved === "light" || saved === "dark") {
-        setMode(saved);
-        applyMode(saved);
-      }
-    } catch (_) { /* file:// storage may throw */ }
+    applyMode(mode);
 
     // Sync theme across tabs / the browser shell.
     const onStorage = (e: StorageEvent) => {
       if (e.key !== "hprof-theme") return;
       const v = e.newValue;
-      const m: ThemeMode = (v === "light" || v === "dark") ? v : "auto";
-      setMode(m);
-      applyMode(m);
+      if (v === "light" || v === "dark") { setMode(v); applyMode(v); }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
