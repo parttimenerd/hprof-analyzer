@@ -767,7 +767,7 @@ If all you need is a class histogram, [`hprof-slurp`](https://github.com/agourla
 
 ## Performance
 
-Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`b5306da`](https://github.com/parttimenerd/hprof-analyzer/commit/b5306da), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`). MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak.
+Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`57232f7`](https://github.com/parttimenerd/hprof-analyzer/commit/57232f7), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`), cold page cache. MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak. The `heap report` / MCP `load_dump` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable.
 
 | Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
 |----------|-----------|------------|-----------|-----------|----------|------------|-----------|
@@ -777,7 +777,7 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 1
 | VS Code JVM (1.1 GiB) | 1.1 GiB | 19.2 s | 485 MiB | 32.9 s | 821 MiB | 27.4 s | 3.42 GiB |
 | HeapothesYs 16g | 11 GiB | 1:08 | 967 MiB | 1:42 | 2.19 GiB | 1:00 | 5.59 GiB |
 | HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 3:27 | 3.67 GiB | 1:56 | 8.25 GiB |
-| Real-world 34g | 34 GiB | 14:08 | 14.12 GiB | 27:01 | 16.73 GiB | 20:27 | 75.7 GiB |
+| Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 27:06 | 16.74 GiB | 20:27 | 75.7 GiB |
 
 MAT was run with `ParseHeapDump.sh -Xmx80g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
 
