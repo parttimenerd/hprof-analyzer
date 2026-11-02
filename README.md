@@ -767,7 +767,7 @@ If all you need is a class histogram, [`hprof-slurp`](https://github.com/agourla
 
 ## Performance
 
-Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`57232f7`](https://github.com/parttimenerd/hprof-analyzer/commit/57232f7), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`), cold page cache. MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx80g`). Wall-clock in `m:ss` or `s`. RSS is peak. The `heap report` / MCP `load_dump` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable.
+Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`57232f7`](https://github.com/parttimenerd/hprof-analyzer/commit/57232f7), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`), cold page cache. MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx60g`). Wall-clock in `m:ss` or `s`. RSS is peak. The `heap report` / MCP `load_dump` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable.
 
 | Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
 |----------|-----------|------------|-----------|-----------|----------|------------|-----------|
@@ -779,7 +779,7 @@ Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 1
 | HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 3:27 | 3.67 GiB | 1:56 | 8.25 GiB |
 | Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 27:06 | 16.74 GiB | 20:27 | 75.7 GiB |
 
-MAT was run with `ParseHeapDump.sh -Xmx80g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
+MAT was run with `ParseHeapDump.sh -Xmx60g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
 
 **Disk footprint.** MAT writes a persistent binary index alongside the dump on first open (typically ~15–20% of the dump size for large dumps, up to 1× for small dumps). Measured sizes: 51 MiB dump → ~50 MiB index; 11 GiB dump → ~1.6 GiB index; 20 GiB dump → ~3.2 GiB index; a 34 GiB dump is projected at 15–25 GiB (index files total). hprof-analyzer writes no files next to the dump — its cache goes to a system temp directory and is not required for repeat runs.
 

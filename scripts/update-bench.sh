@@ -6,9 +6,9 @@
 #   scripts/update-bench.sh [--run-mat] [--skip-hprof] [--skip-34g]
 #
 # Options:
-#   --run-mat     Run MAT benchmarks (MAT numbers rarely change; cached by default)
-#   --skip-hprof  Skip hprof-analyzer runs (use cached numbers from last run)
-#   --skip-34g    Skip the 34 GiB real-world dump (takes 15-25 min each way)
+#   --run-mat    Run MAT benchmarks (MAT numbers rarely change; cached by default)
+#   --skip-hprof Skip hprof-analyzer basic+full runs (use cached numbers)
+#   --skip-34g   Skip the 34 GiB real-world dump (takes 15-25 min each way)
 #
 # Results are cached in /tmp/hprof-bench-cache.sh and reused when skipped.
 # On success the script rewrites the "## Performance" section of README.md
@@ -21,7 +21,7 @@ MAT="${MAT:-/home/i560383/mat/mat/ParseHeapDump.sh}"
 DUMPS_DIR="${DUMPS_DIR:-/home/i560383/test-heapdumps}"
 CACHE_FILE="/tmp/hprof-bench-cache.sh"
 
-SKIP_MAT=1  # MAT numbers are stable; only re-run with --run-mat
+SKIP_MAT=1      # MAT numbers are stable; only re-run with --run-mat
 SKIP_HPROF=0
 SKIP_34G=0
 for arg in "$@"; do
@@ -102,11 +102,8 @@ run_mat() {
   dir=$(dirname "$dump")
   base=$(basename "$dump" .hprof)
   # Remove MAT index files so we measure a cold parse, not cache reuse.
-  # Use find instead of a glob because zsh (the ThinkStation default shell) errors
-  # on unmatched globs, and the rm || true would silently swallow the no-op.
   find "$dir" -maxdepth 1 -name "${base}*.index" -delete 2>/dev/null || true
-  /usr/bin/time -v bash "$MAT" -Xmx80g "$dump" > "$log" 2>&1 || true
-  # Check for errors
+  /usr/bin/time -v bash "$MAT" -Xmx60g "$dump" > "$log" 2>&1 || true
   if grep -qi "FileNotFoundException\|Application error" "$log"; then
     echo "MAT error for $tag:" >&2
     grep -i "FileNotFoundException\|Application error" "$log" >&2
@@ -166,11 +163,11 @@ for entry in "${DUMPS[@]}"; do
   # Save results to cache after each dump so partial runs survive interruption
   {
     for k in "${!WALL_BASIC[@]}"; do echo "WALL_BASIC[$k]=\"${WALL_BASIC[$k]}\""; done
-    for k in "${!RSS_BASIC[@]}";  do echo "RSS_BASIC[$k]=\"${RSS_BASIC[$k]}\"";   done
-    for k in "${!WALL_FULL[@]}";  do echo "WALL_FULL[$k]=\"${WALL_FULL[$k]}\"";   done
-    for k in "${!RSS_FULL[@]}";   do echo "RSS_FULL[$k]=\"${RSS_FULL[$k]}\"";     done
-    for k in "${!WALL_MAT[@]}";   do echo "WALL_MAT[$k]=\"${WALL_MAT[$k]}\"";     done
-    for k in "${!RSS_MAT[@]}";    do echo "RSS_MAT[$k]=\"${RSS_MAT[$k]}\"";       done
+    for k in "${!RSS_BASIC[@]}";  do echo "RSS_BASIC[$k]=\"${RSS_BASIC[$k]}\"";  done
+    for k in "${!WALL_FULL[@]}";  do echo "WALL_FULL[$k]=\"${WALL_FULL[$k]}\"";  done
+    for k in "${!RSS_FULL[@]}";   do echo "RSS_FULL[$k]=\"${RSS_FULL[$k]}\"";    done
+    for k in "${!WALL_MAT[@]}";   do echo "WALL_MAT[$k]=\"${WALL_MAT[$k]}\"";   done
+    for k in "${!RSS_MAT[@]}";    do echo "RSS_MAT[$k]=\"${RSS_MAT[$k]}\"";     done
   } > "$CACHE_FILE"
   echo "  (cached to $CACHE_FILE)"
 done
@@ -208,7 +205,7 @@ if (( SKIP_34G == 0 )); then
   TABLE_ROWS+="$(row "Real-world 34g"       "34 GiB"   r34g)"$'\n'
 fi
 
-HEADER_LINE="Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [\`${COMMIT}\`](https://github.com/parttimenerd/hprof-analyzer/commit/${COMMIT}), ${DATE}. \"Basic\" = default analysis; \"Full\" = \`--full-analysis\` (\`--obj-graph --collections --find-duplicates\`). MAT = Eclipse MAT 1.17.0 (\`ParseHeapDump.sh -Xmx80g\`). Wall-clock in \`m:ss\` or \`s\`. RSS is peak."
+HEADER_LINE="Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [\`${COMMIT}\`](https://github.com/parttimenerd/hprof-analyzer/commit/${COMMIT}), ${DATE}. \"Basic\" = default analysis; \"Full\" = \`--full-analysis\` (\`--obj-graph --collections --find-duplicates\`). MAT = Eclipse MAT 1.17.0 (\`ParseHeapDump.sh -Xmx60g\`). Wall-clock in \`m:ss\` or \`s\`. RSS is peak. The \`heap report\` / MCP \`load_dump\` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable."
 
 TABLE_HEADER="| Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
 |----------|-----------|------------|-----------|-----------|----------|------------|-----------|"

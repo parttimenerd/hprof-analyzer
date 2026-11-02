@@ -836,6 +836,7 @@ pub fn capture_type_ref_and_obj_graph(
     //   • accumulate (src_ci, dst_ci) count for type-ref graph
     //   • if dst is captured, append src to inbound_acc[dst]
     let mut inbound_acc: FastU32Map<Vec<(u32, u16)>> = FastU32Map::default();
+
     for src_idx in 0..n {
         let start = g.fwd_offsets[src_idx] as usize;
         let end = g.fwd_offsets[src_idx + 1] as usize;
