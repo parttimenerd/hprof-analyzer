@@ -3493,21 +3493,36 @@ function TopConsumersSection({ report }: { report: Report }) {
     <section id="top-consumers">
       <h2>Top Consumers</h2>
       <p className="subtitle">Biggest objects, classes, and packages by retained heap. Unlike Leak Suspects, these tables are unfiltered — use them when a suspect didn&apos;t cross the leak threshold, or to see the full retention picture.</p>
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        {(["tables", "treemap", ...(hasTwoHopChains ? ["chains"] : [])] as const).map(v => (
-          <button key={v} onClick={() => setTopView(v as typeof topView)} style={{
-            padding: "0.25rem 0.85rem", fontSize: "0.88rem",
-            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
-            background: topView === v ? "var(--accent)" : "transparent",
-            color: topView === v ? "#fff" : "var(--fg)",
-          }}>{v === "tables" ? "⊞ Tables" : v === "treemap" ? "▦ Treemap" : "⛓ Retention Chains"}</button>
-        ))}
+      {/* Top toolbar: view tabs + class-kind filter side by side */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+        <div style={{ display: "flex", gap: "0.4rem" }}>
+          {(["tables", "treemap", ...(hasTwoHopChains ? ["chains"] : [])] as const).map(v => (
+            <button key={v} onClick={() => setTopView(v as typeof topView)} style={{
+              padding: "0.25rem 0.85rem", fontSize: "0.88rem",
+              border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+              background: topView === v ? "var(--accent)" : "transparent",
+              color: topView === v ? "#fff" : "var(--fg)",
+            }}>{v === "tables" ? "⊞ Tables" : v === "treemap" ? "▦ Treemap" : "⛓ Retention Chains"}</button>
+          ))}
+        </div>
+        <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />
+        <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Classes:</span>
+          {(["all", "app", "jdk"] as const).map(v => (
+            <button key={v} onClick={() => setClsKindFilter(v)} style={{
+              padding: "0.15rem 0.55rem", fontSize: "0.8rem",
+              border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+              background: clsKindFilter === v ? "var(--accent)" : "transparent",
+              color: clsKindFilter === v ? "#fff" : "var(--fg)",
+            }}>{v === "all" ? "All" : v === "app" ? "App" : "JDK"}</button>
+          ))}
+        </div>
       </div>
       {topView === "treemap" && (
-        <TopConsumersTreemap rows={t.biggest_classes} />
+        <TopConsumersTreemap rows={filteredClasses} />
       )}
       {topView === "chains" && (
-        <RetentionChainsView rows={t.biggest_classes} total={total} />
+        <RetentionChainsView rows={filteredClasses} total={total} />
       )}
       {topView === "tables" && (<>
       <h3>Biggest Objects (Top-Level Dominators)</h3>
@@ -3516,22 +3531,11 @@ function TopConsumersSection({ report }: { report: Report }) {
 
       <h3>Biggest Classes by Retained Heap</h3>
       <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis.</p>
-      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.5rem", alignItems: "center" }}>
-        <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>Show:</span>
-        {(["all", "app", "jdk"] as const).map(v => (
-          <button key={v} onClick={() => setClsKindFilter(v)} style={{
-            padding: "0.15rem 0.6rem", fontSize: "0.82rem",
-            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
-            background: clsKindFilter === v ? "var(--accent)" : "transparent",
-            color: clsKindFilter === v ? "#fff" : "var(--fg)",
-          }}>{v === "all" ? "All" : v === "app" ? "App" : "JDK"}</button>
-        ))}
-      </div>
       <StdTable columns={clsTableCols} data={filteredClasses} searchKeys={["pretty_class"]} fmtBtn={kbBtnCls} defaultSortFieldId="retained"
         extraBtns={<CopyTsvBtn rows={[["Class","Instances","Retained (bytes)","% Heap"],...filteredClasses.map(c=>[ c.pretty_class, String(c.instances), String(c.retained), fmtPct(pctOf(c.retained,total)) ])]} label="Copy as TSV" />}
       />
       {t.biggest_classes.some(c => c.holders && c.holders.length > 0) && (
-        <BiggestClassHolders rows={t.biggest_classes} total={total} />
+        <BiggestClassHolders rows={filteredClasses} total={total} />
       )}
 
       {pkgRoot.children.length > 0 && (
