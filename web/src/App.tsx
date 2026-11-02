@@ -11821,7 +11821,7 @@ export function ComparePanel({ onClose }: { onClose?: () => void }) {
 // Wraps DiffApp but appends triage-signal diff and leak-indicator diff sections,
 // which require the original Report objects (not just the SeriesDiffResult).
 
-function DiffAppWithExtra({ diff, reports }: { diff: SeriesDiffResult; reports?: import("./types").Report[] }) {
+export function DiffAppWithExtra({ diff, reports }: { diff: SeriesDiffResult; reports?: import("./types").Report[] }) {
   return (
     <>
       <DiffApp diff={diff} />

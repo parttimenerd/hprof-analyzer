@@ -135,7 +135,7 @@
   </div>
 
   <div id="drop-zone">
-    <input type="file" id="file-input" accept=".hprof,.hprof.gz,.hprof.zip,.gz,.zip">
+    <input type="file" id="file-input" accept=".hprof,.hprof.gz,.hprof.zip,.gz,.zip" multiple>
     <label for="file-input">
       <div id="drop-zone-icon">
         <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -146,8 +146,8 @@
           <path d="M24 26v8M20 30l4-4 4 4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div id="drop-zone-text">Drop a <strong>.hprof</strong> file here, or click to select</div>
-      <div id="drop-zone-hint">gzip and zip archives accepted · for files above 3 GB consider using the <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener">CLI version</a> that supports the same features</div>
+      <div id="drop-zone-text">Drop <strong>.hprof</strong> file(s) here, or click to select</div>
+      <div id="drop-zone-hint">gzip and zip archives accepted · drop 2+ files to compare · for files above 3 GB consider using the <a href="https://crates.io/crates/hprof-analyzer" target="_blank" rel="noopener">CLI version</a> that supports the same features</div>
     </label>
   </div>
   <div id="mode-buttons" style="display:none">
@@ -175,14 +175,6 @@
   <div id="sample-section" style="display:none">
     <p class="sample-label">— or try a sample dump —</p>
     <div id="sample-list"></div>
-  </div>
-
-  <div id="compare-json-section" style="margin-top:1.5rem; text-align:center; display:none">
-    <p class="sample-label">— or compare existing report files —</p>
-    <button id="btn-compare-reports" class="mode-btn-compact">
-      <span class="mode-icon" style="font-size:1.1em">⇌</span>
-      Compare Report JSONs
-    </button>
   </div>
   <!-- sample section shown by JS once WASM is ready -->
   <p id="wasm-load-status" style="display:none"></p>

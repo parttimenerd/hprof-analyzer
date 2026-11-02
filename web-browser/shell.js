@@ -495,8 +495,24 @@ const SAMPLE_DUMPS = [
     modeButtons.style.display = 'flex';
   }
 
+  function onFilesSelected(files) {
+    if (!files || files.length === 0) return;
+    if (files.length >= 2) {
+      // Multi-file: compare mode
+      if (wasmReady) {
+        compareWasmDumps(Array.from(files));
+      } else {
+        document.getElementById('wasm-load-status').textContent =
+          'WASM not available — comparison requires WebAssembly.';
+        document.getElementById('wasm-load-status').style.display = '';
+      }
+    } else {
+      onFileSelected(files[0]);
+    }
+  }
+
   fileInput.addEventListener('change', () => {
-    if (fileInput.files.length > 0) onFileSelected(fileInput.files[0]);
+    if (fileInput.files.length > 0) onFilesSelected(fileInput.files);
   });
 
   dropZone.addEventListener('dragover', e => {
@@ -507,8 +523,7 @@ const SAMPLE_DUMPS = [
   dropZone.addEventListener('drop', e => {
     e.preventDefault();
     dropZone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) onFileSelected(file);
+    if (e.dataTransfer.files.length > 0) onFilesSelected(e.dataTransfer.files);
   });
 
   document.getElementById('btn-oql-shell').addEventListener('click', () => {
@@ -550,29 +565,11 @@ const SAMPLE_DUMPS = [
     }
   });
 
-  // Compare Reports: show the React ComparePanel in a dedicated screen.
-  const compareJsonSection = document.getElementById('compare-json-section');
-  if (compareJsonSection) compareJsonSection.style.display = '';
-  const btnCompare = document.getElementById('btn-compare-reports');
-  if (btnCompare) {
-    btnCompare.addEventListener('click', () => {
-      showScreen('compare-screen');
-      const container = document.getElementById('compare-container');
-      if (container && window.hprofRenderComparePanel) {
-        // Only mount once; the ComparePanel manages its own state.
-        if (!container._compareMounted) {
-          container._compareMounted = true;
-          window.hprofRenderComparePanel(container, () => showScreen('upload-screen'));
-        }
-      }
-    });
-  }
   const btnCompareBack = document.getElementById('btn-compare-back');
   if (btnCompareBack) btnCompareBack.addEventListener('click', () => showScreen('upload-screen'));
   const btnThemeCompare = document.getElementById('btn-theme-toggle-compare');
   if (btnThemeCompare) {
     btnThemeCompare.addEventListener('click', () => {
-      // Reuse the same theme-cycle logic (call the main toggle if defined, or do it inline).
       const btn = document.getElementById('btn-theme-toggle');
       if (btn) btn.click();
     });
@@ -1205,6 +1202,121 @@ async function loadWasmSessionWithReport(file, opts = {}) {
   } catch (e) {
     msg.innerHTML = _errorHtml('Analysis', file.name, e);
   }
+}
+
+// Analyze multiple .hprof files sequentially in WASM, then show a diff.
+// Files are analyzed one at a time (no parallel WASM — only one HprofSession
+// can hold the full heap graph in memory). Progress is shown in compare-screen.
+async function compareWasmDumps(files) {
+  if (!files || files.length < 2) return;
+
+  showScreen('compare-screen');
+  const container = document.getElementById('compare-container');
+  if (!container) return;
+
+  // Show sequential progress UI (replace any previously mounted React tree)
+  container._compareMounted = false;
+  container.innerHTML = `
+    <div id="cmp-progress-wrap" style="padding:2rem 2rem 1rem;max-width:680px;margin:0 auto">
+      <h2 style="margin:0 0 .5rem;font-size:1.3rem">Comparing ${files.length} heap dumps</h2>
+      <p id="cmp-progress-desc" style="margin:0 0 1.2rem;color:var(--fg2);font-size:.9rem">
+        Analyzing each dump sequentially — this may take a few minutes per dump.
+      </p>
+      <div id="cmp-file-list"></div>
+    </div>`;
+
+  const fileList = container.querySelector('#cmp-file-list');
+
+  // Create one row per file
+  const rows = files.map((f, i) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:.75rem;margin-bottom:.7rem;font-size:.88rem';
+    row.innerHTML = `
+      <span style="width:1.6rem;text-align:right;color:var(--fg2);flex-shrink:0">${i + 1}.</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
+      <span id="cmp-status-${i}" style="flex-shrink:0;color:var(--fg2)">waiting…</span>`;
+    fileList.appendChild(row);
+    return row;
+  });
+
+  const setStatus = (i, text, color) => {
+    const el = container.querySelector(`#cmp-status-${i}`);
+    if (el) { el.textContent = text; if (color) el.style.color = color; }
+  };
+
+  const reports = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    setStatus(i, 'parsing…', 'var(--accent)');
+
+    // Progress label embedded in the status cell (updated via callbacks)
+    let session;
+    try {
+      const headerBuf = await file.slice(0, 4).arrayBuffer();
+      const header = new Uint8Array(headerBuf);
+      const isGzipUpfront = header[0] === 0x1f && header[1] === 0x8b;
+
+      const { bytes, decompressedSize } = await _prepareFileBytes(file, {
+        compBarEnd: 0, setStage: () => {}, onProgress: () => {},
+      });
+
+      setStatus(i, 'loading…', 'var(--accent)');
+      session = await _loadWithFallback(bytes, file, () => {}, decompressedSize, null);
+    } catch (e) {
+      setStatus(i, `error: ${e}`, 'var(--red, #c0392b)');
+      container.innerHTML = `<div style="padding:2rem;color:var(--red,#c0392b)">
+        <strong>Failed to load ${escHtml(file.name)}:</strong> ${escHtml(String(e))}
+        <p><button onclick="showScreen('upload-screen')">← Back</button></p>
+      </div>`;
+      return;
+    }
+
+    setStatus(i, 'analyzing…', 'var(--accent)');
+    try {
+      session.run_full_analysis_with_progress(() => {});
+    } catch (e) {
+      // Analysis failure is non-fatal: retained sizes unavailable but class histogram still works
+      setStatus(i, 'analysis partial', 'var(--yellow, #e67e22)');
+    }
+
+    setStatus(i, 'building report…', 'var(--accent)');
+    let reportJson;
+    try {
+      reportJson = session.generate_report();
+    } catch (e) {
+      setStatus(i, `report error: ${e}`, 'var(--red, #c0392b)');
+      container.innerHTML = `<div style="padding:2rem;color:var(--red,#c0392b)">
+        <strong>Failed to generate report for ${escHtml(file.name)}:</strong> ${escHtml(String(e))}
+        <p><button onclick="showScreen('upload-screen')">← Back</button></p>
+      </div>`;
+      return;
+    }
+
+    let report;
+    try {
+      report = JSON.parse(reportJson);
+    } catch (e) {
+      setStatus(i, `parse error: ${e}`, 'var(--red, #c0392b)');
+      return;
+    }
+    reports.push(report);
+    setStatus(i, '✓ done', 'var(--green, #27ae60)');
+
+    // Free session memory before loading the next dump
+    if (session.free) session.free();
+  }
+
+  // All reports ready — compute diff and render
+  if (!window.hprofDiffReports || !window.hprofRenderDiff) {
+    container.innerHTML = `<div style="padding:2rem">React bundle not loaded — cannot render diff.</div>`;
+    return;
+  }
+
+  const diff = window.hprofDiffReports(reports);
+  container.innerHTML = '';
+  container._compareMounted = true;
+  window.hprofRenderDiff(container, diff, reports);
 }
 
 // wasm32 linear memory is capped at 4 GiB, so a plain .hprof larger than this

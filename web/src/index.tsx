@@ -7,7 +7,7 @@
 // We decode + inflate + JSON.parse the report data, then render.
 import React from "react";
 import { createRoot } from "react-dom/client";
-import App, { DiffApp, ErrorBoundary, ComparePanel, diffSeriesReports } from "./App";
+import App, { DiffApp, DiffAppWithExtra, ErrorBoundary, ComparePanel, diffSeriesReports } from "./App";
 import type { Report, SeriesDiffEnvelope } from "./types";
 import { FlatTreemap, QueryViz } from "./charts";
 import { formatBytes, fmtCount } from "./format";
@@ -90,7 +90,7 @@ window.hprofUnmountViz = (container) => {
   }
 };
 
-window.hprofRenderDiff = (container, diff, _reports) => {
+window.hprofRenderDiff = (container, diff, reports) => {
   let root = _vizRoots.get(container);
   if (!root) {
     root = createRoot(container);
@@ -99,7 +99,7 @@ window.hprofRenderDiff = (container, diff, _reports) => {
   root.render(
     <React.StrictMode>
       <ErrorBoundary>
-        <DiffApp diff={diff} />
+        <DiffAppWithExtra diff={diff} reports={reports} />
       </ErrorBoundary>
     </React.StrictMode>,
   );
