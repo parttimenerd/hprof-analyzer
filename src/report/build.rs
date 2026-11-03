@@ -1002,13 +1002,18 @@ fn build_nio_buffer_owners(g: &Graph, root_path_max_depth: usize) -> Vec<NioBuff
             let root_type_label = root_type_of
                 .get(&(cur as u32))
                 .and_then(|&ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
-            root_path.push(RootPathStep {
-                obj_index_1based: cur + 1,
-                display_class: class_display(g, cur),
-                retained: g.retained.get(cur).copied().unwrap_or(0),
-                root_type_label,
-                field_edge: None,
-            });
+            let step_class = class_display(g, cur);
+            // Skip intermediate objects whose class couldn't be resolved —
+            // they have no display label and just produce blank "retains N B" noise.
+            if !step_class.is_empty() || is_root {
+                root_path.push(RootPathStep {
+                    obj_index_1based: cur + 1,
+                    display_class: step_class,
+                    retained: g.retained.get(cur).copied().unwrap_or(0),
+                    root_type_label,
+                    field_edge: None,
+                });
+            }
             if is_root || idom == undef || depth >= root_path_max_depth {
                 break;
             }

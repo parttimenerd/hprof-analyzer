@@ -2504,7 +2504,7 @@ function SysPropsTable({ rows }: { rows: { key: string; value: string }[] }) {
 
 // RootPathChain — SVG chain visualisation of the dominator path from suspect
 // (step 0) down to its GC root (last step). Replaces the old numbered list.
-function RootPathChain({ steps }: { steps: RootPathStep[] }) {
+function RootPathChain({ steps, defaultOpen }: { steps: RootPathStep[], defaultOpen?: boolean }) {
   const [fmtB] = useFmtBytes();
   const uid = React.useId();
   const markerId = `rpc-arrow-${uid.replace(/:/g, "")}`;
@@ -2526,7 +2526,7 @@ function RootPathChain({ steps }: { steps: RootPathStep[] }) {
   const svgH = steps.length * BOX_H + (steps.length - 1) * CONN_H;
 
   return (
-    <details open className="root-path-chain">
+    <details open={defaultOpen} className="root-path-chain">
       <summary>Root Path to GC Root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
       <svg
         viewBox={`0 0 ${VB_W} ${svgH}`}
@@ -3065,7 +3065,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           </details>
         );
       })()}
-      {s.root_path && s.root_path.length > 0 && <RootPathChain steps={s.root_path} />}
+      {s.root_path && s.root_path.length > 0 && <RootPathChain steps={s.root_path} defaultOpen />}
       {s.dominator_tree && <DomSubtreeSvg node={s.dominator_tree} onNavigate={(idx) => {
         (window as any).__explorerNavigate?.("explore", idx) ?? (window.location.hash = `explore/${idx}`);
       }} />}
