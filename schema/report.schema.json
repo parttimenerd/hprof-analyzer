@@ -447,6 +447,10 @@
       "description": "One \"big drop\" in the dominator tree: a dominator whose retained heap is\nmuch larger than any single child's, i.e. retention concentrates AT this\nnode rather than flowing to one dominated child. A large drop marks a good\nplace to start a leak investigation. Additive; not parity-compared.",
       "type": "object",
       "properties": {
+        "category": {
+          "description": "Classification category of `display_class`. See `classify.rs`.",
+          "type": "string"
+        },
         "child_count": {
           "description": "Number of dominator-tree children of this node.",
           "type": "integer",
@@ -1180,6 +1184,11 @@
       "properties": {
         "array_class": {
           "type": "string"
+        },
+        "is_jdk": {
+          "description": "True when the array class belongs to the JDK or stdlib (java.*, sun.*, jdk.*, etc.).\nAdded in cache version 33; older cached JSON has this absent — treated as false by the UI.",
+          "type": "boolean",
+          "default": false
         },
         "length": {
           "type": "integer",
@@ -2232,6 +2241,10 @@
       "description": "One (dominator_class, dominated_class) pair for the V5 two-sided sankey.\nPowers \"who holds X\" (rows where dominated_class == target) and\n\"what does X hold\" (rows where dominator_class == target) from a single dataset.",
       "type": "object",
       "properties": {
+        "dominated_category": {
+          "description": "Classification category of `dominated_class`. See `classify.rs`.",
+          "type": "string"
+        },
         "dominated_class": {
           "type": "string"
         },
@@ -2247,6 +2260,10 @@
           "format": "uint64",
           "minimum": 0
         },
+        "dominator_category": {
+          "description": "Classification category of `dominator_class`. See `classify.rs`.",
+          "type": "string"
+        },
         "dominator_class": {
           "type": "string"
         },
@@ -2255,6 +2272,10 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "top_app_dominator": {
+          "description": "First ancestor in the idom chain of objects in this pair (walking up\nfrom the dominator side) whose category is not `jdk` or `framework`.\nEmpty when the dominator is already non-JDK/framework.",
+          "type": "string"
         }
       },
       "required": [
@@ -2269,6 +2290,10 @@
       "description": "One row of the immediate-dominator class rollup: for each dominator class,\nhow many objects it immediately dominates and their aggregate shallow heap.",
       "type": "object",
       "properties": {
+        "category": {
+          "description": "Classification category of `dominator_class`. See `classify.rs`.",
+          "type": "string"
+        },
         "dominated_count": {
           "description": "Number of objects immediately dominated by objects of this class.",
           "type": "integer",
@@ -2295,6 +2320,10 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "top_app_dominator": {
+          "description": "First ancestor in the dominator chain whose category is not `jdk` or\n`framework` — i.e. the closest user-visible class retaining these\nobjects. Empty when the dominator is already non-JDK/framework.",
+          "type": "string"
         }
       },
       "required": [
@@ -2853,6 +2882,10 @@
       "description": "One row of \"Biggest Objects\".",
       "type": "object",
       "properties": {
+        "category": {
+          "description": "Classification category of `display_class`. See `classify.rs`.",
+          "type": "string"
+        },
         "display_class": {
           "type": "string"
         },

@@ -1,5 +1,8 @@
 #!/bin/sh
 set -e
+echo '+HPROF_UPDATE_SNAPSHOTS=1 cargo test emit_schema_matches_committed_file --features native'
+HPROF_UPDATE_SNAPSHOTS=1 cargo test emit_schema_matches_committed_file --features native 2>/dev/null
+git add schema/report.schema.json
 echo '+cargo fmt --all -- --check'
 cargo fmt --all -- --check
 echo '+cargo clippy --all-targets --all-features -- -D warnings'

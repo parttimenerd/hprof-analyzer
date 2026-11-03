@@ -1515,20 +1515,25 @@ mod tests {
 
     #[test]
     fn emit_schema_matches_committed_file() {
+        let schema_path = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/report.schema.json");
+        let fresh = serde_json::to_value(schemars::schema_for!(Report)).expect("fresh schema");
+        let fresh_pretty =
+            serde_json::to_string_pretty(&fresh).expect("serialize fresh schema") + "\n";
+
+        if std::env::var("HPROF_UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+            std::fs::write(schema_path, &fresh_pretty).expect("write schema");
+            return;
+        }
+
         let committed: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/schema/report.schema.json"
-            ))
-            .expect("read committed schema"),
+            &std::fs::read_to_string(schema_path).expect("read committed schema"),
         )
         .expect("parse committed schema");
-        let fresh = serde_json::to_value(schemars::schema_for!(Report)).expect("fresh schema");
         // Value-equality: whitespace / key ordering must not cause false diffs.
         assert_eq!(
             committed, fresh,
-            "schema/report.schema.json must equal a fresh schema_for!(Report); \
-             regenerate with: cargo build --release && ./target/release/hprof-analyzer dev emit-schema > schema/report.schema.json"
+            "schema/report.schema.json is stale; regenerate with: \
+             HPROF_UPDATE_SNAPSHOTS=1 cargo test emit_schema_matches_committed_file --features native"
         );
     }
 
