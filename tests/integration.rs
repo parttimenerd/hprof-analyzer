@@ -250,6 +250,17 @@ fn json_golden_snapshot() {
 
     let mut got: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("analyzer stdout was not valid JSON");
+
+    if std::env::var("HPROF_UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+        normalize_nondeterministic(&mut got);
+        std::fs::write(
+            &golden_path,
+            serde_json::to_string_pretty(&got).expect("serialize") + "\n",
+        )
+        .unwrap_or_else(|e| panic!("cannot write golden {golden_path}: {e}"));
+        return;
+    }
+
     let golden_text = std::fs::read_to_string(&golden_path)
         .unwrap_or_else(|e| panic!("cannot read golden {golden_path}: {e}"));
     let mut want: serde_json::Value =
@@ -261,9 +272,8 @@ fn json_golden_snapshot() {
     assert_eq!(
         got, want,
         "JSON report drifted from the golden snapshot at {golden_path}. If this \
-         change is intended, regenerate the golden with:\n  \
-         cargo run --release -- tests/fixtures/dump_4_philosophers.hprof \
-         --format json > tests/fixtures/dump_4_philosophers_report.json"
+         change is intended, regenerate with:\n  \
+         HPROF_UPDATE_SNAPSHOTS=1 cargo test json_golden_snapshot"
     );
 }
 
