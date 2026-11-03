@@ -624,12 +624,14 @@ pub fn build_model(
     );
     t_bm!("leak_suspects");
     crate::trace::probe("build_model: after leak_suspects aggregates");
+    let classifier = crate::classify::build_classifier(opts.categories.clone());
     let dominator_analysis = build_dominator_analysis(
         g,
         &dc_offsets,
         &dc_targets,
         depth_counts.len() as u32,
         precomputed_total_shallow,
+        &classifier,
     );
     t_bm!("dominator_analysis");
     crate::trace::probe("build_model: after dominator_analysis aggregates");
@@ -654,7 +656,6 @@ pub fn build_model(
     crate::trace::trim();
     crate::trace::probe("build_model: after drop(dc) — before system_overview");
     crate::trace::probe("build_model: before system_overview aggregates");
-    let classifier = crate::classify::build_classifier(opts.categories.clone());
     let (overview, top_level_list, self_referential_classes, category_rollup) =
         build_system_overview(
             g,
@@ -1891,6 +1892,7 @@ fn build_dominator_analysis(
     dc_targets: &[u32],
     longest_chain_depth: u32,
     total_shallow: u64,
+    classifier: &crate::classify::Classifier,
 ) -> DominatorAnalysis {
     let n = g.n;
     let undef = u32::MAX;
@@ -1905,6 +1907,13 @@ fn build_dominator_analysis(
         } else {
             String::new()
         }
+    };
+    // Pre-classify all classes so per-object category lookups are O(1).
+    let class_categories: Vec<&str> = (0..class_count)
+        .map(|ci| classifier.classify(&pretty_class_name(&g.class_names[ci])))
+        .collect();
+    let is_own = |ci: usize| -> bool {
+        ci < class_count && class_categories[ci] != "jdk" && class_categories[ci] != "framework"
     };
 
     const DROP_THRESHOLD_PCT: f64 = 1.0;
@@ -1930,6 +1939,11 @@ fn build_dominator_analysis(
     // Packing avoids the tuple-hash overhead of HashMap<(u32, u32), _>.
     // U64HashMap uses a fast multiplicative hash for integer keys (~3× faster than SipHash).
     let mut pair_map: U64HashMap<(u64, u64, u64)> = U64HashMap::default();
+    // ci_to_top_app: per class-index, the first non-jdk/framework ancestor class
+    // name found by walking g.idom on sampled objects. Populated only for
+    // jdk/framework classes; remains None for own-code classes (not needed).
+    // Uses the FIRST hit seen per class to keep the loop cheap.
+    let mut ci_to_top_app: Vec<Option<String>> = vec![None; class_count];
     for i in 0..n {
         if g.idom[i] == undef {
             continue;
@@ -1948,9 +1962,12 @@ fn build_dominator_analysis(
                 .unwrap_or((0, u32::MAX));
             let drop_bytes = ret_i.saturating_sub(largest_child_retained);
             if drop_bytes > 0 {
+                let cls = display_of(i);
+                let cat = classifier.classify(&cls).to_string();
                 drops.push(BigDropRow {
                     obj_index_1based: (i as u64) + 1,
-                    display_class: display_of(i),
+                    display_class: cls,
+                    category: cat,
                     retained: ret_i,
                     child_count,
                     largest_child_retained,
@@ -1986,6 +2003,28 @@ fn build_dominator_analysis(
                         e.0 += 1;
                         e.1 += cu_sh;
                         e.2 += cu_ret;
+                    }
+                }
+
+                // ── Top-app-dominator collection ─────────────────────────────
+                // For jdk/framework classes, walk up g.idom from this object to
+                // find the first non-jdk/framework ancestor. Record only the
+                // first hit per class — good enough for a display label.
+                if !is_own(pci) && ci_to_top_app[pci].is_none() {
+                    let mut cur = g.idom[i] as usize;
+                    for _ in 0..30 {
+                        if cur >= n || g.idom[cur] == undef {
+                            break;
+                        }
+                        let cci_raw2 = g.class_idx[cur] as usize;
+                        if cci_raw2 < class_count {
+                            let cci2 = remap[cci_raw2] as usize;
+                            if is_own(cci2) {
+                                ci_to_top_app[pci] = Some(pretty_class_name(&g.class_names[cci2]));
+                                break;
+                            }
+                        }
+                        cur = g.idom[cur] as usize;
                     }
                 }
             }
@@ -2057,12 +2096,19 @@ fn build_dominator_analysis(
     order.truncate(IMMEDIATE_DOMINATORS_CAP);
     let mut rows: Vec<ImmediateDominatorRow> = order
         .into_iter()
-        .map(|ci| ImmediateDominatorRow {
-            dominator_class: pretty_class_name(&g.class_names[ci]),
-            dominator_count: dom_entries[ci].dom_count,
-            dominated_count: dom_entries[ci].domd_count,
-            dominator_shallow: dom_entries[ci].dom_shallow,
-            dominated_shallow: dom_entries[ci].domd_shallow,
+        .map(|ci| {
+            let cls = pretty_class_name(&g.class_names[ci]);
+            let category = classifier.classify(&cls).to_string();
+            let top_app_dominator = ci_to_top_app[ci].clone().unwrap_or_default();
+            ImmediateDominatorRow {
+                dominator_class: cls,
+                category,
+                top_app_dominator,
+                dominator_count: dom_entries[ci].dom_count,
+                dominated_count: dom_entries[ci].domd_count,
+                dominator_shallow: dom_entries[ci].dom_shallow,
+                dominated_shallow: dom_entries[ci].domd_shallow,
+            }
         })
         .collect();
     // Insert the "(GC Root)" row (if it has any dominated objects) at its
@@ -2071,6 +2117,8 @@ fn build_dominator_analysis(
     if gc_root_dom.domd_count > 0 {
         let gc_row = ImmediateDominatorRow {
             dominator_class: GC_ROOT_LABEL.to_string(),
+            category: String::new(),
+            top_app_dominator: String::new(),
             // The GC-root "system" has no shallow heap of its own — it is not
             // a real object, so dominator_count/dominator_shallow stay 0.
             dominator_count: 0,
@@ -2091,15 +2139,34 @@ fn build_dominator_analysis(
         .map(|(key, (cnt, shl, ret))| {
             let pci = (key >> 32) as usize;
             let cci = (key & 0xFFFF_FFFF) as usize;
+            let (dom_cls, dominator_category, top_app_dominator) = if pci == gc_root_sentinel {
+                (GC_ROOT_LABEL.to_string(), String::new(), String::new())
+            } else {
+                let cls = pretty_class_name(&g.class_names[pci]);
+                let cat = classifier.classify(&cls).to_string();
+                let top_app = ci_to_top_app
+                    .get(pci)
+                    .and_then(|v| v.clone())
+                    .unwrap_or_default();
+                (cls, cat, top_app)
+            };
+            let empty_name = String::new();
+            let dom_class_name = pretty_class_name(if cci < class_count {
+                &g.class_names[cci]
+            } else {
+                &empty_name
+            });
+            let dominated_category = if cci < class_count {
+                classifier.classify(&dom_class_name).to_string()
+            } else {
+                String::new()
+            };
             ImmDomPair {
-                // pci == gc_root_sentinel (== class_count, out of range for a
-                // real class_names index) marks the synthetic "(GC Root)" side.
-                dominator_class: if pci == gc_root_sentinel {
-                    GC_ROOT_LABEL.to_string()
-                } else {
-                    pretty_class_name(&g.class_names[pci])
-                },
-                dominated_class: pretty_class_name(&g.class_names[cci]),
+                dominator_class: dom_cls,
+                dominator_category,
+                dominated_class: dom_class_name,
+                dominated_category,
+                top_app_dominator,
                 pair_count: cnt,
                 dominated_shallow: shl,
                 dominated_retained: ret,
@@ -5601,7 +5668,8 @@ fn build_top_consumers(
             };
             ObjRow {
                 obj_index_1based: idx + 1,
-                display_class,
+                display_class: display_class.clone(),
+                category: classifier.classify(&display_class).to_string(),
                 shallow: g.shallow[idx] as u64,
                 retained: g.retained[idx],
                 pct_bp,

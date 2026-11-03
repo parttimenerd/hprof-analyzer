@@ -5364,6 +5364,7 @@ mod tests {
         r.dominator_analysis.big_drops.rows = vec![crate::report::model::BigDropRow {
             obj_index_1based: 1,
             display_class: "com.example.Cache".into(),
+            category: String::new(),
             retained: 150 * 1024 * 1024,
             child_count: 5,
             largest_child_retained: 10 * 1024 * 1024,
@@ -5386,6 +5387,7 @@ mod tests {
         r.dominator_analysis.big_drops.rows = vec![crate::report::model::BigDropRow {
             obj_index_1based: 1,
             display_class: "com.example.Foo".into(),
+            category: String::new(),
             retained: 50 * 1024 * 1024,
             child_count: 1,
             largest_child_retained: 10 * 1024 * 1024,

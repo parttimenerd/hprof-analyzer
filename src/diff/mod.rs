@@ -638,6 +638,7 @@ mod tests {
         report::ObjRow {
             obj_index_1based: 1,
             display_class: display.to_string(),
+            category: String::new(),
             shallow: sh,
             retained: ret,
             pct_bp: 0,

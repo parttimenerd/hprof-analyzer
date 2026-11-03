@@ -841,6 +841,9 @@ pub struct SelfReferentialClassRow {
 pub struct ObjRow {
     pub obj_index_1based: usize,
     pub display_class: String,
+    /// Classification category of `display_class`. See `classify.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
     pub shallow: u64,
     pub retained: u64,
     /// Retained share of total reachable shallow heap, in integer basis
@@ -1091,6 +1094,9 @@ pub struct BigDropRow {
     /// 1-based object index of the dominator node.
     pub obj_index_1based: u64,
     pub display_class: String,
+    /// Classification category of `display_class`. See `classify.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
     /// Retained heap of the dominator node.
     pub retained: u64,
     /// Number of dominator-tree children of this node.
@@ -1121,6 +1127,14 @@ pub struct BigDrops {
 )]
 pub struct ImmediateDominatorRow {
     pub dominator_class: String,
+    /// Classification category of `dominator_class`. See `classify.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// First ancestor in the dominator chain whose category is not `jdk` or
+    /// `framework` — i.e. the closest user-visible class retaining these
+    /// objects. Empty when the dominator is already non-JDK/framework.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub top_app_dominator: String,
     /// Number of distinct dominator objects of this class (with >=1 dom child).
     pub dominator_count: u64,
     /// Number of objects immediately dominated by objects of this class.
@@ -1139,7 +1153,18 @@ pub struct ImmediateDominatorRow {
 )]
 pub struct ImmDomPair {
     pub dominator_class: String,
+    /// Classification category of `dominator_class`. See `classify.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dominator_category: String,
     pub dominated_class: String,
+    /// Classification category of `dominated_class`. See `classify.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dominated_category: String,
+    /// First ancestor in the idom chain of objects in this pair (walking up
+    /// from the dominator side) whose category is not `jdk` or `framework`.
+    /// Empty when the dominator is already non-JDK/framework.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub top_app_dominator: String,
     /// Number of (dominator, dominated) object pairs counted.
     pub pair_count: u64,
     /// Aggregate retained heap of the dominated objects.
