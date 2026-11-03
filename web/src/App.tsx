@@ -5969,6 +5969,16 @@ function DomGraphView({ pairs, idoms }: {
     return m;
   }, [pairs, idoms]);
 
+  // Category per class (first category seen wins)
+  const categoryMap = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of pairs) {
+      if (p.dominator_category && !m.has(p.dominator_class)) m.set(p.dominator_class, p.dominator_category);
+      if (p.dominated_category && !m.has(p.dominated_class)) m.set(p.dominated_class, p.dominated_category);
+    }
+    return m;
+  }, [pairs]);
+
   // Retained bytes per dominator→dominated edge
   const topN = 50;
   const { fdNodes, fdEdges } = React.useMemo(() => {
@@ -5978,17 +5988,18 @@ function DomGraphView({ pairs, idoms }: {
     for (const cls of extraClasses) topSet.add(cls);
     const included = sorted.filter(([cls]) => topSet.has(cls));
     const maxRet = Math.max(...included.map(([, r]) => r), 1);
-    const fdNodes = included.map(([cls, ret]): { id: string; r: number; ret: number } => ({
+    const fdNodes = included.map(([cls, ret]): { id: string; r: number; ret: number; category: string } => ({
       id: cls,
       r: Math.max(8, Math.min(28, 8 + 20 * Math.sqrt(ret / maxRet))),
       ret,
+      category: categoryMap.get(cls) ?? rowCategory({ display_class: cls }),
     }));
     const nodeIds = new Set(fdNodes.map(n => n.id));
     const fdEdges = pairs
       .filter(p => nodeIds.has(p.dominator_class) && nodeIds.has(p.dominated_class) && p.dominator_class !== p.dominated_class)
       .map(p => ({ src: p.dominator_class, dst: p.dominated_class, retained: p.dominated_retained }));
     return { fdNodes, fdEdges };
-  }, [retMap, pairs, extraClasses]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [retMap, pairs, extraClasses, categoryMap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build adjacency for ancestor/subtree traversal (class-level graph)
   const { parentsOf, childrenOf } = React.useMemo(() => {
@@ -6128,6 +6139,8 @@ function DomGraphView({ pairs, idoms }: {
           size: n.r * 2,
           color: computeNodeColor(n.id, n.ret),
           retained: n.ret,
+          shape: categoryNodeShape(n.category),
+          category: n.category,
         },
       })),
       ...fdEdges.map((e, i) => ({
@@ -6165,6 +6178,31 @@ function DomGraphView({ pairs, idoms }: {
     cy.on("tap", evt => {
       if (evt.target === cy) { setSelected(null); applyCyHighlight(cy, null); }
     });
+
+    // Progressive label hiding: hide all labels when zoomed out, show top-10 by retained at mid zoom
+    const ZOOM_HIDE = 0.25;
+    const ZOOM_TOP = 0.5;
+    const updateLabels = () => {
+      const z = cy.zoom();
+      if (z < ZOOM_HIDE) {
+        cy.nodes().style("label", "");
+      } else if (z < ZOOM_TOP) {
+        const sorted = cy.nodes().toArray().sort((a, b) => (b.data("retained") as number) - (a.data("retained") as number));
+        const top10 = new Set(sorted.slice(0, 10).map(n => n.data("id") as string));
+        cy.nodes().forEach(n => {
+          const base = n.data("label") as string;
+          const pct = n.data("pctLabel") as string;
+          n.style("label", top10.has(n.data("id") as string) ? (showPct && pct ? `${base}\n${pct}` : base) : "");
+        });
+      } else {
+        cy.nodes().forEach(n => {
+          const base = n.data("label") as string;
+          const pct = n.data("pctLabel") as string;
+          n.style("label", showPct && pct ? `${base}\n${pct}` : base);
+        });
+      }
+    };
+    cy.on("zoom", updateLabels);
 
     cyRef.current?.destroy();
     cyRef.current = cy;
@@ -7698,13 +7736,26 @@ function heatColor(t: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+// Map category → cytoscape node shape so shape encodes class origin at a glance:
+//   jdk → diamond (built-in/primitive types and arrays)
+//   framework → round-rectangle (library/container classes)
+//   other/app → ellipse (default, user code)
+function categoryNodeShape(category: string): string {
+  if (category === "jdk") return "diamond";
+  if (category === "framework") return "round-rectangle";
+  return "ellipse";
+}
+
 function buildDomGraphStyle(): cytoscape.Stylesheet[] {
+  const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#222";
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
   return [
     { selector: "node", style: {
         label: "data(label)", "font-size": 11, "background-color": "data(color)",
-        width: "data(size)", height: "data(size)", color: "#222",
+        width: "data(size)", height: "data(size)", shape: "data(shape)" as any,
+        color: fg,
         "text-valign": "bottom", "text-halign": "center", "text-margin-y": 3,
-        "text-outline-width": 2, "text-outline-color": "#fff", "min-zoomed-font-size": 8,
+        "text-outline-width": 2, "text-outline-color": bg, "min-zoomed-font-size": 8,
       } as any },
     { selector: "node:selected", style: { "border-width": 3, "border-color": "#0066cc", "border-opacity": 1 } as any },
     { selector: "edge", style: {
@@ -7717,6 +7768,8 @@ function buildDomGraphStyle(): cytoscape.Stylesheet[] {
 }
 
 function buildCyBaseStyle(): cytoscape.Stylesheet[] {
+  const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#222";
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
   return [
     {
       selector: "node",
@@ -7726,12 +7779,12 @@ function buildCyBaseStyle(): cytoscape.Stylesheet[] {
         "background-color": "data(color)",
         width: "data(size)",
         height: "data(size)",
-        color: "#222",
+        color: fg,
         "text-valign": "bottom",
         "text-halign": "center",
         "text-margin-y": 3,
         "text-outline-width": 2,
-        "text-outline-color": "#fff",
+        "text-outline-color": bg,
         "min-zoomed-font-size": 8,
       } as any,
     },
@@ -7756,15 +7809,17 @@ function buildCyBaseStyle(): cytoscape.Stylesheet[] {
 function buildCyStyleWithFields(showFields: boolean): cytoscape.Stylesheet[] {
   const base = buildCyBaseStyle();
   if (showFields) {
+    const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#555";
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
     base.push({
       selector: "edge[fields]",
       style: {
         label: "data(fields)",
         "font-size": 8,
-        color: "#555",
+        color: fg,
         "text-rotation": "autorotate",
         "text-outline-width": 1,
-        "text-outline-color": "#fff",
+        "text-outline-color": bg,
       } as any,
     });
   }
