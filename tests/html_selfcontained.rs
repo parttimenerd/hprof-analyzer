@@ -71,6 +71,20 @@ fn html_is_self_contained_no_network() {
     );
 }
 
+/// The JS viewer's `CURRENT_SCHEMA_VERSION` constant must be kept in sync with
+/// `SCHEMA_VERSION` in `src/report/model.rs`. If they drift, the rendered HTML
+/// shows a "this viewer supports up to version N" error banner instead of the
+/// report. This test catches that by checking the error string is absent.
+#[test]
+fn html_schema_version_is_current() {
+    let html = render_html();
+    assert!(
+        !html.contains("this viewer supports up to version"),
+        "Schema version mismatch: bundle CURRENT_SCHEMA_VERSION is behind \
+         model.rs SCHEMA_VERSION — bump it in web/src/index.tsx"
+    );
+}
+
 #[test]
 fn html_render_is_deterministic() {
     let a = render_html();
