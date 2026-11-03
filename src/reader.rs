@@ -93,6 +93,7 @@ impl<R: Read> Read for LenientGzDecoder<R> {
 impl HprofReader {
     /// Open a dump (gzip/zip/tar.gz auto-detected) and consume its HPROF header.
     pub fn open(path: &str) -> io::Result<Self> {
+        #[cfg(any(feature = "native", feature = "redact-bin"))]
         let lower = path.to_ascii_lowercase();
 
         // tar.gz: gunzip then stream the first .hprof entry from the tar archive.

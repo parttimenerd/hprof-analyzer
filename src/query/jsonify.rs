@@ -169,6 +169,7 @@ pub fn pending_cell(idx: usize, class: &str, addr: Option<u64>) -> String {
 
 /// The dense index carried by a [`pending_cell`], or `None` for anything else —
 /// including an already-expanded cell, which makes the post-pass idempotent.
+#[cfg(feature = "native")]
 fn pending_index(cell: &QueryValue) -> Option<usize> {
     let QueryValue::Str(s) = cell else {
         return None;

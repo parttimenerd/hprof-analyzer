@@ -140,7 +140,9 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
     while len > 1 {
         let half = len / 2;
         let mid = base + half;
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         let q = (len - half) / 2;
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         let ptr = sub.as_ptr();
         #[cfg(target_arch = "x86_64")]
         unsafe {

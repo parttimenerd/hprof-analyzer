@@ -5,11 +5,15 @@
 //! `crate::run_oql::run_oql_escalated` regardless of which crate is being
 //! compiled.
 
+#[cfg(feature = "native")]
 use std::collections::HashMap;
+#[cfg(feature = "native")]
 use std::io;
 
+#[cfg(feature = "native")]
 use crate::opts::{AnalyzeOptions, DEFAULT_QUERY_PATH_DEPTH};
 use crate::query;
+#[cfg(feature = "native")]
 use crate::{cvec, dominator, pass1, pass2, retained, rpo_dfs};
 
 /// A `ClassIndexResolver` that resolves nothing — used when only the boolean
@@ -114,6 +118,7 @@ impl crate::query::jsonify::JsonifySession for EscalatedJsonifySession<'_> {
     }
 }
 
+#[cfg(feature = "native")]
 pub(crate) fn run_oql_escalated(
     input: &str,
     flat: &[(query::ast::Query, query::plan::QueryPlan)],

@@ -1295,6 +1295,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let class_name = q.from.class_name();
+    #[cfg(feature = "native")]
     let alias = q.alias.as_deref().unwrap_or("");
     let has_deferred_pred = q.where_.as_ref().is_some_and(|p| {
         crate::query::plan::pred_uses_retained(p)
@@ -1310,6 +1311,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                 continue;
             }
         }
+        #[cfg(feature = "native")]
         let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
         let row: Vec<QueryValue> = q
             .select
