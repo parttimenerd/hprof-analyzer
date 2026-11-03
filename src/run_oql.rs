@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::io;
 
 #[cfg(feature = "native")]
-use crate::opts::{AnalyzeOptions, DEFAULT_QUERY_PATH_DEPTH};
+use crate::opts::AnalyzeOptions;
+use crate::opts::DEFAULT_QUERY_PATH_DEPTH;
 use crate::query;
 #[cfg(feature = "native")]
 use crate::{cvec, dominator, pass1, pass2, retained, rpo_dfs};
