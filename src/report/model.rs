@@ -1292,6 +1292,10 @@ pub struct ConstantArrayRow {
     /// arrays. `None` when `--collections` was off or no field holds them.
     #[serde(default)]
     pub owner: Option<String>,
+    /// True when the array class belongs to the JDK or stdlib (java.*, sun.*, jdk.*, etc.).
+    /// Added in cache version 33; older cached JSON has this absent — treated as false by the UI.
+    #[serde(default)]
+    pub is_jdk: bool,
 }
 
 /// Primitive arrays whose every element is the same constant. `truncated` =

@@ -578,6 +578,9 @@ export interface ConstantArrayRow {
   // Dominant incoming reference (`Class#field`) across the group's members.
   // Absent when --collections was off or no field holds them.
   owner?: string | null;
+  // True when the array class is from the JDK/stdlib. Added in cache version 33;
+  // older cached JSON deserializes with this absent (treated as false by UI).
+  is_jdk?: boolean;
 }
 
 export interface ConstantPrimitiveArrays {

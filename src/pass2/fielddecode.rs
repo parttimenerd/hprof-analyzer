@@ -2023,13 +2023,16 @@ fn assemble_const_arrays(
                     .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
                     .map(|(o, _)| o.to_string())
             });
+            let array_class = crate::report::pretty_class_name(prim_array_class_name(elem_type));
+            let is_jdk = is_jdk_array(&array_class);
             ConstantArrayRow {
-                array_class: crate::report::pretty_class_name(prim_array_class_name(elem_type)),
+                array_class,
                 length,
                 value,
                 objects,
                 shallow,
                 owner,
+                is_jdk,
             }
         })
         .collect();
@@ -2049,9 +2052,20 @@ fn assemble_const_arrays(
             objects: other.0,
             shallow: other.1,
             owner: None,
+            is_jdk: false,
         });
     }
     ConstantPrimitiveArrays { rows, truncated }
+}
+
+fn is_jdk_array(array_class: &str) -> bool {
+    // Primitive arrays (byte[], int[], etc.) have no dot — always JDK
+    !array_class.contains('.')
+        || array_class.starts_with("java.")
+        || array_class.starts_with("javax.")
+        || array_class.starts_with("jdk.")
+        || array_class.starts_with("sun.")
+        || array_class.starts_with("com.sun.")
 }
 
 /// Build one ReferenceStats, or None when the kind is absent. Rows sorted

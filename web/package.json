@@ -5,9 +5,11 @@
   "description": "React app bundled into the hprof-analyzer self-contained HTML report",
   "type": "module",
   "scripts": {
-    "build": "node esbuild.config.mjs"
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.watch.mjs"
   },
   "dependencies": {
+    "@floating-ui/react-dom": "^2.1.9",
     "@types/d3-sankey": "^0.12.5",
     "chart.js": "4.4.7",
     "cytoscape": "^3.34.0",

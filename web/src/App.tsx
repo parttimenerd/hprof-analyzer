@@ -18,10 +18,10 @@ import {
   TopClassesChart,
   ZoomableTreemap,
 } from "./charts";
+import { Tooltip, TipHeader, TipRow, TipNote } from "./tooltip";
 import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 import { sankey, sankeyLinkHorizontal } from "d3-sankey";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
-import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
 import cytoscape from "cytoscape";
 import coseBilkent from "cytoscape-cose-bilkent";
 cytoscape.use(coseBilkent as cytoscape.Ext);
@@ -313,6 +313,10 @@ function Nav({ report }: { report: Report }) {
   const suspectCount = report.leaks.suspects.length;
   const threadCount = report.threads?.threads?.length ?? 0;
   items.push(["leak-suspects",       "Leak Suspects",    "Analysis", suspectCount > 0 ? String(suspectCount) : undefined]);
+  const li0 = report.leak_indicators;
+  if (li0 && (li0.anonymous_class_count > 0 || li0.thread_local_null_key_count > 0 || li0.direct_byte_buffer_capacity_sum > 0)) {
+    items.push(["leak-indicators", "Leak Indicators"]);
+  }
   items.push(["top-consumers",       "Top Consumers"]);
   // App Classes: shortcut to Top Consumers pre-filtered to non-JDK classes
   items.push(["app-classes",         "App Classes"]);
@@ -367,8 +371,8 @@ function Nav({ report }: { report: Report }) {
   if (report.overview.dominator_depth_histogram.length > 0) addDist("dominator-depth-distribution", "Dominator-Depth Distribution");
   addDist("hprof-record-census", "Dump Completeness");
   const li = report.leak_indicators;
-  if (li && (li.anonymous_class_count > 0 || li.thread_local_null_key_count > 0 || li.direct_byte_buffer_capacity_sum > 0)) {
-    addDist("leak-indicators", "Leak Indicators");
+  if (li && li.direct_byte_buffer_capacity_sum > 0) {
+    // just for "Off-Heap NIO" nav — leak-indicators is already registered in Analysis group above
   }
   addDist("glossary", "Glossary");
 
@@ -2562,6 +2566,8 @@ function RootPathChain({ steps, defaultOpen }: { steps: RootPathStep[], defaultO
             ? step.display_class.slice(0, maxChars - 1) + "…"
             : step.display_class;
 
+          const retainedPct = steps[0].retained > 0 ? step.retained / steps[0].retained : 0;
+          const barW = retainedPct * (BOX_W - 2 * PAD_X);
           return (
             <g key={i}
               style={inGraph ? { cursor: "pointer" } : undefined}
@@ -2569,7 +2575,10 @@ function RootPathChain({ steps, defaultOpen }: { steps: RootPathStep[], defaultO
               role={inGraph ? "button" : undefined}
               aria-label={inGraph ? `Explore ${step.display_class} in Object Graph` : undefined}
             >
-              <title>{inGraph ? `Click to open ${step.display_class} in Object Graph Explorer` : step.display_class}</title>
+              <title>{isLast
+                ? `${step.display_class}\nGC Root: ${step.root_type_label ?? "unknown"}\nStep ${i + 1} of ${steps.length}`
+                : `${step.display_class}\nRetains: ${fmtExactBytes(step.retained)} (${fmtPct(retainedPct * 100)} of suspect)\n${step.field_edge ? `Field: .${step.field_edge}\n` : ""}Step ${i + 1} of ${steps.length}`
+              }</title>
               {/* Box */}
               {isLast ? (
                 // Double-border for GC root (two rects slightly inset)
@@ -2591,6 +2600,18 @@ function RootPathChain({ steps, defaultOpen }: { steps: RootPathStep[], defaultO
                 <rect x={BOX_X} y={boxY} width={BOX_W} height={BOX_H}
                   rx={R} ry={R}
                   fill="var(--bg)" stroke="var(--border)" strokeWidth={1} />
+              )}
+              {/* Retained-bytes dropoff bar at bottom of box */}
+              {!isLast && barW > 0 && (
+                <rect
+                  x={BOX_X + PAD_X}
+                  y={boxY + BOX_H - 5}
+                  width={barW}
+                  height={5}
+                  rx={2} ry={2}
+                  fill="var(--accent)"
+                  opacity={0.28}
+                />
               )}
 
               {/* Class name */}
@@ -2876,16 +2897,25 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
           style={{ display: "block", overflow: "visible" }}
         >
           {/* Links — drawn inside the sankey column (svgW wide) */}
-          {graph.links.map((link, i) => (
-            <path
-              key={`sl-${i}`}
-              className="sankey-link"
-              d={sankeyLinkHorizontal()(link) ?? undefined}
-              stroke="var(--muted)"
-              strokeWidth={Math.max(1, link.width ?? 1)}
-              strokeOpacity={0.35}
-            />
-          ))}
+          {graph.links.map((link, i) => {
+            type SankeyLink = typeof link & { source: { name?: string; retained?: number }; target: { name?: string } };
+            const sl = link as unknown as SankeyLink;
+            const srcName = sl.source?.name ?? "";
+            const tgtName = sl.target?.name ?? "";
+            const retBytes = sl.source?.retained ?? 0;
+            return (
+              <path
+                key={`sl-${i}`}
+                className="sankey-link"
+                d={sankeyLinkHorizontal()(link) ?? undefined}
+                stroke="var(--muted)"
+                strokeWidth={Math.max(1, link.width ?? 1)}
+                strokeOpacity={0.35}
+              >
+                {srcName && tgtName && <title>{shortClass(srcName)} → {shortClass(tgtName)}{retBytes > 0 ? `: ${fmtB(retBytes)} retained` : ""}</title>}
+              </path>
+            );
+          })}
           {/* Nodes + labels; labels extend into the right label column */}
           {graph.nodes.map((n, i) => {
             type SN = SNode & { x0?: number; x1?: number; y0?: number; y1?: number; depth?: number };
@@ -2945,46 +2975,85 @@ function MergedPathSankey({ node }: { node: MergedPathNode }) {
   );
 }
 
-function LeakChainGraph({ steps }: { steps: RootPathStep[] }) {
-  const uid = React.useId().replace(/:/g, "");
-  const markerId = `lc-arr-${uid}`;
+function RetentionChainBar({ steps }: { steps: RootPathStep[] }) {
+  const [fmtB] = useFmtBytes();
   if (!steps || steps.length < 2) return null;
-  const W = 320, H = 70, pad = 20;
-  const step = (W - 2 * pad) / Math.max(1, steps.length - 1);
-  const nodes = steps.map((s, i) => ({
-    x: pad + i * step,
-    y: H / 2,
-    label: s.display_class.split(".").pop()?.slice(0, 9) ?? "?",
-    fieldEdge: s.field_edge ?? "",
-  }));
+  const rootRetained = steps[0].retained || 1;
+
   return (
-    <svg width={W} height={H} className="leak-chain-svg" style={{ overflow: "visible" }}>
-      <defs>
-        <marker id={markerId} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
-          <path d="M0,0 L0,5 L5,2.5 z" fill="var(--muted)" />
-        </marker>
-      </defs>
-      {nodes.slice(0, -1).map((n, i) => (
-        <line key={i} x1={n.x + 7} y1={n.y} x2={nodes[i + 1].x - 7} y2={nodes[i + 1].y}
-          stroke="var(--muted)" strokeWidth={1.5} markerEnd={`url(#${markerId})`} />
-      ))}
-      {nodes.map((n, i) => (
-        <g key={i}>
-          <circle cx={n.x} cy={n.y} r={i === 0 ? 9 : 6}
-            fill={i === 0 ? "var(--accent)" : "var(--muted)"} opacity={0.75} />
-          <text x={n.x} y={n.y + 18} textAnchor="middle" fontSize={9} fill="var(--fg)">{n.label}</text>
-          {n.fieldEdge && i < nodes.length - 1 && (
-            <text x={n.x + step / 2} y={n.y - 8} textAnchor="middle" fontSize={8} fill="var(--muted)">.{n.fieldEdge}</text>
-          )}
-        </g>
-      ))}
-    </svg>
+    <div style={{ display: "flex", alignItems: "stretch", gap: 0, margin: "0.4rem 0", overflowX: "auto" }}>
+      {steps.map((step, i) => {
+        const isFirst = i === 0;
+        const isLast = i === steps.length - 1;
+        const pctWidth = Math.max(6, (step.retained / rootRetained) * 100);
+        const shortCls = step.display_class.split(".").pop() ?? step.display_class;
+        const tip = (
+          <>
+            <TipHeader>{step.display_class}</TipHeader>
+            <TipRow label="Retains" value={<>{fmtB(step.retained)} <span style={{ opacity: 0.7 }}>[{fmtExactBytes(step.retained)}]</span></>} />
+            <TipRow label="% of suspect" value={fmtPct((step.retained / rootRetained) * 100)} />
+            {step.field_edge && <TipRow label="Field" value={`.${step.field_edge}`} />}
+            <TipRow label="Step" value={`${i + 1} of ${steps.length}`} />
+            {isLast && step.root_type_label && <TipRow label="GC Root" value={step.root_type_label} />}
+          </>
+        );
+        return (
+          <React.Fragment key={i}>
+            {i > 0 && steps[i].field_edge && (
+              <div style={{ display: "flex", alignItems: "center", padding: "0 3px", color: "var(--muted)", fontSize: "0.72rem", whiteSpace: "nowrap", flexShrink: 0 }}>
+                .{steps[i].field_edge}
+              </div>
+            )}
+            {i > 0 && !steps[i].field_edge && (
+              <div style={{ display: "flex", alignItems: "center", padding: "0 2px", color: "var(--muted)", flexShrink: 0 }}>›</div>
+            )}
+            <Tooltip content={tip} placement="top">
+              <div style={{
+                minWidth: 44,
+                width: `${pctWidth}%`,
+                background: isFirst ? "var(--accent, #4af)" : isLast ? "var(--muted, #888)" : "var(--border, #444)",
+                borderRadius: 3,
+                padding: "3px 5px",
+                overflow: "hidden",
+                cursor: "default",
+                flexShrink: 0,
+              }}>
+                <div style={{ fontSize: "0.75rem", color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: isFirst ? 700 : 400 }}>
+                  {shortCls}
+                </div>
+                {pctWidth > 12 && (
+                  <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.75)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {fmtB(step.retained)}
+                  </div>
+                )}
+              </div>
+            </Tooltip>
+          </React.Fragment>
+        );
+      })}
+    </div>
   );
 }
 
 function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: number }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const share = pctOf(s.retained, total);
+  const retainedTip = (
+    <>
+      <TipHeader>Retained Memory</TipHeader>
+      <TipRow label="Retained" value={fmtExactBytes(s.retained)} />
+      <TipRow label="% of heap" value={fmtPct(share)} />
+      <TipNote>Freeing this object would reclaim {fmtPct(share)} of total reachable memory</TipNote>
+    </>
+  );
+  const shallowTip = s.shallow > 0 ? (
+    <>
+      <TipHeader>Shallow Size</TipHeader>
+      <TipRow label="Shallow" value={fmtExactBytes(s.shallow)} />
+      <TipRow label="Retained" value={fmtExactBytes(s.retained)} />
+      <TipNote>Shallow = the object itself. Retained = full subtree kept alive only by this object.</TipNote>
+    </>
+  ) : null;
   return (
     <div className="suspect" id={`suspect-${rank}`}>
       <h3 style={{ margin: "0 0 0.25rem" }}>
@@ -2999,14 +3068,23 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <span className="pill">{s.is_single ? "Single Object" : `Class Group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
-        Retains <strong title={fmtExactBytes(s.retained)}>{fmtB(s.retained)}</strong>{" "}
+        Retains{" "}
+        <Tooltip content={retainedTip}>
+          <strong style={{ cursor: "help", borderBottom: "1px dotted var(--muted)" }} title={fmtExactBytes(s.retained)}>{fmtB(s.retained)}</strong>
+        </Tooltip>{" "}
         <span className="mat-exact">
           {fmtExactBytes(s.retained)} ({fmtPct(share)})
         </span>
-        {s.shallow > 0 && <> · shallow <span title={fmtExactBytes(s.shallow)}>{fmtB(s.shallow)}</span></>}.
+        {s.shallow > 0 && (
+          <> · shallow{" "}
+            <Tooltip content={shallowTip}>
+              <span style={{ cursor: "help", borderBottom: "1px dotted var(--muted)" }} title={fmtExactBytes(s.shallow)}>{fmtB(s.shallow)}</span>
+            </Tooltip>
+          </>
+        )}.
       </p>
       {s.root_path && s.root_path.length >= 2 && (
-        <LeakChainGraph steps={s.root_path} />
+        <RetentionChainBar steps={s.root_path} />
       )}
       <p style={{ margin: "0.25rem 0" }}>
         <span className="label">Held by:</span>{" "}
@@ -3206,50 +3284,28 @@ function PkgTreeTable({ nodes, maxRetained }: { nodes: PackageNode[]; maxRetaine
 }
 
 function TopConsumersTreemap({ rows }: { rows: Array<{ pretty_class: string; retained: number }> }) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const [w, setW] = React.useState(680);
-  React.useLayoutEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(entries => {
-      const bw = entries[0]?.contentRect.width;
-      if (bw && bw > 0) setW(Math.floor(bw));
-    });
-    ro.observe(ref.current);
-    return () => ro.disconnect();
-  }, []);
-
-  const H = 400;
-  const data = { name: "root", children: rows.slice(0, 60).map(r => ({ name: r.pretty_class, value: r.retained })) };
-  const root = hierarchy(data).sum((d: any) => d.value ?? 0).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
-  treemap<any>().size([w, H]).tile(treemapSquarify).padding(2)(root);
-
+  type Row = { pretty_class: string; retained: number };
+  const rootNode = React.useMemo(() => ({ pretty_class: "", retained: rows.reduce((s, r) => s + r.retained, 0), _children: rows }), [rows]);
   return (
-    <div ref={ref} style={{ width: "100%" }}>
-      <svg width={w} height={H} style={{ display: "block", border: "1px solid var(--border)", borderRadius: 4 }}>
-        {root.leaves().map((leaf: any, i: number) => {
-          const lw = leaf.x1 - leaf.x0, lh = leaf.y1 - leaf.y0;
-          return (
-            <g key={i} style={{ cursor: "pointer" }}
-               onClick={() => fireInspect({ kind: "class", cls: leaf.data.name })}>
-              <title>{leaf.data.name}{"\n"}{fmtExactBytes(leaf.data.value)} retained</title>
-              <rect x={leaf.x0} y={leaf.y0} width={lw} height={lh}
-                fill={tpfgColor(leaf.data.name)} opacity={0.82} rx={2} />
-              {lw > 36 && lh > 18 && (
-                <text x={leaf.x0 + lw / 2} y={leaf.y0 + lh / 2}
-                  textAnchor="middle" dominantBaseline="middle"
-                  fontSize={Math.min(12, lw / 7)} fill="var(--bg, #fff)"
-                  style={{ pointerEvents: "none" }}>
-                  {leaf.data.name.split(".").pop()?.slice(0, Math.floor(lw / 7))}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-      <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "4px 0 0" }}>
-        Top {Math.min(60, rows.length)} classes by retained heap. Click to inspect.
-      </p>
-    </div>
+    <ZoomableTreemap<{ pretty_class: string; retained: number; _children?: Row[] }>
+      root={rootNode}
+      getChildren={(n) => (n as any)._children ?? []}
+      getValue={(n) => n.retained}
+      getLabel={(n) => n.pretty_class}
+      fmt={formatBytes}
+      fmtExact={fmtExactBytes}
+      height={400}
+      renderLeaf={(node) =>
+        node.pretty_class ? (
+          <div style={{ marginTop: "0.4rem", fontSize: "0.8rem", color: "var(--muted)" }}>
+            <button style={{ fontSize: "0.8rem", padding: "0.1rem 0.5rem", cursor: "pointer", border: "1px solid var(--border)", borderRadius: 3, background: "transparent", color: "var(--fg)" }}
+              onClick={() => fireInspect({ kind: "class", cls: node.pretty_class })}>
+              Inspect {node.pretty_class}
+            </button>
+          </div>
+        ) : null
+      }
+    />
   );
 }
 
@@ -3469,7 +3525,20 @@ function TopConsumersSection({ report }: { report: Report }) {
       );
     }},
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
-    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: (o) => <span title={fmtExactBytes(o.retained)}>{fmtB(o.retained)}</span>, selector: (o) => o.retained, sortable: true },
+    { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px",
+      cell: (o) => (
+        <Tooltip content={<>
+          <TipHeader>Retained</TipHeader>
+          <TipRow label="Retained" value={fmtExactBytes(o.retained)} />
+          <TipRow label="% of heap" value={fmtPct(pctOf(o.retained, total))} />
+          <TipRow label="Shallow" value={fmtExactBytes(o.shallow)} />
+          <TipRow label="Object" value={`#${o.obj_index_1based - 1}`} />
+          <TipNote>Retained = all objects alive only through this one</TipNote>
+        </>}>
+          <span style={{ cursor: "help" }}>{fmtB(o.retained)}</span>
+        </Tooltip>
+      ),
+      selector: (o) => o.retained, sortable: true },
     { id: "pct", name: "% Heap", right: true, width: "100px", format: (o) => fmtPct(pctOf(o.retained, total)), selector: (o) => o.pct_bp, sortable: true },
     ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, minWidth: "160px", maxWidth: "317px", cell: (o: ObjRow) => {
       const text = o.owner ?? o.held_via ?? null;
@@ -3503,10 +3572,45 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const clsTableCols: TableColumn<ClassRow>[] = [
     { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /><OqlBtn cls={c.pretty_class} /><ListObjectsBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
-    { id: "instances", name: "Instances", right: true, width: "120px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
+    { id: "instances", name: "Instances", right: true, width: "120px",
+      cell: (c) => (
+        <Tooltip content={<>
+          <TipHeader>{c.pretty_class}</TipHeader>
+          <TipRow label="Instances" value={fmtCount(c.instances)} />
+          <TipRow label="Avg retained" value={c.instances > 0 ? fmtExactBytes(Math.round(c.retained / c.instances)) : "—"} />
+          <TipRow label="Avg shallow" value={c.instances > 0 ? fmtExactBytes(Math.round(c.shallow / c.instances)) : "—"} />
+        </>}>
+          <span style={{ cursor: "help" }}>{fmtCount(c.instances)}</span>
+        </Tooltip>
+      ),
+      selector: (c) => c.instances, sortable: true },
     { id: "bar", name: "", width: "80px", cell: (c) => <span className="bar-bg"><span className="bar-fill" style={{ width: `${maxClsRetained > 0 ? (c.retained / maxClsRetained) * 100 : 0}%` }} /></span> },
-    { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "135px" : "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtBcls(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
-    { id: "pct", name: "% Heap", right: true, width: "100px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained, sortable: true },
+    { id: "retained", name: useKBcls ? "Retained (KB)" : "Retained", right: true, width: useKBcls ? "135px" : "110px",
+      cell: (c) => (
+        <Tooltip content={<>
+          <TipHeader>Retained</TipHeader>
+          <TipRow label="Retained" value={fmtExactBytes(c.retained)} />
+          <TipRow label="% of heap" value={fmtPct(pctOf(c.retained, total))} />
+          <TipRow label="Instances" value={fmtCount(c.instances)} />
+          <TipRow label="Avg / inst" value={c.instances > 0 ? fmtExactBytes(Math.round(c.retained / c.instances)) : "—"} />
+          <TipNote>All {fmtCount(c.instances)} instances combined</TipNote>
+        </>}>
+          <span style={{ cursor: "help" }}>{fmtBcls(c.retained)}</span>
+        </Tooltip>
+      ),
+      selector: (c) => c.retained, sortable: true },
+    { id: "pct", name: "% Heap", right: true, width: "100px",
+      cell: (c) => (
+        <Tooltip content={<>
+          <TipHeader>% of Heap</TipHeader>
+          <TipRow label="% retained" value={fmtPct(pctOf(c.retained, total))} />
+          <TipRow label="Retained" value={fmtExactBytes(c.retained)} />
+          <TipRow label="Total heap" value={fmtExactBytes(total)} />
+        </>}>
+          <span style={{ cursor: "help" }}>{fmtPct(pctOf(c.retained, total))}</span>
+        </Tooltip>
+      ),
+      selector: (c) => c.retained, sortable: true },
     { id: "bpi", name: "B / Inst", right: true, width: "90px", sortable: true, selector: c => c.instances > 0 ? c.retained / c.instances : 0,
       cell: c => {
         if (c.instances === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
@@ -3885,7 +3989,16 @@ function ThreadsByRetainedTable({ threads }: { threads: ThreadInfo[] }) {
       right: true,
       width: useKB ? "142px" : "118px",
       sortable: true,
-      cell: byteCell((t) => t.retained, fmtB, useKB),
+      cell: (t) => (
+        <Tooltip content={<>
+          <TipHeader>{t.name?.trim() || "(unnamed)"}</TipHeader>
+          <TipRow label="Retained" value={fmtExactBytes(t.retained)} />
+          <TipRow label="TL roots" value={t.local_root_count > 0 ? fmtCount(t.local_root_count) : "—"} />
+          <TipNote>All objects alive only through this thread's stack</TipNote>
+        </>}>
+          <span style={{ cursor: "help" }}>{fmtB(t.retained)}</span>
+        </Tooltip>
+      ),
       selector: (t) => t.retained,
     },
     {
@@ -4443,15 +4556,72 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       {cpaRows.length === 0 ? (
         <p className="subtitle">None found in this dump.</p>
       ) : (() => {
-        const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
-          { id: "class", name: "Array Class", grow: 1, maxWidth: cpaHasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
-          { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
-          { id: "value", name: "Value", right: true, width: "90px", format: (r) => String(r.value), selector: (r) => r.value, sortable: true },
-          { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
-          { id: "shallow", name: useKBcpa ? "Shallow (KB)" : "Shallow", right: true, width: useKBcpa ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtBcpa, useKBcpa), selector: (r) => r.shallow, sortable: true },
-          ...(cpaHasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "307px", cell: (r: import("./types").ConstantArrayRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").ConstantArrayRow>] : []),
-        ];
-        return <StdTable columns={cpaCols} data={cpaRows} searchKeys={["array_class"]} fmtBtn={kbBtnCpa} defaultSortFieldId="shallow" defaultSortAsc={false} />;
+        const appRows = cpaRows.filter(r => !r.is_jdk);
+        const jdkRows = cpaRows.filter(r => r.is_jdk);
+        const renderCpaTable = (rows: import("./types").ConstantArrayRow[], hasOwner: boolean) => {
+          const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
+            { id: "class", name: "Array Class", grow: 1, maxWidth: hasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+            { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
+            { id: "value", name: "Value", right: true, width: "90px",
+              cell: (r) => (
+                <Tooltip content={<>
+                  <TipHeader>Constant Value</TipHeader>
+                  <TipRow label="Value" value={String(r.value)} />
+                  <TipRow label="Arrays" value={fmtCount(r.objects)} />
+                  <TipRow label="Total elements" value={fmtCount(r.objects * r.length)} />
+                  <TipNote>Every element in all {fmtCount(r.objects)} arrays equals {r.value}. Candidate for a shared static final.</TipNote>
+                </>}>
+                  <span style={{ cursor: "help" }}>{String(r.value)}</span>
+                </Tooltip>
+              ),
+              selector: (r) => r.value, sortable: true },
+            { id: "objects", name: "Objects", right: true, width: "100px",
+              cell: (r) => (
+                <Tooltip content={<>
+                  <TipHeader>Array Count</TipHeader>
+                  <TipRow label="Arrays" value={fmtCount(r.objects)} />
+                  <TipRow label="Length each" value={fmtCount(r.length)} />
+                  <TipRow label="Total elements" value={fmtCount(r.objects * r.length)} />
+                  <TipNote>All {fmtCount(r.objects)} arrays contain only {r.value}</TipNote>
+                </>}>
+                  <span style={{ cursor: "help" }}>{fmtCount(r.objects)}</span>
+                </Tooltip>
+              ),
+              selector: (r) => r.objects, sortable: true },
+            { id: "shallow", name: useKBcpa ? "Shallow (KB)" : "Shallow", right: true, width: useKBcpa ? "135px" : "110px",
+              cell: (r) => (
+                <Tooltip content={<>
+                  <TipHeader>Shallow Size</TipHeader>
+                  <TipRow label="Shallow" value={fmtExactBytes(r.shallow)} />
+                  <TipRow label="Arrays" value={`${fmtCount(r.objects)} × ${fmtCount(r.length)} elements`} />
+                  <TipRow label="Total elements" value={fmtCount(r.objects * r.length)} />
+                  <TipNote>Replace with shared static final to reclaim ~{fmtExactBytes(r.shallow)}</TipNote>
+                </>}>
+                  <span style={{ cursor: "help" }}>{fmtBcpa(r.shallow)}</span>
+                </Tooltip>
+              ),
+              selector: (r) => r.shallow, sortable: true },
+            ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "307px", cell: (r: import("./types").ConstantArrayRow) => r.owner ? <code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").ConstantArrayRow>] : []),
+          ];
+          return <StdTable columns={cpaCols} data={rows} searchKeys={["array_class"]} fmtBtn={kbBtnCpa} defaultSortFieldId="shallow" defaultSortAsc={false} />;
+        };
+        if (appRows.length > 0 && jdkRows.length > 0) {
+          return (
+            <>
+              <h4 style={{ margin: "0.6rem 0 0.2rem", fontSize: "0.95rem" }}>Application Arrays — actionable ({appRows.length} group{appRows.length === 1 ? "" : "s"})</h4>
+              {renderCpaTable(appRows, appRows.some(r => r.owner != null))}
+              <details style={{ marginTop: "0.4rem" }}>
+                <summary style={{ cursor: "pointer", color: "var(--muted)", userSelect: "none", fontSize: "0.88rem" }}>
+                  JDK / Platform Arrays — informational ({jdkRows.length} group{jdkRows.length === 1 ? "" : "s"})
+                </summary>
+                <div style={{ marginTop: "0.4rem" }}>
+                  {renderCpaTable(jdkRows, jdkRows.some(r => r.owner != null))}
+                </div>
+              </details>
+            </>
+          );
+        }
+        return renderCpaTable(cpaRows, cpaHasOwner);
       })()}
 
       {topArraysBlock(topPrim, "primitive", fmtBparr, kbBtnParr, useKBparr)}
@@ -5001,6 +5171,8 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 interface WhoHoldsSankeyProps {
   pairs: ImmDomPair[];
   initialTarget: string;
+  /** Total heap size for % of heap computations in tooltips. */
+  totalHeap?: number;
   /** When set, the component is controlled from outside: target = externalTarget. */
   externalTarget?: string;
   /** Called when the user wants to pivot to a new class (internal or external). */
@@ -5042,6 +5214,12 @@ interface WhoHoldsLink {
   source: string;
   target: string;
   value: number;
+  // per-link pair data for tooltip (source cls → target cls)
+  srcCls?: string;
+  tgtCls?: string;
+  linkRetained?: number;
+  linkShallow?: number;
+  linkPairCount?: number;
 }
 
 // Aggregate pair stats for a class appearing in the graph
@@ -5094,7 +5272,12 @@ function buildSankeyGraph(
       if (!nodeMap.has(id)) makeNode(id, side, h.dominator_class);
       // Avoid duplicate links
       if (!links.find(l => l.source === id && l.target === prevId)) {
-        links.push({ source: id, target: prevId, value: Math.max(1, h.dominated_retained) });
+        links.push({
+          source: id, target: prevId, value: Math.max(1, h.dominated_retained),
+          srcCls: h.dominator_class, tgtCls: cls,
+          linkRetained: h.dominated_retained, linkShallow: h.dominated_shallow ?? 0,
+          linkPairCount: h.pair_count ?? 1,
+        });
       }
     }
     return holders;
@@ -5109,7 +5292,12 @@ function buildSankeyGraph(
       const id = side + ":" + d.dominated_class;
       if (!nodeMap.has(id)) makeNode(id, side, d.dominated_class);
       if (!links.find(l => l.source === prevId && l.target === id)) {
-        links.push({ source: prevId, target: id, value: Math.max(1, d.dominated_retained) });
+        links.push({
+          source: prevId, target: id, value: Math.max(1, d.dominated_retained),
+          srcCls: cls, tgtCls: d.dominated_class,
+          linkRetained: d.dominated_retained, linkShallow: d.dominated_shallow ?? 0,
+          linkPairCount: d.pair_count ?? 1,
+        });
       }
     }
     return dominated;
@@ -5162,7 +5350,7 @@ interface NodePopover {
   y: number;
 }
 
-function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHoldsSankeyProps) {
+function WhoHoldsSankey({ pairs, initialTarget, totalHeap, externalTarget, onPivot }: WhoHoldsSankeyProps) {
   const [target, setTarget] = React.useState(externalTarget ?? initialTarget);
   const [history, setHistory] = React.useState<string[]>([]);
   const [search, setSearch] = React.useState("");
@@ -5172,6 +5360,11 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
   const [cols, setCols] = React.useState<SankeyColCount>(3);
   const [fullscreen, setFullscreen] = React.useState(false);
   const [popover, setPopover] = React.useState<NodePopover | null>(null);
+  const [linkPopover, setLinkPopover] = React.useState<{
+    x: number; y: number;
+    srcCls: string; tgtCls: string;
+    retained: number; shallow: number; pairCount: number;
+  } | null>(null);
   const [showChain, setShowChain] = React.useState(true);
 
   // When a table row drives an external pivot, reset history and jump to it.
@@ -5348,17 +5541,14 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
   );
 
   const breadcrumb = (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.25rem", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
-      {history.map((h, i) => (
-        <React.Fragment key={`${h}-${i}`}>
-          <button
-            onClick={() => goToHistory(i)}
-            title={h}
-            style={{ border: "none", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: 0, fontSize: "0.85rem", textDecoration: "underline" }}
-          >{shortClass(h)}</button>
-          <span style={{ color: "var(--muted)" }}>›</span>
-        </React.Fragment>
-      ))}
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+      {history.length > 0 && (
+        <button
+          onClick={() => goToHistory(history.length - 1)}
+          title={history[history.length - 1]}
+          style={{ border: "1px solid var(--border)", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: "1px 6px", fontSize: "0.82rem", borderRadius: 4, flexShrink: 0 }}
+        >← {shortClass(history[history.length - 1])}</button>
+      )}
       <span className="copy-cell">
         <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
         <CopyBtn text={target} />
@@ -5389,16 +5579,33 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
             style={{ overflow: "hidden" }}
           >
             {/* Links */}
-            {graph.links.map((link, i) => (
-              <path
-                key={`link-${i}`}
-                d={sankeyLinkHorizontal()(link) ?? undefined}
-                fill="none"
-                stroke="var(--muted)"
-                strokeWidth={Math.max(1, link.width ?? 1)}
-                opacity={0.4}
-              />
-            ))}
+            {graph.links.map((link, i) => {
+              const whl = link as unknown as WhoHoldsLink;
+              return (
+                <path
+                  key={`link-${i}`}
+                  d={sankeyLinkHorizontal()(link) ?? undefined}
+                  fill="none"
+                  stroke="var(--muted)"
+                  strokeWidth={Math.max(1, link.width ?? 1)}
+                  opacity={0.4}
+                  style={{ cursor: "default" }}
+                  onMouseEnter={(e) => {
+                    if (whl.srcCls && whl.tgtCls) {
+                      setLinkPopover({
+                        x: e.clientX, y: e.clientY,
+                        srcCls: whl.srcCls, tgtCls: whl.tgtCls,
+                        retained: whl.linkRetained ?? 0,
+                        shallow: whl.linkShallow ?? 0,
+                        pairCount: whl.linkPairCount ?? 1,
+                      });
+                    }
+                    setPopover(null);
+                  }}
+                  onMouseLeave={() => setLinkPopover(null)}
+                />
+              );
+            })}
             {/* Nodes */}
             {graph.nodes.map((n) => {
               const x0 = n.x0 ?? 0;
@@ -5435,6 +5642,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
                     }}
                     onMouseEnter={(e) => {
                       setPopover({ nodeId: n.id, x: e.clientX, y: e.clientY });
+                      setLinkPopover(null);
                     }}
                     onMouseLeave={() => setPopover(null)}
                   />
@@ -5466,7 +5674,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
       style={{
         position: "fixed",
         left: Math.min(popover!.x + 8, window.innerWidth - 280),
-        top: Math.min(popover!.y + 8, window.innerHeight - 160),
+        top: Math.min(popover!.y + 8, window.innerHeight - 200),
         zIndex: 99999,
         background: "var(--card-bg, var(--bg))",
         border: "1px solid var(--border)",
@@ -5485,6 +5693,12 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.15rem 0.6rem", color: "var(--fg)" }}>
         <span style={{ color: "var(--muted)" }}>Pairs:</span><span>{fmtCount(popoverNode.pairCount)}</span>
         <span style={{ color: "var(--muted)" }}>Total retained:</span><span>{fmtExactBytes(popoverNode.totalRetained)}</span>
+        {totalHeap && totalHeap > 0 && (
+          <><span style={{ color: "var(--muted)" }}>% of heap:</span><span>{(popoverNode.totalRetained / totalHeap * 100).toFixed(1)}%</span></>
+        )}
+        {popoverNode.pairCount > 0 && popoverNode.totalRetained > 0 && (
+          <><span style={{ color: "var(--muted)" }}>Avg retained/inst:</span><span>{fmtExactBytes(Math.round(popoverNode.totalRetained / popoverNode.pairCount))}</span></>
+        )}
         {popoverNode.totalShallow > 0 && (
           <><span style={{ color: "var(--muted)" }}>Total shallow:</span><span>{fmtExactBytes(popoverNode.totalShallow)}</span></>
         )}
@@ -5493,8 +5707,46 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
         </span>
       </div>
       {popoverNode.side !== "C" && (
-        <div style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--muted)" }}>Click to focus →</div>
+        <div style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--accent)", fontWeight: 600 }}>Click to focus →</div>
       )}
+    </div>
+  ) : null;
+
+  const linkPopoverEl = linkPopover ? (
+    <div
+      style={{
+        position: "fixed",
+        left: Math.min(linkPopover.x + 10, window.innerWidth - 300),
+        top: Math.min(linkPopover.y + 8, window.innerHeight - 180),
+        zIndex: 99999,
+        background: "var(--card-bg, var(--bg))",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+        padding: "0.6rem 0.8rem",
+        minWidth: 260,
+        maxWidth: 360,
+        fontSize: "0.82rem",
+        pointerEvents: "none",
+      }}
+    >
+      <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginBottom: "0.35rem" }}>
+        <span style={{ fontFamily: "var(--mono, monospace)", fontWeight: 600, color: "var(--fg)" }}>{shortClass(linkPopover.srcCls)}</span>
+        {" "}<span style={{ color: "var(--muted)" }}>dominates</span>{" "}
+        <span style={{ fontFamily: "var(--mono, monospace)", fontWeight: 600, color: "var(--fg)" }}>{shortClass(linkPopover.tgtCls)}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.15rem 0.6rem", color: "var(--fg)" }}>
+        <span style={{ color: "var(--muted)" }}>Retained:</span><span title={fmtExactBytes(linkPopover.retained)}>{fmtB(linkPopover.retained)} <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>({fmtExactBytes(linkPopover.retained)})</span></span>
+        {linkPopover.shallow > 0 && (
+          <><span style={{ color: "var(--muted)" }}>Shallow:</span><span>{fmtExactBytes(linkPopover.shallow)}</span></>
+        )}
+        {totalHeap && totalHeap > 0 && (
+          <><span style={{ color: "var(--muted)" }}>% of heap:</span><span>{(linkPopover.retained / totalHeap * 100).toFixed(2)}%</span></>
+        )}
+        <span style={{ color: "var(--muted)" }}>Pair count:</span><span>{fmtCount(linkPopover.pairCount)}</span>
+      </div>
+      <div style={{ marginTop: "0.3rem", fontSize: "0.74rem", color: "var(--muted)" }} title={linkPopover.srcCls}>{linkPopover.srcCls}</div>
+      <div style={{ fontSize: "0.74rem", color: "var(--muted)" }} title={linkPopover.tgtCls}>→ {linkPopover.tgtCls}</div>
     </div>
   ) : null;
 
@@ -5536,6 +5788,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
           {inner}
         </div>
         {popoverEl}
+        {linkPopoverEl}
       </>
     );
   }
@@ -5544,6 +5797,7 @@ function WhoHoldsSankey({ pairs, initialTarget, externalTarget, onPivot }: WhoHo
     <>
       <div>{inner}</div>
       {popoverEl}
+      {linkPopoverEl}
     </>
   );
 }
@@ -6372,7 +6626,7 @@ function SelfReferentialClustersSubsection({ rows }: { rows: SelfReferentialClas
   );
 }
 
-function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }: { data?: DominatorAnalysis; selfReferentialClasses?: SelfReferentialClassRow[]; typeRefGraph?: TypeEdge[] }) {
+function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, totalHeap }: { data?: DominatorAnalysis; selfReferentialClasses?: SelfReferentialClassRow[]; typeRefGraph?: TypeEdge[]; totalHeap?: number }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
   const threshold = data?.big_drops?.threshold ?? 0;
@@ -6545,6 +6799,7 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
             initialTarget={effectiveNavTarget}
             externalTarget={navTarget ?? undefined}
             onPivot={setNavTarget}
+            totalHeap={totalHeap}
           />
         </div>
       )}
@@ -6569,12 +6824,16 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
             <p className="subtitle">No dominator pair data — regenerate the report to populate.</p>
           ) : (() => {
             // Build a class-level dominator tree from pairs for the icicle.
-            // pairs[i] = { dominator_class, dominated_class, dominated_retained }
-            // We root at a virtual "(heap)" node and treat each dominator_class as a parent.
-            // Aggregate retained per class: retained[cls] = sum of dominated_retained where cls is dominated_class.
-            interface FNode { label: string; retained: number; children: FNode[]; }
+            interface FNode { label: string; retained: number; children: FNode[]; pairCount?: number; shallow?: number; }
             const retainedByClass = new Map<string, number>();
             const childrenOf = new Map<string, Map<string, number>>();
+            // Track pair counts and shallow bytes from idoms for getExtra
+            const pairCountByClass = new Map<string, number>();
+            const shallowByClass = new Map<string, number>();
+            for (const dom of idoms) {
+              pairCountByClass.set(dom.dominator_class, dom.dominator_count);
+              shallowByClass.set(dom.dominator_class, dom.dominator_shallow);
+            }
             for (const p of pairs) {
               retainedByClass.set(p.dominated_class, (retainedByClass.get(p.dominated_class) ?? 0) + p.dominated_retained);
               if (!childrenOf.has(p.dominator_class)) childrenOf.set(p.dominator_class, new Map());
@@ -6589,7 +6848,9 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
               const children: FNode[] = kids
                 ? [...kids.entries()].map(([lbl, ret]) => buildNode(lbl, ret)).sort((a, b) => b.retained - a.retained)
                 : [];
-              return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children };
+              return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children,
+                pairCount: pairCountByClass.get(label),
+                shallow: shallowByClass.get(label) };
             };
             for (const [dom] of childrenOf) {
               if (!allDominated.has(dom)) roots.push(buildNode(dom));
@@ -6606,6 +6867,12 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph }
                 fmt={formatBytes}
                 fmtExact={fmtExactBytes}
                 height={480}
+                getExtra={(n: FNode) => n.pairCount != null ? (
+                  <>
+                    <TipRow label="Instances" value={fmtCount(n.pairCount)} />
+                    {n.shallow != null && <TipRow label="Shallow" value={fmtExactBytes(n.shallow)} />}
+                  </>
+                ) : null}
               />
             );
           })()}
@@ -7755,12 +8022,21 @@ function TypeGraphSankey({ edges, topN, onSelect }: { edges: TypeEdge[]; topN: n
       <div ref={containerRef} style={{ width: "100%" }}>
         <svg width={w} height={height} role="img" aria-label="Type reference Sankey"
           style={{ display: "block", overflow: "visible" }}>
-          {graph.links.map((link, i) => (
-            <path key={`tgl-${i}`} className="sankey-link"
-              d={sankeyLinkHorizontal()(link) ?? undefined}
-              fill="none" stroke="var(--muted)"
-              strokeWidth={Math.max(1, link.width ?? 1)} strokeOpacity={0.32} />
-          ))}
+          {graph.links.map((link, i) => {
+            type TSankeyLink = typeof link & { source: SNode & { x0?: number; x1?: number; y0?: number; y1?: number; name?: string; retained?: number }; target: SNode & { name?: string } };
+            const tl = link as unknown as TSankeyLink;
+            const srcName = tl.source?.name ?? "";
+            const tgtName = tl.target?.name ?? "";
+            const retBytes = tl.source?.retained ?? 0;
+            return (
+              <path key={`tgl-${i}`} className="sankey-link"
+                d={sankeyLinkHorizontal()(link) ?? undefined}
+                fill="none" stroke="var(--muted)"
+                strokeWidth={Math.max(1, link.width ?? 1)} strokeOpacity={0.32}>
+                {srcName && tgtName && <title>{tpfgShortName(srcName)} → {tpfgShortName(tgtName)}{retBytes > 0 ? `: ${formatBytes(retBytes)} retained` : ""}</title>}
+              </path>
+            );
+          })}
           {graph.nodes.map((n, i) => {
             type SN = SNode & { x0?: number; x1?: number; y0?: number; y1?: number };
             const sn = n as unknown as SN;
@@ -13419,6 +13695,7 @@ export default function App({ report }: { report: Report }) {
       )}
       <HeapInspector report={report} histogram={report.overview?.histogram ?? []} />
       <OomTriage report={report} />
+      <LeakIndicatorsSection data={report.leak_indicators} totalHeap={report.overview.total_shallow} />
       <ExecSummaryCard report={report} />
       <WasteSummarySection report={report} />
       <KpiStrip report={report} />
@@ -13431,7 +13708,7 @@ export default function App({ report }: { report: Report }) {
       <DuplicatePrimArraysSection report={report} />
       <BoxedNumbersSection report={report} />
       <HeaderOverheadSection report={report} />
-      <DominatorAnalysisSection data={report.dominator_analysis} selfReferentialClasses={report.self_referential_classes} typeRefGraph={report.type_ref_graph} />
+      <DominatorAnalysisSection data={report.dominator_analysis} selfReferentialClasses={report.self_referential_classes} typeRefGraph={report.type_ref_graph} totalHeap={report.overview.total_shallow} />
       <ThreadsSection report={report} />
       <FrameworkAnalysisSection items={report.framework_analysis} />
       {report.top_components?.components?.length ? (
@@ -13475,7 +13752,6 @@ export default function App({ report }: { report: Report }) {
       )}
       <RetentionConcentrationSection report={report} />
       <DominatorDepthSection report={report} />
-      <LeakIndicatorsSection data={report.leak_indicators} totalHeap={report.overview.total_shallow} />
       <CustomQueriesSection report={report} />
       <GlossarySection />
       <BackToTop />

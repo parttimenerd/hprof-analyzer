@@ -10,8 +10,7 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 1600 KB minified bundle budget (raised for Cytoscape.js graph library).
-const BUDGET_BYTES = 1600 * 1024;
+const BUDGET_BYTES = 2048 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

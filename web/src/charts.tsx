@@ -16,6 +16,7 @@ import type {
   VizSpec,
 } from "./types";
 import { fmtCount, formatBytes, fmtExactBytes, fmtPct, shortLoader } from "./format";
+import { Tooltip, TipHeader, TipRow, TipNote } from "./tooltip";
 import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
 import { themeColors, useThemeKey } from "./chartSetup";
 import "./chartSetup";
@@ -270,6 +271,7 @@ export function ZoomableTreemap<T>({
   height = 320,
   renderLeaf,
   extraLeaves,
+  getExtra,
 }: {
   root: T;
   getChildren: (n: T) => T[];
@@ -281,9 +283,13 @@ export function ZoomableTreemap<T>({
   renderLeaf?: (node: T, pathLabels: string[]) => React.ReactNode;
   /** Extra non-navigable tiles to mix into the treemap alongside real children (e.g. direct classes). */
   extraLeaves?: (node: T, pathLabels: string[]) => { label: string; value: number }[];
+  /** Optional extra info line(s) for tooltips — e.g. instance count, pair count. */
+  getExtra?: (n: T) => React.ReactNode | null;
 }) {
   const [path, setPath] = React.useState<T[]>([]);
   const [mode, setMode] = React.useState<"treemap" | "flame">("treemap");
+  // null = normal view, non-null = drilling into "Other" bucket at that level
+  const [otherItems, setOtherItems] = React.useState<Array<{ label: string; value: number; node: T | null }> | null>(null);
   const ref = React.useRef<HTMLDivElement>(null);
   const [w, setW] = React.useState(600);
 
@@ -298,12 +304,15 @@ export function ZoomableTreemap<T>({
   }, []);
 
   // Reset zoom when root changes
-  React.useEffect(() => { setPath([]); }, [root]);
+  React.useEffect(() => { setPath([]); setOtherItems(null); }, [root]);
 
   const currentNode = path.length > 0 ? path[path.length - 1] : root;
   const children = getChildren(currentNode).filter((c) => getValue(c) > 0);
   // Build the dotted package path for the current node (skip root's empty label)
   const pathLabels = path.map((n) => getLabel(n)).filter(Boolean);
+
+  // Total value at the root, for showing "X% of total" in the breadcrumb
+  const rootTotal = getValue(root) || 1;
 
   // Color map: keyed by top-level-child label of the ORIGINAL root (stable across zooms)
   const colorMap = React.useMemo(
@@ -321,29 +330,61 @@ export function ZoomableTreemap<T>({
     () => extraLeaves ? extraLeaves(currentNode, pathLabels) : [],
     [extraLeaves, currentNode, pathLabels],
   );
+
+  // All items (children + extras) as a flat list for layout
+  type LayoutItem = { node: T | null; extra: { label: string; value: number } | null; value: number };
+  const allItems = React.useMemo((): LayoutItem[] => [
+    ...children.map((c) => ({ node: c, extra: null, value: getValue(c) })),
+    ...extras.map((e) => ({ node: null, extra: e, value: e.value })),
+  ], [children, extras]);
+
+  const total = allItems.reduce((s, it) => s + it.value, 0) || 1;
+
+  // Minimum % of total below which items are bucketed into "Other"
+  const OTHER_MIN_PCT = 0.5; // items < 0.5% of current view total go into "Other"
+  // Only bucket if there are multiple tiny items
+  const [visibleItems, otherBucketItems] = React.useMemo(() => {
+    const sorted = [...allItems].sort((a, b) => b.value - a.value);
+    const threshold = total * (OTHER_MIN_PCT / 100);
+    const visible: LayoutItem[] = [];
+    const other: LayoutItem[] = [];
+    for (const item of sorted) {
+      if (item.value >= threshold || visible.length < 3) {
+        visible.push(item);
+      } else {
+        other.push(item);
+      }
+    }
+    // Only bucket if ≥ 2 items would go into Other
+    if (other.length < 2) return [sorted, [] as LayoutItem[]];
+    return [visible, other];
+  }, [allItems, total]);
+
+  const otherBucketValue = otherBucketItems.reduce((s, it) => s + it.value, 0);
+
   const nodes = React.useMemo(() => {
-    const hasAny = children.length > 0 || extras.length > 0;
+    const itemsToLayout = visibleItems.length > 0 ? visibleItems : allItems;
+    const hasAny = itemsToLayout.length > 0 || otherBucketItems.length > 0;
     if (!hasAny || w < 10) return [];
-    type Leaf = { node: T | null; extra: { label: string; value: number } | null; value: number };
+    type Leaf = LayoutItem;
     const leaves: Leaf[] = [
-      ...children.map((c) => ({ node: c, extra: null, value: getValue(c) })),
-      ...extras.map((e) => ({ node: null, extra: e, value: e.value })),
-    ];
-    const hierarchyRoot = hierarchy<{ node: T | null; extra: { label: string; value: number } | null; value: number; children?: Leaf[] }>(
-      { node: null, extra: null, value: 0, children: leaves },
-      (d) => d.children,
+      ...itemsToLayout,
+      // Add Other bucket as a synthetic extra leaf
+      ...(otherBucketItems.length >= 2 ? [{ node: null, extra: { label: `Other (${otherBucketItems.length})`, value: otherBucketValue }, value: otherBucketValue, _isOther: true as const }] : []),
+    ] as Leaf[];
+    const hierarchyRoot = hierarchy<{ node: T | null; extra: { label: string; value: number } | null; value: number; children?: Leaf[]; _isOther?: boolean }>(
+      { node: null, extra: null, value: 0, children: leaves as never },
+      (d) => (d as any).children,
     )
-      .sum((d) => (d.children ? 0 : d.value))
+      .sum((d) => ((d as any).children ? 0 : d.value))
       .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
     treemap<{ node: T | null; extra: { label: string; value: number } | null; value: number }>()
       .tile(treemapSquarify)
       .size([w, height])
       .paddingOuter(2)
       .paddingInner(1)(hierarchyRoot as never);
-    return hierarchyRoot.leaves() as unknown as (ReturnType<typeof hierarchy> & { x0: number; y0: number; x1: number; y1: number; data: Leaf })[];
-  }, [children, extras, w, height]);
-
-  const total = (children.reduce((s, c) => s + getValue(c), 0) + extras.reduce((s, e) => s + e.value, 0)) || 1;
+    return hierarchyRoot.leaves() as unknown as (ReturnType<typeof hierarchy> & { x0: number; y0: number; x1: number; y1: number; data: Leaf & { _isOther?: boolean } })[];
+  }, [visibleItems, allItems, otherBucketItems, otherBucketValue, w, height]);
 
   // Flame levels
   const flameLevels = React.useMemo(
@@ -352,6 +393,7 @@ export function ZoomableTreemap<T>({
   );
 
   const zoomTo = (node: T) => {
+    setOtherItems(null);
     setPath((prev) => [...prev, node]);
   };
 
@@ -359,26 +401,80 @@ export function ZoomableTreemap<T>({
 
   if (children.length === 0 && path.length === 0) return null;
 
+  // When drilling into the "Other" bucket, show a mini-treemap for those items
+  const renderOtherView = () => {
+    if (!otherItems || otherItems.length === 0) return null;
+    const otherTotal = otherItems.reduce((s, it) => s + it.value, 0) || 1;
+    return (
+      <div style={{ marginTop: "0.5rem", border: "1px solid var(--border)", borderRadius: 4, padding: "0.5rem" }}>
+        <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.4rem" }}>
+          Other — {otherItems.length} items, {fmt(otherTotal)} ({fmtPct((otherTotal / rootTotal) * 100)} of total)
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+          {[...otherItems].sort((a, b) => b.value - a.value).map((it, idx) => {
+            const pct = fmtPct((it.value / otherTotal) * 100);
+            const pctOfTotal = fmtPct((it.value / rootTotal) * 100);
+            const label = it.node ? getLabel(it.node) : (it.extra?.label ?? "?");
+            const hasKids = it.node ? getChildren(it.node).filter((c) => getValue(c) > 0).length > 0 : false;
+            const isClickable = it.node !== null && (hasKids || !!renderLeaf);
+            return (
+              <div key={idx}
+                title={`${label}: ${fmt(it.value)} (${pctOfTotal} of total, ${pct} of Other)${fmtExact ? ` [${fmtExact(it.value)}]` : ""}${isClickable ? " — click to drill in" : ""}`}
+                onClick={isClickable && it.node !== null ? () => { setOtherItems(null); zoomTo(it.node!); } : undefined}
+                style={{
+                  padding: "0.2rem 0.5rem",
+                  background: it.node ? getColor(it.node) : "var(--muted)",
+                  color: "#fff",
+                  borderRadius: 3,
+                  fontSize: "0.78rem",
+                  cursor: isClickable ? "zoom-in" : "default",
+                  opacity: 0.87,
+                  minWidth: 0,
+                  maxWidth: 260,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+                <span style={{ opacity: 0.75, marginLeft: "0.3rem" }}>{fmt(it.value)}</span>
+                <span style={{ opacity: 0.6, marginLeft: "0.2rem", fontSize: "0.72rem" }}>{pctOfTotal}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="chart-wrap" ref={ref}>
       {/* Breadcrumb toolbar */}
       <div className="zm-toolbar">
         {crumbs.map((crumb, i) => {
-          const isCurrent = i === crumbs.length - 1;
+          const isCurrent = i === crumbs.length - 1 && !otherItems;
           const label = i === 0 ? (getLabel(crumb) || "⬛ root") : getLabel(crumb);
+          const crumbVal = getValue(crumb);
+          const crumbPct = i > 0 && rootTotal > 0 ? ` (${fmtPct((crumbVal / rootTotal) * 100)})` : "";
           return (
             <React.Fragment key={i}>
               {i > 0 && <span className="zm-sep">›</span>}
               {isCurrent ? (
-                <span className="zm-crumb-cur">{label}</span>
+                <span className="zm-crumb-cur">{label}{crumbPct}</span>
               ) : (
-                <button className="zm-crumb" onClick={() => setPath(path.slice(0, i))}>
-                  {label}
+                <button className="zm-crumb" onClick={() => { setOtherItems(null); setPath(path.slice(0, i)); }}>
+                  {label}{crumbPct}
                 </button>
               )}
             </React.Fragment>
           );
         })}
+        {otherItems && (
+          <>
+            <span className="zm-sep">›</span>
+            <span className="zm-crumb-cur">Other ({otherItems.length})</span>
+          </>
+        )}
         <span className="zm-spacer" />
         <button className={`zm-mode-btn${mode === "treemap" ? " active" : ""}`} onClick={() => setMode("treemap")} title="Squarify treemap view">
           ⬛ Treemap
@@ -389,22 +485,58 @@ export function ZoomableTreemap<T>({
       </div>
 
       {/* Treemap mode */}
-      {mode === "treemap" && (
+      {mode === "treemap" && !otherItems && (
         <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
           {nodes.map((leaf, i) => {
             const { x0, y0, x1, y1, data: ld } = leaf;
             const lw = x1 - x0;
             const lh = y1 - y0;
             if (lw < 1 || lh < 1) return null;
+            // "Other" bucket tile
+            if ((ld as any)._isOther) {
+              const val = otherBucketValue;
+              const pct = fmtPct((val / total) * 100);
+              const pctOfTotal = fmtPct((val / rootTotal) * 100);
+              return (
+                <div
+                  key="__other__"
+                  title={`Other (${otherBucketItems.length} items): ${fmt(val)} (${pctOfTotal} of total) — click to expand`}
+                  onClick={() => setOtherItems(otherBucketItems.map(it => ({ label: it.node ? getLabel(it.node) : (it.extra?.label ?? "?"), value: it.value, node: it.node })))}
+                  style={{
+                    position: "absolute", left: x0, top: y0, width: lw, height: lh,
+                    background: "#888", opacity: 0.75, boxSizing: "border-box", overflow: "hidden",
+                    cursor: "pointer",
+                    border: "1px dashed rgba(255,255,255,0.4)",
+                  }}
+                >
+                  {lw > 44 && lh > 18 && (
+                    <span style={{ display: "block", padding: "2px 4px", fontSize: Math.min(12, lw / 7), color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      Other ({otherBucketItems.length}) ›
+                    </span>
+                  )}
+                  {lw > 44 && lh > 34 && (
+                    <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(11, lw / 8), color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {fmt(val)} ({pct})
+                    </span>
+                  )}
+                  {lw > 44 && lh > 50 && (
+                    <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(10, lw / 9), color: "rgba(255,255,255,0.6)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {pctOfTotal} of total
+                    </span>
+                  )}
+                </div>
+              );
+            }
             // Extra (class) tile
             if (ld.extra !== null) {
               const val = ld.extra.value;
               const pct = fmtPct((val / total) * 100);
+              const pctOfTotal = fmtPct((val / rootTotal) * 100);
               const bg = getColor(currentNode);
               return (
                 <div
                   key={`x${i}`}
-                  title={`${ld.extra.label}: ${fmt(val)} (${pct})${fmtExact ? ` [${fmtExact(val)}]` : ""} — class`}
+                  title={`${ld.extra.label}: ${fmt(val)} (${pctOfTotal} of total)${fmtExact ? ` [${fmtExact(val)}]` : ""} — class`}
                   style={{
                     position: "absolute", left: x0, top: y0, width: lw, height: lh,
                     background: bg, opacity: 0.55, boxSizing: "border-box", overflow: "hidden",
@@ -419,7 +551,12 @@ export function ZoomableTreemap<T>({
                   )}
                   {lw > 44 && lh > 34 && (
                     <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(10, lw / 8), color: "rgba(255,255,255,0.75)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {fmt(val)}
+                      {fmt(val)} ({pct})
+                    </span>
+                  )}
+                  {lw > 44 && lh > 50 && (
+                    <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(10, lw / 9), color: "rgba(255,255,255,0.6)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {pctOfTotal} of total
                     </span>
                   )}
                 </div>
@@ -429,32 +566,51 @@ export function ZoomableTreemap<T>({
             const node = ld.node as T;
             const val = ld.value;
             const pct = fmtPct((val / total) * 100);
+            const pctOfTotal = fmtPct((val / rootTotal) * 100);
             const hasKids = getChildren(node).filter((c) => getValue(c) > 0).length > 0;
             const isClickable = hasKids || !!renderLeaf;
             const bg = getColor(node);
+            const kidCount = getChildren(node).filter((c) => getValue(c) > 0).length;
+            const extraContent = getExtra ? getExtra(node) : null;
+            const tileTip = (
+              <>
+                <TipHeader>{getLabel(node)}</TipHeader>
+                <TipRow label="Retained" value={<>{fmt(val)}{fmtExact ? <span style={{ opacity: 0.7 }}> [{fmtExact(val)}]</span> : null}</>} />
+                <TipRow label="% of view" value={pct} />
+                {path.length > 0 && <TipRow label="% of total" value={pctOfTotal} />}
+                {hasKids && <TipRow label="Children" value={kidCount} />}
+                {extraContent && <TipNote>{extraContent}</TipNote>}
+                {isClickable && <TipNote style={{ color: "var(--accent, #4af)" }}>Click to drill in ▶</TipNote>}
+              </>
+            );
             return (
-              <div
-                key={i}
-                title={`${getLabel(node)}: ${fmt(val)} (${pct})${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
-                onClick={isClickable ? () => zoomTo(node) : undefined}
-                style={{
-                  position: "absolute", left: x0, top: y0, width: lw, height: lh,
-                  background: bg, opacity: 0.87, boxSizing: "border-box", overflow: "hidden",
-                  cursor: isClickable ? (hasKids ? "zoom-in" : "pointer") : "default",
-                  border: isClickable ? "1px solid rgba(255,255,255,0.25)" : "none",
-                }}
-              >
-                {lw > 44 && lh > 22 && (
-                  <span style={{ display: "block", padding: "2px 4px", fontSize: Math.min(12, lw / 7), color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {getLabel(node)}{hasKids ? " ›" : (isClickable ? " ≡" : "")}
-                  </span>
-                )}
-                {lw > 44 && lh > 38 && (
-                  <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(11, lw / 8), color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {fmt(val)} ({pct})
-                  </span>
-                )}
-              </div>
+              <Tooltip key={i} content={tileTip} placement="top">
+                <div
+                  onClick={isClickable ? () => zoomTo(node) : undefined}
+                  style={{
+                    position: "absolute", left: x0, top: y0, width: lw, height: lh,
+                    background: bg, opacity: 0.87, boxSizing: "border-box", overflow: "hidden",
+                    cursor: isClickable ? (hasKids ? "zoom-in" : "pointer") : "default",
+                    border: isClickable ? "1px solid rgba(255,255,255,0.25)" : "none",
+                  }}
+                >
+                  {lw > 30 && lh > 18 && (
+                    <span style={{ display: "block", padding: "2px 4px", fontSize: Math.min(12, lw / 7), color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {getLabel(node)}{hasKids ? " ›" : (isClickable ? " ≡" : "")}
+                    </span>
+                  )}
+                  {lw > 30 && lh > 34 && (
+                    <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(11, lw / 8), color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {fmt(val)}
+                    </span>
+                  )}
+                  {lw > 30 && lh > 50 && (
+                    <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(10, lw / 9), color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {pct}{path.length > 0 ? ` (${pctOfTotal} total)` : ""}
+                    </span>
+                  )}
+                </div>
+              </Tooltip>
             );
           })}
           {children.length === 0 && extras.length === 0 && (
@@ -486,8 +642,10 @@ export function ZoomableTreemap<T>({
         </div>
       )}
 
-      {/* Flamegraph (icicle) mode */}
-      {mode === "flame" && (
+      {/* "Other" bucket drill-down (treemap mode) */}
+      {mode === "treemap" && otherItems && renderOtherView()}
+
+      {mode === "flame" && !otherItems && (
         <div className="flame-container" style={{ maxHeight: height + 40 }}>
           {flameLevels.map((level, lvl) => (
             <div key={lvl} className="flame-level">
@@ -495,17 +653,33 @@ export function ZoomableTreemap<T>({
                 const hasKids = getChildren(cell.node).filter((c) => getValue(c) > 0).length > 0;
                 const isClickable = lvl > 0 && (hasKids || !!renderLeaf);
                 const val = getValue(cell.node);
-                const pct = fmtPct((val / getValue(currentNode)) * 100);
+                const viewTotal = getValue(currentNode) || 1;
+                const pctOfView = fmtPct((val / viewTotal) * 100);
+                const pctOfRoot = fmtPct((val / (rootTotal || 1)) * 100);
+                const kidCount = getChildren(cell.node).filter((c) => getValue(c) > 0).length;
+                const extraContent = getExtra ? getExtra(cell.node) : null;
+                const flameTip = (
+                  <>
+                    <TipHeader>{getLabel(cell.node)}</TipHeader>
+                    <TipRow label="Retained" value={<>{fmt(val)}{fmtExact ? <span style={{ opacity: 0.7 }}> [{fmtExact(val)}]</span> : null}</>} />
+                    <TipRow label="% of view" value={pctOfView} />
+                    {val !== rootTotal && <TipRow label="% of total" value={pctOfRoot} />}
+                    <TipRow label="Depth" value={`level ${lvl + 1}`} />
+                    {hasKids && <TipRow label="Children" value={kidCount} />}
+                    {extraContent && <TipNote>{extraContent}</TipNote>}
+                    {isClickable && <TipNote accent>Click to drill in ▶</TipNote>}
+                  </>
+                );
                 return (
-                  <div
-                    key={ci}
-                    className={`flame-cell${!isClickable ? " flame-cell-leaf" : ""}`}
-                    style={{ width: `${cell.pct}%`, background: PALETTE[cell.colorIdx % PALETTE.length] }}
-                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct})${fmtExact ? ` [${fmtExact(val)}]` : ""}${hasKids && lvl > 0 ? " — click to drill in" : isClickable ? " — click to see classes" : ""}`}
-                    onClick={isClickable ? () => zoomTo(cell.node) : undefined}
-                  >
-                    <span className="flame-label">{getLabel(cell.node)}</span>
-                  </div>
+                  <Tooltip key={ci} content={flameTip} placement="top">
+                    <div
+                      className={`flame-cell${!isClickable ? " flame-cell-leaf" : ""}`}
+                      style={{ width: `${cell.pct}%`, background: PALETTE[cell.colorIdx % PALETTE.length] }}
+                      onClick={isClickable ? () => zoomTo(cell.node) : undefined}
+                    >
+                      <span className="flame-label">{getLabel(cell.node)}</span>
+                    </div>
+                  </Tooltip>
                 );
               })}
             </div>
@@ -515,15 +689,25 @@ export function ZoomableTreemap<T>({
               {extras.map((e, ci) => {
                 const pct = fmtPct((e.value / (getValue(currentNode) || 1)) * 100);
                 const bg = getColor(currentNode);
+                const pctOfRoot = fmtPct((e.value / (rootTotal || 1)) * 100);
+                const extraTip = (
+                  <>
+                    <TipHeader>{e.label}</TipHeader>
+                    <TipRow label="Retained" value={<>{fmt(e.value)}{fmtExact ? <span style={{ opacity: 0.7 }}> [{fmtExact(e.value)}]</span> : null}</>} />
+                    <TipRow label="% of view" value={pct} />
+                    <TipRow label="% of total" value={pctOfRoot} />
+                    <TipNote>Class-level entry</TipNote>
+                  </>
+                );
                 return (
-                  <div
-                    key={ci}
-                    className="flame-cell flame-cell-leaf"
-                    style={{ width: `${((e.value / (getValue(currentNode) || 1)) * 100)}%`, background: bg, opacity: 0.6 }}
-                    title={`${e.label}: ${fmt(e.value)} (${pct})${fmtExact ? ` [${fmtExact(e.value)}]` : ""} — class`}
-                  >
-                    <span className="flame-label">{e.label}</span>
-                  </div>
+                  <Tooltip key={ci} content={extraTip} placement="top">
+                    <div
+                      className="flame-cell flame-cell-leaf"
+                      style={{ width: `${((e.value / (getValue(currentNode) || 1)) * 100)}%`, background: bg, opacity: 0.6 }}
+                    >
+                      <span className="flame-label">{e.label}</span>
+                    </div>
+                  </Tooltip>
                 );
               })}
             </div>
