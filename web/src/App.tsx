@@ -1089,19 +1089,21 @@ function SortableTh<T>({ label, colKey, sortKey, setSortKey }: {
 
 // ── Shared category helpers ───────────────────────────────────────────────────
 
-/** Resolve the category for any row that has a pretty_class + optional category field.
- *  Uses the backend-supplied value when present; falls back to a name-prefix heuristic
- *  for older reports that lack the field. */
-function rowCategory(row: { pretty_class: string; category?: string }): string {
+const JDK_PREFIX_RE = /^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/;
+
+/** Resolve the category for any row. Accepts pretty_class or display_class; uses
+ *  the backend-supplied category when present, falls back to a name-prefix heuristic. */
+function rowCategory(row: { pretty_class?: string; display_class?: string; category?: string }): string {
   if (row.category) return row.category;
-  if (/^(java|javax|jdk|sun|com\.sun|com\.oracle|org\.xml|org\.w3c|org\.ietf)\b/.test(row.pretty_class)) return "jdk";
+  const cls = row.pretty_class ?? row.display_class ?? "";
+  if (JDK_PREFIX_RE.test(cls)) return "jdk";
   return "other";
 }
 
 /** Derive the sorted list of category buttons to show for a set of rows.
  *  Always starts with "all"; user-defined categories come first (alphabetical),
  *  then "other" / "framework" / "jdk" at the end if present. */
-function availableCategoryButtons(rows: { pretty_class: string; category?: string }[]): string[] {
+function availableCategoryButtons(rows: { pretty_class?: string; display_class?: string; category?: string }[]): string[] {
   const seen = new Set<string>();
   for (const r of rows) seen.add(rowCategory(r));
   const fixed = ["other", "framework", "jdk"];
@@ -3629,10 +3631,13 @@ function TopConsumersSection({ report }: { report: Report }) {
   const hasTwoHopChains = t.biggest_classes.some(c => c.holders?.some(h => h.via_class?.length));
   const [topView, setTopView] = React.useState<"tables" | "treemap" | "chains">("tables");
 
-  // Derive the set of categories present in biggest_classes (or category_rollup).
+  // Derive the set of categories present in biggest_classes + biggest_objects.
   // Always include "all"; add every distinct category found, with jdk/framework/other
   // normalised to fixed labels. User-defined categories appear as-is.
-  const availableCategories = React.useMemo(() => availableCategoryButtons(t.biggest_classes), [t.biggest_classes]);
+  const availableCategories = React.useMemo(() => availableCategoryButtons([
+    ...t.biggest_classes,
+    ...t.biggest_objects.map(o => ({ display_class: o.display_class, category: o.category })),
+  ]), [t.biggest_classes, t.biggest_objects]);
 
   const [clsKindFilter, setClsKindFilter] = React.useState<string>("all");
 
@@ -3646,6 +3651,11 @@ function TopConsumersSection({ report }: { report: Report }) {
     if (clsKindFilter === "all") return t.biggest_classes;
     return t.biggest_classes.filter(c => rowCategory(c) === clsKindFilter);
   }, [t.biggest_classes, clsKindFilter]);
+
+  const filteredObjects = React.useMemo(() => {
+    if (clsKindFilter === "all") return t.biggest_objects;
+    return t.biggest_objects.filter(o => rowCategory({ display_class: o.display_class, category: o.category }) === clsKindFilter);
+  }, [t.biggest_objects, clsKindFilter]);
 
   return (
     <section id="top-consumers">
@@ -3675,7 +3685,7 @@ function TopConsumersSection({ report }: { report: Report }) {
       {topView === "tables" && (<>
       <h3>Biggest Objects (Top-Level Dominators)</h3>
       <p className="subtitle">All top-level dominators ranked by retained heap — every object directly held by a GC root, sorted largest first. Click a row to jump to it in the Object Graph Explorer.{objHasOwner && <> <strong>Held via</strong> — the <code>Class#field</code> reference most directly retaining each object; objects can have multiple referrers.</>}</p>
-      <StdTable columns={objTableCols} data={t.biggest_objects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
+      <StdTable columns={objTableCols} data={filteredObjects} searchKeys={["display_class"]} fmtBtn={kbBtn} defaultSortFieldId="retained" />
 
       <h3>Biggest Classes by Retained Heap</h3>
       <p className="subtitle">Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis.</p>
@@ -6637,6 +6647,34 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
   const pairsTotalCount = data?.immediate_dominators?.pairs_total_count ?? 0;
   const [domView, setDomView] = React.useState<"tables" | "graph" | "heatmap" | "flame" | "ref">("tables");
 
+  // Shared category filter (persists across Tables/Graph/Heatmap/Flame tab switches).
+  const [domCatFilter, setDomCatFilter] = React.useState("all");
+  const domCategoryButtons = React.useMemo(
+    () => availableCategoryButtons([
+      ...drops.map(r => ({ display_class: r.display_class, category: r.category })),
+      ...idoms.map(r => ({ display_class: r.dominator_class, category: r.category })),
+    ]),
+    [drops, idoms],
+  );
+  const filteredDrops = React.useMemo(
+    () => domCatFilter === "all" ? drops : drops.filter(r => rowCategory({ display_class: r.display_class, category: r.category }) === domCatFilter),
+    [drops, domCatFilter],
+  );
+  const filteredIdoms = React.useMemo(
+    () => domCatFilter === "all" ? idoms : idoms.filter(r => rowCategory({ display_class: r.dominator_class, category: r.category }) === domCatFilter),
+    [idoms, domCatFilter],
+  );
+  const filteredPairs = React.useMemo(
+    () => domCatFilter === "all" ? pairs : pairs.filter(p =>
+      rowCategory({ display_class: p.dominator_class, category: p.dominator_category }) === domCatFilter ||
+      rowCategory({ display_class: p.dominated_class, category: p.dominated_category }) === domCatFilter
+    ),
+    [pairs, domCatFilter],
+  );
+
+  // Whether any idom row has a top_app_dominator (show extra column).
+  const hasTopApp = React.useMemo(() => idoms.some(r => !!r.top_app_dominator), [idoms]);
+
   // Navigator state lifted so tables can drive it.
   const [navTarget, setNavTarget] = React.useState<string | null>(null);
   const navigatorRef = React.useRef<HTMLDivElement>(null);
@@ -6682,15 +6720,19 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
       <h2>Dominator Analysis</h2>
       <p className="subtitle">An object <em>dominates</em> another if every path from a GC root passes through it — making it unreachable reclaims the entire dominated subtree. <strong>Big Drops</strong> shows objects holding memory directly or across many small children. <strong>Immediate Dominators</strong> ranks classes by how much dominated shallow heap they gate. <strong>Graph</strong> shows a class-level dominator graph (top 50 classes by retained); <strong>Heatmap</strong> maps dominator → dominated by class.</p>
 
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        {(["tables", "graph", "heatmap", "flame", ...(typeRefGraph?.length ? ["ref"] : [])] as const).map(v => (
-          <button key={v} onClick={() => setDomView(v as typeof domView)} style={{
-            padding: "0.25rem 0.85rem", fontSize: "0.88rem",
-            border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
-            background: domView === v ? "var(--accent)" : "transparent",
-            color: domView === v ? "#fff" : "var(--fg)",
-          }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : v === "heatmap" ? "▦ Heatmap" : v === "flame" ? "🔥 Flame" : "🔗 Ref Edges"}</button>
-        ))}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          {(["tables", "graph", "heatmap", "flame", ...(typeRefGraph?.length ? ["ref"] : [])] as const).map(v => (
+            <button key={v} onClick={() => setDomView(v as typeof domView)} style={{
+              padding: "0.25rem 0.85rem", fontSize: "0.88rem",
+              border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+              background: domView === v ? "var(--accent)" : "transparent",
+              color: domView === v ? "#fff" : "var(--fg)",
+            }}>{v === "tables" ? "⊞ Tables" : v === "graph" ? "⬡ Graph" : v === "heatmap" ? "▦ Heatmap" : v === "flame" ? "🔥 Flame" : "🔗 Ref Edges"}</button>
+          ))}
+        </div>
+        {domCategoryButtons.length > 0 && <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />}
+        <CategoryFilterBar categories={domCategoryButtons} active={domCatFilter} onChange={setDomCatFilter} style={{ marginBottom: 0 }} />
       </div>
 
       {/* Context menu */}
@@ -6722,13 +6764,13 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
           { id: "child_ret", name: useKB ? "Child Retained (KB)" : "Child Retained", right: true, width: useKB ? "160px" : "130px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
           { id: "drop", name: useKB ? "Drop (KB)" : "Drop", right: true, width: useKB ? "120px" : "110px", cell: byteCell(r => r.drop_bytes, fmtB, useKB), selector: (r) => r.drop_bytes, sortable: true },
         ];
-        const totalDropRetained = drops.reduce((s, r) => s + r.retained, 0);
-        const totalChildRetained = drops.reduce((s, r) => s + r.largest_child_retained, 0);
-        const totalDropBytes = drops.reduce((s, r) => s + r.drop_bytes, 0);
+        const totalDropRetained = filteredDrops.reduce((s, r) => s + r.retained, 0);
+        const totalChildRetained = filteredDrops.reduce((s, r) => s + r.largest_child_retained, 0);
+        const totalDropBytes = filteredDrops.reduce((s, r) => s + r.drop_bytes, 0);
         return (
           <>
             <StdTable
-              columns={dropCols} data={drops} searchKeys={["display_class"]} fmtBtn={kbBtn}
+              columns={dropCols} data={filteredDrops} searchKeys={["display_class"]} fmtBtn={kbBtn}
               defaultSortFieldId="drop" defaultSortAsc={false}
               onRowClicked={hasPairs ? (r) => pivotToClass(r.display_class) : undefined}
               onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.display_class }); } : undefined}
@@ -6754,26 +6796,36 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
       ) : (() => {
         const idomCols: TableColumn<import("./types").ImmediateDominatorRow>[] = [
           { id: "dominator_class", name: "Dominator Class", grow: 1, maxWidth: "360px", cell: (r) => <span className="copy-cell"><code title={r.dominator_class}>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /><PivotBtn cls={r.dominator_class} /><OqlBtn cls={r.dominator_class} /><ListObjectsBtn cls={r.dominator_class} /></span>, selector: (r) => r.dominator_class, sortable: true },
+          ...(hasTopApp ? [{ id: "top_app", name: "Top App Class", grow: 1, maxWidth: "280px", cell: (r: import("./types").ImmediateDominatorRow) => r.top_app_dominator ? (
+            <Tooltip content={<><TipHeader>Top App Class</TipHeader><TipRow label="Class" value={r.top_app_dominator} /><TipNote>First non-JDK/framework ancestor in the idom chain — which of your own classes is upstream of this JDK class.</TipNote></>}>
+              <span className="copy-cell" style={{ cursor: "help" }}>
+                <code style={{ color: "var(--accent)", fontSize: "0.88em" }} title={r.top_app_dominator}>{r.top_app_dominator.split(".").pop() ?? r.top_app_dominator}</code>
+                <CopyBtn text={r.top_app_dominator} />
+                <PivotBtn cls={r.top_app_dominator} />
+              </span>
+            </Tooltip>
+          ) : <span style={{ color: "var(--muted)" }}>—</span>, selector: (r: import("./types").ImmediateDominatorRow) => r.top_app_dominator ?? "" } as TableColumn<import("./types").ImmediateDominatorRow>] : []),
           { id: "dominator_count", name: "# Dominators", right: true, width: "132px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count, sortable: true },
           { id: "dominated_count", name: "# Dominated", right: true, width: "128px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count, sortable: true },
           { id: "dominator_shallow", name: useKB ? "Dominator Shallow (KB)" : "Dominator Shallow", right: true, width: useKB ? "205px" : "195px", cell: byteCell(r => r.dominator_shallow, fmtB, useKB), selector: (r) => r.dominator_shallow, sortable: true },
           { id: "dominated_shallow", name: useKB ? "Dominated Shallow (KB)" : "Dominated Shallow", right: true, width: useKB ? "210px" : "195px", cell: byteCell(r => r.dominated_shallow, fmtB, useKB), selector: (r) => r.dominated_shallow, sortable: true },
         ];
-        const totalDomCount = idoms.reduce((s, r) => s + r.dominator_count, 0);
-        const totalDominatedCount = idoms.reduce((s, r) => s + r.dominated_count, 0);
-        const totalDomShallow = idoms.reduce((s, r) => s + r.dominator_shallow, 0);
-        const totalDominatedShallow = idoms.reduce((s, r) => s + r.dominated_shallow, 0);
+        const totalDomCount = filteredIdoms.reduce((s, r) => s + r.dominator_count, 0);
+        const totalDominatedCount = filteredIdoms.reduce((s, r) => s + r.dominated_count, 0);
+        const totalDomShallow = filteredIdoms.reduce((s, r) => s + r.dominator_shallow, 0);
+        const totalDominatedShallow = filteredIdoms.reduce((s, r) => s + r.dominated_shallow, 0);
         return (
           <>
             <StdTable
-              columns={idomCols} data={idoms} searchKeys={["dominator_class"]} fmtBtn={kbBtn}
+              columns={idomCols} data={filteredIdoms} searchKeys={["dominator_class"]} fmtBtn={kbBtn}
               defaultSortFieldId="dominated_shallow" defaultSortAsc={false}
               onRowClicked={hasPairs ? (r) => pivotToClass(r.dominator_class) : undefined}
               onRowContextMenu={hasPairs ? (r, e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, cls: r.dominator_class }); } : undefined}
-              rowClickTitle={hasPairs ? "Click to view in Who Holds sankey" : undefined}              extraBtns={<CopyTsvBtn rows={[["Dominator Class","# Dominators","# Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...idoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
+              rowClickTitle={hasPairs ? "Click to view in Who Holds sankey" : undefined}              extraBtns={<CopyTsvBtn rows={[["Dominator Class","# Dominators","# Dominated","Dominator Shallow (bytes)","Dominated Shallow (bytes)"],...filteredIdoms.map(r=>[r.dominator_class,String(r.dominator_count),String(r.dominated_count),String(r.dominator_shallow),String(r.dominated_shallow)])]} label="Copy as TSV" />}
             />
             <div style={{ display: "flex", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
               <span style={{ flex: 1, paddingLeft: 5, paddingRight: 5 }}>Total</span>
+              {hasTopApp && <span style={{ flex: 1, maxWidth: "280px", paddingLeft: 5, paddingRight: 5 }}></span>}
               <span style={{ width: "132px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalDomCount)}</span>
               <span style={{ width: "128px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}>{fmtCount(totalDominatedCount)}</span>
               <span style={{ width: useKB ? "205px" : "195px", flexShrink: 0, flexGrow: 0, paddingLeft: 5, paddingRight: 5, textAlign: "right" }}><span title={fmtExactBytes(totalDomShallow)}>{fmtB(totalDomShallow)}</span></span>
@@ -6795,7 +6847,7 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
             </p>
           )}
           <WhoHoldsSankey
-            pairs={pairs}
+            pairs={filteredPairs}
             initialTarget={effectiveNavTarget}
             externalTarget={navTarget ?? undefined}
             onPivot={setNavTarget}
@@ -6806,11 +6858,11 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
       </>)}
 
       {domView === "graph" && (
-        <DomGraphView pairs={pairs} idoms={idoms} />
+        <DomGraphView pairs={filteredPairs} idoms={filteredIdoms} />
       )}
 
       {domView === "heatmap" && (
-        <RetentionHeatmapView pairs={pairs} />
+        <RetentionHeatmapView pairs={filteredPairs} />
       )}
 
       {domView === "flame" && (
@@ -6820,7 +6872,7 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
             dominator tree; width = fraction of total retained dominated through that class.
             Click a cell to zoom into its subtree. Built from class-level dominator pairs.
           </p>
-          {pairs.length === 0 ? (
+          {filteredPairs.length === 0 ? (
             <p className="subtitle">No dominator pair data — regenerate the report to populate.</p>
           ) : (() => {
             // Build a class-level dominator tree from pairs for the icicle.
@@ -6830,18 +6882,18 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
             // Track pair counts and shallow bytes from idoms for getExtra
             const pairCountByClass = new Map<string, number>();
             const shallowByClass = new Map<string, number>();
-            for (const dom of idoms) {
+            for (const dom of filteredIdoms) {
               pairCountByClass.set(dom.dominator_class, dom.dominator_count);
               shallowByClass.set(dom.dominator_class, dom.dominator_shallow);
             }
-            for (const p of pairs) {
+            for (const p of filteredPairs) {
               retainedByClass.set(p.dominated_class, (retainedByClass.get(p.dominated_class) ?? 0) + p.dominated_retained);
               if (!childrenOf.has(p.dominator_class)) childrenOf.set(p.dominator_class, new Map());
               const kids = childrenOf.get(p.dominator_class)!;
               kids.set(p.dominated_class, (kids.get(p.dominated_class) ?? 0) + p.dominated_retained);
             }
             // Find roots: classes that appear as dominator but not as dominated child of another class
-            const allDominated = new Set(pairs.map(p => p.dominated_class));
+            const allDominated = new Set(filteredPairs.map(p => p.dominated_class));
             const roots: FNode[] = [];
             const buildNode = (label: string, retainedOverride?: number): FNode => {
               const kids = childrenOf.get(label);

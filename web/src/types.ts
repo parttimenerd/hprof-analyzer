@@ -344,6 +344,8 @@ export interface LeakSuspects {
 export interface ObjRow {
   obj_index_1based: number;
   display_class: string;
+  /** "jdk" | "framework" | "other" | custom category. Absent on older reports. */
+  category?: string;
   shallow: number;
   retained: number;
   pct_bp: number;
@@ -472,6 +474,8 @@ export interface ArraysBySize {
 export interface BigDropRow {
   obj_index_1based: number;
   display_class: string;
+  /** "jdk" | "framework" | "other" | custom category. Absent on older reports. */
+  category?: string;
   retained: number;
   child_count: number;
   largest_child_retained: number;
@@ -487,6 +491,10 @@ export interface BigDrops {
 // One immediate-dominator class rollup row.
 export interface ImmediateDominatorRow {
   dominator_class: string;
+  /** "jdk" | "framework" | "other" | custom category. Absent on older reports. */
+  category?: string;
+  /** First non-jdk/framework ancestor in the idom chain. Absent when already app class. */
+  top_app_dominator?: string;
   dominator_count: number;
   dominated_count: number;
   dominator_shallow: number;
@@ -496,7 +504,13 @@ export interface ImmediateDominatorRow {
 // One (dominator_class, dominated_class) pair with retained/shallow sizes.
 export interface ImmDomPair {
   dominator_class: string;
+  /** "jdk" | "framework" | "other" | custom category. Absent on older reports. */
+  dominator_category?: string;
   dominated_class: string;
+  /** "jdk" | "framework" | "other" | custom category. Absent on older reports. */
+  dominated_category?: string;
+  /** First non-jdk/framework ancestor in the idom chain for this pair. Absent when dominator is already app class. */
+  top_app_dominator?: string;
   pair_count: number;
   dominated_retained: number;
   dominated_shallow: number;
