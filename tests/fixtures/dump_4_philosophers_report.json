@@ -18701,7 +18701,7 @@
     },
     "longest_chain_depth": 28
   },
-  "generated": null,
+  "generated": "__NORMALIZED__",
   "leak_indicators": {
     "anonymous_class_count": 204,
     "direct_byte_buffer_cap_buckets": [
@@ -55047,7 +55047,7 @@
         "total_retained": 408
       }
     ],
-    "file_path": null,
+    "file_path": "__NORMALIZED__",
     "file_size": 23731997,
     "format": "JAVA PROFILE 1.0.2",
     "gc_roots": 1681,

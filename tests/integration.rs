@@ -210,11 +210,11 @@ fn end_to_end_dump0() {
 fn normalize_nondeterministic(v: &mut serde_json::Value) {
     if let Some(obj) = v.as_object_mut() {
         if obj.contains_key("generated") {
-            obj["generated"] = serde_json::Value::Null;
+            obj["generated"] = serde_json::Value::String("__NORMALIZED__".into());
         }
         if let Some(ov) = obj.get_mut("overview").and_then(|o| o.as_object_mut()) {
             if ov.contains_key("file_path") {
-                ov["file_path"] = serde_json::Value::Null;
+                ov["file_path"] = serde_json::Value::String("__NORMALIZED__".into());
             }
         }
     }
