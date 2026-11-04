@@ -118,6 +118,12 @@ pub enum StageOp {
     /// `main.rs` so the `LateCtx` that backs these attributes is built; the actual
     /// projection is handled per-attribute in `stage_runner::project_late_row`.
     ResolveClassMetadata,
+    /// Gate for `@dominatorClass` / `@dominatorDepth` / `dominatorof(x)` in a
+    /// mixed SELECT (alongside other attributes). Presence in `late_ops` keeps
+    /// `needs.dominator_children` alive through `eliminate_dead_needs` so the
+    /// dominator tree (idom[]) is built by the escalated pipeline. Actual
+    /// projection is handled per-attribute in `stage_runner::project_late_row`.
+    ResolveDominatorAttrs,
     /// Expand each carried collection-object dense index into its logical element
     /// references. `class` is the slashified class name (e.g.
     /// `java/util/ArrayList`). Each element ref is emitted as a new row; rows
@@ -1283,6 +1289,12 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             // JoinRetained is the established "enter P3" signal; it costs
             // nothing in the stage runner (the op body is empty).
             late_ops.push(StageOp::JoinRetained);
+        }
+        // Gate op: tells eliminate_dead_needs to preserve needs.dominator_children
+        // so idom[] is built by the escalated pipeline. Without this, the optimizer
+        // sees only JoinRetained in late_ops and clears dominator_children.
+        if !late_ops.contains(&StageOp::ResolveDominatorAttrs) {
+            late_ops.push(StageOp::ResolveDominatorAttrs);
         }
     }
 

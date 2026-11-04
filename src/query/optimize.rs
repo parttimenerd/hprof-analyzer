@@ -124,6 +124,12 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
             // ResolveClassMetadata is a gate-only op (signals that @category /
             // @superclass / @collectionSize need the late window); no QueryNeeds field.
             StageOp::ResolveClassMetadata => {}
+            // ResolveDominatorAttrs is a gate-only op that preserves
+            // needs.dominator_children so idom[] is built for @dominatorClass /
+            // @dominatorDepth / dominatorof(x) in mixed-select queries.
+            StageOp::ResolveDominatorAttrs => {
+                dominator_children = true;
+            }
         }
     }
     // Only DOWNGRADE (clear) — never set a need true here (setting is the

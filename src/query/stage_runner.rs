@@ -538,6 +538,12 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 // Gate-only op: the actual @category/@superclass/@collectionSize
                 // projection is handled by project_late_row; no early return.
             }
+            StageOp::ResolveDominatorAttrs => {
+                // Gate-only op: preserves needs.dominator_children through
+                // eliminate_dead_needs so idom[] is built for @dominatorClass /
+                // @dominatorDepth / dominatorof(x) in mixed-select queries.
+                // Projection is handled by project_late_row; no early return.
+            }
             StageOp::EntriesExpand { .. } => {
                 // v1 stub: FROM ENTRIES collection expansion is not yet fully
                 // implemented for the late phase. Return zero rows without
