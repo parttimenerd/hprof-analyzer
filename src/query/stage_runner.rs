@@ -459,6 +459,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             || crate::query::plan::pred_uses_refpath(p)
             || crate::query::plan::pred_uses_class_metadata(p)
             || crate::query::plan::pred_uses_edge(p)
+            || crate::query::plan::pred_uses_dominator_of(p)
     });
     let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let get_filtered_idx = |carry: &CrossPhaseEntry| -> Vec<u32> {

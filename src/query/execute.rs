@@ -1404,6 +1404,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
+            // @dominatorDepth / @dominatorClass / dominatorof() are resolved in P3.
+            // Skip at scan time so they don't compare against 0/Null and drop rows.
+            if self.plan.finalize_at == crate::query::plan::Phase::P3
+                && crate::query::plan::pred_uses_dominator_of(&term.pred)
+            {
+                continue;
+            }
             if !self.eval_pred(&term.pred, src_idx, class_id, blob) {
                 return false;
             }
@@ -1516,6 +1523,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // @inbounds / @outbounds: skip at scan time when finalize_at != P1.
             if self.plan.finalize_at != crate::query::plan::Phase::P1
                 && crate::query::plan::pred_uses_edge(&term.pred)
+            {
+                continue;
+            }
+            // @dominatorDepth / @dominatorClass / dominatorof(): skip at scan time.
+            if self.plan.finalize_at == crate::query::plan::Phase::P3
+                && crate::query::plan::pred_uses_dominator_of(&term.pred)
             {
                 continue;
             }

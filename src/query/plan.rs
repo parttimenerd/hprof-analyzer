@@ -1256,6 +1256,22 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         });
     }
 
+    // `dominators(alias)` in a mixed SELECT: it expands to one row per dominator-tree
+    // child, so it cannot be combined with other select items (the cardinality would differ).
+    // Reject with an actionable error identical to the @inbounds/@outbounds guard above.
+    if q.select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Attr(Attr::Dominators(_))))
+        && q.select.len() > 1
+    {
+        return Err(QueryError(
+            "dominators(x) must be the only select item \
+             (e.g. SELECT dominators(s) FROM java.lang.Thread s). \
+             It expands to one row per dominator-tree child object, not a scalar count."
+                .into(),
+        ));
+    }
+
     let cross_phase = uses_retained(q);
     if cross_phase {
         needs.retained = true;
@@ -1594,7 +1610,7 @@ fn uses_dominator_of(q: &Query) -> bool {
     in_select || in_where
 }
 
-fn pred_uses_dominator_of(p: &Predicate) -> bool {
+pub(crate) fn pred_uses_dominator_of(p: &Predicate) -> bool {
     match p {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             pred_uses_dominator_of(a) || pred_uses_dominator_of(b)
