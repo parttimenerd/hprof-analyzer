@@ -1560,12 +1560,21 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
 /// outer query semi-joins by dense object index, so a scalar/field projection
 /// (which loses object identity) is rejected with an actionable message.
 fn enforce_from_subquery_projection(inner: &Query) -> Result<(), QueryError> {
+    // @objectAddress projects a raw heap address (Int), not a dense index; the
+    // FROM semi-join uses row_dense_index which reads ObjRef.index or a small Int.
+    // An address interpreted as a dense index finds no match → silently empty result.
+    // Reject it explicitly so the user gets an actionable error instead.
+    if inner.select.len() == 1 && matches!(inner.select[0], SelectItem::Attr(Attr::ObjectAddress)) {
+        return Err(QueryError(
+            "FROM-subquery cannot SELECT @objectAddress: addresses are not dense indices \
+             and the semi-join would return no rows. Use SELECT * or SELECT @objectId instead."
+                .into(),
+        ));
+    }
     let ok = inner.select.len() == 1
         && matches!(
             inner.select[0],
-            SelectItem::Star
-                | SelectItem::Attr(Attr::ObjectId)
-                | SelectItem::Attr(Attr::ObjectAddress)
+            SelectItem::Star | SelectItem::Attr(Attr::ObjectId)
         );
     if ok {
         Ok(())
@@ -3777,6 +3786,23 @@ mod tests {
         let q = parse("SELECT * FROM (SELECT @objectId FROM java.lang.String s) x").unwrap();
         let plan = pq(&q).unwrap();
         assert!(plan.from_subplan.is_some());
+    }
+
+    #[test]
+    fn from_subquery_address_projection_rejected() {
+        // @objectAddress produces a raw heap address (Int), not a dense index.
+        // row_dense_index would misinterpret it and the semi-join returns no rows.
+        // Planning must reject this with an actionable error.
+        let q = parse("SELECT * FROM (SELECT @objectAddress FROM java.lang.String s) x").unwrap();
+        let err = pq(&q).unwrap_err();
+        assert!(
+            err.0.contains("@objectAddress"),
+            "error must name @objectAddress: {err:?}"
+        );
+        assert!(
+            err.0.contains("@objectId"),
+            "error must suggest @objectId: {err:?}"
+        );
     }
 
     #[test]
