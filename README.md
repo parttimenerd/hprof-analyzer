@@ -224,7 +224,7 @@ hprof-analyzer heap report heap.hprof --section leaks
 | `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. Also forces the unreachable-forest dominator pass regardless of unreachable object count (see note below). **Note:** on dumps with a large unreachable object set the `unreachable-retained` phase (iterative dominator over the garbage subgraph) can dominate wall time; use `heap report` / `heap query` (disk-cached) for repeated analysis instead. |
 | `--field-stats` | Per-class reference-field null/non-null/retained stats for the top-50 classes by instance count. |
 | `--ref-paths` | Capture field-name labels on reference edges (~2 bytes/edge). Enables named field breakdowns in `--field-stats` and richer root paths. |
-| `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default. |
+| `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default for `heap report`; the `heap query` subcommand defaults to reachable-only and uses `--all` to include unreachable objects instead. |
 | `--detail minimal\|default\|max` | Adjust output-size caps. See [detail preset table](#tune-the-report-size-with---detail) below. |
 | `--mat <DIR>` | Emit Eclipse MAT-compatible binary index files into `DIR` alongside the normal analysis. |
 | `--query <OQL>` | Run an OQL query and embed results in the report. May be repeated. |

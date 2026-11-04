@@ -179,7 +179,7 @@ ORDER BY n DESC
 `e BETWEEN a AND b` is equivalent to `e >= a AND e <= b`.
 
 ```sql
--- Replace null with a default
+-- Replace null with a default (toString returns null when the backing array is absent)
 SELECT COALESCE(toString(s), "<null>") AS val FROM java.lang.String s
 
 -- Filter to objects of moderate size
