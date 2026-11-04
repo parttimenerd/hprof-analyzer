@@ -386,7 +386,19 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
         // inbound/forward edge store, dominator tree, or post-scan retained
         // sizes), none of which the query-only path builds. Classify by the plan
         // so the fix ("run the full report") is attached to the right feature.
-        let error = if entry.plan.needs.ref_walk {
+        let error = if entry
+            .plan
+            .late_ops
+            .iter()
+            .any(|op| matches!(op, StageOp::EntriesExpand { .. }))
+        {
+            // Check FROM ENTRIES before ref_walk: FROM ENTRIES also sets
+            // needs.ref_walk, so the ref_walk branch would fire first and give
+            // a misleading "reference-path" message.
+            "FROM ENTRIES requires the forward reference graph; \
+             it is not available in the query-only path. Run the full \
+             report (drop --query-only) to use FROM ENTRIES queries."
+        } else if entry.plan.needs.ref_walk {
             "reference-path (N-hop `x.field.tail`) queries require the full \
              analysis pipeline; the reference graph is not built in the \
              query-only path. Run the full report (drop --query-only) to use \
@@ -410,15 +422,6 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
             "@GCRoots/@GCRootInfo/@info require the full analysis pipeline; \
              GC-root data is not collected in the query-only path. Run the full \
              report (drop --query-only) to use GC-root queries."
-        } else if entry
-            .plan
-            .late_ops
-            .iter()
-            .any(|op| matches!(op, StageOp::EntriesExpand { .. }))
-        {
-            "FROM ENTRIES requires the forward reference graph; \
-             it is not available in the query-only path. Run the full \
-             report (drop --query-only) to use FROM ENTRIES queries."
         } else {
             "@retainedHeapSize requires the full analysis pipeline; \
              it is not available in the query-only path. Run the full \
