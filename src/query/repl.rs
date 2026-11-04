@@ -5671,7 +5671,7 @@ fn print_result(
     if res.truncated {
         writeln!(
             out,
-            "{cy}-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --{cr2}",
+            "{cy}-- result capped at {} rows (remove LIMIT or increase with LIMIT N for more) --{cr2}",
             fmt_int(res.row_count as i64)
         )?;
     }
