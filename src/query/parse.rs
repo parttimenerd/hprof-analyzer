@@ -332,6 +332,7 @@ where
             .then_ignore(just(Token::RParen))
             .map(|_| Attr::ClassOf))
         .or(dom_fn("dominators").map(Attr::Dominators))
+        .or(dom_fn("pathToRoot").map(Attr::PathToRoot))
         .or(dom_fn("dominatorof").map(Attr::DominatorOf))
         .or(dom_fn("toString").map(Attr::ToString))
         .or(any_ident().map(Attr::Field))
@@ -1587,6 +1588,7 @@ pub const FUNCS: &[&str] = &[
     "toHex",
     "path",
     "dominators",
+    "pathToRoot",
     "dominatorof",
 ];
 
@@ -3235,6 +3237,19 @@ mod tests {
         let err = parse("SELECT dominatorof() FROM java.lang.String s").unwrap_err();
         assert!(
             err.to_string().contains("dominatorof(x) requires"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn parse_path_to_root() {
+        let q = parse("SELECT pathToRoot(s) FROM java.lang.String s").unwrap();
+        assert!(matches!(&q.select[0], SelectItem::Attr(Attr::PathToRoot(v)) if v == "s"));
+    }
+    #[test]
+    fn parse_path_to_root_requires_arg() {
+        let err = parse("SELECT pathToRoot() FROM java.lang.String s").unwrap_err();
+        assert!(
+            err.to_string().contains("pathToRoot(x) requires"),
             "unexpected error: {err}"
         );
     }

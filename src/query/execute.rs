@@ -117,6 +117,7 @@ impl QueryExecState {
                     StageOp::RetainedSet { .. }
                         | StageOp::DominatorChildren { .. }
                         | StageOp::DominatorOf
+                        | StageOp::PathToRoot
                         | StageOp::EdgeLookup { .. }
                         | StageOp::BoundedPath { .. }
                 )
@@ -980,6 +981,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // dominator-tree attrs are cross-phase: the dominator tree exists only
             // post-scan, so these are filled by the stage runner, not here.
             Attr::Dominators(_)
+            | Attr::PathToRoot(_)
             | Attr::DominatorOf(_)
             | Attr::DominatorClass
             | Attr::DominatorDepth
@@ -1082,6 +1084,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: filled by the stage runner.
             Attr::Dominators(_)
+            | Attr::PathToRoot(_)
             | Attr::DominatorOf(_)
             | Attr::DominatorClass
             | Attr::DominatorDepth
@@ -2658,6 +2661,7 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         Attr::Outbounds => "@outbounds".into(),
         Attr::ClassOf => "classof".into(),
         Attr::Dominators(a) => format!("dominators({a})"),
+        Attr::PathToRoot(a) => format!("pathToRoot({a})"),
         Attr::DominatorOf(a) => format!("dominatorof({a})"),
         Attr::DominatorClass => "@dominatorClass".into(),
         Attr::DominatorDepth => "@dominatorDepth".into(),

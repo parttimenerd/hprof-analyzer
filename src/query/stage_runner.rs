@@ -477,6 +477,11 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 let idoms = run_dominator_of(&idx, ctx);
                 return dominator_rows(entry, q, &idoms, entry.carry.truncated(), ctx);
             }
+            StageOp::PathToRoot => {
+                let seeds = get_filtered_idx(entry);
+                let chain = run_path_to_root(&seeds, ctx);
+                return dominator_rows(entry, q, &chain, entry.carry.truncated(), ctx);
+            }
             StageOp::RetainedSet { cap } => {
                 let seeds = get_filtered_idx(entry);
                 let (set, trunc) = run_retained_set(&seeds, *cap, ctx);
@@ -2539,6 +2544,31 @@ pub(crate) fn run_dominator_of(matches: &[u32], ctx: &LateCtx) -> Vec<u32> {
             if d != u32::MAX {
                 out.push(d);
             }
+        }
+    }
+    out
+}
+
+/// Walk `idom[]` upward from each seed to the GC root, emitting one row per hop
+/// (including the seed and the root). Backs `pathToRoot(x)`.
+pub(crate) fn run_path_to_root(seeds: &[u32], ctx: &LateCtx) -> Vec<u32> {
+    let undef = u32::MAX;
+    let mut out = Vec::new();
+    for &seed in seeds {
+        let mut cur = seed;
+        let mut hops: u32 = 0;
+        loop {
+            let dom = ctx.idom.get(cur as usize).copied().unwrap_or(undef);
+            if dom == undef || dom == cur {
+                out.push(cur); // include the GC-root step
+                break;
+            }
+            out.push(cur);
+            cur = dom;
+            hops += 1;
+            if hops > 10_000 {
+                break;
+            } // safety cap
         }
     }
     out

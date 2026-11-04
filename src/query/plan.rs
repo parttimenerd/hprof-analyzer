@@ -74,6 +74,9 @@ pub enum StageOp {
     /// Emit the dominator-tree children of each carried dense index (bounded by
     /// `cap`). Backs `dominators(x)`.
     DominatorChildren { cap: usize },
+    /// Walk `idom[]` upward from each carried object and emit one row per hop.
+    /// Backs `pathToRoot(x)`.
+    PathToRoot,
     /// Emit the immediate dominator (idom) of each carried dense index — one row
     /// per input (the tree root has no idom and yields nothing). Backs
     /// `dominatorof(x)`.
@@ -1093,6 +1096,43 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             finalize_at: Phase::P3,
             carry: CarryLayout::IndexOnly,
             late_ops: vec![op],
+            limit: scan_limit(q),
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
+            select_arity,
+            union_branches: Vec::new(),
+            union_limit: None,
+            from_subplan: None,
+            in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
+        });
+    }
+
+    // `pathToRoot(alias)`: walk idom[] upward from each matched object to the
+    // GC root, emitting one row per hop. The sole argument must name the FROM alias.
+    if let [SelectItem::Attr(Attr::PathToRoot(a))] = q.select.as_slice() {
+        if Some(a.as_str()) != q.alias.as_deref() {
+            return Err(QueryError(format!(
+                "unknown alias '{a}'; the FROM clause binds {}",
+                match &q.alias {
+                    Some(al) => format!("alias '{al}'"),
+                    None => "no alias".to_string(),
+                }
+            )));
+        }
+        needs.dominator_children = true;
+        return Ok(QueryPlan {
+            kind: StageKind::SingleScan,
+            needs,
+            where_terms,
+            finalize_at: Phase::P3,
+            carry: CarryLayout::IndexOnly,
+            late_ops: vec![StageOp::PathToRoot],
             limit: scan_limit(q),
             scan_limit: None,
             order_sensitive: q.order_by.is_some(),

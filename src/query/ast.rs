@@ -127,6 +127,10 @@ pub enum Attr {
     Category,
     /// `dominators(alias)` — dominator-tree children of each matched object.
     Dominators(String),
+    /// `pathToRoot(alias)` — walk `idom[]` from the given object upward to the
+    /// GC root, emitting one row per hop. Same schema as `dominators()` but
+    /// walks up instead of collecting children.
+    PathToRoot(String),
     /// `dominatorof(alias)` — immediate dominator (idom) of each matched object.
     DominatorOf(String),
     /// `@dominatorClass` — pretty class name of this object's immediate dominator.

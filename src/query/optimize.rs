@@ -106,7 +106,7 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
                 retained = true;
                 dominator_children = true;
             }
-            StageOp::DominatorChildren { .. } | StageOp::DominatorOf => {
+            StageOp::DominatorChildren { .. } | StageOp::DominatorOf | StageOp::PathToRoot => {
                 dominator_children = true;
             }
             StageOp::RefWalkResolve { .. } => ref_walk = true,
