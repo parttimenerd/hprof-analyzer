@@ -1003,6 +1003,29 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         expr_for_each_attr(ge, &mut |a| note_attr_need_attr(a, &mut needs));
     }
 
+    // RefPath (N-hop reference walk) in a GROUP BY key is not supported: the
+    // walk resolves post-scan (P2) while GROUP BY buckets are accumulated during
+    // the scan — there is no late-stage GROUP BY merge yet. Detect this early so
+    // the user gets a clear error instead of a silent all-rows-in-one-null-group.
+    for (i, ge) in q.group_by.iter().enumerate() {
+        let mut has_refpath = false;
+        expr_for_each_attr(ge, &mut |a| {
+            if matches!(a, Attr::RefPath { .. } | Attr::ValueArray) {
+                has_refpath = true;
+            }
+        });
+        if has_refpath {
+            let col = format!("GROUP BY expression {}", i + 1);
+            return Err(QueryError(format!(
+                "{col} contains a reference-path (multi-hop field walk), which cannot be \
+                 evaluated during the scan pass where GROUP BY buckets are built. \
+                 Use a subquery or a WHERE filter on @objectAddress instead: \
+                 e.g. SELECT @objectId FROM java.lang.String s WHERE s.value.@objectAddress \
+                 = (SELECT @valueArray FROM java.lang.String LIMIT 1)"
+            )));
+        }
+    }
+
     // True when any aggregate arg is a compound SelectItem::Expr — i.e. the arg
     // is not a bare @attr or COUNT(*) and cannot be answered from class-summary
     // scalars. A bare @usedHeapSize arg folds to SelectItem::Attr (not Expr), so
@@ -3112,6 +3135,33 @@ mod tests {
             plan.late_ops
         );
         assert_eq!(plan.finalize_at, Phase::P2, "@valueArray resolves at P2");
+    }
+
+    #[test]
+    fn group_by_refpath_rejected_with_clear_error() {
+        let q = parse(
+            "SELECT s.value.@objectAddress, COUNT(*) FROM java.lang.String s \
+             GROUP BY s.value.@objectAddress",
+        )
+        .unwrap();
+        let err = pq(&q).unwrap_err();
+        assert!(
+            err.0.contains("reference-path"),
+            "error must mention 'reference-path'; got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn group_by_value_array_rejected() {
+        let q = parse("SELECT @valueArray, COUNT(*) FROM java.lang.String s GROUP BY @valueArray")
+            .unwrap();
+        let err = pq(&q).unwrap_err();
+        assert!(
+            err.0.contains("reference-path"),
+            "error must mention 'reference-path'; got: {}",
+            err.0
+        );
     }
 
     #[test]
