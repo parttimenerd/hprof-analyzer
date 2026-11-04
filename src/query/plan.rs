@@ -3651,6 +3651,29 @@ mod tests {
         assert_eq!(plan.in_subplans.len(), 2);
     }
 
+    #[test]
+    fn not_in_subquery_parses_and_plans() {
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectAddress NOT IN \
+             (SELECT @objectAddress FROM java.lang.Integer i)",
+        )
+        .unwrap();
+        let plan = pq(&q).unwrap();
+        assert_eq!(
+            plan.in_subplans.len(),
+            1,
+            "NOT IN subquery must plan one InSubplan (the Not wraps it)"
+        );
+        assert_eq!(plan.in_subplans[0].lhs, Attr::ObjectAddress);
+        // The WHERE predicate should be Not(InSubquery{...}).
+        let pred = q.where_.as_ref().unwrap();
+        assert!(
+            matches!(pred, crate::query::ast::Predicate::Not(inner)
+                if matches!(**inner, crate::query::ast::Predicate::InSubquery { .. })),
+            "NOT IN must desugar to Predicate::Not(InSubquery{{..}})"
+        );
+    }
+
     // ---------- Task 34: explain() / stage_list() tests ----------
 
     /// After optimize, explain() must contain `scan_limit: 5` when the limit

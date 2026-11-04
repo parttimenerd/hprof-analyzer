@@ -656,13 +656,25 @@ where
                 .map(|(_lhs, cname)| Predicate::InstanceOf(cname));
             let in_subquery = attr
                 .clone()
-                .then_ignore(ident_ci("IN"))
+                .then(
+                    ident_ci("NOT")
+                        .then_ignore(ident_ci("IN"))
+                        .to(true)
+                        .or(ident_ci("IN").to(false)),
+                )
                 .then_ignore(just(Token::LParen))
                 .then(base_query.clone())
                 .then_ignore(just(Token::RParen))
-                .map(|(lhs, inner): (Attr, Query)| Predicate::InSubquery {
-                    lhs,
-                    inner: Box::new(inner),
+                .map(|((lhs, negated), inner): ((Attr, bool), Query)| {
+                    let pred = Predicate::InSubquery {
+                        lhs,
+                        inner: Box::new(inner),
+                    };
+                    if negated {
+                        Predicate::Not(Box::new(pred))
+                    } else {
+                        pred
+                    }
                 });
             // `expr IN (v1, v2, …)` — value-list form (desugars to OR chain of = compares).
             // Must be tried before `compare` so `IN` is not parsed as a field name.
