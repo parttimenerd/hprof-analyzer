@@ -259,7 +259,12 @@ impl Pass2 {
         // still registered in class_addr_to_hist. Without this, @superclass
         // returns Null for any class whose direct superclass has zero instances
         // (e.g. java.util.ArrayList → java.util.AbstractList).
-        for (&addr, ci) in &p1.class_map {
+        // Sort by address for deterministic class_names ordering (p1.class_map
+        // is a HashMap whose iteration order is not stable across runs).
+        let mut sorted_class_map: Vec<(u64, &crate::pass1::ClassInfo)> =
+            p1.class_map.iter().map(|(&a, ci)| (a, ci)).collect();
+        sorted_class_map.sort_unstable_by_key(|&(a, _)| a);
+        for (addr, ci) in sorted_class_map {
             class_addr_to_hist.entry(addr).or_insert_with(|| {
                 get_or_insert_class(
                     addr,
