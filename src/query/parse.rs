@@ -286,6 +286,7 @@ where
                 "dominatorClass" => Attr::DominatorClass,
                 "dominatorDepth" => Attr::DominatorDepth,
                 "superclass" => Attr::Superclass,
+                "collectionSize" => Attr::CollectionSize,
                 other => {
                     // Suggest the nearest known @attribute on a typo
                     // (@objectAdress -> @objectAddress). ATTRIBUTES carries the
@@ -627,10 +628,17 @@ where
             ));
             FromSource::Object(0)
         });
+        // `FROM ENTRIES <ClassName>` — iterate over the logical elements of a
+        // known collection class (e.g. `java.util.ArrayList`). Each row is one
+        // element reference.
+        let from_entries = ident_ci("ENTRIES")
+            .ignore_then(any_ident().labelled("collection class name"))
+            .map(|class| FromSource::Entries { class });
         let from_source = from_subquery
             .or(from_object)
             .or(instanceof_addr)
             .or(from_object_expr)
+            .or(from_entries)
             .or(from_class);
 
         // Predicate grammar. Defined inside the `base_query` recursive closure so
@@ -1547,6 +1555,8 @@ pub const RESERVED: &[&str] = &[
     "DESC",
     // MAT no-op keyword; blocked from alias/completion slots.
     "OBJECTS",
+    // Collection-entry iteration keyword.
+    "ENTRIES",
     // Column-alias / retained-set modifier keywords.
     "AS",
     "RETAINED",
@@ -1643,6 +1653,7 @@ pub const ATTRIBUTES: &[&str] = &[
     "@dominatorClass",
     "@dominatorDepth",
     "@superclass",
+    "@collectionSize",
 ];
 
 /// The union of every completion-candidate slice the parser exposes. The
@@ -5672,6 +5683,33 @@ mod tests {
             ),
             "expected Superclass attr, got: {:?}",
             q.select[0]
+        );
+    }
+
+    #[test]
+    fn parse_collection_size_attr() {
+        let q = parse("SELECT @collectionSize FROM java.util.ArrayList").unwrap();
+        assert!(
+            matches!(
+                &q.select[0],
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::CollectionSize)
+            ),
+            "expected CollectionSize attr, got: {:?}",
+            q.select[0]
+        );
+    }
+
+    #[test]
+    fn parse_from_entries() {
+        let q = parse("SELECT * FROM ENTRIES java.util.ArrayList").unwrap();
+        assert!(
+            matches!(
+                &q.from,
+                crate::query::ast::FromSource::Entries { class }
+                    if class == "java.util.ArrayList"
+            ),
+            "expected FromSource::Entries, got: {:?}",
+            q.from
         );
     }
 }

@@ -144,6 +144,10 @@ pub enum Attr {
     /// superclass. Returns Null for java.lang.Object (no superclass).
     /// Resolved in the late phase via `class_super_idx`.
     Superclass,
+    /// `@collectionSize` — logical element count of a known collection class
+    /// (e.g. `java.util.ArrayList.size`). Returns `Null` for unrecognised
+    /// classes or when the size field is not present.
+    CollectionSize,
     /// `toString(alias)` — decode a `java.lang.String` instance to its text.
     /// Usable as a WHERE predicate LHS (`WHERE toString(s) LIKE "java.*"`).
     /// Only valid for `java.lang.String` FROM; non-String targets are an error.
@@ -309,6 +313,13 @@ pub enum FromSource {
     /// `FROM OBJECTS 0x1295e2f8`). Resolved to one dense index via the
     /// address->index map; a missing address yields zero rows (MAT parity).
     Object(u64),
+    /// `FROM ENTRIES <ClassName>` — iterate over the logical *elements* of a
+    /// known collection class (e.g. `java.util.ArrayList`). Each row is one
+    /// element reference, not the collection object itself. `class` is the
+    /// dotted class name as written (e.g. `java.util.ArrayList`).
+    Entries {
+        class: String,
+    },
 }
 
 impl FromSource {
@@ -319,6 +330,7 @@ impl FromSource {
             FromSource::Class(c) => &c.class_name,
             FromSource::Subquery(_) => "",
             FromSource::Object(_) => "",
+            FromSource::Entries { class } => class,
         }
     }
     /// The class spec for a class FROM, or `None` for a subquery source.
@@ -327,6 +339,7 @@ impl FromSource {
             FromSource::Class(c) => Some(c),
             FromSource::Subquery(_) => None,
             FromSource::Object(_) => None,
+            FromSource::Entries { .. } => None,
         }
     }
     /// Whether this is `FROM INSTANCEOF C` (subclasses included). `false` for a
@@ -340,6 +353,7 @@ impl FromSource {
             FromSource::Subquery(q) => Some(q),
             FromSource::Class(_) => None,
             FromSource::Object(_) => None,
+            FromSource::Entries { .. } => None,
         }
     }
 }
