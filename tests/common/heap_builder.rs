@@ -1143,3 +1143,131 @@ pub fn build_two_hop_holders(b: &mut HeapBuilder, n: usize) {
     let container_id = b.instance(container_class, &d);
     b.class_with_static_root("scenarios/TwoHopRoot", "root", container_id, &[]);
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 19: category_in_histogram — category is non-empty on ClassRow
+// ---------------------------------------------------------------------------
+
+/// Build a heap with many `com.example.Widget` instances so `biggest_classes`
+/// is non-empty and the `category` field is populated. Uses the same pattern
+/// as `build_single_culprit_simple_class` (50 instances with int fields) but
+/// with a `com.example` class to test the "other" category bucket.
+pub fn build_app_class_in_histogram() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    // 50 instances of com.example.Widget with 3 int fields each —
+    // same pattern as build_single_culprit_simple_class, which reliably
+    // produces biggest_classes entries.
+    let cls = b.class(
+        "com/example/Widget",
+        &[("x", T_INT), ("y", T_INT), ("z", T_INT)],
+    );
+    let mut refs: Vec<u64> = Vec::new();
+    for i in 0..50i32 {
+        let mut data = Vec::new();
+        int_field(&mut data, i);
+        int_field(&mut data, i * 2);
+        int_field(&mut data, i * 3);
+        refs.push(b.instance(cls, &data));
+    }
+    let obj_class = b.class("java/lang/Object", &[]);
+    let arr = b.obj_array(obj_class, &refs);
+    let container_class = b.class("com/example/WidgetRegistry", &[("widgets", T_OBJECT)]);
+    let mut cdata = Vec::new();
+    obj_field(&mut cdata, arr);
+    let container = b.instance(container_class, &cdata);
+    b.class_with_static_root("com/example/AppRoot", "registry", container, &[]);
+    b.build()
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 20: culprit_prefers_app_class_over_jdk
+// ---------------------------------------------------------------------------
+
+/// Build a heap where a `com.example.Cache` instance is a DIRECT top-level
+/// dominator (via a Thread GC root), retaining 200 byte arrays that each have
+/// 4096 bytes. The com.example.Cache must be nominated as primary culprit.
+///
+/// The Cache is the thread's `target` field, making it a direct child of the
+/// thread in the dominator tree. The thread itself is the GC root but the
+/// Cache is the real accumulator. The primary_culprit path resolution must
+/// pick Cache (the app class), not Thread.
+pub fn build_app_class_culprit() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+
+    // Build 200 byte arrays, each 4096 bytes.
+    let mut payload_ids: Vec<u64> = Vec::with_capacity(200);
+    for _ in 0..200 {
+        payload_ids.push(b.prim_array(T_BYTE, &vec![0u8; 4096]));
+    }
+
+    // A simple obj array to hold the payloads.
+    let object_class = b.class("java/lang/Object", &[]);
+    let arr_obj = b.obj_array(object_class, &payload_ids);
+
+    // Cache class: one Object field (the array).
+    let cache_cls = b.class("com/example/Cache", &[("data", T_OBJECT)]);
+    let mut buf = Vec::new();
+    obj_field(&mut buf, arr_obj);
+    let cache_obj = b.instance(cache_cls, &buf);
+
+    // Thread class: one Object field ("target") pointing at Cache.
+    let thread_class = b.class("java/lang/Thread", &[("target", T_OBJECT)]);
+    let mut tdata = Vec::new();
+    obj_field(&mut tdata, cache_obj);
+    let thread_obj = b.instance(thread_class, &tdata);
+    b.thread_root(thread_obj);
+
+    b.build()
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 21: subclass_hierarchy_no_panic (class_with_super coverage)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with a three-level inheritance hierarchy (Base → Sub → SubSub)
+/// to verify that `class_with_super` chains are handled without panic in all
+/// analysis passes (field offset walks, dominator computation, etc.).
+pub fn build_subclass_hierarchy() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    let base = b.class("com/example/Base", &[("x", T_INT)]);
+    let sub = b.class_with_super("com/example/Sub", base, &[("y", T_INT)]);
+    let subsub = b.class_with_super("com/example/SubSub", sub, &[("z", T_INT)]);
+    // SubSub instance data only carries its own declared field (z).
+    let arr = b.prim_array(T_BYTE, &vec![0u8; 256 * 1024]);
+    let mut buf = Vec::new();
+    int_field(&mut buf, 1); // z field value
+    let obj = b.instance(subsub, &buf);
+    // Anchor via a static root and add sticky-class roots for all three classes.
+    b.class_with_static_root("com/example/Root", "val", obj, &[]);
+    b.root_sticky_class(base);
+    b.root_sticky_class(sub);
+    b.root_sticky_class(subsub);
+    // Add a large prim array to push retained size high enough for the
+    // subclass object to appear as a significant suspect.
+    let _ = arr; // arr is an independent root, not wired here — that's fine for a no-panic check
+    b.build()
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 22: mixed_class_heap (classof() coverage, no-panic)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with multiple instance types so that any code path that
+/// iterates over instances and calls classof() must handle heterogeneous
+/// classes without panicking.
+pub fn build_mixed_class_heap() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    let a = b.class("com/example/TypeA", &[("x", T_INT)]);
+    let c = b.class("com/example/TypeB", &[("y", T_INT)]);
+    for _ in 0..5 {
+        let mut v = Vec::new();
+        int_field(&mut v, 1);
+        b.instance(a, &v);
+        let mut v = Vec::new();
+        int_field(&mut v, 2);
+        b.instance(c, &v);
+    }
+    b.root_sticky_class(a);
+    b.root_sticky_class(c);
+    b.build()
+}

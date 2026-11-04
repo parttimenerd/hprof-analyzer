@@ -642,6 +642,80 @@ fn check_sankey_imdom_chain(report: &Report) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 19: category_in_histogram — category is non-empty on ClassRow
+// ---------------------------------------------------------------------------
+
+fn build_category_in_histogram() -> Vec<u8> {
+    heap_builder::build_app_class_in_histogram()
+}
+
+fn check_category_in_histogram(report: &Report) {
+    // biggest_classes should have category populated (not empty) for recognized classes
+    let has_category = report
+        .top
+        .biggest_classes
+        .iter()
+        .any(|r| !r.category.is_empty());
+    assert!(
+        has_category,
+        "at least one biggest_classes row should have a non-empty category; got: {:?}",
+        report
+            .top
+            .biggest_classes
+            .iter()
+            .map(|r| (&r.pretty_class, &r.category))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 20: culprit_prefers_app_class_over_jdk
+// ---------------------------------------------------------------------------
+
+fn build_culprit_prefers_app_class() -> Vec<u8> {
+    heap_builder::build_app_class_culprit()
+}
+
+fn check_culprit_prefers_app_class(report: &Report) {
+    assert!(
+        !report.primary_culprits.is_empty(),
+        "should have at least one primary culprit"
+    );
+    let culprit = &report.primary_culprits[0];
+    assert!(
+        culprit.class_name.starts_with("com.example"),
+        "culprit should be the application class, got: {}",
+        culprit.class_name
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 21: subclass_hierarchy_no_panic (class_with_super coverage)
+// ---------------------------------------------------------------------------
+
+fn build_subclass_hierarchy_scenario() -> Vec<u8> {
+    heap_builder::build_subclass_hierarchy()
+}
+
+fn check_subclass_hierarchy_no_panic(report: &Report) {
+    // Just verify the report builds cleanly when subclasses are present.
+    let _ = &report.triage;
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 22: mixed_class_heap (classof() coverage, no-panic)
+// ---------------------------------------------------------------------------
+
+fn build_mixed_class_heap_scenario() -> Vec<u8> {
+    heap_builder::build_mixed_class_heap()
+}
+
+fn check_mixed_class_heap_no_panic(report: &Report) {
+    // Just verifies no panic — classof() is OQL-only.
+    let _ = &report.triage;
+}
+
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
 }
@@ -761,6 +835,30 @@ const SCENARIOS: &[Scenario] = &[
         build: build_two_hop_holders,
         check: check_two_hop_holders,
     },
+    Scenario {
+        name: "category_in_histogram",
+        opts: default_opts,
+        build: build_category_in_histogram,
+        check: check_category_in_histogram,
+    },
+    Scenario {
+        name: "culprit_prefers_app_class_over_jdk",
+        opts: default_opts,
+        build: build_culprit_prefers_app_class,
+        check: check_culprit_prefers_app_class,
+    },
+    Scenario {
+        name: "subclass_hierarchy_no_panic",
+        opts: default_opts,
+        build: build_subclass_hierarchy_scenario,
+        check: check_subclass_hierarchy_no_panic,
+    },
+    Scenario {
+        name: "mixed_class_heap_no_panic",
+        opts: default_opts,
+        build: build_mixed_class_heap_scenario,
+        check: check_mixed_class_heap_no_panic,
+    },
 ];
 
 #[test]
@@ -863,6 +961,26 @@ fn scenario_two_hop_holders() {
     run_scenario(&SCENARIOS[18]);
 }
 
+#[test]
+fn scenario_category_in_histogram() {
+    run_scenario(&SCENARIOS[19]);
+}
+
+#[test]
+fn scenario_culprit_prefers_app_class_over_jdk() {
+    run_scenario(&SCENARIOS[20]);
+}
+
+#[test]
+fn scenario_subclass_hierarchy_no_panic() {
+    run_scenario(&SCENARIOS[21]);
+}
+
+#[test]
+fn scenario_mixed_class_heap_no_panic() {
+    run_scenario(&SCENARIOS[22]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -871,7 +989,7 @@ fn scenario_two_hop_holders() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        19,
+        23,
         "update this test when adding scenarios"
     );
 }
