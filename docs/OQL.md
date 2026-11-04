@@ -57,10 +57,12 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 - `*` — project the matched object itself.
 - A bare alias (`s`) — projects the object, same as `*`.
 - An attribute: `@objectId`, `@objectAddress`, `@usedHeapSize`,
-  `@retainedHeapSize`¹, `@displayName`, `@length`, `@inbounds`¹, `@outbounds`¹.
+  `@retainedHeapSize`¹, `@displayName`, `@length`, `@inbounds`¹, `@outbounds`¹,
+  `@category`, `@superclass`, `@collectionSize`,
+  `@dominatorClass`¹, `@dominatorDepth`¹.
 - A field path: `s.fieldName`, `s.a.b`.
 - A function: `classof(x)`, `toString(x)`, `path(a, b)`, `dominators(x)`¹,
-  `dominatorof(x)`¹.
+  `dominatorof(x)`¹, `pathToRoot(x)`¹.
 - An aggregate: `COUNT(*)`, `SUM(e)`, `MIN(e)`, `MAX(e)`, `AVG(e)`,
   `MEDIAN(e)`, `PERCENTILE(e, <int>)`.
 - `<expr> AS <name>` — rename the output column.
@@ -76,11 +78,14 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 | `FROM INSTANCEOF java.lang.Object` | the class and all subclasses |
 | `FROM "java\.lang\..*"` | class-name regex (double-quoted) |
 | `FROM ( SELECT … ) s` | subquery as the row source |
+| `FROM ENTRIES java.util.ArrayList`¹ | iterate logical entries of a collection — see [FROM ENTRIES](#from-entries) |
 
 ### Predicates (WHERE)
 
 - Comparisons: `=`, `!=`, `<`, `<=`, `>`, `>=`.
-- `LIKE "regex"` / `NOT LIKE "regex"` — RHS must be a string literal.
+- `LIKE "pattern"` / `NOT LIKE "pattern"` — RHS must be a string literal. Accepts
+  both **SQL globs** (`%` = any sequence, `_` = any single character) and
+  **regex** patterns interchangeably: `LIKE "%error%"` and `LIKE ".*error.*"` both work.
 - `<attr> INSTANCEOF <class>`.
 - `<attr> IN ( SELECT @objectAddress FROM … )` — membership against a subquery
   that selects a single address-valued column. (`IN` takes a **subquery**, not a
@@ -295,6 +300,107 @@ object without re-expanding it. `@index` is the dense object index (same as
 `@objectId`) — pass it to `inspect_object` or `browse_dominators` for further
 inspection.
 
+---
+
+## Virtual attributes reference
+
+These attributes are available in any `SELECT` or `WHERE` expression. Attributes
+marked ¹ require the full analysis pipeline.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `@objectId` | Int | Dense object index (0-based) |
+| `@objectAddress` | Int | Raw HPROF heap address (hex) |
+| `@usedHeapSize` | Int | Shallow heap size of this object |
+| `@retainedHeapSize`¹ | Int | Total heap retained exclusively by this object |
+| `@displayName` | Str | Class name (dot-form) |
+| `@length` | Int | Array length; `null` for non-arrays |
+| `@inbounds`¹ | Obj | Incoming reference objects |
+| `@outbounds`¹ | Obj | Outgoing reference objects |
+| `@category` | Str | Classifier bucket: `"jdk"`, `"framework"`, `"other"`, or a user-defined name |
+| `@superclass` | Str | Pretty class name of the immediate superclass; `null` for `java.lang.Object` |
+| `@collectionSize` | Int | Logical element count from the collection's size field; `null` for non-collections |
+| `@dominatorClass`¹ | Str | Class name of the immediate dominator object |
+| `@dominatorDepth`¹ | Int | Distance (in dominator hops) from GC roots |
+
+### `pathToRoot(alias)`¹
+
+Walks `idom[]` upward from each matched object to the GC root, emitting one row
+per hop. Same output schema as `dominators(alias)` but traverses *up* instead of
+collecting children.
+
+```sql
+-- Show the retainer chain of the biggest String
+SELECT pathToRoot(s)
+FROM java.lang.String s
+ORDER BY @retainedHeapSize DESC
+LIMIT 1
+```
+
+---
+
+## FROM ENTRIES
+
+`FROM ENTRIES <ClassName>` iterates the **logical entries** of a Java collection
+instead of the collection objects themselves. Each row represents one element
+(List/array types) or one key-value pair (Map types).
+
+```sql
+-- All elements of ArrayList instances
+SELECT index, element FROM ENTRIES java.util.ArrayList LIMIT 20
+
+-- Equivalent to inspecting elementData[] manually, but cleaner
+```
+
+**Supported in v1:** `java.util.ArrayList`, `java.util.Vector` (elementData[]
+backing array → `(index: Int, element: Int)` rows, where `element` is the dense
+object index of each non-null element).
+
+**Deferred to v2:** `HashMap`, `LinkedHashMap`, `HashSet`, `ArrayDeque`, `TreeMap`.
+For Maps in the meantime, query `FROM java.util.HashMap$Node` directly to inspect
+entries, or use `s.table.key` / `s.table.value` field paths.
+
+`FROM ENTRIES` requires the **full analysis pipeline** (forward reference graph).
+Running it in query-only mode (`query` subcommand) returns zero rows with a clear
+error message.
+
+### Adding support for new collection types
+
+The collection registry lives in `src/collections.rs` as `builtin_coll_descs()` —
+a `Vec<CollDesc>` where each entry describes one class:
+
+```rust
+CollDesc {
+    class_name: "com/example/MyList",   // slash-form
+    size_field:  Some(("size", "com/example/MyList")),   // (field, declaring_class)
+    array_field: Some(("elements", "com/example/MyList")),
+    nested_map_field: None,
+    kind: CollKind::List,
+}
+```
+
+You can also add entries via config (`.hprof-analyzer.toml`):
+
+```toml
+[[collection]]
+class_name = "com.example.MyList"
+kind = "list"
+size_field = "size"
+array_field = "elements"
+```
+
+The config entries are prepended ahead of the built-ins, so they shadow any
+built-in descriptor with the same class name. Custom entries affect:
+
+- Fill-ratio statistics in the `collections` report section
+- `@collectionSize` OQL attribute
+- `FROM ENTRIES` iteration (once the class's `kind` and fields are registered)
+
+The superclass chain is walked automatically when matching — a descriptor for
+`java.util.AbstractList` covers all subclasses that don't have their own entry.
+
+---
+
 ## Worked examples
 
 ### Counting and filtering
@@ -456,8 +562,10 @@ some attributes and functions are unavailable there:
 | Needs the full pipeline | query-only error |
 |-------------------------|------------------|
 | `@retainedHeapSize`, `AS RETAINED SET` | "…requires the full analysis pipeline…" |
-| `dominators(x)`, `dominatorof(x)` | "dominator queries … require the full analysis pipeline…" |
+| `dominators(x)`, `dominatorof(x)`, `pathToRoot(x)` | "dominator queries … require the full analysis pipeline…" |
 | `@inbounds`, `@outbounds`, `path(a, b)` | reference-graph queries need the full path |
+| `@dominatorClass`, `@dominatorDepth` | dominator metadata, same requirement |
+| `FROM ENTRIES <ClassName>` | requires the forward reference graph |
 
 To use those, run the **full report** command (no `query` subcommand) and pass
 `--query` / `--query-file`. The report build produces the retained sizes,
@@ -697,6 +805,13 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `@index` / `@class` attribute aliases | `@index` = `@objectId`; `@class` = `@displayName` |
 | `jsonify(x [, depth])` — expand object to JSON tree | `SELECT jsonify(x) FROM INSTANCEOF java.util.HashMap x LIMIT 3` |
 | `s[n]` / `s[a:b]` array subscript / slice | `SELECT s[0] FROM int[] s LIMIT 10` |
+| `@category` — classifier bucket for each object's class | `WHERE @category = "framework"` |
+| `@superclass` — immediate superclass name | `SELECT @superclass FROM INSTANCEOF java.lang.Thread` |
+| `@collectionSize` — logical element count | `WHERE @collectionSize > 1000` |
+| `@dominatorClass`¹ / `@dominatorDepth`¹ — dominator metadata | `ORDER BY @dominatorDepth DESC` |
+| `pathToRoot(x)`¹ — walk idom[] upward to GC root | `SELECT pathToRoot(s) FROM … LIMIT 1` |
+| `FROM ENTRIES <ClassName>`¹ — collection entry iteration | `SELECT index, element FROM ENTRIES java.util.ArrayList` |
+| SQL LIKE wildcards (`%`, `_`) auto-translated to regex | `LIKE "%error%"` works alongside `LIKE ".*error.*"` |
 
 ### Compatible with MAT
 
@@ -709,7 +824,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | `FROM "<regex>"` double-quoted class-name regex | `FROM "java\.util\..*"` |
 | `FROM (subquery)` semi-join | `FROM (SELECT * FROM java.lang.Thread) t` |
 | `WHERE`, `ORDER BY`, `LIMIT`, `UNION`, `SELECT DISTINCT` | standard SQL clauses |
-| `LIKE "<regex>"` / `NOT LIKE` | `WHERE toString(s) LIKE ".*error.*"` |
+| `LIKE "pattern"` / `NOT LIKE` — SQL globs (`%`, `_`) and regex both accepted | `LIKE "%error%"`, `LIKE ".*error.*"` |
 | `WHERE x INSTANCEOF C` | |
 | `SELECT … AS RETAINED SET`, `SELECT OBJECTS …` | MAT set-operation markers (no-ops here) |
 | `<expr> AS <name>` column alias | `@usedHeapSize AS bytes` |
@@ -731,6 +846,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | **`toString()` on non-String** | Calls JVM `toString()` via reflection | Returns `NULL` — static analysis cannot invoke live JVM methods |
 | **`get(n)` indexed access** | Works on arrays/collections | Rejected — dereference the backing field directly (e.g. `a.elementData`) |
 | **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Rejected — aggregate the inner query instead |
+| **`LIKE` pattern syntax** | Regex only | Both SQL globs (`%`, `_`) and regex accepted; `%` auto-translates to `.*` |
 
 ### Not yet supported
 

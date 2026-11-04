@@ -6,6 +6,34 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **OQL: new virtual attributes** — `@category` (classifier bucket: `"jdk"` /
+  `"framework"` / `"other"` / user-defined), `@superclass` (immediate superclass
+  name), `@collectionSize` (logical element count from the collection's size
+  field), `@dominatorClass`¹ (class name of the immediate dominator), and
+  `@dominatorDepth`¹ (distance in dominator hops from GC roots).
+
+- **OQL: `pathToRoot(alias)`¹** — walks `idom[]` upward from each matched object
+  to the GC root, emitting one row per hop. Mirrors `dominators(alias)` but
+  traverses up instead of down.
+
+- **OQL: `FROM ENTRIES <ClassName>`¹** — iterates the logical entries of a Java
+  collection. v1 supports `ArrayList`/`Vector` (yields `(index, element)` rows).
+  Backed by the shared `CollDesc` registry in `src/collections.rs`.
+
+- **OQL: SQL LIKE wildcards** — `LIKE "%foo%"` and `LIKE ".*foo.*"` are now
+  equivalent. `%` auto-translates to `.*` and `_` to `.` before regex
+  compilation, so both SQL-glob and regex styles work interchangeably.
+
+- **Shared collection registry (`src/collections.rs`)** — `CollDesc`,
+  `CollKind`, and `builtin_coll_descs()` moved from `pass2/fielddecode.rs` into
+  a new shared module, making collection metadata available to both the pass2
+  fill-ratio analysis and the OQL engine. User-defined entries via
+  `[[collection]]` in `.hprof-analyzer.toml` are prepended ahead of built-ins.
+
+- **`class_super_idx` on `Graph`** — O(1) superclass lookup for OQL. Populated
+  during the pass1→pass2 bridge from `ClassInfo.super_id`. Cache VERSION bumped
+  to 14.
+
 - **⛓ Retention Chains tab** — a new tab in the Top Consumers section shows
   class-level aggregated retention chains for classes where the dominator Sankey
   misses the full picture (retained heap split across millions of per-instance
