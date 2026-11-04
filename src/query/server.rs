@@ -1698,4 +1698,44 @@ mod tests {
         assert_eq!(arr[0]["name"], "top-classes-by-count");
         assert!(arr[0]["oql"].as_str().unwrap().starts_with("SELECT"));
     }
+
+    // ── FROM ENTRIES regression test (OQL-5 / OQL-6) ────────────────────────
+    // FROM ENTRIES must produce element rows, not an empty result. Before the
+    // fix, array→element edges were never added to the refwalk CSR (only
+    // instance field edges were captured), so expand_list_array found no edges
+    // for the backing array and returned an empty row set.
+
+    /// OQL-5/6: SELECT index, element FROM ENTRIES java.util.ArrayList must
+    /// return at least one row on any fixture that contains ArrayList instances.
+    #[test]
+    fn from_entries_arraylist_returns_element_rows() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body, _) = state.route(
+            "POST",
+            "/",
+            "SELECT index, element FROM ENTRIES java.util.ArrayList",
+        );
+        assert_eq!(status, 200, "query failed: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(true), "query error: {v}");
+        let row_count = v["result"]["row_count"].as_u64().unwrap_or(0);
+        // The fixture contains ArrayLists with elements; zero rows means the
+        // array→element edges were not captured in the refwalk CSR.
+        assert!(
+            row_count > 0,
+            "FROM ENTRIES ArrayList returned 0 rows; expected element rows from fixture ArrayLists"
+        );
+        // Columns must be 'index' and 'element'.
+        let cols = v["result"]["columns"].as_array().expect("columns array");
+        assert_eq!(
+            cols.len(),
+            2,
+            "expected 2 columns (index, element), got {cols:?}"
+        );
+        assert_eq!(cols[0]["name"], "index", "first column must be 'index'");
+        assert_eq!(
+            cols[1]["name"], "element",
+            "second column must be 'element'"
+        );
+    }
 }

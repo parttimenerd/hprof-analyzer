@@ -1943,6 +1943,19 @@ impl Pass2 {
                             {
                                 let name = crate::report::pretty_class_name(raw);
                                 v.visit_array(src_idx, &name, count as u32);
+                                // Deliver non-null element dense indices for FROM ENTRIES.
+                                let mut elem_indices: Vec<u32> = Vec::new();
+                                for chunk in scratch.chunks(ids as usize) {
+                                    let ref_val = read_id(chunk, id_size);
+                                    if ref_val != 0 {
+                                        if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                            elem_indices.push(dst as u32);
+                                        }
+                                    }
+                                }
+                                if !elem_indices.is_empty() {
+                                    v.visit_object_array_elements(src_idx, &elem_indices);
+                                }
                             }
                         }
                     }

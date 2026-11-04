@@ -70,4 +70,10 @@ pub trait ObjectVisitor {
     /// so the name is passed directly. `length` is the element count, projected
     /// as `@length`. Defaulted to a no-op so instance-only visitors ignore arrays.
     fn visit_array(&mut self, _src_idx: usize, _class_name: &str, _length: u32) {}
+
+    /// Called immediately after `visit_array` for OBJECT_ARRAY_DUMP records only.
+    /// `src_idx` is the same array dense index; `elements` is a slice of non-null
+    /// element dense indices (nulls are excluded). Defaulted to a no-op; only
+    /// FROM ENTRIES refwalk capture needs this.
+    fn visit_object_array_elements(&mut self, _src_idx: usize, _elements: &[u32]) {}
 }

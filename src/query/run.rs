@@ -216,6 +216,11 @@ struct RefWalkState<'q, R: ClassResolver> {
     /// Left `false` (no capture) otherwise so non-address runs stay
     /// byte/RSS-identical.
     needs_address_tail: bool,
+    /// Armed when any FROM ENTRIES query is present. The expansion in the late
+    /// window needs array→element edges in the refwalk CSR to iterate collection
+    /// backing arrays; without them expand_list_array returns no rows. Triggers
+    /// visit_arrays so pass2 calls visit_object_array_elements.
+    needs_array_elements: bool,
     resolver: &'q R,
 }
 
@@ -304,12 +309,19 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         let mut per_query_tails: Vec<Vec<String>> = Vec::new();
         let mut needs_length_tail = false;
         let mut needs_address_tail = false;
+        let mut needs_array_elements = false;
         for ex in execs {
             if ex.plan().needs.ref_walk {
                 per_query_hops.push(crate::query::refwalk::refwalk_field_names(ex.query()));
                 per_query_tails.push(crate::query::refwalk::refwalk_tail_field_names(ex.query()));
                 needs_length_tail |= crate::query::refwalk::refwalk_has_length_tail(ex.query());
                 needs_address_tail |= crate::query::refwalk::refwalk_has_address_tail(ex.query());
+                if matches!(
+                    ex.query().from,
+                    crate::query::ast::FromSource::Entries { .. }
+                ) {
+                    needs_array_elements = true;
+                }
             }
         }
         if per_query_hops.is_empty() {
@@ -329,6 +341,7 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             ),
             needs_length_tail,
             needs_address_tail,
+            needs_array_elements,
             resolver,
         })
     }
@@ -347,10 +360,9 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     /// sets.
     pub fn wants_arrays(&self) -> bool {
         self.execs.iter().any(|e| e.wants_arrays())
-            || self
-                .refwalk
-                .as_ref()
-                .is_some_and(|s| s.needs_length_tail || s.needs_address_tail)
+            || self.refwalk.as_ref().is_some_and(|s| {
+                s.needs_length_tail || s.needs_address_tail || s.needs_array_elements
+            })
     }
     /// Finalize every executor into a `QueryExecState`, each tagged with its
     /// original `slot` (the query's index in the caller's list): row-mode
@@ -605,6 +617,20 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
             if !ex.scan_satisfied() {
                 ex.visit_array(src_idx, class_name, length);
             }
+        }
+    }
+    fn visit_object_array_elements(&mut self, src_idx: usize, elements: &[u32]) {
+        let Some(state) = self.refwalk.as_mut() else {
+            return;
+        };
+        if !state.needs_array_elements {
+            return;
+        }
+        // Field id 0 is the sentinel for array element slots. expand_list_array
+        // iterates ALL outgoing edges of the array node without filtering by
+        // field id, so any field id works here; 0 matches the test fixture.
+        for &dst in elements {
+            state.edges.push(src_idx as u32, 0, dst);
         }
     }
 }
