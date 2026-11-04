@@ -338,7 +338,6 @@ function Nav({ report }: { report: Report }) {
   addData("arrays-by-size", "Arrays by Size");
   addData("collections", "Collections");
   const hasWasteBudget =
-    (report.overview.duplicate_strings?.approx_wasted_bytes ?? 0) > 0 ||
     (report.overview.duplicate_prim_arrays?.total_wasted_bytes ?? 0) > 0 ||
     (report.overview.boxed_numbers?.some(r => r.total_shallow > 0) ?? false) ||
     (report.collection_attribution?.tiny_overhead?.some(r => r.overhead_bytes > 0) ?? false);
@@ -1804,17 +1803,15 @@ function SizeDistributionSection({ report }: { report: Report }) {
 
 // ── Small capped sub-tables for Duplicate Strings section ────────────────────
 function TopDuplicatedTable({ rows }: { rows: DupStringSample[] }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<DupStringSample>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
     { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count, sortable: true },
-    { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "132px" : "100px", cell: byteCell(s => s.wasted_bytes, fmtB, useKB), selector: (s) => s.wasted_bytes, sortable: true },
     { id: "value", name: "Value", grow: 1, minWidth: "100px", maxWidth: "600px", cell: (s) => <ExpandableText text={s.text} label="Duplicated String Value" /> },
   ];
   return (
     <>
       <h3>Most-Duplicated Values</h3>
-      <StdTable columns={cols} data={rows} searchKeys={["text"]} fmtBtn={kbBtn} defaultSortFieldId="wasted" defaultSortAsc={false} />
+      <StdTable columns={cols} data={rows} searchKeys={["text"]} defaultSortFieldId="count" defaultSortAsc={false} />
     </>
   );
 }
@@ -1847,19 +1844,6 @@ function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
       </p>
       <StdTable columns={cols} data={rows} searchKeys={["class_name"]} defaultSortFieldId="refs" defaultSortAsc={false} />
     </>
-  );
-}
-
-function CharArrayWasteTopTable({ rows }: { rows: CharArrayWasteRow[] }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
-  const cols: TableColumn<CharArrayWasteRow>[] = [
-    { id: "array", name: "Array #", right: true, width: "100px", format: (r) => fmtCount(r.array_obj_1based), selector: (r) => r.array_obj_1based, sortable: true },
-    { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
-    { id: "used", name: useKB ? "Used (KB)" : "Used", right: true, width: useKB ? "132px" : "100px", cell: byteCell(r => r.used, fmtB, useKB), selector: (r) => r.used, sortable: true },
-    { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "132px" : "100px", cell: byteCell(r => r.wasted_bytes, fmtB, useKB), selector: (r) => r.wasted_bytes, sortable: true },
-  ];
-  return (
-    <StdTable columns={cols} data={rows} searchKeys={[]} fmtBtn={kbBtn} defaultSortFieldId="wasted" defaultSortAsc={false} />
   );
 }
 
@@ -1920,8 +1904,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings">
       <h2>Duplicate Strings</h2>
       <p className="subtitle">
-        String values seen more than once — reclaim by normalizing at parse time, using <code>-XX:+UseStringDeduplication</code> (G1 GC), or sharing a canonical instance per value. Deduplication is approximate (64-bit hash; rare collisions possible).{" "}
-        Approximate wasted: <strong title={fmtExactBytes(d.approx_wasted_bytes)}>{fmtB(d.approx_wasted_bytes)}</strong> across{" "}
+        String values seen more than once (64-bit value hashes; rare collisions possible). Storage savings cannot be estimated from value counts alone: backing arrays can be shared or differently encoded. {" "}
         {fmtCount(d.duplicated_values)} duplicated values ({fmtCount(d.total_string_instances)} total String instances, {fmtCount(d.distinct_values)} distinct).
       </p>
 
@@ -1956,14 +1939,10 @@ function DuplicateStringsSection({ report }: { report: Report }) {
 
       {w && (
         <>
-          <h3><code>char[]</code> Waste</h3>
+          <h3>String Backing Arrays</h3>
           <p className="subtitle">
-            Strings whose <code>char[]</code> or <code>byte[]</code> backing array is larger than the character data — typical of <code>StringBuilder.toString()</code> leaving slack capacity, or oversized pre-allocated buffers. {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
-            <span title={fmtExactBytes(w.total_wasted_bytes)}>{fmtB(w.total_wasted_bytes)}</span> total wasted.
+            {fmtCount(w.arrays_examined)} distinct backing arrays examined. Storage slack cannot be estimated from the decoded String length.
           </p>
-          {w.top.length > 0 && (
-            <CharArrayWasteTopTable rows={w.top} />
-          )}
         </>
       )}
     </section>
@@ -4641,23 +4620,21 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 }
 
 // ── Collection Waste Budget ───────────────────────────────────────────────────
-// Aggregates all heap-waste sources (duplicate strings, dup prim arrays, boxed
+// Aggregates quantifiable heap-waste sources (dup prim arrays, boxed
 // numbers, tiny collection overhead) into one table sorted by wasted bytes.
 function CollectionWasteBudgetSection({ report }: { report: Report }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
 
-  const ds = report.overview.duplicate_strings;
   const dp = report.overview.duplicate_prim_arrays;
   const bn = report.overview.boxed_numbers;
   const ca = report.collection_attribution;
 
   // Determine visibility: at least one source must have data.
-  const hasDs = (ds?.approx_wasted_bytes ?? 0) > 0;
   const hasDp = (dp?.total_wasted_bytes ?? 0) > 0;
   const hasBn = (bn?.reduce((s, r) => s + r.total_shallow, 0) ?? 0) > 0;
   const hasTiny = (ca?.tiny_overhead?.some(r => r.overhead_bytes > 0)) ?? false;
 
-  if (!hasDs && !hasDp && !hasBn && !hasTiny) return null;
+  if (!hasDp && !hasBn && !hasTiny) return null;
 
   interface WasteRow {
     type: string;
@@ -4667,15 +4644,6 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   }
 
   const rows: WasteRow[] = [];
-
-  if (hasDs && ds) {
-    rows.push({
-      type: "Duplicate Strings",
-      wasted: ds.approx_wasted_bytes,
-      objects: ds.total_string_instances - ds.distinct_values,
-      fix: "Intern at parse time (e.g. map.computeIfAbsent(s, k -> k)) or use Guava Interner",
-    });
-  }
 
   if (hasDp && dp) {
     const objCount = dp.rows.reduce((s, r) => s + r.duplicated_groups, 0);
@@ -13577,7 +13545,29 @@ function HeapInspector({ report, histogram }: { report: any; histogram: any[] })
 // ── Start Here callout ───────────────────────────────────────────────────────
 // Shown on first open (per session). Dismissed permanently until the page is
 // reloaded. Does not render if sessionStorage is unavailable.
-export default function App({ report }: { report: Report }) {
+export default function App({ report: originalReport }: { report: Report }) {
+  // Old exported reports may still carry UTF-8-derived String waste figures.
+  // Preserve the value census but never present those figures as reclaimable.
+  const report: Report = React.useMemo(() => {
+    const sources = originalReport.waste_summary?.sources.filter(s =>
+      s.label !== "Duplicate String Values" && s.label !== "String Backing-Array Slack"
+    );
+    const total_bytes = sources?.reduce((sum, s) => sum + s.bytes, 0) ?? 0;
+    const oldTotal = originalReport.waste_summary?.total_bytes ?? 0;
+    const oldReachable = originalReport.waste_summary?.reachable_bytes;
+    return {
+      ...originalReport,
+      triage: originalReport.triage.filter(s =>
+        s.id !== "char-array-slack" && (s.id !== "duplicate-strings" || s.detail.includes("Storage savings"))
+      ),
+      waste_summary: originalReport.waste_summary && sources ? {
+        ...originalReport.waste_summary,
+        sources,
+        total_bytes,
+        reachable_bytes: oldReachable == null || oldTotal === 0 ? undefined : Math.round(oldReachable * total_bytes / oldTotal),
+      } : originalReport.waste_summary,
+    };
+  }, [originalReport]);
   const [expandAllTables, setExpandAllTables] = React.useState(false);
   const [showShortcuts, setShowShortcuts] = React.useState(false);
   const showShortcutsRef = React.useRef(false);

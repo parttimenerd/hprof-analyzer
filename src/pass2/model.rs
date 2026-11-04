@@ -537,6 +537,12 @@ pub struct Graph {
     /// `class_ref_field_names[ci][k]` = name of the k-th reference field of class ci.
     /// Empty when `opts.field_stats` is false.
     pub class_ref_field_names: Vec<Vec<String>>,
+    /// Per-class-histogram-row index of the immediate superclass.
+    /// `class_super_idx[c]` = histogram row of class `c`'s superclass,
+    /// or `u32::MAX` when there is no superclass (java.lang.Object) or
+    /// when the superclass object address could not be resolved.
+    /// Length == `class_names.len()`. Populated during pass2 initialization.
+    pub class_super_idx: Vec<u32>,
 }
 
 // ── Object-graph click-through capture ──────────────────────────────────────
@@ -2275,6 +2281,7 @@ mod obj_graph_tests {
             type_ref_pairs: None,
             type_ref_pair_fields: None,
             class_ref_field_names: vec![],
+            class_super_idx: vec![],
         }
     }
 

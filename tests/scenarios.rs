@@ -882,6 +882,18 @@ const SCENARIOS: &[Scenario] = &[
             let _ = r;
         },
     },
+    // Scenario 25: category_attr_no_panic — verify the report builds without
+    // panic when the heap has a mix of JDK and framework classes.
+    // @category is OQL-only; this scenario just guards that the report-building
+    // path (which now builds the class_categories vec) does not regress.
+    Scenario {
+        name: "category_attr_no_panic",
+        opts: default_opts,
+        build: build_mixed_class_heap_scenario,
+        check: |r: &Report| {
+            let _ = r; // @category is OQL-only; just verify report builds
+        },
+    },
 ];
 
 #[test]
@@ -1014,6 +1026,11 @@ fn scenario_class_super_idx_populated() {
     run_scenario(&SCENARIOS[24]);
 }
 
+#[test]
+fn scenario_category_attr_no_panic() {
+    run_scenario(&SCENARIOS[25]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1022,7 +1039,7 @@ fn scenario_class_super_idx_populated() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        25,
+        26,
         "update this test when adding scenarios"
     );
 }

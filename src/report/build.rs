@@ -918,21 +918,6 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
         Some(SectionId::Collections.slug()),
     );
 
-    if let Some(dup) = report.overview.duplicate_strings.as_ref() {
-        push(
-            "Duplicate String Values",
-            dup.approx_wasted_bytes,
-            Some(SectionId::DuplicateStrings.slug()),
-        );
-        if let Some(caw) = dup.char_array_waste.as_ref() {
-            push(
-                "String Backing-Array Slack",
-                caw.total_wasted_bytes,
-                Some(SectionId::DuplicateStrings.slug()),
-            );
-        }
-    }
-
     if let Some(dpa) = report.overview.duplicate_prim_arrays.as_ref() {
         // Rendered as a `###` subsection of System Overview, no dedicated anchor.
         push("Duplicate Primitive Arrays", dpa.total_wasted_bytes, None);

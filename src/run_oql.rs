@@ -430,6 +430,17 @@ pub(crate) fn run_oql_escalated(
     } else {
         &gc_root_tags
     };
+    // Build category slice for @category OQL attribute
+    let classifier = crate::classify::build_classifier(opts.categories.clone());
+    let class_categories: Vec<String> = g
+        .class_names
+        .iter()
+        .map(|n| {
+            classifier
+                .classify(&crate::report::format::pretty_class_name(n))
+                .to_string()
+        })
+        .collect();
     let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
@@ -454,6 +465,7 @@ pub(crate) fn run_oql_escalated(
             gc_root_tags: gc_root_tags_ref,
             class_idx: &g.class_idx,
             class_names: &g.class_names,
+            class_categories: &class_categories,
             dump_path: Some(std::path::PathBuf::from(input)),
             offsets: &disk_offsets,
             id_size,

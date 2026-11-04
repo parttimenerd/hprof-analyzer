@@ -979,7 +979,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: the dominator tree exists only
             // post-scan, so these are filled by the stage runner, not here.
-            Attr::Dominators(_) | Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth => QueryValue::Null,
+            Attr::Dominators(_)
+            | Attr::DominatorOf(_)
+            | Attr::DominatorClass
+            | Attr::DominatorDepth => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(
                 self.resolver
                     .class_name(class_id)
@@ -1077,7 +1080,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: filled by the stage runner.
-            Attr::Dominators(_) | Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth => QueryValue::Null,
+            Attr::Dominators(_)
+            | Attr::DominatorOf(_)
+            | Attr::DominatorClass
+            | Attr::DominatorDepth => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
             Attr::Length => QueryValue::Int(length as i64),
             // inbound/outbound reference counts need the post-scan ref graph; filled later.

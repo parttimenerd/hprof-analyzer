@@ -278,6 +278,7 @@ mod tests {
             type_ref_pairs: None,
             type_ref_pair_fields: None,
             class_ref_field_names: vec![],
+            class_super_idx: vec![],
         };
         (g, dc_off, dc_tgt)
     }

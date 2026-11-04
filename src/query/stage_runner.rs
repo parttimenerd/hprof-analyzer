@@ -653,16 +653,11 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     if dom == u32::MAX {
                         QueryValue::Null
                     } else {
-                        let ci = ctx
-                            .class_idx
-                            .get(dom as usize)
-                            .copied()
-                            .unwrap_or(u32::MAX) as usize;
+                        let ci =
+                            ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
                         ctx.class_names
                             .get(ci)
-                            .map(|n| {
-                                QueryValue::Str(crate::report::format::pretty_class_name(n))
-                            })
+                            .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
                             .unwrap_or(QueryValue::Null)
                     }
                 }
@@ -693,6 +688,13 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
                         None => QueryValue::Null,
                     }
+                }
+                SelectItem::Attr(Attr::Category) => {
+                    let ci = ctx.class_idx.get(s as usize).copied().unwrap_or(u32::MAX) as usize;
+                    ctx.class_categories
+                        .get(ci)
+                        .map(|cat| QueryValue::Str(cat.clone()))
+                        .unwrap_or(QueryValue::Null)
                 }
                 SelectItem::Attr(Attr::ToHex(inner)) => {
                     let ret = ctx.retained.get(s as usize).copied().unwrap_or(0);
@@ -1093,13 +1095,10 @@ fn eval_late_expr_multi(
                 if dom == u32::MAX {
                     QueryValue::Null
                 } else {
-                    let ci =
-                        ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
+                    let ci = ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
                     ctx.class_names
                         .get(ci)
-                        .map(|n| {
-                            QueryValue::Str(crate::report::format::pretty_class_name(n))
-                        })
+                        .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
                         .unwrap_or(QueryValue::Null)
                 }
             }
@@ -1272,11 +1271,7 @@ fn project_string_row_item(
             if dom == u32::MAX {
                 QueryValue::Null
             } else {
-                let ci = ctx
-                    .class_idx
-                    .get(dom as usize)
-                    .copied()
-                    .unwrap_or(u32::MAX) as usize;
+                let ci = ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
                 ctx.class_names
                     .get(ci)
                     .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
@@ -1310,6 +1305,17 @@ fn project_string_row_item(
                 Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
                 None => QueryValue::Null,
             }
+        }
+        SelectItem::Attr(Attr::Category) => {
+            let ci = ctx
+                .class_idx
+                .get(dense as usize)
+                .copied()
+                .unwrap_or(u32::MAX) as usize;
+            ctx.class_categories
+                .get(ci)
+                .map(|cat| QueryValue::Str(cat.clone()))
+                .unwrap_or(QueryValue::Null)
         }
         SelectItem::Attr(Attr::ToHex(inner)) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
@@ -1363,6 +1369,17 @@ fn project_array_index_item(
                 None => QueryValue::Null,
             }
         }
+        SelectItem::Attr(Attr::Category) => {
+            let ci = ctx
+                .class_idx
+                .get(dense as usize)
+                .copied()
+                .unwrap_or(u32::MAX) as usize;
+            ctx.class_categories
+                .get(ci)
+                .map(|cat| QueryValue::Str(cat.clone()))
+                .unwrap_or(QueryValue::Null)
+        }
         // `@displayName` and `@classOf` both return the class name of the matched
         // object. Every row in an array-index result came from the query's FROM
         // class, so the FROM class name is the correct value here — consistent with
@@ -1382,11 +1399,7 @@ fn project_array_index_item(
             if dom == u32::MAX {
                 QueryValue::Null
             } else {
-                let ci = ctx
-                    .class_idx
-                    .get(dom as usize)
-                    .copied()
-                    .unwrap_or(u32::MAX) as usize;
+                let ci = ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
                 ctx.class_names
                     .get(ci)
                     .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
@@ -2352,11 +2365,7 @@ fn project_late_row(
                 if dom == u32::MAX {
                     QueryValue::Null
                 } else {
-                    let ci = ctx
-                        .class_idx
-                        .get(dom as usize)
-                        .copied()
-                        .unwrap_or(u32::MAX) as usize;
+                    let ci = ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
                     ctx.class_names
                         .get(ci)
                         .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
@@ -2390,6 +2399,13 @@ fn project_late_row(
                     Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
                     None => QueryValue::Null,
                 }
+            }
+            SelectItem::Attr(Attr::Category) => {
+                let ci = ctx.class_idx.get(idx as usize).copied().unwrap_or(u32::MAX) as usize;
+                ctx.class_categories
+                    .get(ci)
+                    .map(|cat| QueryValue::Str(cat.clone()))
+                    .unwrap_or(QueryValue::Null)
             }
             SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                 match ctx.class_name_of(idx) {

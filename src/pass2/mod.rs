@@ -1099,6 +1099,36 @@ impl Pass2 {
                 HashMap::new()
             };
 
+        // Build class_super_idx: resolve each histogram row's superclass address to
+        // its histogram row index. Uses p1.class_map before it is freed below and
+        // class_addr_to_hist while it is still live (moved into InboundBuilder later).
+        // Must be computed before p1.class_map is cleared.
+        let class_super_idx: Vec<u32> = {
+            // Invert class_addr_to_hist to get histogram_row → class_object_address
+            let mut row_to_class_addr: Vec<u64> = vec![0u64; class_names.len()];
+            for (&addr, &row) in &class_addr_to_hist {
+                if (row as usize) < row_to_class_addr.len() {
+                    row_to_class_addr[row as usize] = addr;
+                }
+            }
+            let class_count = class_names.len();
+            let mut super_idx = vec![u32::MAX; class_count];
+            for row in 0..class_count {
+                let class_addr = row_to_class_addr[row];
+                if class_addr == 0 {
+                    continue;
+                }
+                if let Some(ci) = p1.class_map.get(&class_addr) {
+                    if ci.super_id != 0 {
+                        if let Some(&super_row) = class_addr_to_hist.get(&ci.super_id) {
+                            super_idx[row] = super_row;
+                        }
+                    }
+                }
+            }
+            super_idx
+        };
+
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
         // STACK_TRACE maps were just consumed by build_thread_stacks and are
@@ -1550,6 +1580,7 @@ impl Pass2 {
             type_ref_pairs: None,
             type_ref_pair_fields: None,
             class_ref_field_names: vec![],
+            class_super_idx,
         };
 
         // Populate class_ref_field_names when --field-stats is set (named plans were

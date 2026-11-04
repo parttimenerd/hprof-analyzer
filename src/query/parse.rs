@@ -3242,7 +3242,7 @@ mod tests {
         assert!(
             matches!(&q.select[0], SelectItem::Attr(Attr::DominatorClass)),
             "expected Attr::DominatorClass, got {:?}",
-            &q.select[0]
+            q.select[0]
         );
     }
     #[test]
@@ -3251,7 +3251,7 @@ mod tests {
         assert!(
             matches!(&q.select[0], SelectItem::Attr(Attr::DominatorDepth)),
             "expected Attr::DominatorDepth, got {:?}",
-            &q.select[0]
+            q.select[0]
         );
     }
     #[test]
@@ -5629,6 +5629,19 @@ mod tests {
         assert!(
             !err.contains("LBracket"),
             "expected no 'LBracket' in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_category_attr() {
+        let q = parse("SELECT @category FROM java.lang.String").unwrap();
+        assert!(
+            matches!(
+                &q.select[0],
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Category)
+            ),
+            "expected Category attr, got: {:?}",
+            q.select[0]
         );
     }
 }
