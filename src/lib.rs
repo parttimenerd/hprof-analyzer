@@ -6,6 +6,7 @@ pub mod cache;
 mod chunkvec;
 pub mod classify;
 mod collection_config;
+pub mod collections;
 pub mod cvec;
 mod dominator;
 #[cfg(feature = "native")]

@@ -33,10 +33,10 @@ mod scan;
 pub(crate) mod sizing;
 mod strings;
 
+pub(crate) use crate::collections::{CollDesc, CollKind, builtin_coll_descs};
 pub(crate) use boxed::build_boxed_holders_from_counts;
 pub(crate) use dup_prim_arrays::{DupPrimArrays, DupPrimCollector, finalize_dup_array_holders};
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
-pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
 pub use framework_scan::scan_frameworks;
 pub(crate) use meta::*;
 pub use model::*;

@@ -17,6 +17,7 @@ mod cache;
 mod chunkvec;
 mod classify;
 mod collection_config;
+mod collections;
 mod cvec;
 mod diff;
 mod diff_reports;
