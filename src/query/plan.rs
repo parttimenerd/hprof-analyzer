@@ -766,9 +766,10 @@ fn rewrite_value_array_pred(p: Predicate) -> Predicate {
     }
 }
 
-/// Lower `@valueArray` in all SELECT items and WHERE predicates to a 1-hop
-/// `RefPath { hops: ["value"], tail: ObjectAddress, role: ProjectionOnly }`. The
-/// RefWalk machinery in the P2 window then resolves the hop transparently.
+/// Lower `@valueArray` in all SELECT items, WHERE predicates, and GROUP BY
+/// expressions to a 1-hop `RefPath { hops: ["value"], tail: ObjectAddress,
+/// role: ProjectionOnly }`. The RefWalk machinery in the P2 window then
+/// resolves the hop transparently.
 fn rewrite_value_array_in_query(mut q: Query) -> Query {
     q.select = q
         .select
@@ -776,6 +777,11 @@ fn rewrite_value_array_in_query(mut q: Query) -> Query {
         .map(rewrite_value_array_select_item)
         .collect();
     q.where_ = q.where_.map(rewrite_value_array_pred);
+    q.group_by = q
+        .group_by
+        .into_iter()
+        .map(rewrite_value_array_expr)
+        .collect();
     q
 }
 
@@ -1001,29 +1007,6 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // Register needs for GROUP BY key expressions.
     for ge in &q.group_by {
         expr_for_each_attr(ge, &mut |a| note_attr_need_attr(a, &mut needs));
-    }
-
-    // RefPath (N-hop reference walk) in a GROUP BY key is not supported: the
-    // walk resolves post-scan (P2) while GROUP BY buckets are accumulated during
-    // the scan — there is no late-stage GROUP BY merge yet. Detect this early so
-    // the user gets a clear error instead of a silent all-rows-in-one-null-group.
-    for (i, ge) in q.group_by.iter().enumerate() {
-        let mut has_refpath = false;
-        expr_for_each_attr(ge, &mut |a| {
-            if matches!(a, Attr::RefPath { .. } | Attr::ValueArray) {
-                has_refpath = true;
-            }
-        });
-        if has_refpath {
-            let col = format!("GROUP BY expression {}", i + 1);
-            return Err(QueryError(format!(
-                "{col} contains a reference-path (multi-hop field walk), which cannot be \
-                 evaluated during the scan pass where GROUP BY buckets are built. \
-                 Use a subquery or a WHERE filter on @objectAddress instead: \
-                 e.g. SELECT @objectId FROM java.lang.String s WHERE s.value.@objectAddress \
-                 = (SELECT @valueArray FROM java.lang.String LIMIT 1)"
-            )));
-        }
     }
 
     // True when any aggregate arg is a compound SelectItem::Expr — i.e. the arg
@@ -1363,7 +1346,28 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // so a single walk of the deepest path subsumes shorter co-prefixed ones.
     let where_hops = q.where_.as_ref().map(pred_refpath_hops).unwrap_or(0);
     let select_hops = q.select.iter().map(select_refpath_hops).max().unwrap_or(0);
-    if where_hops > 0 || select_hops > 0 {
+    // GROUP BY expressions may contain RefPath hops (e.g. GROUP BY s.value.@objectAddress).
+    // These can't be resolved at scan time (the ref graph doesn't exist yet), so we treat
+    // them as projection-only RefPaths and force carry mode + P2 finalization so the
+    // late-phase GROUP BY aggregator (join_retained_group_by) can call eval_late_gb_key.
+    let group_by_hops = q
+        .group_by
+        .iter()
+        .map(|e| {
+            let mut max = 0usize;
+            expr_for_each_attr(e, &mut |a| {
+                if let Attr::RefPath { hops, .. } = a {
+                    max = max.max(hops.len());
+                }
+                if matches!(a, Attr::ValueArray) {
+                    max = max.max(1);
+                }
+            });
+            max
+        })
+        .max()
+        .unwrap_or(0);
+    if where_hops > 0 || select_hops > 0 || group_by_hops > 0 {
         needs.ref_walk = true;
         // A predicate-critical walk must complete before filtering, so its ops
         // come first and set the role; otherwise the walk is projection-only.
@@ -1380,8 +1384,10 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         if where_hops > 0 {
             push_hops(where_hops, RefRole::PredicateCritical);
         }
-        if select_hops > 0 {
-            push_hops(select_hops, RefRole::ProjectionOnly);
+        // Projection-only: SELECT hops and GROUP BY hops both resolve after filtering.
+        let projection_hops = select_hops.max(group_by_hops);
+        if projection_hops > 0 {
+            push_hops(projection_hops, RefRole::ProjectionOnly);
         }
         // RefWalk finalizes at P2; a later phase (P3 retained/dominators) wins.
         if finalize_at == Phase::P1 {
@@ -1469,6 +1475,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         // Slashify the class name (Java uses '/' in HPROF, dots in OQL).
         let slash_class = class.replace('.', "/");
         late_ops.push(StageOp::EntriesExpand { class: slash_class });
+        // Need the forward reference graph to traverse backing array/map fields.
+        needs.ref_walk = true;
         // Entries expansion runs in the late phase; bump finalize_at.
         if finalize_at == Phase::P1 {
             finalize_at = Phase::P2;
@@ -1810,8 +1818,11 @@ pub(crate) fn pred_uses_refpath(p: &Predicate) -> bool {
         Predicate::And(a, b) | Predicate::Or(a, b) => pred_uses_refpath(a) || pred_uses_refpath(b),
         Predicate::Not(a) => pred_uses_refpath(a),
         Predicate::Compare { lhs, rhs, .. } => {
-            expr_any_attr(lhs, |a| matches!(a, Attr::RefPath { .. }))
-                || expr_any_attr(rhs, |a| matches!(a, Attr::RefPath { .. }))
+            expr_any_attr(lhs, |a| {
+                matches!(a, Attr::RefPath { .. } | Attr::ValueArray)
+            }) || expr_any_attr(rhs, |a| {
+                matches!(a, Attr::RefPath { .. } | Attr::ValueArray)
+            })
         }
         _ => false,
     }
@@ -3138,30 +3149,49 @@ mod tests {
     }
 
     #[test]
-    fn group_by_refpath_rejected_with_clear_error() {
+    fn group_by_refpath_uses_carry_and_ref_walk() {
+        // GROUP BY on a RefPath hop must arm ref_walk, emit RefWalkResolve ops,
+        // and set finalize_at = P2 so the late-phase GROUP BY aggregator runs.
         let q = parse(
             "SELECT s.value.@objectAddress, COUNT(*) FROM java.lang.String s \
              GROUP BY s.value.@objectAddress",
         )
         .unwrap();
-        let err = pq(&q).unwrap_err();
+        let plan = pq(&q).unwrap();
+        assert_eq!(plan.kind, StageKind::GroupBy);
         assert!(
-            err.0.contains("reference-path"),
-            "error must mention 'reference-path'; got: {}",
-            err.0
+            plan.needs.ref_walk,
+            "GROUP BY RefPath must arm ref_walk; plan needs: {:?}",
+            plan.needs
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "GROUP BY RefPath must finalize at P2"
+        );
+        let resolve_ops: Vec<_> = plan
+            .late_ops
+            .iter()
+            .filter(|op| matches!(op, StageOp::RefWalkResolve { .. }))
+            .collect();
+        assert!(
+            !resolve_ops.is_empty(),
+            "GROUP BY RefPath must emit at least one RefWalkResolve op"
         );
     }
 
     #[test]
-    fn group_by_value_array_rejected() {
+    fn group_by_value_array_uses_carry_and_ref_walk() {
+        // @valueArray in GROUP BY must also route through carry/late-phase.
         let q = parse("SELECT @valueArray, COUNT(*) FROM java.lang.String s GROUP BY @valueArray")
             .unwrap();
-        let err = pq(&q).unwrap_err();
+        let plan = pq(&q).unwrap();
+        assert_eq!(plan.kind, StageKind::GroupBy);
         assert!(
-            err.0.contains("reference-path"),
-            "error must mention 'reference-path'; got: {}",
-            err.0
+            plan.needs.ref_walk,
+            "GROUP BY @valueArray must arm ref_walk"
         );
+        assert_eq!(plan.finalize_at, Phase::P2);
     }
 
     #[test]
@@ -4533,5 +4563,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn from_entries_sets_ref_walk_and_late_op() {
+        let q = parse("SELECT x.@objectId FROM ENTRIES java.util.ArrayList x").unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+            .expect("FROM ENTRIES ArrayList must plan successfully");
+        assert!(
+            plan.needs.ref_walk,
+            "FROM ENTRIES must set needs.ref_walk so the forward CSR is built"
+        );
+        let has_entries_expand = plan.late_ops.iter().any(
+            |op| matches!(op, StageOp::EntriesExpand { class } if class.contains("ArrayList")),
+        );
+        assert!(
+            has_entries_expand,
+            "FROM ENTRIES must push EntriesExpand to late_ops, got: {:?}",
+            plan.late_ops
+        );
+        assert_ne!(
+            plan.finalize_at,
+            Phase::P1,
+            "FROM ENTRIES must not finalize at P1 (needs carry mode)"
+        );
     }
 }

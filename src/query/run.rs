@@ -856,10 +856,7 @@ pub fn run_resident_only(
     // map; row-mode would emit all-Null rows at scan time since blobs are empty.
     let mut entries: Vec<(usize, SingleScanExecutor<'_, LiveResolver<'_>>)> = Vec::new();
     for (slot, (q, plan)) in flat.iter().enumerate() {
-        let ex = if plan.needs.string_values
-            || (plan.kind == crate::query::plan::StageKind::GroupBy
-                && plan.finalize_at == crate::query::plan::Phase::P3)
-        {
+        let ex = if plan.needs.string_values || plan.finalize_at != crate::query::plan::Phase::P1 {
             use crate::query::carry::Carry;
             SingleScanExecutor::new_carry(
                 q,
@@ -950,8 +947,7 @@ pub fn run_resident_with_retained(
     for (slot, (q, plan)) in flat.iter().enumerate() {
         let ex = if plan.needs.string_values
             || plan.needs.retained
-            || (plan.kind == crate::query::plan::StageKind::GroupBy
-                && plan.finalize_at == crate::query::plan::Phase::P3)
+            || plan.finalize_at != crate::query::plan::Phase::P1
         {
             use crate::query::carry::Carry;
             SingleScanExecutor::new_carry(

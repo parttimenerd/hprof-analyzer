@@ -412,7 +412,9 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
             .iter()
             .any(|op| matches!(op, StageOp::EntriesExpand { .. }))
         {
-            "FROM ENTRIES is a v1 stub; it is not available in the query-only path."
+            "FROM ENTRIES requires the forward reference graph; \
+             it is not available in the query-only path. Run the full \
+             report (drop --query-only) to use FROM ENTRIES queries."
         } else {
             "@retainedHeapSize requires the full analysis pipeline; \
              it is not available in the query-only path. Run the full \
@@ -505,8 +507,15 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             // The plan emits one RefWalkResolve op per hop, but the whole walk is
             // driven off the query's RefPath AST in one pass here — the first op
             // handles the entire path, so later per-hop ops are skipped.
+            // Exception: for GROUP BY queries with a RefPath GROUP BY key, the
+            // RefPath resolution happens inside join_retained_group_by (via
+            // eval_late_gb_key), not here. Fall through to join_retained instead.
             StageOp::RefWalkResolve { .. } => {
-                return refpath_rows(entry, q, ctx);
+                if entry.plan.kind != crate::query::plan::StageKind::GroupBy {
+                    return refpath_rows(entry, q, ctx);
+                }
+                // GroupBy: let the op loop continue; join_retained will dispatch to
+                // join_retained_group_by which uses eval_late_gb_key.
             }
             StageOp::EdgeLookup { dir } => {
                 let idx = get_filtered_idx(entry);
@@ -545,27 +554,26 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 // @dominatorDepth / dominatorof(x) in mixed-select queries.
                 // Projection is handled by project_late_row; no early return.
             }
-            StageOp::EntriesExpand { .. } => {
-                // v1 stub: FROM ENTRIES collection expansion is not yet fully
-                // implemented for the late phase. Return zero rows without
-                // panicking so that existing queries run safely.
-                return QueryResult {
-                    name: entry.name.clone(),
-                    oql: String::new(),
-                    columns: vec![crate::query::model::QueryColumn {
-                        name: "@objectId".to_string(),
-                    }],
-                    rows: Vec::new(),
-                    row_count: 0,
-                    truncated: false,
-                    error: None,
-                    note: Some(
-                        "FROM ENTRIES is a v1 stub: element expansion is not yet implemented."
-                            .to_string(),
-                    ),
-                    viz: None,
-                    elapsed_ms: None,
-                };
+            StageOp::EntriesExpand { class } => {
+                if ctx.fwd_off.is_empty() {
+                    return QueryResult {
+                        name: entry.name.clone(),
+                        oql: String::new(),
+                        columns: Vec::new(),
+                        rows: Vec::new(),
+                        row_count: 0,
+                        truncated: false,
+                        error: Some(
+                            "FROM ENTRIES requires the full analysis pipeline \
+                             (forward reference graph). Run without --query-only."
+                                .to_string(),
+                        ),
+                        note: None,
+                        viz: None,
+                        elapsed_ms: None,
+                    };
+                }
+                return entries_expand_rows(entry, class, ctx);
             }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
@@ -2255,6 +2263,212 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         truncated,
         error: None,
         note: order_by_note,
+        viz: None,
+        elapsed_ms: None,
+    }
+}
+
+// ── FROM ENTRIES helpers ──────────────────────────────────────────────────────
+
+/// Walk the forward CSR from `obj` and return the target dense index of the
+/// first edge whose interned field name equals `field_name`. Returns `None`
+/// when the field is absent or the node is out of range.
+fn fwd_edge_by_name(obj: u32, field_name: &str, ctx: &LateCtx) -> Option<u32> {
+    let si = obj as usize;
+    if si + 1 >= ctx.fwd_off.len() {
+        return None;
+    }
+    let fid = ctx.field_id(field_name)?;
+    let (start, end) = (ctx.fwd_off[si] as usize, ctx.fwd_off[si + 1] as usize);
+    for k in start..end {
+        if ctx.fwd_field[k] == fid {
+            let tgt = ctx.fwd_tgt[k];
+            if tgt != u32::MAX {
+                return Some(tgt);
+            }
+        }
+    }
+    None
+}
+
+/// Iterate all outgoing edges from the backing array node and emit one row per
+/// non-null element: `(idx: Int, element: ObjRef)`. Array-element edges have
+/// field id 0 (the empty-string sentinel), so we include all edges.
+fn expand_list_array(arr: u32, ctx: &LateCtx, rows: &mut Vec<Vec<QueryValue>>, limit: usize) {
+    let si = arr as usize;
+    if si + 1 >= ctx.fwd_off.len() {
+        return;
+    }
+    let (start, end) = (ctx.fwd_off[si] as usize, ctx.fwd_off[si + 1] as usize);
+    for (logical_idx, k) in (start..end).enumerate() {
+        if rows.len() >= limit {
+            break;
+        }
+        let elem = ctx.fwd_tgt[k];
+        if elem != u32::MAX {
+            rows.push(vec![
+                QueryValue::Int(logical_idx as i64),
+                QueryValue::ObjRef {
+                    index: elem as u64,
+                    class: "?".to_string(),
+                    addr: ctx.id_map.to_addr_opt(elem),
+                },
+            ]);
+        }
+    }
+}
+
+/// Expand a HashMap-style table[]: for each non-null Node slot, follow next-chains
+/// and emit `(key: ObjRef, value: ObjRef)` pairs.
+fn expand_map_table(table: u32, ctx: &LateCtx, rows: &mut Vec<Vec<QueryValue>>, limit: usize) {
+    let si = table as usize;
+    if si + 1 >= ctx.fwd_off.len() {
+        return;
+    }
+    let (start, end) = (ctx.fwd_off[si] as usize, ctx.fwd_off[si + 1] as usize);
+    for k in start..end {
+        if rows.len() >= limit {
+            break;
+        }
+        let mut node = ctx.fwd_tgt[k];
+        let mut depth = 0usize;
+        while node != u32::MAX && depth < 1000 && rows.len() < limit {
+            let key = fwd_edge_by_name(node, "key", ctx).unwrap_or(u32::MAX);
+            let value = fwd_edge_by_name(node, "value", ctx).unwrap_or(u32::MAX);
+            let next = fwd_edge_by_name(node, "next", ctx).unwrap_or(u32::MAX);
+            if key != u32::MAX || value != u32::MAX {
+                rows.push(vec![
+                    if key == u32::MAX {
+                        QueryValue::Null
+                    } else {
+                        QueryValue::ObjRef {
+                            index: key as u64,
+                            class: "?".to_string(),
+                            addr: ctx.id_map.to_addr_opt(key),
+                        }
+                    },
+                    if value == u32::MAX {
+                        QueryValue::Null
+                    } else {
+                        QueryValue::ObjRef {
+                            index: value as u64,
+                            class: "?".to_string(),
+                            addr: ctx.id_map.to_addr_opt(value),
+                        }
+                    },
+                ]);
+            }
+            node = next;
+            depth += 1;
+        }
+    }
+}
+
+/// Expand collection instances carried from scan to their logical entries.
+/// Returns one row per element (List/Set/Deque: `(index, element)`) or
+/// per entry (Map: `(key, value)`). Unsupported collection types return
+/// zero rows with an explanatory note.
+fn entries_expand_rows(entry: &CrossPhaseEntry, class: &str, ctx: &LateCtx) -> QueryResult {
+    use crate::collections::{CollKind, builtin_coll_descs, find_desc_by_name};
+
+    let coll_descs = builtin_coll_descs();
+    let slash = class.replace('.', "/");
+    let mut rows: Vec<Vec<QueryValue>> = Vec::new();
+    let mut note: Option<String> = None;
+    const ROW_CAP: usize = 500_000;
+
+    let desc_idx = find_desc_by_name(&slash, &coll_descs);
+    if let Some(di) = desc_idx {
+        let desc = &coll_descs[di];
+        let is_map = matches!(desc.kind, CollKind::Map);
+
+        if desc.array_field.is_none() && desc.nested_map_field.is_none() {
+            // e.g. TreeMap, LinkedList: no backing array in v1
+            note = Some(format!(
+                "FROM ENTRIES: {} has no backing array; entry iteration is not supported in v1.",
+                class
+            ));
+        } else {
+            let seeds = entry.carry.indices();
+            for obj in seeds {
+                if rows.len() >= ROW_CAP {
+                    break;
+                }
+                // Find the backing array
+                let arr_idx = if let Some((ref field, _)) = desc.array_field {
+                    fwd_edge_by_name(obj, field, ctx)
+                } else if let Some((ref field, _)) = desc.nested_map_field {
+                    // e.g. HashSet.map → inner HashMap; then find inner's table
+                    let inner = fwd_edge_by_name(obj, field, ctx);
+                    inner.and_then(|inner_obj| {
+                        // Look up the inner map's descriptor by class name
+                        // The inner map is typically java.util.HashMap — find its table
+                        if let Some(inner_name) = ctx.class_name_of(inner_obj) {
+                            let inner_slash = inner_name.replace('.', "/");
+                            if let Some(di2) = find_desc_by_name(&inner_slash, &coll_descs) {
+                                if let Some((ref f2, _)) = coll_descs[di2].array_field {
+                                    return fwd_edge_by_name(inner_obj, f2, ctx);
+                                }
+                            }
+                        }
+                        // Fallback: try "table" directly
+                        fwd_edge_by_name(inner_obj, "table", ctx)
+                    })
+                } else {
+                    None
+                };
+
+                let Some(arr) = arr_idx else {
+                    continue;
+                };
+
+                if is_map {
+                    expand_map_table(arr, ctx, &mut rows, ROW_CAP);
+                } else {
+                    expand_list_array(arr, ctx, &mut rows, ROW_CAP);
+                }
+            }
+        }
+    } else {
+        note = Some(format!(
+            "FROM ENTRIES: {} is not a known collection type. \
+             Supported types include ArrayList, HashMap, LinkedHashMap, HashSet, ArrayDeque.",
+            class
+        ));
+    }
+
+    let is_map = desc_idx
+        .map(|di| matches!(coll_descs[di].kind, CollKind::Map))
+        .unwrap_or(false);
+    let columns = if is_map {
+        vec![
+            QueryColumn {
+                name: "key".to_string(),
+            },
+            QueryColumn {
+                name: "value".to_string(),
+            },
+        ]
+    } else {
+        vec![
+            QueryColumn {
+                name: "index".to_string(),
+            },
+            QueryColumn {
+                name: "element".to_string(),
+            },
+        ]
+    };
+    let row_count = rows.len() as u64;
+    QueryResult {
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns,
+        rows,
+        row_count,
+        truncated: row_count >= ROW_CAP as u64,
+        error: None,
+        note,
         viz: None,
         elapsed_ms: None,
     }
@@ -5002,5 +5216,183 @@ mod arith_late_tests {
             result, 3u32,
             "bare alias 's' should resolve to the loop variable"
         );
+    }
+
+    #[test]
+    fn group_by_refpath_resolves_in_late_phase() {
+        // Two String objects (dense 0,1) both pointing to the same char[] (dense 2).
+        // One more String (dense 3) pointing to a different char[] (dense 4).
+        // GROUP BY s.value.@objectId should yield 2 groups:
+        //   id(2) → COUNT=2, id(4) → COUNT=1
+        //
+        // Forward CSR layout (one "value" field):
+        //   node0 → [2], node1 → [2], node2 → [], node3 → [4], node4 → []
+        let fwd_off: Vec<u32> = vec![0, 1, 2, 2, 3, 3]; // n=5 nodes, n+1 entries
+        let fwd_tgt: Vec<u32> = vec![2, 2, 4]; // targets
+        let fwd_field: Vec<u32> = vec![0, 0, 0]; // all "value" field (id=0)
+        let field_names = vec!["value".to_string()];
+        let id_map = IdMap::identity(5);
+        let retained = vec![0u64; 5];
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &id_map,
+            fwd_off: &fwd_off,
+            fwd_tgt: &fwd_tgt,
+            fwd_field: &fwd_field,
+            field_names: &field_names,
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
+            class_categories: &[],
+            class_super_idx: &[],
+            coll_size_per_dense: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
+        };
+
+        // Use @objectId (dense index) rather than @objectAddress since the test
+        // id_map is identity (empty addr_of) and to_addr always returns 0.
+        let q = crate::query::parse::parse(
+            "SELECT s.value.@objectId, COUNT(*) AS n FROM java.lang.String s \
+             GROUP BY s.value.@objectId ORDER BY n DESC",
+        )
+        .unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
+        assert!(plan.needs.ref_walk, "plan must arm ref_walk");
+        assert_ne!(
+            plan.finalize_at,
+            crate::query::plan::Phase::P1,
+            "must use carry mode"
+        );
+
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(0); // String → char[] at dense 2
+        carry.push_index(1); // String → char[] at dense 2
+        carry.push_index(3); // String → char[] at dense 4
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q_grp".to_string(), plan, carry);
+
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.rows.len(), 2, "expected 2 groups, got: {:?}", r.rows);
+
+        // First row (DESC by COUNT): the group with COUNT=2 (char[] at dense 2)
+        let count0 = if let QueryValue::Int(n) = r.rows[0][1] {
+            n
+        } else {
+            panic!("expected Int count, got {:?}", r.rows[0][1])
+        };
+        let count1 = if let QueryValue::Int(n) = r.rows[1][1] {
+            n
+        } else {
+            panic!("expected Int count, got {:?}", r.rows[1][1])
+        };
+        assert_eq!(count0, 2, "first group (larger) should have COUNT=2");
+        assert_eq!(count1, 1, "second group should have COUNT=1");
+        // Group keys should be dense indices 2 and 4.
+        assert_ne!(r.rows[0][0], QueryValue::Null, "group key must not be Null");
+        assert_ne!(r.rows[1][0], QueryValue::Null, "group key must not be Null");
+        let key0 = if let QueryValue::Int(k) = r.rows[0][0] {
+            k
+        } else {
+            -1
+        };
+        let key1 = if let QueryValue::Int(k) = r.rows[1][0] {
+            k
+        } else {
+            -1
+        };
+        // COUNT=2 group keys on char[] at dense 2, COUNT=1 on char[] at dense 4
+        assert!(
+            (key0 == 2 && key1 == 4) || (key0 == 4 && key1 == 2),
+            "expected group keys (2,4) in some order, got ({key0},{key1})"
+        );
+    }
+
+    #[test]
+    fn entries_expand_arraylist_yields_element_rows() {
+        // ArrayList (dense 0) → elementData Object[] (dense 1) → [elem2, elem3, elem4]
+        // Field name pool: index 0="" (array slots), index 1="elementData"
+        // fwd_off: [0, 1, 4, 4, 4, 4]
+        // fwd_tgt: [1, 2, 3, 4]
+        // fwd_field: [1, 0, 0, 0]
+        let fwd_off: Vec<u32> = vec![0, 1, 4, 4, 4, 4];
+        let fwd_tgt: Vec<u32> = vec![1, 2, 3, 4];
+        let fwd_field: Vec<u32> = vec![1, 0, 0, 0];
+        let field_names = vec!["".to_string(), "elementData".to_string()];
+        let id_map = IdMap::identity(5);
+        let retained = vec![0u64; 5];
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &id_map,
+            fwd_off: &fwd_off,
+            fwd_tgt: &fwd_tgt,
+            fwd_field: &fwd_field,
+            field_names: &field_names,
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
+            class_categories: &[],
+            class_super_idx: &[],
+            coll_size_per_dense: &[],
+            dump_path: None,
+            offsets: &[],
+            id_size: 8,
+        };
+
+        let q =
+            crate::query::parse::parse("SELECT index, element FROM ENTRIES java.util.ArrayList")
+                .unwrap();
+        let plan =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(0);
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q_entries".to_string(), plan, carry);
+
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.rows.len(), 3, "expected 3 elements, got: {:?}", r.rows);
+        assert_eq!(r.rows[0][0], QueryValue::Int(0));
+        assert_eq!(r.rows[1][0], QueryValue::Int(1));
+        assert_eq!(r.rows[2][0], QueryValue::Int(2));
+        let elem_dense = |row: &[QueryValue]| match &row[1] {
+            QueryValue::ObjRef { index, .. } => *index,
+            other => panic!("expected ObjRef, got {other:?}"),
+        };
+        assert_eq!(elem_dense(&r.rows[0]), 2);
+        assert_eq!(elem_dense(&r.rows[1]), 3);
+        assert_eq!(elem_dense(&r.rows[2]), 4);
+        assert_eq!(r.columns[0].name, "index");
+        assert_eq!(r.columns[1].name, "element");
     }
 }

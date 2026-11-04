@@ -217,6 +217,41 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             _ => {}
         }
     }
+    fn collect_expr(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Attr(a) => collect_attr(a, out),
+            Expr::Lit(_) => {}
+            Expr::Binary { lhs, rhs, .. } => {
+                collect_expr(lhs, out);
+                collect_expr(rhs, out);
+            }
+            Expr::Unary { arg, .. } => collect_expr(arg, out),
+            Expr::Method { receiver, args, .. } => {
+                collect_expr(receiver, out);
+                for a in args {
+                    collect_expr(a, out);
+                }
+            }
+            Expr::Aggregate { .. } => {}
+            Expr::Case { branches, else_ } => {
+                for (_, then_e) in branches {
+                    collect_expr(then_e, out);
+                }
+                if let Some(e) = else_ {
+                    collect_expr(e, out);
+                }
+            }
+            Expr::Coalesce(args) => {
+                for a in args {
+                    collect_expr(a, out);
+                }
+            }
+            Expr::NullIf { lhs, rhs } => {
+                collect_expr(lhs, out);
+                collect_expr(rhs, out);
+            }
+        }
+    }
     fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
         match p {
             Predicate::And(a, b) | Predicate::Or(a, b) => {
@@ -224,10 +259,9 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 collect_pred(b, out);
             }
             Predicate::Not(a) => collect_pred(a, out),
-            Predicate::Compare { lhs, .. } => {
-                if let Expr::Attr(a) = lhs {
-                    collect_attr(a, out);
-                }
+            Predicate::Compare { lhs, rhs, .. } => {
+                collect_expr(lhs, out);
+                collect_expr(rhs, out);
             }
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
             Predicate::Exists { .. } => {}
@@ -259,6 +293,37 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
     if let Some(pred) = &q.where_ {
         collect_pred(pred, &mut out);
     }
+    for expr in &q.group_by {
+        collect_expr(expr, &mut out);
+    }
+    // FROM ENTRIES queries need the backing collection fields in the forward CSR
+    // so entries_expand_rows can traverse them at late-phase expansion time.
+    if let crate::query::ast::FromSource::Entries { class } = &q.from {
+        use crate::collections::{CollKind, builtin_coll_descs, find_desc_by_name};
+        let descs = builtin_coll_descs();
+        let slash = class.replace('.', "/");
+        if let Some(di) = find_desc_by_name(&slash, &descs) {
+            let desc = &descs[di];
+            if let Some((ref f, _)) = desc.array_field {
+                if !out.iter().any(|x| x == f) {
+                    out.push(f.clone());
+                }
+            }
+            if let Some((ref f, _)) = desc.nested_map_field {
+                if !out.iter().any(|x| x == f) {
+                    out.push(f.clone());
+                }
+            }
+            // Map/Set kinds need key/value/next for node traversal.
+            if matches!(desc.kind, CollKind::Map | CollKind::Set) {
+                for name in &["key", "value", "next"] {
+                    if !out.iter().any(|x| x == *name) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
     out
 }
 
@@ -282,6 +347,41 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             }
         }
     }
+    fn collect_expr(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Attr(a) => collect_attr(a, out),
+            Expr::Lit(_) => {}
+            Expr::Binary { lhs, rhs, .. } => {
+                collect_expr(lhs, out);
+                collect_expr(rhs, out);
+            }
+            Expr::Unary { arg, .. } => collect_expr(arg, out),
+            Expr::Method { receiver, args, .. } => {
+                collect_expr(receiver, out);
+                for a in args {
+                    collect_expr(a, out);
+                }
+            }
+            Expr::Aggregate { .. } => {}
+            Expr::Case { branches, else_ } => {
+                for (_, then_e) in branches {
+                    collect_expr(then_e, out);
+                }
+                if let Some(e) = else_ {
+                    collect_expr(e, out);
+                }
+            }
+            Expr::Coalesce(args) => {
+                for a in args {
+                    collect_expr(a, out);
+                }
+            }
+            Expr::NullIf { lhs, rhs } => {
+                collect_expr(lhs, out);
+                collect_expr(rhs, out);
+            }
+        }
+    }
     fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
         match p {
             Predicate::And(a, b) | Predicate::Or(a, b) => {
@@ -289,10 +389,9 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 collect_pred(b, out);
             }
             Predicate::Not(a) => collect_pred(a, out),
-            Predicate::Compare { lhs, .. } => {
-                if let Expr::Attr(a) = lhs {
-                    collect_attr(a, out);
-                }
+            Predicate::Compare { lhs, rhs, .. } => {
+                collect_expr(lhs, out);
+                collect_expr(rhs, out);
             }
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
             Predicate::Exists { .. } => {}
@@ -322,6 +421,9 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
     }
     if let Some(pred) = &q.where_ {
         collect_pred(pred, &mut out);
+    }
+    for expr in &q.group_by {
+        collect_expr(expr, &mut out);
     }
     out
 }
@@ -384,7 +486,8 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
         SelectItem::Expr(e) => expr_has(e),
         _ => false,
     });
-    select_has || q.where_.as_ref().is_some_and(pred_has)
+    let group_by_has = q.group_by.iter().any(expr_has);
+    select_has || group_by_has || q.where_.as_ref().is_some_and(pred_has)
 }
 
 /// True if any `Attr::RefPath` in the query has an `Attr::ObjectAddress` tail
@@ -448,7 +551,8 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
         SelectItem::Expr(e) => expr_has(e),
         _ => false,
     });
-    select_has || q.where_.as_ref().is_some_and(pred_has)
+    let group_by_has = q.group_by.iter().any(expr_has);
+    select_has || group_by_has || q.where_.as_ref().is_some_and(pred_has)
 }
 
 /// The query-gated RefWalk artifacts carried out of pass2 into the P2 late
@@ -683,5 +787,65 @@ mod tests {
         // updating an existing key does not trip the cap.
         t.insert(3, QueryValue::Int(7));
         assert_eq!(t.get(3), Some(&QueryValue::Int(7)));
+    }
+
+    #[test]
+    fn refwalk_field_names_includes_group_by_hops() {
+        // GROUP BY s.value.@objectAddress uses the "value" hop; must appear in field names.
+        let q = crate::query::parse::parse(
+            "SELECT s.value.@objectAddress, COUNT(*) FROM java.lang.String s \
+             GROUP BY s.value.@objectAddress",
+        )
+        .unwrap();
+        let names = refwalk_field_names(&q);
+        assert!(
+            names.contains(&"value".to_string()),
+            "expected 'value' in field names for GROUP BY RefPath, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn refwalk_has_address_tail_true_for_group_by_refpath() {
+        let q = crate::query::parse::parse(
+            "SELECT s.value.@objectAddress, COUNT(*) FROM java.lang.String s \
+             GROUP BY s.value.@objectAddress",
+        )
+        .unwrap();
+        assert!(
+            refwalk_has_address_tail(&q),
+            "GROUP BY s.value.@objectAddress must trigger address-tail capture"
+        );
+    }
+
+    #[test]
+    fn refwalk_field_names_includes_entries_backing_fields_for_arraylist() {
+        // FROM ENTRIES java.util.ArrayList must include "elementData" (the array_field)
+        // so the forward CSR captures that edge during pass2.
+        let q = crate::query::parse::parse("SELECT x.@objectId FROM ENTRIES java.util.ArrayList x")
+            .unwrap();
+        let names = refwalk_field_names(&q);
+        assert!(
+            names.contains(&"elementData".to_string()),
+            "expected 'elementData' in field names for FROM ENTRIES ArrayList, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn refwalk_field_names_includes_entries_backing_fields_for_hashmap() {
+        // FROM ENTRIES java.util.HashMap must include "table", "key", "value", "next".
+        let q = crate::query::parse::parse(
+            "SELECT k.@objectId, v.@objectId FROM ENTRIES java.util.HashMap",
+        )
+        .unwrap();
+        let names = refwalk_field_names(&q);
+        for expected in &["table", "key", "value", "next"] {
+            assert!(
+                names.contains(&expected.to_string()),
+                "expected '{expected}' in field names for FROM ENTRIES HashMap, got: {:?}",
+                names
+            );
+        }
     }
 }
