@@ -804,6 +804,17 @@ pub(crate) fn resume_with_string_values(
         for (slot, r) in slotted.iter_mut() {
             if let Some(src) = row_src_by_slot.get(slot) {
                 filter_result_by_src(r, src, dfn);
+                // Re-apply LIMIT after DFN prune: the scan skipped the early-stop
+                // (because some of the N scanned rows might have been unreachable
+                // and pruned here), so the result may still exceed plan.limit.
+                if let Some(limit) = flat.get(*slot).and_then(|(_, p)| p.limit) {
+                    let lim = limit as usize;
+                    if r.rows.len() > lim {
+                        r.rows.truncate(lim);
+                        r.row_count = lim as u64;
+                        r.truncated = true;
+                    }
+                }
             }
         }
     }
@@ -870,7 +881,11 @@ pub fn run_resident_only(
         };
         entries.push((slot, ex));
     }
-    let mut driver = ScanDriver::new(entries).with_src_capture(reachable_only);
+    let mut driver = ScanDriver::new(entries);
+    // run_resident_only filters unreachable objects PRE-SCAN via dfn_for_scan
+    // (below), so row_src capture is unnecessary: all collected rows are already
+    // reachable, and the post-scan DFN prune in resume_with_string_values is a
+    // no-op. Skip with_src_capture to preserve the early-stop optimization.
 
     // Drive over cached dense indices with an EMPTY blob. ONLY true instances
     // (kind 0) go through visit_instance — this mirrors the scan path exactly,
@@ -974,9 +989,19 @@ pub fn run_resident_with_retained(
         };
         entries.push((slot, ex));
     }
-    let mut driver = ScanDriver::new(entries).with_src_capture(reachable_only);
+    let mut driver = ScanDriver::new(entries);
+    // Same pre-scan DFN filter as run_resident_only: skip unreachable objects
+    // before they reach the executor, so early-stop and LIMIT are correct.
+    let dfn_for_scan: Option<&[u32]> = if reachable_only {
+        cache.dfn.as_deref()
+    } else {
+        None
+    };
     for i in 0..cache.n {
         if cache.p1.kind[i] == 0 {
+            if dfn_for_scan.is_some_and(|d| d.get(i).copied().unwrap_or(u32::MAX) == u32::MAX) {
+                continue;
+            }
             let class_addr = cache.p1.class_addr_table[cache.class_ids[i] as usize];
             driver.visit_instance(i, class_addr, &[]);
             if driver.is_done() {

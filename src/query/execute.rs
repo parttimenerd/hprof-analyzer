@@ -839,6 +839,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         if self.group_map.is_some() {
             return false;
         }
+        // Reachable-only row mode: row_src is armed; can't early-stop because
+        // the post-scan DFN prune may remove some collected rows, leaving fewer
+        // than LIMIT. LIMIT is re-applied after the prune in resume_with_string_values.
+        if self.row_src.is_some() {
+            return false;
+        }
         match self.plan.scan_limit {
             Some(lim) => self.matched >= lim,
             None => false,
@@ -1910,8 +1916,14 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // applied post-scan, after the semi-join in run.rs, so the scan must
         // collect every match (a scan cap here would cap non-matching objects
         // and the semi-join would then discard them → too few rows).
-        // No-ORDER-BY, no-subquery queries keep the byte-identical early-stop.
-        if self.query.order_by.is_none() && self.query.from.as_subquery().is_none() {
+        // Reachable-only (row_src armed): can't early-stop because the post-scan
+        // DFN prune may remove some of these rows, leaving fewer than LIMIT rows.
+        // LIMIT is re-applied post-prune in resume_with_string_values.
+        // No-ORDER-BY, no-subquery, no-reachable-only queries keep the early-stop.
+        if self.query.order_by.is_none()
+            && self.query.from.as_subquery().is_none()
+            && self.row_src.is_none()
+        {
             if let Some(limit) = self.plan.limit {
                 if self.matched >= limit {
                     self.truncated = true;
@@ -2014,8 +2026,12 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             return;
         }
         // See the ORDER BY / FROM-subquery note in `visit_instance`: don't
-        // early-stop when a sort or a semi-join is pending.
-        if self.query.order_by.is_none() && self.query.from.as_subquery().is_none() {
+        // early-stop when a sort or a semi-join is pending. Also skip early-stop
+        // when reachable-only (row_src armed): see visit_instance for rationale.
+        if self.query.order_by.is_none()
+            && self.query.from.as_subquery().is_none()
+            && self.row_src.is_none()
+        {
             if let Some(limit) = self.plan.limit {
                 if self.matched >= limit {
                     self.truncated = true;
