@@ -1596,18 +1596,35 @@ fn uses_retained(q: &Query) -> bool {
 /// True if any SELECT item or WHERE predicate references `dominatorof(x)`.
 /// When true the planner sets `needs.dominator_children` so idom[] is loaded.
 fn uses_dominator_of(q: &Query) -> bool {
-    let in_select = q.select.iter().any(|it| {
-        matches!(
-            it,
+    let in_select = q.select.iter().any(|it| match it {
+        SelectItem::Attr(Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth) => {
+            true
+        }
+        // Also detect dominator attrs inside aggregate args: MIN(@dominatorDepth), etc.
+        SelectItem::Aggregate { arg, .. } => matches!(
+            arg.as_ref(),
             SelectItem::Attr(Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth)
-        )
+        ),
+        _ => false,
     });
     let in_where = q
         .where_
         .as_ref()
         .map(pred_uses_dominator_of)
         .unwrap_or(false);
-    in_select || in_where
+    // Also check GROUP BY expressions for dominator attrs.
+    let in_group_by = q.group_by.iter().any(|ge| {
+        expr_any_attr(ge, |a| {
+            matches!(
+                a,
+                Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth
+            )
+        })
+    });
+    // Check ORDER BY key for dominator attrs so ORDER BY @dominatorDepth works
+    // without the attr also being in SELECT.
+    let in_order_by = matches!(&q.order_by, Some(ob) if matches!(ob.key, Attr::DominatorDepth | Attr::DominatorClass | Attr::DominatorOf(_)));
+    in_select || in_where || in_group_by || in_order_by
 }
 
 pub(crate) fn pred_uses_dominator_of(p: &Predicate) -> bool {

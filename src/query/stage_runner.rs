@@ -2193,10 +2193,18 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     }
 
     // ORDER BY: use the standard resolver (handles alias-stripped names).
+    let mut order_by_note: Option<String> = None;
     if let Some(ob) = &q.order_by {
         let cols = query_columns(q);
-        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &cols, &ob.key) {
-            crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir);
+        match crate::query::execute::order_by_column_index(q, &cols, &ob.key) {
+            Some(col_idx) => crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir),
+            None => {
+                order_by_note = Some(format!(
+                    "ORDER BY `{}` was not applied: the sort key must be a \
+                     selected column on this query path; rows are in scan order",
+                    crate::query::execute::attr_name(&ob.key)
+                ));
+            }
         }
     }
 
@@ -2217,7 +2225,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         rows,
         truncated,
         error: None,
-        note: None,
+        note: order_by_note,
         viz: None,
         elapsed_ms: None,
     }
@@ -2475,9 +2483,19 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         .map(|(idx, ret)| project_late_row(q, *idx, *ret, ctx, &like_regexes))
         .collect();
     let mut truncated = entry.carry.truncated();
+    let mut order_by_note: Option<String> = None;
     if let Some(ob) = &q.order_by {
-        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
-            crate::query::execute::sort_rows_by_column(&mut out_rows, col_idx, ob.dir);
+        match crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
+            Some(col_idx) => {
+                crate::query::execute::sort_rows_by_column(&mut out_rows, col_idx, ob.dir);
+            }
+            None => {
+                order_by_note = Some(format!(
+                    "ORDER BY `{}` was not applied: the sort key must be a \
+                     selected column on this query path; rows are in scan order",
+                    crate::query::execute::attr_name(&ob.key)
+                ));
+            }
         }
     }
     if let Some(limit) = stage_limit(q) {
@@ -2494,7 +2512,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         rows: out_rows,
         truncated,
         error: None,
-        note: None,
+        note: order_by_note,
         viz: None,
         elapsed_ms: None,
     }
