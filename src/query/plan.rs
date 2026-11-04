@@ -1347,6 +1347,20 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         late_ops.push(StageOp::ResolveClassMetadata);
     }
 
+    // GROUP BY @displayName uses the instance_string flag (same flag prevents
+    // HistogramOnly). The grouping key is resolved at scan time from the class
+    // name table, but the scan happens before DFN is computed in run_oql_escalated
+    // (the only path for instance_string queries). Forcing P2 makes the executor
+    // carry individual dense indices instead of accumulating a group map during the
+    // scan; prune_cross_phase_reachable then removes unreachable indices before
+    // join_retained_group_by re-computes the groups at the late stage where the full
+    // LateCtx (including class_idx / class_names) is available.
+    if kind == StageKind::GroupBy && needs.instance_string && finalize_at == Phase::P1 {
+        finalize_at = Phase::P2;
+        // No extra late op: join_retained / join_retained_group_by is always called
+        // at the end of run_entry when the op list is exhausted.
+    }
+
     // @inbounds / @outbounds in WHERE: the scalar count (number of in/out refs)
     // is resolved post-scan from the edge CSR. Upgrade to P2 so the late window
     // runs and deferred_where_passes can evaluate these predicates.
@@ -4624,6 +4638,25 @@ mod tests {
                 ))
             ),
             "expected DisplayName expr in group_by_exprs"
+        );
+    }
+
+    #[test]
+    fn group_by_displayname_forces_p2_for_reachability() {
+        // GROUP BY @displayName must use carry mode (finalize_at >= P2) so that
+        // prune_cross_phase_reachable can filter unreachable objects before the
+        // late-phase join_retained_group_by runs. At P1, groups are accumulated
+        // during the scan before DFN is computed, so unreachable objects are counted.
+        let q = parse("SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName")
+            .unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        assert_eq!(plan.kind, StageKind::GroupBy);
+        assert_ne!(
+            plan.finalize_at,
+            Phase::P1,
+            "GROUP BY @displayName must not finalize at P1; got {:?} — unreachable objects \
+             would be counted before DFN is available",
+            plan.finalize_at
         );
     }
 

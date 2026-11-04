@@ -1635,6 +1635,58 @@ mod tests {
         assert_eq!(fwd, rev, "OR result must not depend on predicate order");
     }
 
+    // ── GROUP BY reachability regression test (OQL-1 / #18) ─────────────────
+    // GROUP BY @displayName must only count reachable objects. Before the fix,
+    // the scan-time group accumulator ran before DFN was computed, so unreachable
+    // objects were silently included.
+
+    fn query_reachable(state: &ServerState, oql: &str) -> serde_json::Value {
+        let (status, body, _) = state.route("POST", "/", oql);
+        assert_eq!(status, 200, "query failed: {body}");
+        serde_json::from_str(&body).unwrap()
+    }
+
+    fn row_count_reachable(v: &serde_json::Value) -> u64 {
+        assert_eq!(v["ok"], serde_json::json!(true), "query failed: {v}");
+        v["result"]["row_count"].as_u64().unwrap()
+    }
+
+    /// OQL-1 / #18: GROUP BY @displayName sum must not exceed the direct
+    /// reachable-only COUNT(*). Before the fix, the scan-time GroupBy ran before
+    /// DFN was available, counting unreachable objects.
+    #[test]
+    fn group_by_displayname_sum_matches_direct_count() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load reachable");
+
+        // Direct reachable count for Threads (small class → easy to reason about).
+        let direct = row_count_reachable(&query_reachable(
+            &state,
+            "SELECT COUNT(*) FROM java.lang.Thread",
+        ));
+
+        // GROUP BY @displayName over Thread: all groups must sum to the same count.
+        let gb_result = query_reachable(
+            &state,
+            "SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName",
+        );
+        let rows = gb_result["result"]["rows"].as_array().expect("rows array");
+        let gb_sum: u64 = rows
+            .iter()
+            .map(|row| {
+                row.as_array()
+                    .and_then(|r| r.get(1))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            })
+            .sum();
+
+        assert_eq!(
+            gb_sum, direct,
+            "GROUP BY @displayName total ({gb_sum}) must equal direct COUNT(*) ({direct}) \
+             in reachable-only mode; a mismatch means unreachable objects were counted"
+        );
+    }
+
     #[test]
     fn named_queries_endpoint_returns_28() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
