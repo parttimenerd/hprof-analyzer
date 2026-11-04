@@ -897,7 +897,15 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     let from_subplan = match q.from.as_subquery() {
         Some(inner) => {
             enforce_from_subquery_projection(inner)?;
-            Some(Box::new(plan_query(inner, depth_cap)?))
+            let inner_plan = plan_query(inner, depth_cap)?;
+            if plan_has_subqueries(&inner_plan) {
+                return Err(QueryError(
+                    "nested subqueries are not supported: the inner query of FROM (<subquery>) \
+                     must not itself contain IN, EXISTS, or FROM (<subquery>) clauses"
+                        .into(),
+                ));
+            }
+            Some(Box::new(inner_plan))
         }
         None => None,
     };
@@ -1587,6 +1595,13 @@ fn collect_in_subplans(
         Predicate::InSubquery { lhs, inner } => {
             enforce_in_subquery_projection(inner)?;
             let inner_plan = plan_query(inner, depth_cap)?;
+            if plan_has_subqueries(&inner_plan) {
+                return Err(QueryError(
+                    "nested subqueries are not supported: the inner query of IN (<subquery>) \
+                     must not itself contain IN, EXISTS, or FROM (<subquery>) clauses"
+                        .into(),
+                ));
+            }
             out.push(InSubplan {
                 lhs: lhs.clone(),
                 plan: inner_plan,
@@ -1597,6 +1612,13 @@ fn collect_in_subplans(
         Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
         Predicate::Exists { .. } => Ok(()),
     }
+}
+
+/// Return true when a plan contains any subquery that the two-phase driver
+/// would need to materialise (IN / EXISTS WHERE subqueries or a FROM subquery).
+/// Used to detect and reject nesting at plan time.
+fn plan_has_subqueries(plan: &QueryPlan) -> bool {
+    !plan.in_subplans.is_empty() || !plan.exists_subplans.is_empty() || plan.from_subplan.is_some()
 }
 
 /// Walk a WHERE tree, plan each `EXISTS (<subquery>)` / `NOT EXISTS (<subquery>)` inner,
@@ -1617,6 +1639,13 @@ fn collect_exists_subplans(
         Predicate::Not(a) => collect_exists_subplans(a, out, depth_cap),
         Predicate::Exists { inner, negated } => {
             let inner_plan = plan_query(inner, depth_cap)?;
+            if plan_has_subqueries(&inner_plan) {
+                return Err(QueryError(
+                    "nested subqueries are not supported: the inner query of EXISTS (<subquery>) \
+                     must not itself contain IN, EXISTS, or FROM (<subquery>) clauses"
+                        .into(),
+                ));
+            }
             out.push(ExistsSubplan {
                 negated: *negated,
                 plan: inner_plan,
@@ -4625,6 +4654,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn nested_exists_subquery_is_rejected_at_plan_time() {
+        // A nested EXISTS (inner has its own EXISTS) must fail at plan time with
+        // an actionable error rather than silently returning wrong results.
+        let oql = "SELECT @objectId FROM java.lang.Object \
+                   WHERE EXISTS (SELECT * FROM java.lang.Thread \
+                                 WHERE EXISTS (SELECT * FROM java.lang.String))";
+        let q = parse(oql).expect("parses");
+        let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+            .expect_err("nested EXISTS must be rejected at plan time");
+        assert!(
+            err.0.contains("nested subqueries are not supported"),
+            "error must mention nesting: {err:?}"
+        );
+    }
+
+    #[test]
+    fn nested_in_subquery_is_rejected_at_plan_time() {
+        // Nested IN (inner has WHERE IN) must fail at plan time.
+        let oql = "SELECT @objectId FROM java.lang.Object \
+                   WHERE @objectAddress IN \
+                     (SELECT @objectAddress FROM java.lang.Thread \
+                      WHERE @objectAddress IN \
+                        (SELECT @objectAddress FROM java.lang.String))";
+        let q = parse(oql).expect("parses");
+        let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+            .expect_err("nested IN must be rejected at plan time");
+        assert!(
+            err.0.contains("nested subqueries are not supported"),
+            "error must mention nesting: {err:?}"
+        );
     }
 
     #[test]
