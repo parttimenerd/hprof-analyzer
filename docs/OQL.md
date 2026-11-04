@@ -19,7 +19,7 @@ Every example below was run against `tests/fixtures/dump_4_philosophers.hprof`.
 ```console
 $ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM java.lang.String"
 COUNT(*)
-24760
+23331
 (1 row)
 ```
 
@@ -315,8 +315,8 @@ marked ¹ require the full analysis pipeline.
 | `@retainedHeapSize`¹ | Int | Total heap retained exclusively by this object |
 | `@displayName` | Str | Class name (dot-form) |
 | `@length` | Int | Array length; `null` for non-arrays |
-| `@inbounds`¹ | Obj | Incoming reference objects |
-| `@outbounds`¹ | Obj | Outgoing reference objects |
+| `@inbounds`¹ | Obj | Incoming reference objects — **must be the sole SELECT item** |
+| `@outbounds`¹ | Obj | Outgoing reference objects — **must be the sole SELECT item** |
 | `@category` | Str | Classifier bucket: `"jdk"`, `"framework"`, `"other"`, or a user-defined name |
 | `@superclass` | Str | Pretty class name of the immediate superclass; `null` for `java.lang.Object` |
 | `@collectionSize` | Int | Logical element count from the collection's size field; `null` for non-collections |
@@ -406,23 +406,27 @@ The superclass chain is walked automatically when matching — a descriptor for
 ### Counting and filtering
 
 ```console
-$ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM java.lang.String"
+$ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM java.lang.String" --all
 COUNT(*)
 24760
 
-$ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object"
+$ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object" --all
 COUNT(*)
-134277
+203782
 
-$ hprof-analyzer query heap.hprof --query 'SELECT COUNT(*) FROM "java\.lang\..*"'
+$ hprof-analyzer query heap.hprof --query 'SELECT COUNT(*) FROM "java\.lang\..*"' --all
 COUNT(*)
 169980
 ```
 
+Without `--all` (the default) only GC-reachable objects are counted; counts are
+lower. Pass `--all` to include unreachable objects and match these example
+outputs exactly.
+
 `FROM OBJECTS <class>` is identical to `FROM <class>`:
 
 ```console
-$ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM OBJECTS java.lang.String"
+$ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM OBJECTS java.lang.String" --all
 COUNT(*)
 24760
 ```
