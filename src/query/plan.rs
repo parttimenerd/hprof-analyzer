@@ -1204,10 +1204,22 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     }
 
     // `@inbounds` / `@outbounds`: the referrers / forward-targets of each matched
-    // object, emitted one row per neighbour. Only special-cased as a LONE select
-    // item (mixed selects still hit the Null projection path — see execute.rs).
+    // object, emitted one row per neighbour. Only valid as a LONE select item
+    // (like path(a, b)); a mixed select is rejected with an actionable error.
     // Edges resolve in the P2 late window from the inbound CSR / retained edge
     // store, so we finalize at P2 and carry only the dense index frontier.
+    if q.select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Attr(Attr::Inbounds | Attr::Outbounds)))
+        && q.select.len() > 1
+    {
+        return Err(QueryError(
+            "@inbounds and @outbounds must be the only select item \
+             (e.g. SELECT @inbounds FROM java.lang.ArrayList). \
+             They expand to one row per reference object, not a scalar count."
+                .into(),
+        ));
+    }
     if let [SelectItem::Attr(a @ (Attr::Inbounds | Attr::Outbounds))] = q.select.as_slice() {
         let dir = match a {
             Attr::Inbounds => EdgeDir::Inbound,
@@ -1279,6 +1291,15 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // attrs would finalize at P1 (scan-only) and the late-phase code that fills
     // them would never run, returning null for every row.
     if uses_class_metadata(q) && finalize_at == Phase::P1 {
+        finalize_at = Phase::P2;
+        late_ops.push(StageOp::ResolveClassMetadata);
+    }
+
+    // @inbounds / @outbounds in WHERE: the scalar count (number of in/out refs)
+    // is resolved post-scan from the edge CSR. Upgrade to P2 so the late window
+    // runs and deferred_where_passes can evaluate these predicates.
+    let edge_in_where = q.where_.as_ref().map(pred_uses_edge).unwrap_or(false);
+    if edge_in_where && finalize_at == Phase::P1 {
         finalize_at = Phase::P2;
         late_ops.push(StageOp::ResolveClassMetadata);
     }
@@ -1585,18 +1606,47 @@ fn pred_uses_dominator_of(p: &Predicate) -> bool {
 }
 
 fn uses_class_metadata(q: &Query) -> bool {
-    let in_select = q.select.iter().any(|it| {
+    let is_class_meta_attr =
+        |a: &Attr| matches!(a, Attr::Category | Attr::Superclass | Attr::CollectionSize);
+    let is_class_meta_item = |it: &SelectItem| -> bool {
         matches!(
             it,
             SelectItem::Attr(Attr::Category | Attr::Superclass | Attr::CollectionSize)
         )
+    };
+    let in_select = q.select.iter().any(|it| {
+        if is_class_meta_item(it) {
+            return true;
+        }
+        // Also check aggregate args, e.g. MIN(@collectionSize)
+        if let SelectItem::Aggregate { arg, .. } = it {
+            if is_class_meta_item(arg) {
+                return true;
+            }
+        }
+        // Also check expressions in SELECT, e.g. @collectionSize * 2
+        if let SelectItem::Expr(e) = it {
+            if expr_any_attr(e, is_class_meta_attr) {
+                return true;
+            }
+        }
+        false
     });
     let in_where = q
         .where_
         .as_ref()
         .map(pred_uses_class_metadata)
         .unwrap_or(false);
-    in_select || in_where
+    // Also check GROUP BY and ORDER BY expressions
+    let in_group_by = q
+        .group_by
+        .iter()
+        .any(|e| expr_any_attr(e, is_class_meta_attr));
+    let in_order_by = q
+        .order_by
+        .as_ref()
+        .is_some_and(|ob| is_class_meta_attr(&ob.key));
+    in_select || in_where || in_group_by || in_order_by
 }
 
 pub fn pred_uses_class_metadata(p: &Predicate) -> bool {
@@ -1694,6 +1744,21 @@ pub(crate) fn pred_uses_refpath(p: &Predicate) -> bool {
         Predicate::Compare { lhs, rhs, .. } => {
             expr_any_attr(lhs, |a| matches!(a, Attr::RefPath { .. }))
                 || expr_any_attr(rhs, |a| matches!(a, Attr::RefPath { .. }))
+        }
+        _ => false,
+    }
+}
+
+/// True if any comparison in the predicate tree references `@inbounds` or
+/// `@outbounds`. These are resolved from the reference graph (built post-scan),
+/// so a carry-mode scan must skip them and defer to the late phase.
+pub(crate) fn pred_uses_edge(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => pred_uses_edge(a) || pred_uses_edge(b),
+        Predicate::Not(a) => pred_uses_edge(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::Inbounds | Attr::Outbounds))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::Inbounds | Attr::Outbounds))
         }
         _ => false,
     }

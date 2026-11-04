@@ -457,6 +457,8 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
         crate::query::plan::pred_uses_retained(p)
             || crate::query::plan::pred_uses_tostring(p)
             || crate::query::plan::pred_uses_refpath(p)
+            || crate::query::plan::pred_uses_class_metadata(p)
+            || crate::query::plan::pred_uses_edge(p)
     });
     let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let get_filtered_idx = |carry: &CrossPhaseEntry| -> Vec<u32> {
@@ -1223,6 +1225,22 @@ fn eval_late_expr_multi(
                     QueryValue::Int(size as i64)
                 }
             }
+            // @inbounds as a scalar: count of inbound references from the CSR.
+            // Returns Null when the inbound index was not built for this query.
+            Attr::Inbounds => {
+                let i = idx as usize;
+                if i + 1 < ctx.in_off.len() {
+                    let count = ctx.in_off[i + 1] - ctx.in_off[i];
+                    QueryValue::Int(count as i64)
+                } else {
+                    QueryValue::Null
+                }
+            }
+            // @outbounds as a scalar: count of outgoing references from the retained-edge store.
+            Attr::Outbounds => match ctx.retained_edges {
+                Some(re) => QueryValue::Int(re.targets_of(idx).len() as i64),
+                None => QueryValue::Null,
+            },
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -2025,6 +2043,11 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
                 }
+                // Route all other attrs through eval_late_expr_multi so class-metadata
+                // attrs (@collectionSize, @category, @superclass) work in aggregates.
+                SelectItem::Attr(a) => {
+                    eval_late_expr_multi(&Expr::Attr(a.clone()), idx, ret, ctx, &like_regexes)
+                }
                 SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, &like_regexes),
                 SelectItem::Star => QueryValue::Int(1),
                 _ => QueryValue::Null,
@@ -2246,6 +2269,11 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                     SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
                     SelectItem::Attr(Attr::ObjectAddress) => {
                         QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
+                    }
+                    // Route all other attrs through eval_late_expr_multi so class-metadata
+                    // attrs (@collectionSize, @category, @superclass) work in aggregates.
+                    SelectItem::Attr(a) => {
+                        eval_late_expr_multi(&Expr::Attr(a.clone()), idx, ret, ctx, &like_regexes)
                     }
                     SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, &like_regexes),
                     SelectItem::Star => QueryValue::Int(1),

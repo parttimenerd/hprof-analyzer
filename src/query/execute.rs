@@ -1385,15 +1385,22 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
-            // @category, @superclass, @collectionSize are resolved in the P2 late
-            // phase (ResolveClassMetadata op). Skip them at scan time so they don't
-            // compare against Null and drop rows before the late phase runs.
-            if self
-                .plan
-                .late_ops
-                .iter()
-                .any(|op| matches!(op, crate::query::plan::StageOp::ResolveClassMetadata))
+            // @category, @superclass, @collectionSize are resolved in the late
+            // phase (P2 or P3). Skip them at scan time so they don't compare
+            // against Null and drop rows before the late phase runs. The late
+            // phase (join_retained / deferred_where_passes) evaluates these via
+            // eval_late_pred_multi, which has full access to class_categories,
+            // class_super_idx, and coll_size_per_dense.
+            if self.plan.finalize_at != crate::query::plan::Phase::P1
                 && crate::query::plan::pred_uses_class_metadata(&term.pred)
+            {
+                continue;
+            }
+            // @inbounds / @outbounds are resolved from the ref graph (post-scan).
+            // Skip them at scan time when finalize_at != P1 so they don't falsely
+            // filter rows before the late phase evaluates them.
+            if self.plan.finalize_at != crate::query::plan::Phase::P1
+                && crate::query::plan::pred_uses_edge(&term.pred)
             {
                 continue;
             }
@@ -1500,13 +1507,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
-            // See `where_passes`: skip class-metadata terms when ResolveClassMetadata is in late_ops.
-            if self
-                .plan
-                .late_ops
-                .iter()
-                .any(|op| matches!(op, crate::query::plan::StageOp::ResolveClassMetadata))
+            // See `where_passes`: skip class-metadata terms when finalize_at != P1.
+            if self.plan.finalize_at != crate::query::plan::Phase::P1
                 && crate::query::plan::pred_uses_class_metadata(&term.pred)
+            {
+                continue;
+            }
+            // @inbounds / @outbounds: skip at scan time when finalize_at != P1.
+            if self.plan.finalize_at != crate::query::plan::Phase::P1
+                && crate::query::plan::pred_uses_edge(&term.pred)
             {
                 continue;
             }
