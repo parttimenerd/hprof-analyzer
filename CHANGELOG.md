@@ -6,6 +6,13 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **OQL: `@fillRatio` virtual attribute** — returns the backing-array fill ratio
+  (`non_null_slots / backing_array_length`) for known collection types (e.g.
+  `HashMap`, `ArrayList`) as a float 0.0–1.0. Returns `Null` for objects that are
+  not recognized collections or lack a backing array field. Requires the forward
+  reference graph (`--full-analysis` or when running in the late phase), which is
+  activated automatically when `@fillRatio` appears in a query.
+
 - **OQL: new virtual attributes** — `@category` (classifier bucket: `"jdk"` /
   `"framework"` / `"other"` / user-defined), `@superclass` (immediate superclass
   name), `@collectionSize` (logical element count from the collection's size
