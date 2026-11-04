@@ -982,7 +982,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Dominators(_)
             | Attr::DominatorOf(_)
             | Attr::DominatorClass
-            | Attr::DominatorDepth => QueryValue::Null,
+            | Attr::DominatorDepth
+            | Attr::Superclass => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(
                 self.resolver
                     .class_name(class_id)
@@ -1083,7 +1084,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Dominators(_)
             | Attr::DominatorOf(_)
             | Attr::DominatorClass
-            | Attr::DominatorDepth => QueryValue::Null,
+            | Attr::DominatorDepth
+            | Attr::Superclass => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
             Attr::Length => QueryValue::Int(length as i64),
             // inbound/outbound reference counts need the post-scan ref graph; filled later.
@@ -2659,6 +2661,7 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         Attr::DominatorOf(a) => format!("dominatorof({a})"),
         Attr::DominatorClass => "@dominatorClass".into(),
         Attr::DominatorDepth => "@dominatorDepth".into(),
+        Attr::Superclass => "@superclass".into(),
         Attr::ToString(a) => format!("toString({a})"),
         Attr::ToHex(inner) => format!("toHex({})", expr_name(inner)),
         Attr::Field(f) => f.clone(),

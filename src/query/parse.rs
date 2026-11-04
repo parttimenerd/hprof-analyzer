@@ -285,6 +285,7 @@ where
                 "category" => Attr::Category,
                 "dominatorClass" => Attr::DominatorClass,
                 "dominatorDepth" => Attr::DominatorDepth,
+                "superclass" => Attr::Superclass,
                 other => {
                     // Suggest the nearest known @attribute on a typo
                     // (@objectAdress -> @objectAddress). ATTRIBUTES carries the
@@ -1639,6 +1640,7 @@ pub const ATTRIBUTES: &[&str] = &[
     "@category",
     "@dominatorClass",
     "@dominatorDepth",
+    "@superclass",
 ];
 
 /// The union of every completion-candidate slice the parser exposes. The
@@ -5641,6 +5643,19 @@ mod tests {
                 crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Category)
             ),
             "expected Category attr, got: {:?}",
+            q.select[0]
+        );
+    }
+
+    #[test]
+    fn parse_superclass_attr() {
+        let q = parse("SELECT @superclass FROM java.lang.String").unwrap();
+        assert!(
+            matches!(
+                &q.select[0],
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Superclass)
+            ),
+            "expected Superclass attr, got: {:?}",
             q.select[0]
         );
     }

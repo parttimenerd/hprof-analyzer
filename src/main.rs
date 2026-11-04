@@ -4765,6 +4765,7 @@ fn run(
             class_idx: &g.class_idx,
             class_names: &g.class_names,
             class_categories: &class_categories,
+            class_super_idx: &g.class_super_idx,
             dump_path: Some(std::path::PathBuf::from(input)),
             offsets: &[],
             id_size,

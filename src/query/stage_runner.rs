@@ -164,6 +164,9 @@ pub struct LateCtx<'a> {
     /// `class_categories[class_idx[dense_obj_idx]]` = `"jdk"` | `"framework"` | `"other"` | user-name.
     /// Empty slice when not available (test contexts).
     pub class_categories: &'a [String],
+    /// Per-class-table-row superclass index (u32::MAX = no superclass / java.lang.Object).
+    /// See `Graph::class_super_idx`. Empty slice when not available (test contexts).
+    pub class_super_idx: &'a [u32],
     /// Absolute path to the dump file. Used by `array_index_rows` to seek to
     /// object records for `s[i]` / `s[start:end]` evaluation. `None` when the
     /// late context is constructed without a file reference (e.g. unit tests).
@@ -661,6 +664,18 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                             .unwrap_or(QueryValue::Null)
                     }
                 }
+                SelectItem::Attr(Attr::Superclass) => {
+                    let ci = ctx.class_idx.get(s as usize).copied().unwrap_or(u32::MAX) as usize;
+                    let super_row = ctx.class_super_idx.get(ci).copied().unwrap_or(u32::MAX);
+                    if super_row == u32::MAX {
+                        QueryValue::Null
+                    } else {
+                        ctx.class_names
+                            .get(super_row as usize)
+                            .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                            .unwrap_or(QueryValue::Null)
+                    }
+                }
                 SelectItem::Attr(Attr::DominatorDepth) => {
                     let mut depth: u32 = 0;
                     let mut cur = s;
@@ -1128,6 +1143,20 @@ fn eval_late_expr_multi(
                     .map(|s| QueryValue::Str(s.clone()))
                     .unwrap_or(QueryValue::Null)
             }
+            // @superclass: pretty class name of this object's class's immediate superclass.
+            // Returns Null for java.lang.Object (no superclass).
+            Attr::Superclass => {
+                let ci = ctx.class_idx.get(idx as usize).copied().unwrap_or(u32::MAX) as usize;
+                let super_row = ctx.class_super_idx.get(ci).copied().unwrap_or(u32::MAX);
+                if super_row == u32::MAX {
+                    QueryValue::Null
+                } else {
+                    ctx.class_names
+                        .get(super_row as usize)
+                        .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                        .unwrap_or(QueryValue::Null)
+                }
+            }
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1317,6 +1346,22 @@ fn project_string_row_item(
                 .map(|cat| QueryValue::Str(cat.clone()))
                 .unwrap_or(QueryValue::Null)
         }
+        SelectItem::Attr(Attr::Superclass) => {
+            let ci = ctx
+                .class_idx
+                .get(dense as usize)
+                .copied()
+                .unwrap_or(u32::MAX) as usize;
+            let super_row = ctx.class_super_idx.get(ci).copied().unwrap_or(u32::MAX);
+            if super_row == u32::MAX {
+                QueryValue::Null
+            } else {
+                ctx.class_names
+                    .get(super_row as usize)
+                    .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                    .unwrap_or(QueryValue::Null)
+            }
+        }
         SelectItem::Attr(Attr::ToHex(inner)) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             match eval_late_expr_multi(inner, dense, ret, ctx, like_regexes) {
@@ -1379,6 +1424,22 @@ fn project_array_index_item(
                 .get(ci)
                 .map(|cat| QueryValue::Str(cat.clone()))
                 .unwrap_or(QueryValue::Null)
+        }
+        SelectItem::Attr(Attr::Superclass) => {
+            let ci = ctx
+                .class_idx
+                .get(dense as usize)
+                .copied()
+                .unwrap_or(u32::MAX) as usize;
+            let super_row = ctx.class_super_idx.get(ci).copied().unwrap_or(u32::MAX);
+            if super_row == u32::MAX {
+                QueryValue::Null
+            } else {
+                ctx.class_names
+                    .get(super_row as usize)
+                    .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                    .unwrap_or(QueryValue::Null)
+            }
         }
         // `@displayName` and `@classOf` both return the class name of the matched
         // object. Every row in an array-index result came from the query's FROM
@@ -2407,6 +2468,18 @@ fn project_late_row(
                     .map(|cat| QueryValue::Str(cat.clone()))
                     .unwrap_or(QueryValue::Null)
             }
+            SelectItem::Attr(Attr::Superclass) => {
+                let ci = ctx.class_idx.get(idx as usize).copied().unwrap_or(u32::MAX) as usize;
+                let super_row = ctx.class_super_idx.get(ci).copied().unwrap_or(u32::MAX);
+                if super_row == u32::MAX {
+                    QueryValue::Null
+                } else {
+                    ctx.class_names
+                        .get(super_row as usize)
+                        .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                        .unwrap_or(QueryValue::Null)
+                }
+            }
             SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                 match ctx.class_name_of(idx) {
                     Some(name) => QueryValue::Str(name.to_string()),
@@ -2537,6 +2610,7 @@ mod tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2803,6 +2877,7 @@ mod classof_late_tests {
             class_idx,
             class_names,
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2930,6 +3005,7 @@ mod classof_late_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2966,6 +3042,7 @@ mod classof_late_tests {
             class_idx: &class_idx,
             class_names: &class_names,
             class_categories: &[],
+            class_super_idx: &[],
             idom: &[],
             dc_off: &[],
             dc_tgt: &[],
@@ -3082,6 +3159,7 @@ mod dom_ctx_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3130,6 +3208,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3170,6 +3249,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3202,6 +3282,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3237,6 +3318,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3272,6 +3354,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3306,6 +3389,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3341,6 +3425,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3385,6 +3470,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3426,6 +3512,7 @@ mod dom_run_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3477,6 +3564,7 @@ mod refwalk_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3517,6 +3605,7 @@ mod refwalk_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3855,6 +3944,7 @@ mod edge_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4110,6 +4200,7 @@ mod tostring_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4288,6 +4379,7 @@ mod tostring_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4527,6 +4619,7 @@ mod arith_late_tests {
             class_idx: &[],
             class_names: &[],
             class_categories: &[],
+            class_super_idx: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,

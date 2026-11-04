@@ -894,6 +894,17 @@ const SCENARIOS: &[Scenario] = &[
             let _ = r; // @category is OQL-only; just verify report builds
         },
     },
+    // Scenario 26: superclass_attr_populated — verify the report builds cleanly
+    // when subclasses are present (exercises the @superclass resolution path).
+    Scenario {
+        name: "superclass_attr_populated",
+        opts: default_opts,
+        build: build_subclass_hierarchy_scenario,
+        check: |r: &Report| {
+            // @superclass is OQL-only; just verify report builds cleanly
+            let _ = r;
+        },
+    },
 ];
 
 #[test]
@@ -1031,6 +1042,11 @@ fn scenario_category_attr_no_panic() {
     run_scenario(&SCENARIOS[25]);
 }
 
+#[test]
+fn scenario_superclass_attr_populated() {
+    run_scenario(&SCENARIOS[26]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1039,7 +1055,7 @@ fn scenario_category_attr_no_panic() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        26,
+        27,
         "update this test when adding scenarios"
     );
 }

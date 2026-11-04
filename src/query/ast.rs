@@ -136,6 +136,10 @@ pub enum Attr {
     /// Root's direct children = depth 1. Computed by walking `idom[]` upward.
     /// O(depth) per object. Resolved in late phase.
     DominatorDepth,
+    /// `@superclass` — pretty class name of this object's class's immediate
+    /// superclass. Returns Null for java.lang.Object (no superclass).
+    /// Resolved in the late phase via `class_super_idx`.
+    Superclass,
     /// `toString(alias)` — decode a `java.lang.String` instance to its text.
     /// Usable as a WHERE predicate LHS (`WHERE toString(s) LIKE "java.*"`).
     /// Only valid for `java.lang.String` FROM; non-String targets are an error.
