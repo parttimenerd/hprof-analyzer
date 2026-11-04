@@ -279,6 +279,7 @@ mod tests {
             type_ref_pair_fields: None,
             class_ref_field_names: vec![],
             class_super_idx: vec![],
+            coll_size_per_dense: vec![],
         };
         (g, dc_off, dc_tgt)
     }

@@ -543,6 +543,11 @@ pub struct Graph {
     /// when the superclass object address could not be resolved.
     /// Length == `class_names.len()`. Populated during pass2 initialization.
     pub class_super_idx: Vec<u32>,
+    /// Per-dense-index element count for known collection objects.
+    /// `coll_size_per_dense[i]` = element count if object `i` is a recognized
+    /// collection with a resolvable `size` field; `u32::MAX` otherwise.
+    /// Length == `n` (total object count). Populated during pass2 field-decode.
+    pub coll_size_per_dense: Vec<u32>,
 }
 
 // ── Object-graph click-through capture ──────────────────────────────────────
@@ -2282,6 +2287,7 @@ mod obj_graph_tests {
             type_ref_pair_fields: None,
             class_ref_field_names: vec![],
             class_super_idx: vec![],
+            coll_size_per_dense: vec![],
         }
     }
 

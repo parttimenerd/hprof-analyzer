@@ -113,6 +113,11 @@ pub enum StageOp {
     /// not yet captured during the scan); out-of-bounds and non-resolvable bases
     /// are Null rather than errors, matching the AST contract.
     ResolveArrayIndex,
+    /// Gate for `@category` / `@superclass` / `@collectionSize` attributes.
+    /// Presence in `late_ops` ensures `needs_full` triggers the full pipeline in
+    /// `main.rs` so the `LateCtx` that backs these attributes is built; the actual
+    /// projection is handled per-attribute in `stage_runner::project_late_row`.
+    ResolveClassMetadata,
     /// Expand each carried collection-object dense index into its logical element
     /// references. `class` is the slashified class name (e.g.
     /// `java/util/ArrayList`). Each element ref is emitted as a new row; rows
@@ -1269,6 +1274,15 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         }
     }
 
+    // @category / @superclass / @collectionSize require LateCtx which is only
+    // available from P2 onwards. Without this guard, queries using only these
+    // attrs would finalize at P1 (scan-only) and the late-phase code that fills
+    // them would never run, returning null for every row.
+    if uses_class_metadata(q) && finalize_at == Phase::P1 {
+        finalize_at = Phase::P2;
+        late_ops.push(StageOp::ResolveClassMetadata);
+    }
+
     // N-hop RefWalk: a predicate-critical path (in WHERE) must resolve before
     // row filtering; a projection-only path (SELECT only) resolves after. The
     // hop count is the number of reference edges to follow; we emit one
@@ -1564,6 +1578,38 @@ fn pred_uses_dominator_of(p: &Predicate) -> bool {
                     a,
                     Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth
                 )
+            })
+        }
+        _ => false,
+    }
+}
+
+fn uses_class_metadata(q: &Query) -> bool {
+    let in_select = q.select.iter().any(|it| {
+        matches!(
+            it,
+            SelectItem::Attr(Attr::Category | Attr::Superclass | Attr::CollectionSize)
+        )
+    });
+    let in_where = q
+        .where_
+        .as_ref()
+        .map(pred_uses_class_metadata)
+        .unwrap_or(false);
+    in_select || in_where
+}
+
+pub fn pred_uses_class_metadata(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_uses_class_metadata(a) || pred_uses_class_metadata(b)
+        }
+        Predicate::Not(a) => pred_uses_class_metadata(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| {
+                matches!(a, Attr::Category | Attr::Superclass | Attr::CollectionSize)
+            }) || expr_any_attr(rhs, |a| {
+                matches!(a, Attr::Category | Attr::Superclass | Attr::CollectionSize)
             })
         }
         _ => false,

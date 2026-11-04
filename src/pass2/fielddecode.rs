@@ -773,6 +773,10 @@ pub(crate) struct FieldDecodeState {
     /// Slot-target lists captured before `wanted_arrays` was populated for this
     /// address; drained in `finish()`.
     obj_array_deferred_slots: HashMap<u64, Vec<u32>>,
+    /// Per-dense-index element count for recognized collection objects.
+    /// `coll_size_per_dense[i]` = element count if object `i` was seen as a
+    /// collection with a resolvable `size` field; `u32::MAX` otherwise.
+    coll_size_per_dense: Vec<u32>,
 }
 
 impl FieldDecodeState {
@@ -830,6 +834,7 @@ impl FieldDecodeState {
             obj_array_raw_compact: Vec::new(),
             obj_array_wanted_slots: HashMap::new(),
             obj_array_deferred_slots: HashMap::new(),
+            coll_size_per_dense: Vec::new(),
         }
     }
 
@@ -941,6 +946,13 @@ impl FieldDecodeState {
                     ks.1 += size;
                     ks.2 += coll_shallow;
                     ks.3 = ks.3.max(size);
+                    // Capture per-object size for @collectionSize OQL attribute.
+                    if let Some(cidx) = self.ic.index_of(&p1.id_map, addr) {
+                        if cidx >= self.coll_size_per_dense.len() {
+                            self.coll_size_per_dense.resize(cidx + 1, u32::MAX);
+                        }
+                        self.coll_size_per_dense[cidx] = size.try_into().unwrap_or(u32::MAX - 1);
+                    }
                 }
                 if collect_attribution {
                     if let Some(cidx) = self.ic.index_of(&p1.id_map, addr) {
@@ -1613,6 +1625,7 @@ impl FieldDecodeState {
             },
             self.tl_null_key_count,
             self.tl_entry_records,
+            self.coll_size_per_dense,
         ))
     }
 }
@@ -1640,6 +1653,7 @@ type FieldDecodeViews = (
     Vec<(u32, u64)>, // dbb_top_records: (dense_idx, capacity) top-50 by capacity desc
     u64,      // thread_local_null_key_count
     Vec<(bool, u32)>, // tl_entry_records: (is_stale, value_dense_idx)
+    Vec<u32>, // coll_size_per_dense: element count per object (u32::MAX = not a collection)
 );
 
 /// Compute the collection/array/reference views in exactly THREE full-file

@@ -121,6 +121,9 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
             // EntriesExpand is a row-expanding op that uses the late context but
             // does not set any tracked QueryNeeds field on its own.
             StageOp::EntriesExpand { .. } => {}
+            // ResolveClassMetadata is a gate-only op (signals that @category /
+            // @superclass / @collectionSize need the late window); no QueryNeeds field.
+            StageOp::ResolveClassMetadata => {}
         }
     }
     // Only DOWNGRADE (clear) — never set a need true here (setting is the

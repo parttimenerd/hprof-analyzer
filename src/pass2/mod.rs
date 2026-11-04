@@ -255,6 +255,25 @@ impl Pass2 {
             }
         }
 
+        // Ensure abstract classes and interfaces with no direct instances are
+        // still registered in class_addr_to_hist. Without this, @superclass
+        // returns Null for any class whose direct superclass has zero instances
+        // (e.g. java.util.ArrayList → java.util.AbstractList).
+        for (&addr, ci) in &p1.class_map {
+            class_addr_to_hist.entry(addr).or_insert_with(|| {
+                get_or_insert_class(
+                    addr,
+                    &|| {
+                        p1.strings
+                            .get(&ci.name_id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("unknown@{addr:#x}"))
+                    },
+                    &|| ci.loader_id,
+                )
+            });
+        }
+
         // Free pass1 per-object arrays that are dead after Phase 0b/0c: they
         // are only read to derive `shallow` and `class_idx` above. Releasing
         // them here (~173 MB for a 11 M-object heap) shrinks peak RSS before
@@ -317,15 +336,23 @@ impl Pass2 {
         let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
 
         // Dense field_plans indexed by histogram class idx — replaces per-object HashMap
-        // lookups in the hot scan loops. Sized by the max instance-class histogram index
-        // (built from class_addr_to_hist, which is independent of the get_or_insert_class
-        // closure so we don't need to borrow class_names or class_key_to_idx here).
-        let n_dense_classes = class_idx
-            .iter()
+        // lookups in the hot scan loops. Sized by the max class histogram index seen in
+        // class_addr_to_hist (which now includes abstract classes added above), so
+        // field_plans_dense is always large enough for any valid histogram index.
+        let n_dense_classes = class_addr_to_hist
+            .values()
             .copied()
             .max()
             .map(|m| m as usize + 1)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(
+                class_idx
+                    .iter()
+                    .copied()
+                    .max()
+                    .map(|m| m as usize + 1)
+                    .unwrap_or(0),
+            );
         let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         for (&class_addr, &hidx) in &class_addr_to_hist {
             if let Some(plan) = field_plans.get(&class_addr) {
@@ -684,6 +711,7 @@ impl Pass2 {
             fd_dbb_top_records,
             fd_tl_null_key_count,
             fd_tl_entry_records,
+            fd_coll_size_per_dense,
         ) = fd_state.finish(&p1)?;
         crate::trace::probe("pass2: after field_decode_views (fused into 2a, no extra scan)");
         crate::trace::trim();
@@ -1581,6 +1609,7 @@ impl Pass2 {
             type_ref_pair_fields: None,
             class_ref_field_names: vec![],
             class_super_idx,
+            coll_size_per_dense: fd_coll_size_per_dense,
         };
 
         // Populate class_ref_field_names when --field-stats is set (named plans were

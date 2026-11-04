@@ -1385,6 +1385,18 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
+            // @category, @superclass, @collectionSize are resolved in the P2 late
+            // phase (ResolveClassMetadata op). Skip them at scan time so they don't
+            // compare against Null and drop rows before the late phase runs.
+            if self
+                .plan
+                .late_ops
+                .iter()
+                .any(|op| matches!(op, crate::query::plan::StageOp::ResolveClassMetadata))
+                && crate::query::plan::pred_uses_class_metadata(&term.pred)
+            {
+                continue;
+            }
             if !self.eval_pred(&term.pred, src_idx, class_id, blob) {
                 return false;
             }
@@ -1485,6 +1497,16 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     || crate::query::plan::pred_uses_refpath(&term.pred)
                     || (self.from_is_string()
                         && crate::query::plan::pred_uses_tostring(&term.pred)))
+            {
+                continue;
+            }
+            // See `where_passes`: skip class-metadata terms when ResolveClassMetadata is in late_ops.
+            if self
+                .plan
+                .late_ops
+                .iter()
+                .any(|op| matches!(op, crate::query::plan::StageOp::ResolveClassMetadata))
+                && crate::query::plan::pred_uses_class_metadata(&term.pred)
             {
                 continue;
             }

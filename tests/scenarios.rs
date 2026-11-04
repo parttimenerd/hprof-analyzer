@@ -925,6 +925,19 @@ const SCENARIOS: &[Scenario] = &[
         build: build_from_entries_scenario,
         check: check_from_entries_no_panic,
     },
+    // Scenario 28: collection_size_attr_populated — @collectionSize returns the
+    // element count for ArrayList instances (not null), verifying the
+    // coll_size_per_dense capture path through fielddecode.
+    Scenario {
+        name: "collection_size_attr_populated",
+        opts: default_opts,
+        build: build_from_entries_scenario, // ArrayList with size=3
+        check: |r: &Report| {
+            // @collectionSize is OQL-only; just verify report builds cleanly.
+            // The live OQL check is in scenario_collection_size_attr_populated below.
+            let _ = r;
+        },
+    },
 ];
 
 #[test]
@@ -1072,6 +1085,39 @@ fn scenario_from_entries_no_panic() {
     run_scenario(&SCENARIOS[27]);
 }
 
+#[test]
+fn scenario_collection_size_attr_populated() {
+    run_scenario(&SCENARIOS[28]);
+    // Verify @collectionSize returns a non-null integer by running the OQL.
+    let bytes = heap_builder::build_arraylist_with_string_elements();
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_coll_size.hprof");
+    std::fs::write(&path, &bytes).expect("write temp hprof");
+    let results = hprof_analyzer::run_oql_query(
+        path.to_str().unwrap(),
+        "SELECT @collectionSize FROM INSTANCEOF java.util.ArrayList",
+        false,
+        &AnalyzeOptions::default(),
+    )
+    .expect("OQL query failed");
+    assert_eq!(results.len(), 1);
+    let result = &results[0];
+    assert!(result.error.is_none(), "query error: {:?}", result.error);
+    assert!(!result.rows.is_empty(), "@collectionSize returned no rows");
+    let val = &result.rows[0][0];
+    assert!(
+        !matches!(val, hprof_analyzer::query::model::QueryValue::Null),
+        "@collectionSize should not be null for a recognized ArrayList, got: {:?}",
+        val
+    );
+    // The ArrayList was built with size=3.
+    assert_eq!(
+        *val,
+        hprof_analyzer::query::model::QueryValue::Int(3),
+        "@collectionSize should be 3"
+    );
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1080,7 +1126,7 @@ fn scenario_from_entries_no_panic() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        28,
+        29,
         "update this test when adding scenarios"
     );
 }
