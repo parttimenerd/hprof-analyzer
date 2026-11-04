@@ -1272,10 +1272,21 @@ pub fn run_single_dump(
     let mut from_index_by_slot: std::collections::HashMap<usize, (Vec<u32>, bool)> =
         std::collections::HashMap::new();
     // outer_slot → Vec<bool> (one per ExistsSubplan, in encounter order)
+    // outer_slot → error from a failed inner subquery (propagated to the outer result)
+    let mut inner_errors_by_slot: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
     let mut exists_bools_by_slot: std::collections::HashMap<usize, Vec<bool>> =
         std::collections::HashMap::new();
     for (inner_idx, meta) in inners.iter().enumerate() {
         let res = &inner_results[inner_idx];
+        // If the inner subquery errored (e.g. it needs @retainedHeapSize but the
+        // query-only path can't build retained sizes), propagate the error to
+        // the outer slot so the caller sees it instead of silently 0 rows.
+        if let Some(err) = &res.error {
+            inner_errors_by_slot
+                .entry(meta.outer_slot)
+                .or_insert_with(|| format!("inner subquery failed: {err}"));
+        }
         match &meta.role {
             SubqueryRole::In { lhs } => {
                 let addrs: Vec<u64> = res.rows.iter().filter_map(|r| row_address(r)).collect();
@@ -1354,6 +1365,15 @@ pub fn run_single_dump(
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
     //    the inner result set (matched by dense index). ───────────────────────
+    // First: propagate any inner subquery errors to their outer slots so callers
+    // see "inner subquery failed: ..." rather than a silent empty result.
+    for (slot, err) in &inner_errors_by_slot {
+        if let Some(r) = flat_results.get_mut(*slot) {
+            r.error = Some(err.clone());
+            r.rows.clear();
+            r.row_count = 0;
+        }
+    }
     for (slot, (inner_idx_sorted, inner_trunc)) in &from_index_by_slot {
         let r = &mut flat_results[*slot];
         // Extract this outer result's own row dense indices, sorted, then
