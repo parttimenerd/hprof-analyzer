@@ -199,13 +199,22 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
     use crate::query::ast::{Attr, Expr, Predicate, SelectItem};
 
     fn collect_attr(a: &Attr, out: &mut Vec<String>) {
-        if let Attr::RefPath { hops, tail, .. } = a {
-            for h in hops {
-                if !out.iter().any(|x| x == h) {
-                    out.push(h.clone());
+        match a {
+            Attr::RefPath { hops, tail, .. } => {
+                for h in hops {
+                    if !out.iter().any(|x| x == h) {
+                        out.push(h.clone());
+                    }
                 }
+                collect_attr(tail, out);
             }
-            collect_attr(tail, out);
+            // @valueArray rewrites to RefPath{hops:["value"], tail:ObjectAddress} at plan
+            // time, but refwalk_field_names operates on the original pre-rewrite query.
+            // Emit "value" here so the hop is interned and available during walk.
+            Attr::ValueArray if !out.iter().any(|x| x == "value") => {
+                out.push("value".to_string());
+            }
+            _ => {}
         }
     }
     fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
@@ -395,6 +404,9 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             Attr::RefPath { tail, .. } => {
                 matches!(tail.as_ref(), Attr::ObjectAddress) || attr_has(tail)
             }
+            // @valueArray rewrites to RefPath{hops:["value"], tail:ObjectAddress} at plan
+            // time; the original pre-rewrite query still has ValueArray here.
+            Attr::ValueArray => true,
             Attr::ToHex(inner) => expr_has(inner),
             _ => false,
         }
@@ -550,6 +562,28 @@ mod tests {
     fn refwalk_field_names_empty_when_no_refpath() {
         let q = crate::query::parse::parse("SELECT x.count FROM C x").unwrap();
         assert!(refwalk_field_names(&q).is_empty());
+    }
+
+    #[test]
+    fn refwalk_field_names_includes_value_for_value_array() {
+        // @valueArray on java.lang.String uses the "value" hop; refwalk_field_names
+        // must emit it even though the original query has Attr::ValueArray (not RefPath).
+        let q = crate::query::parse::parse("SELECT @valueArray FROM java.lang.String s").unwrap();
+        let names = refwalk_field_names(&q);
+        assert!(
+            names.contains(&"value".to_string()),
+            "expected 'value' in field names, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn refwalk_has_address_tail_true_for_value_array() {
+        let q = crate::query::parse::parse("SELECT @valueArray FROM java.lang.String s").unwrap();
+        assert!(
+            refwalk_has_address_tail(&q),
+            "@valueArray implies an ObjectAddress tail"
+        );
     }
 
     #[test]

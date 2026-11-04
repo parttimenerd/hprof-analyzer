@@ -688,6 +688,17 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         None => QueryValue::Null,
                     }
                 }
+                // @valueArray rewrites to RefPath{hops:["value"], tail:ObjectAddress} at plan
+                // time, but the original pre-rewrite query has Attr::ValueArray here.
+                // Walk the same single "value" hop and project the resolved object's address.
+                SelectItem::Attr(Attr::ValueArray) => {
+                    let resolved = walk_refpath(&[s], &["value".to_string()], ctx);
+                    match resolved.first() {
+                        Some(&d) => project_tail(&Attr::ObjectAddress, d, ctx, &mut note)
+                            .unwrap_or(QueryValue::Null),
+                        None => QueryValue::Null,
+                    }
+                }
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(s) as i64)
@@ -1158,6 +1169,19 @@ fn eval_late_expr_multi(
                     None => QueryValue::Null,
                 }
             }
+            // @valueArray rewrites to RefPath{hops:["value"], tail:ObjectAddress} at plan time;
+            // the original pre-rewrite query has Attr::ValueArray here in the late window.
+            Attr::ValueArray => {
+                let resolved = walk_refpath(&[idx], &["value".to_string()], ctx);
+                match resolved.first() {
+                    Some(&d) => {
+                        let mut _note: Option<String> = None;
+                        project_tail(&Attr::ObjectAddress, d, ctx, &mut _note)
+                            .unwrap_or(QueryValue::Null)
+                    }
+                    None => QueryValue::Null,
+                }
+            }
             // dominatorof(x): return the immediate dominator as a dense-index Int.
             // Returns Null for GC-root objects (idom == u32::MAX, no dominator).
             // Users can wrap it: classof(dominatorof(x)) uses eval_late_expr_multi
@@ -1471,6 +1495,11 @@ fn project_string_row_item(
                 QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                 _ => QueryValue::Null,
             }
+        }
+        // @valueArray: route through eval_late_expr_multi (same as RefPath)
+        SelectItem::Attr(Attr::ValueArray) => {
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
+            eval_late_expr_multi(&Expr::Attr(Attr::ValueArray), dense, ret, ctx, like_regexes)
         }
         SelectItem::Expr(e) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
@@ -2646,6 +2675,10 @@ fn project_late_row(
                     QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                     _ => QueryValue::Null,
                 }
+            }
+            // @valueArray: route through eval_late_expr_multi (same path as RefPath)
+            SelectItem::Attr(Attr::ValueArray) => {
+                eval_late_expr_multi(&Expr::Attr(Attr::ValueArray), idx, ret, ctx, like_regexes)
             }
             SelectItem::Star => QueryValue::ObjRef {
                 index: idx as u64,

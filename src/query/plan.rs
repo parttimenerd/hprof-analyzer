@@ -3090,6 +3090,31 @@ mod tests {
     }
 
     #[test]
+    fn value_array_lowers_to_refwalk() {
+        // @valueArray on java.lang.String must lower to a 1-hop RefPath ("value"
+        // field) and arm ref_walk with exactly one RefWalkResolve op.
+        let q = parse("SELECT @valueArray FROM java.lang.String s").unwrap();
+        let plan = pq(&q).unwrap();
+        assert!(
+            plan.needs.ref_walk,
+            "@valueArray must arm ref_walk; plan needs: {:?}",
+            plan.needs
+        );
+        let resolve_ops: Vec<_> = plan
+            .late_ops
+            .iter()
+            .filter(|op| matches!(op, StageOp::RefWalkResolve { .. }))
+            .collect();
+        assert_eq!(
+            resolve_ops.len(),
+            1,
+            "@valueArray (1 hop) must emit exactly one RefWalkResolve op; late_ops: {:?}",
+            plan.late_ops
+        );
+        assert_eq!(plan.finalize_at, Phase::P2, "@valueArray resolves at P2");
+    }
+
+    #[test]
     fn union_arity_mismatch_rejected() {
         let q = parse("SELECT @objectId FROM java.lang.String UNION SELECT @objectId, @usedHeapSize FROM java.lang.Integer").unwrap();
         let err = pq(&q).unwrap_err();
