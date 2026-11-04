@@ -639,7 +639,7 @@ The server prints a startup banner listing every available endpoint.
 | GET | `/version` | `{"version":…,"endpoints":[…]}` |
 | GET | `/status` | `{"status":"ready"\|"analyzing"\|"not_started"}` |
 | POST | `/analyze` | Trigger full analysis |
-| POST | `/` | Run OQL → JSON `QueryResult` |
+| POST | `/` | Run OQL → `{"ok":true,"result":{…QueryResult…}}` |
 | POST | `/query` | Alias of `POST /` |
 | POST | `/stream` | Run OQL → NDJSON |
 | GET | `/help` | OQL language reference JSON |
@@ -735,6 +735,18 @@ $ curl -s http://127.0.0.1:7070/stream \
 {"@objectId":1235,"@usedHeapSize":24}
 ...
 ```
+
+### Success and error envelope
+
+Every `POST /` and `POST /query` response is a JSON object with an `ok` field:
+
+```json
+{"ok":true,"result":{…QueryResult…}}
+{"ok":false,"error":{"kind":"<kind>","message":"<reason>"}}
+```
+
+The `result` object shape is described by `GET /schema`. Errors also use this
+envelope — they are **not** plain HTTP error bodies.
 
 ### Error responses
 
