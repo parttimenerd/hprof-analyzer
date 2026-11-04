@@ -94,7 +94,12 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 
 ### Ordering, limiting, union
 
-- `ORDER BY <expr> [ASC|DESC]` sorts the full result before `LIMIT`.
+- `ORDER BY <expr> [ASC|DESC]` sorts the full result before `LIMIT`. **The sort
+  key must be one of the projected (selected) columns.** If the key is not
+  selected, rows are returned in scan order and the result includes a note
+  explaining that the sort was not applied. To sort by `@usedHeapSize`, include
+  it in the `SELECT` list: `SELECT @displayName, @usedHeapSize FROM … ORDER BY
+  @usedHeapSize DESC`.
 - `LIMIT n` caps rows. In a `UNION`, a trailing `LIMIT` caps the combined result.
 - `UNION` concatenates branches. Aggregates are **not** allowed inside a UNION
   branch.
