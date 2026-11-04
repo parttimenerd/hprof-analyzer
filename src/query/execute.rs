@@ -979,7 +979,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: the dominator tree exists only
             // post-scan, so these are filled by the stage runner, not here.
-            Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
+            Attr::Dominators(_) | Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(
                 self.resolver
                     .class_name(class_id)
@@ -997,6 +997,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
             Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
+            // @category: resolved in the late phase (requires classifier + class_categories).
+            Attr::Category => QueryValue::Null,
             // Array index/slice: resolved in P2 late window; scan-time projects Null.
             Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => QueryValue::Null,
             Attr::ToString(_) => {
@@ -1075,7 +1077,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: filled by the stage runner.
-            Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
+            Attr::Dominators(_) | Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
             Attr::Length => QueryValue::Int(length as i64),
             // inbound/outbound reference counts need the post-scan ref graph; filled later.
@@ -1099,6 +1101,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             },
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
             Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
+            // @category: resolved in the late phase (requires classifier + class_categories).
+            Attr::Category => QueryValue::Null,
             // Array index/slice: resolved in P2 late window; scan-time projects Null.
             Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => QueryValue::Null,
             Attr::ToString(_) => {
@@ -2647,6 +2651,8 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         Attr::ClassOf => "classof".into(),
         Attr::Dominators(a) => format!("dominators({a})"),
         Attr::DominatorOf(a) => format!("dominatorof({a})"),
+        Attr::DominatorClass => "@dominatorClass".into(),
+        Attr::DominatorDepth => "@dominatorDepth".into(),
         Attr::ToString(a) => format!("toString({a})"),
         Attr::ToHex(inner) => format!("toHex({})", expr_name(inner)),
         Attr::Field(f) => f.clone(),
@@ -2662,6 +2668,7 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         // G1: GC-root attrs.
         Attr::GcRoots => "@GCRoots".into(),
         Attr::GcRootInfo => "@GCRootInfo".into(),
+        Attr::Category => "@category".into(),
         // Array index/slice postfix notation.
         Attr::ArrayIndex { base, .. } => format!("{}[...]", attr_name(base)),
         Attr::ArraySlice { base, .. } => format!("{}[...]", attr_name(base)),

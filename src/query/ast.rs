@@ -121,10 +121,21 @@ pub enum Attr {
     Outbounds,
     /// `classof(x)` — the runtime class name.
     ClassOf,
+    /// `@category` — classification category of this object's class:
+    /// `"jdk"`, `"framework"`, `"other"`, or a user-defined category name.
+    /// Requires the classifier; resolved in the late phase.
+    Category,
     /// `dominators(alias)` — dominator-tree children of each matched object.
     Dominators(String),
     /// `dominatorof(alias)` — immediate dominator (idom) of each matched object.
     DominatorOf(String),
+    /// `@dominatorClass` — pretty class name of this object's immediate dominator.
+    /// Null for GC roots (idom = u32::MAX). Resolved in late phase via `idom[]`.
+    DominatorClass,
+    /// `@dominatorDepth` — depth of this object in the dominator tree.
+    /// Root's direct children = depth 1. Computed by walking `idom[]` upward.
+    /// O(depth) per object. Resolved in late phase.
+    DominatorDepth,
     /// `toString(alias)` — decode a `java.lang.String` instance to its text.
     /// Usable as a WHERE predicate LHS (`WHERE toString(s) LIKE "java.*"`).
     /// Only valid for `java.lang.String` FROM; non-String targets are an error.

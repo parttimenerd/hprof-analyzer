@@ -160,6 +160,10 @@ pub struct LateCtx<'a> {
     pub class_idx: &'a [u32],
     /// Class histogram row names, indexed by the values in `class_idx`.
     pub class_names: &'a [String],
+    /// Pre-classified category per class-histogram-row index.
+    /// `class_categories[class_idx[dense_obj_idx]]` = `"jdk"` | `"framework"` | `"other"` | user-name.
+    /// Empty slice when not available (test contexts).
+    pub class_categories: &'a [String],
     /// Absolute path to the dump file. Used by `array_index_rows` to seek to
     /// object records for `s[i]` / `s[start:end]` evaluation. `None` when the
     /// late context is constructed without a file reference (e.g. unit tests).
@@ -644,6 +648,40 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
                     _ => QueryValue::Null,
                 },
+                SelectItem::Attr(Attr::DominatorClass) => {
+                    let dom = ctx.idom.get(s as usize).copied().unwrap_or(u32::MAX);
+                    if dom == u32::MAX {
+                        QueryValue::Null
+                    } else {
+                        let ci = ctx
+                            .class_idx
+                            .get(dom as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX) as usize;
+                        ctx.class_names
+                            .get(ci)
+                            .map(|n| {
+                                QueryValue::Str(crate::report::format::pretty_class_name(n))
+                            })
+                            .unwrap_or(QueryValue::Null)
+                    }
+                }
+                SelectItem::Attr(Attr::DominatorDepth) => {
+                    let mut depth: u32 = 0;
+                    let mut cur = s;
+                    loop {
+                        let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
+                        if dom == u32::MAX || dom == cur {
+                            break;
+                        }
+                        depth += 1;
+                        cur = dom;
+                        if depth > 100_000 {
+                            break;
+                        }
+                    }
+                    QueryValue::Int(depth as i64)
+                }
                 SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                     match ctx.class_name_of(s) {
                         Some(name) => QueryValue::Str(name.to_string()),
@@ -1048,6 +1086,49 @@ fn eval_late_expr_multi(
                 Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
                 _ => QueryValue::Null,
             },
+            // @dominatorClass: pretty class name of the immediate dominator.
+            // Returns Null for GC-root objects (idom == u32::MAX).
+            Attr::DominatorClass => {
+                let dom = ctx.idom.get(idx as usize).copied().unwrap_or(u32::MAX);
+                if dom == u32::MAX {
+                    QueryValue::Null
+                } else {
+                    let ci =
+                        ctx.class_idx.get(dom as usize).copied().unwrap_or(u32::MAX) as usize;
+                    ctx.class_names
+                        .get(ci)
+                        .map(|n| {
+                            QueryValue::Str(crate::report::format::pretty_class_name(n))
+                        })
+                        .unwrap_or(QueryValue::Null)
+                }
+            }
+            // @dominatorDepth: depth of this object in the dominator tree.
+            // Root's direct children = depth 1.
+            Attr::DominatorDepth => {
+                let mut depth: u32 = 0;
+                let mut cur = idx;
+                loop {
+                    let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
+                    if dom == u32::MAX || dom == cur {
+                        break;
+                    }
+                    depth += 1;
+                    cur = dom;
+                    if depth > 100_000 {
+                        break; // safety cap for degenerate cycles
+                    }
+                }
+                QueryValue::Int(depth as i64)
+            }
+            // @category: classification category of this object's class.
+            Attr::Category => {
+                let ci = ctx.class_idx.get(idx as usize).copied().unwrap_or(u32::MAX) as usize;
+                ctx.class_categories
+                    .get(ci)
+                    .map(|s| QueryValue::Str(s.clone()))
+                    .unwrap_or(QueryValue::Null)
+            }
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1186,6 +1267,38 @@ fn project_string_row_item(
             Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
             _ => QueryValue::Null,
         },
+        SelectItem::Attr(Attr::DominatorClass) => {
+            let dom = ctx.idom.get(dense as usize).copied().unwrap_or(u32::MAX);
+            if dom == u32::MAX {
+                QueryValue::Null
+            } else {
+                let ci = ctx
+                    .class_idx
+                    .get(dom as usize)
+                    .copied()
+                    .unwrap_or(u32::MAX) as usize;
+                ctx.class_names
+                    .get(ci)
+                    .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                    .unwrap_or(QueryValue::Null)
+            }
+        }
+        SelectItem::Attr(Attr::DominatorDepth) => {
+            let mut depth: u32 = 0;
+            let mut cur = dense;
+            loop {
+                let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
+                if dom == u32::MAX || dom == cur {
+                    break;
+                }
+                depth += 1;
+                cur = dom;
+                if depth > 100_000 {
+                    break;
+                }
+            }
+            QueryValue::Int(depth as i64)
+        }
         SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
             match ctx.class_name_of(dense) {
                 Some(name) => QueryValue::Str(name.to_string()),
@@ -1263,6 +1376,38 @@ fn project_array_index_item(
                 QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                 _ => QueryValue::Null,
             }
+        }
+        SelectItem::Attr(Attr::DominatorClass) => {
+            let dom = ctx.idom.get(dense as usize).copied().unwrap_or(u32::MAX);
+            if dom == u32::MAX {
+                QueryValue::Null
+            } else {
+                let ci = ctx
+                    .class_idx
+                    .get(dom as usize)
+                    .copied()
+                    .unwrap_or(u32::MAX) as usize;
+                ctx.class_names
+                    .get(ci)
+                    .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                    .unwrap_or(QueryValue::Null)
+            }
+        }
+        SelectItem::Attr(Attr::DominatorDepth) => {
+            let mut depth: u32 = 0;
+            let mut cur = dense;
+            loop {
+                let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
+                if dom == u32::MAX || dom == cur {
+                    break;
+                }
+                depth += 1;
+                cur = dom;
+                if depth > 100_000 {
+                    break;
+                }
+            }
+            QueryValue::Int(depth as i64)
         }
         SelectItem::Expr(e) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
@@ -2202,6 +2347,38 @@ fn project_late_row(
                 Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
                 _ => QueryValue::Null,
             },
+            SelectItem::Attr(Attr::DominatorClass) => {
+                let dom = ctx.idom.get(idx as usize).copied().unwrap_or(u32::MAX);
+                if dom == u32::MAX {
+                    QueryValue::Null
+                } else {
+                    let ci = ctx
+                        .class_idx
+                        .get(dom as usize)
+                        .copied()
+                        .unwrap_or(u32::MAX) as usize;
+                    ctx.class_names
+                        .get(ci)
+                        .map(|n| QueryValue::Str(crate::report::format::pretty_class_name(n)))
+                        .unwrap_or(QueryValue::Null)
+                }
+            }
+            SelectItem::Attr(Attr::DominatorDepth) => {
+                let mut depth: u32 = 0;
+                let mut cur = idx;
+                loop {
+                    let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
+                    if dom == u32::MAX || dom == cur {
+                        break;
+                    }
+                    depth += 1;
+                    cur = dom;
+                    if depth > 100_000 {
+                        break;
+                    }
+                }
+                QueryValue::Int(depth as i64)
+            }
             SelectItem::Attr(Attr::UsedHeapSize) => {
                 QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
             }
@@ -2343,6 +2520,7 @@ mod tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2608,6 +2786,7 @@ mod classof_late_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx,
             class_names,
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2734,6 +2913,7 @@ mod classof_late_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2769,6 +2949,7 @@ mod classof_late_tests {
             shallow: &shallow,
             class_idx: &class_idx,
             class_names: &class_names,
+            class_categories: &[],
             idom: &[],
             dc_off: &[],
             dc_tgt: &[],
@@ -2884,6 +3065,7 @@ mod dom_ctx_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2931,6 +3113,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -2970,6 +3153,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3001,6 +3185,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3035,6 +3220,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3069,6 +3255,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3102,6 +3289,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3136,6 +3324,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3179,6 +3368,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3219,6 +3409,7 @@ mod dom_run_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3269,6 +3460,7 @@ mod refwalk_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3308,6 +3500,7 @@ mod refwalk_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3645,6 +3838,7 @@ mod edge_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3899,6 +4093,7 @@ mod tostring_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4076,6 +4271,7 @@ mod tostring_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4314,6 +4510,7 @@ mod arith_late_tests {
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
             class_idx: &[],
             class_names: &[],
+            class_categories: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,

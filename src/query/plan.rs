@@ -1479,7 +1479,7 @@ fn uses_dominator_of(q: &Query) -> bool {
     let in_select = q
         .select
         .iter()
-        .any(|it| matches!(it, SelectItem::Attr(Attr::DominatorOf(_))));
+        .any(|it| matches!(it, SelectItem::Attr(Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth)));
     let in_where = q
         .where_
         .as_ref()
@@ -1495,8 +1495,8 @@ fn pred_uses_dominator_of(p: &Predicate) -> bool {
         }
         Predicate::Not(a) => pred_uses_dominator_of(a),
         Predicate::Compare { lhs, rhs, .. } => {
-            expr_any_attr(lhs, |a| matches!(a, Attr::DominatorOf(_)))
-                || expr_any_attr(rhs, |a| matches!(a, Attr::DominatorOf(_)))
+            expr_any_attr(lhs, |a| matches!(a, Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::DominatorOf(_) | Attr::DominatorClass | Attr::DominatorDepth))
         }
         _ => false,
     }

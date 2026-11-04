@@ -859,6 +859,29 @@ const SCENARIOS: &[Scenario] = &[
         build: build_mixed_class_heap_scenario,
         check: check_mixed_class_heap_no_panic,
     },
+    // Scenario 23: outbounds_attr_no_panic — verify the report builds without
+    // panic when the heap has a linked-list chain (the kind of shape @outbounds
+    // is designed to traverse). The attribute itself is OQL-only and is not
+    // exercised by the report pipeline, so this scenario just guards that the
+    // report-building path does not regress on this heap shape.
+    Scenario {
+        name: "outbounds_attr_no_panic",
+        opts: default_opts,
+        build: build_linked_list_chain,
+        check: |_r: &Report| {},
+    },
+    // Scenario 24: class_super_idx_populated — verify that the graph builds
+    // cleanly when subclasses are present (exercises the class_super_idx
+    // population path added to pass2).
+    Scenario {
+        name: "class_super_idx_populated",
+        opts: default_opts,
+        build: build_subclass_hierarchy_scenario,
+        check: |r: &Report| {
+            // Indirect test: report builds cleanly when subclasses are present.
+            let _ = r;
+        },
+    },
 ];
 
 #[test]
@@ -981,6 +1004,16 @@ fn scenario_mixed_class_heap_no_panic() {
     run_scenario(&SCENARIOS[22]);
 }
 
+#[test]
+fn scenario_outbounds_attr_no_panic() {
+    run_scenario(&SCENARIOS[23]);
+}
+
+#[test]
+fn scenario_class_super_idx_populated() {
+    run_scenario(&SCENARIOS[24]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -989,7 +1022,7 @@ fn scenario_mixed_class_heap_no_panic() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        23,
+        25,
         "update this test when adding scenarios"
     );
 }

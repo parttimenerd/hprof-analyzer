@@ -282,6 +282,9 @@ where
                 "referenceArray" => Attr::ReferenceArray,
                 "GCRoots" => Attr::GcRoots,
                 "GCRootInfo" | "info" => Attr::GcRootInfo,
+                "category" => Attr::Category,
+                "dominatorClass" => Attr::DominatorClass,
+                "dominatorDepth" => Attr::DominatorDepth,
                 other => {
                     // Suggest the nearest known @attribute on a typo
                     // (@objectAdress -> @objectAddress). ATTRIBUTES carries the
@@ -1633,6 +1636,9 @@ pub const ATTRIBUTES: &[&str] = &[
     "@GCRoots",
     "@GCRootInfo",
     "@info",
+    "@category",
+    "@dominatorClass",
+    "@dominatorDepth",
 ];
 
 /// The union of every completion-candidate slice the parser exposes. The
@@ -3228,6 +3234,24 @@ mod tests {
         assert!(
             err.to_string().contains("dominatorof(x) requires"),
             "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn parse_dominator_class_attr() {
+        let q = parse("SELECT @dominatorClass FROM java.lang.String").unwrap();
+        assert!(
+            matches!(&q.select[0], SelectItem::Attr(Attr::DominatorClass)),
+            "expected Attr::DominatorClass, got {:?}",
+            &q.select[0]
+        );
+    }
+    #[test]
+    fn parse_dominator_depth_attr() {
+        let q = parse("SELECT @dominatorDepth FROM java.lang.String").unwrap();
+        assert!(
+            matches!(&q.select[0], SelectItem::Attr(Attr::DominatorDepth)),
+            "expected Attr::DominatorDepth, got {:?}",
+            &q.select[0]
         );
     }
     #[test]
