@@ -4622,7 +4622,10 @@ pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribut
 fn build_stack_held_via(g: &Graph) -> std::collections::HashMap<u32, String> {
     use std::collections::HashMap;
     let mut out: HashMap<u32, String> = HashMap::new();
-    for (&_thread_serial, pairs) in &g.thread_local_frame_samples {
+    let mut thread_serials: Vec<u32> = g.thread_local_frame_samples.keys().copied().collect();
+    thread_serials.sort_unstable();
+    for _thread_serial in thread_serials {
+        let pairs = &g.thread_local_frame_samples[&_thread_serial];
         // Find the ThreadStack for this thread so we can resolve frame_number.
         let stack = g
             .thread_stacks

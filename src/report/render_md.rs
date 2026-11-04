@@ -4691,7 +4691,11 @@ pub(crate) fn render_static_collections(o: &crate::report::SystemOverview, out: 
     if rows.is_empty() {
         return;
     }
-    rows.sort_by_key(|h| std::cmp::Reverse(h.retained));
+    rows.sort_by(|a, b| {
+        b.retained
+            .cmp(&a.retained)
+            .then_with(|| a.pretty_class.cmp(&b.pretty_class))
+    });
 
     out.push_str("## Collection Retained Heap\n\n");
     out.push_str(
@@ -4759,7 +4763,11 @@ pub(crate) fn render_resource_handles(o: &crate::report::SystemOverview, out: &m
     if rows.is_empty() {
         return;
     }
-    rows.sort_by_key(|h| std::cmp::Reverse(h.instances));
+    rows.sort_by(|a, b| {
+        b.instances
+            .cmp(&a.instances)
+            .then_with(|| a.pretty_class.cmp(&b.pretty_class))
+    });
 
     out.push_str("## Resource Handles\n\n");
     out.push_str(
