@@ -878,8 +878,20 @@ pub fn run_resident_only(
     // (kind 3) and arrays (kind 1/2) are skipped: array-FROM queries are routed
     // to the scan path by the caller, and the scan never delivers class objects
     // to visit_instance either.
+    // When reachable_only is set, the pre-computed DFN is available here. Skip
+    // unreachable objects at scan time so aggregate executors (which never
+    // capture per-row source indices) also respect reachability — the post-scan
+    // filter only works for row-mode queries.
+    let dfn_for_scan: Option<&[u32]> = if reachable_only {
+        cache.dfn.as_deref()
+    } else {
+        None
+    };
     for i in 0..cache.n {
         if cache.p1.kind[i] == 0 {
+            if dfn_for_scan.is_some_and(|d| d.get(i).copied().unwrap_or(u32::MAX) == u32::MAX) {
+                continue; // unreachable — skip for all executors, including aggregates
+            }
             let class_addr = cache.p1.class_addr_table[cache.class_ids[i] as usize];
             driver.visit_instance(i, class_addr, &[]);
             if driver.is_done() {
