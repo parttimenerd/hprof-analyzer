@@ -1323,13 +1323,12 @@ pub fn run_single_dump(
                 .or_insert_with(|| format!("inner subquery failed: {err}"));
         }
         match &meta.role {
-            SubqueryRole::In { lhs } => {
+            SubqueryRole::In => {
                 let addrs: Vec<u64> = res.rows.iter().filter_map(|r| row_address(r)).collect();
                 let (set, cap_trunc) =
                     build_in_subquery_set(&addrs, crate::query::SUBQUERY_SET_CAP);
                 in_sets_by_slot.entry(meta.outer_slot).or_default().push(
                     crate::query::execute::InSet {
-                        lhs: lhs.clone(),
                         set,
                         truncated: cap_trunc || res.truncated,
                     },
@@ -1456,9 +1455,7 @@ pub fn run_single_dump(
 /// joined by object identity) or an IN-predicate membership set (on some LHS).
 enum SubqueryRole {
     From,
-    In {
-        lhs: crate::query::ast::Attr,
-    },
+    In,
     /// EXISTS/NOT EXISTS: the bool result is computed from inner row count;
     /// `negated` is already encoded in the planned `ExistsSubplan` but we also
     /// carry it here so the materialization loop doesn't need to re-check.
@@ -1497,9 +1494,7 @@ fn collect_subquery_inners(flat: &[(Query, QueryPlan)]) -> Vec<SubqueryInner> {
         for isp in &plan.in_subplans {
             out.push(SubqueryInner {
                 outer_slot: slot,
-                role: SubqueryRole::In {
-                    lhs: isp.lhs.clone(),
-                },
+                role: SubqueryRole::In,
                 inner: isp.inner.clone(),
                 plan: isp.plan.clone(),
             });

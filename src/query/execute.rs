@@ -296,6 +296,11 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// predicate walker hits an `Exists` node. Reset to 0 at the start of each
     /// per-object `where_passes`/`array_where_passes` call.
     exists_cursor: std::cell::Cell<usize>,
+    /// DFS cursor for IN-subquery predicates: the i-th `InSubquery` node
+    /// encountered during predicate DFS corresponds to `in_sets[i]`. Reset to 0
+    /// at the start of each `where_passes`/`array_where_passes` call, matching
+    /// the encounter order used by `collect_in_subplans` at plan time.
+    in_cursor: std::cell::Cell<usize>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -625,11 +630,9 @@ fn eval_having_expr(
 }
 
 /// A resolved `IN (<subquery>)` membership set injected before the outer scan.
-/// `lhs` is the outer attribute compared for membership (must be
-/// `@objectAddress`); `set` is the inner subquery's projected addresses; and
-/// `truncated` records whether the inner result (and thus membership) was capped.
+/// `set` is the inner subquery's projected addresses; and `truncated` records
+/// whether the inner result (and thus membership) was capped.
 pub struct InSet {
-    pub lhs: Attr,
     pub set: std::collections::HashSet<u64>,
     pub truncated: bool,
 }
@@ -704,6 +707,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             group_map,
             exists_bools: Vec::new(),
             exists_cursor: std::cell::Cell::new(0),
+            in_cursor: std::cell::Cell::new(0),
         }
     }
 
@@ -735,6 +739,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             group_map: None,
             exists_bools: Vec::new(),
             exists_cursor: std::cell::Cell::new(0),
+            in_cursor: std::cell::Cell::new(0),
         }
     }
 
@@ -1374,9 +1379,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         }
     }
     fn where_passes(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> bool {
-        // Reset the EXISTS-result cursor so the DFS walk over where_terms picks
-        // up exists_bools entries in the same encounter order they were planned.
+        // Reset cursors so the DFS walk over where_terms picks up entries in the
+        // same encounter order they were planned.
         self.exists_cursor.set(0);
+        self.in_cursor.set(0);
         for term in &self.plan.where_terms {
             // In carry mode, @retainedHeapSize and toString() WHERE terms can't
             // be evaluated during the scan (retained size / string value are
@@ -1491,16 +1497,31 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
 
     /// Evaluate a `WHERE <lhs> IN (<subquery>)` predicate against the injected
-    /// membership set. The set is matched to the predicate by its `lhs` attr
-    /// (the only IN LHS this slice supports is `@objectAddress`). Membership
-    /// tests the current object's real address against the set. A missing set
-    /// (driver never injected one — a wiring bug) yields the loud unreachable.
+    /// membership set. Sets are looked up positionally by DFS encounter order
+    /// (matching `collect_in_subplans` at plan time) via `in_cursor`, so repeated
+    /// IN predicates on the same attribute each test their own inner set.
+    /// The outer object's `lhs` attribute value is extracted and tested for
+    /// membership in the set (which always stores heap addresses since the inner
+    /// is enforced to project `@objectAddress`).
     fn eval_in_subquery(&self, lhs: &Attr, src_idx: usize) -> bool {
-        let Some(inset) = self.in_sets.iter().find(|s| &s.lhs == lhs) else {
+        let idx = self.in_cursor.get();
+        self.in_cursor.set(idx + 1);
+        let Some(inset) = self.in_sets.get(idx) else {
             return in_subquery_unresolved();
         };
-        match self.resolver.addr_of(src_idx) {
-            Some(addr) => crate::query::run::in_subquery_contains(&inset.set, addr),
+        // Extract the outer LHS attribute value; the inner always stores heap
+        // addresses, so only @objectAddress membership is semantically meaningful.
+        // Other LHS attrs are evaluated as their natural u64 value — comparing a
+        // dense index or shallow size against a set of heap addresses will produce
+        // no matches, which is the correct behaviour for a type-mismatched IN.
+        let val: Option<u64> = match lhs {
+            Attr::ObjectAddress => self.resolver.addr_of(src_idx),
+            Attr::ObjectId => Some(src_idx as u64),
+            Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|v| v as u64),
+            _ => return false,
+        };
+        match val {
+            Some(v) => crate::query::run::in_subquery_contains(&inset.set, v),
             None => false,
         }
     }
@@ -1509,8 +1530,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// `INSTANCEOF` are meaningful; named-field compares resolve to Null (and
     /// thus behave like the instance path's unknown-field handling).
     fn array_where_passes(&self, src_idx: usize, class_name: &str, length: u32) -> bool {
-        // Reset the EXISTS-result cursor (same as in where_passes).
+        // Reset cursors (same as in where_passes).
         self.exists_cursor.set(0);
+        self.in_cursor.set(0);
         for term in &self.plan.where_terms {
             // See `where_passes`: skip retained/String-toString terms in carry
             // mode. A non-String toString is scan-time-known, so it is NOT skipped.
@@ -4028,7 +4050,6 @@ mod tests {
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         let set: std::collections::HashSet<u64> = [0x200u64, 0x400].into_iter().collect();
         ex.set_in_subquery_sets(vec![InSet {
-            lhs: Attr::ObjectAddress,
             set,
             truncated: false,
         }]);
@@ -4058,7 +4079,6 @@ mod tests {
         };
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.set_in_subquery_sets(vec![InSet {
-            lhs: Attr::ObjectAddress,
             set: std::iter::once(0x200u64).collect(),
             truncated: true,
         }]);

@@ -1528,6 +1528,113 @@ mod tests {
         );
     }
 
+    // ── IN-predicate regression tests (OQL-13, OQL-15) ──────────────────────
+    // These tests run against the full fixture with --all (reachable_only=false)
+    // so that every object is visible and counts match the audit numbers.
+
+    fn state_all() -> ServerState {
+        ServerState::load(FIXTURE, 5, false).expect("load all-objects")
+    }
+
+    fn row_count(v: &serde_json::Value) -> u64 {
+        assert_eq!(v["ok"], serde_json::json!(true), "query failed: {v}");
+        v["result"]["row_count"].as_u64().unwrap()
+    }
+
+    fn query_all(state: &ServerState, oql: &str) -> serde_json::Value {
+        let (status, body, _) = state.route("POST", "/", oql);
+        assert_eq!(status, 200, "query failed: {body}");
+        serde_json::from_str(&body).unwrap()
+    }
+
+    /// OQL-15: each IN clause must evaluate the declared LHS, not always @objectAddress.
+    /// With --all, @objectAddress IN (thread addresses) should match Thread count.
+    /// @objectId IN (those same addresses) must NOT match Thread count because
+    /// a dense index is not a heap address — expect zero matches.
+    #[test]
+    fn in_lhs_attribute_is_respected() {
+        let state = state_all();
+
+        let addr_count = row_count(&query_all(
+            &state,
+            r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+               WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.Thread)"#,
+        ));
+        assert!(addr_count > 0, "@objectAddress IN threads must match >0");
+
+        let id_count = row_count(&query_all(
+            &state,
+            r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+               WHERE @objectId IN (SELECT @objectAddress FROM java.lang.Thread)"#,
+        ));
+        // Dense indices are small integers; Thread heap addresses are large raw
+        // pointers — the two sets are disjoint in any realistic heap dump.
+        assert_eq!(
+            id_count, 0,
+            "@objectId IN (heap addresses) must produce 0 matches, got {id_count}"
+        );
+    }
+
+    /// OQL-13a: two IN predicates on the same attribute via OR must return their union,
+    /// not just the first set's count.
+    #[test]
+    fn in_or_of_two_predicates_returns_union() {
+        let state = state_all();
+
+        let thread_n = row_count(&query_all(&state, "SELECT COUNT(*) FROM java.lang.Thread"));
+        let string_n = row_count(&query_all(&state, "SELECT COUNT(*) FROM java.lang.String"));
+        let union_n = row_count(&query_all(
+            &state,
+            r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+               WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.Thread)
+                  OR @objectAddress IN (SELECT @objectAddress FROM java.lang.String)"#,
+        ));
+        // Threads and Strings are disjoint, so union == sum.
+        assert_eq!(
+            union_n,
+            thread_n + string_n,
+            "OR of two disjoint IN sets must equal their sum: \
+             threads={thread_n} strings={string_n} union={union_n}"
+        );
+    }
+
+    /// OQL-13b: AND of two disjoint IN predicates must return zero.
+    #[test]
+    fn in_and_of_disjoint_predicates_returns_zero() {
+        let state = state_all();
+
+        let intersection_n = row_count(&query_all(
+            &state,
+            r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+               WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.Thread)
+                AND @objectAddress IN (SELECT @objectAddress FROM java.lang.String)"#,
+        ));
+        assert_eq!(
+            intersection_n, 0,
+            "AND of Thread ∩ String addresses must be empty, got {intersection_n}"
+        );
+    }
+
+    /// OQL-13c: reversing the two OR operands must produce the same union count.
+    #[test]
+    fn in_or_order_independent() {
+        let state = state_all();
+
+        let fwd = row_count(&query_all(
+            &state,
+            r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+               WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.Thread)
+                  OR @objectAddress IN (SELECT @objectAddress FROM java.lang.String)"#,
+        ));
+        let rev = row_count(&query_all(
+            &state,
+            r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+               WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.String)
+                  OR @objectAddress IN (SELECT @objectAddress FROM java.lang.Thread)"#,
+        ));
+        assert_eq!(fwd, rev, "OR result must not depend on predicate order");
+    }
+
     #[test]
     fn named_queries_endpoint_returns_28() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
