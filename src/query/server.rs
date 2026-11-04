@@ -31,6 +31,7 @@ pub fn run_query_json(
     cache: &mut Option<ReplCache>,
     prebuilt: Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)>,
     retained: Option<&Arc<Vec<u64>>>,
+    rows_limit: Option<usize>,
 ) -> serde_json::Value {
     let started = Instant::now();
     let (cleaned, viz, warning) = crate::query::viz::split_directive(text);
@@ -213,6 +214,14 @@ pub fn run_query_json(
     }
 
     result.elapsed_ms = Some(started.elapsed().as_millis() as u64);
+    // Apply HTTP-level row cap after query and reachability pruning.
+    if let Some(cap) = rows_limit {
+        if result.rows.len() > cap {
+            result.rows.truncate(cap);
+            result.row_count = cap as u64;
+            result.truncated = true;
+        }
+    }
     match serde_json::to_value(&result) {
         Ok(rv) => serde_json::json!({ "ok": true, "result": rv }),
         Err(e) => serde_json::json!({
@@ -235,7 +244,16 @@ pub fn run_query_ndjson(
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
 ) -> (u16, String) {
-    let v = run_query_json(path, text, path_depth, reachable_only, cache, None, None);
+    let v = run_query_json(
+        path,
+        text,
+        path_depth,
+        reachable_only,
+        cache,
+        None,
+        None,
+        None,
+    );
     if v["ok"] != serde_json::json!(true) {
         let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
         return (400, format!("{line}\n"));
@@ -472,8 +490,8 @@ impl ServerState {
         let path = url.split('?').next().unwrap_or(url);
         match (method, path) {
             ("POST", "/") | ("POST", "/query") => {
-                let oql = match extract_oql(body) {
-                    Ok(oql) => oql,
+                let (oql, rows_limit) = match extract_oql(body) {
+                    Ok(pair) => pair,
                     Err(message) => {
                         return (
                             400,
@@ -501,6 +519,7 @@ impl ServerState {
                     &mut guard,
                     prebuilt,
                     self.retained_data.get(),
+                    rows_limit,
                 );
                 if v["ok"] == serde_json::json!(true) {
                     // Cache the plan on success so subsequent identical queries skip parse+plan.
@@ -515,7 +534,7 @@ impl ServerState {
             }
             ("POST", "/stream") => {
                 let oql = match extract_oql(body) {
-                    Ok(oql) => oql,
+                    Ok((oql, _limit)) => oql,
                     Err(message) => {
                         let line = serde_json::json!({ "kind": "error", "error": { "kind": "request", "message": message } });
                         return (400, format!("{line}\n"), "application/x-ndjson");
@@ -536,7 +555,7 @@ impl ServerState {
             }
             ("POST", "/plan") | ("POST", "/explain") => {
                 let oql = match extract_oql(body) {
-                    Ok(oql) => oql,
+                    Ok((oql, _limit)) => oql,
                     Err(message) => {
                         return (
                             400,
@@ -737,6 +756,7 @@ fn run_query_ndjson_prebuilt(
         cache,
         prebuilt,
         retained,
+        None,
     );
     if v["ok"] != serde_json::json!(true) {
         let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
@@ -771,13 +791,13 @@ const MAX_OQL_LEN: usize = 64 * 1024;
 /// clear error rather than feeding the braces to the OQL tokenizer (which would
 /// surface a baffling "unexpected character '{'" message). Over-long input is
 /// rejected up front so a giant junk body can't be echoed back in an error.
-fn extract_oql(body: &str) -> Result<String, String> {
+fn extract_oql(body: &str) -> Result<(String, Option<usize>), String> {
     let trimmed = body.trim();
-    let oql = if trimmed.starts_with('{') {
+    let (oql, limit) = if trimmed.starts_with('{') {
         let v: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
             format!("malformed JSON body ({e}) - send a raw OQL string, or {{\"query\":\"<OQL>\"}}")
         })?;
-        match v.get("query") {
+        let q = match v.get("query") {
             Some(serde_json::Value::String(q)) => q.clone(),
             Some(_) => return Err("JSON body field 'query' must be a string".to_string()),
             None => {
@@ -786,9 +806,17 @@ fn extract_oql(body: &str) -> Result<String, String> {
                         .to_string(),
                 )
             }
-        }
+        };
+        let limit = match v.get("limit") {
+            Some(serde_json::Value::Number(n)) => n.as_u64().map(|n| n as usize),
+            Some(_) => {
+                return Err("JSON body field 'limit' must be a non-negative integer".to_string());
+            }
+            None => None,
+        };
+        (q, limit)
     } else {
-        trimmed.to_string()
+        (trimmed.to_string(), None)
     };
     if oql.len() > MAX_OQL_LEN {
         return Err(format!(
@@ -796,7 +824,7 @@ fn extract_oql(body: &str) -> Result<String, String> {
             oql.len()
         ));
     }
-    Ok(oql)
+    Ok((oql, limit))
 }
 
 pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
@@ -901,8 +929,8 @@ mod tests {
             &mut cache,
             None,
             None,
+            None,
         );
-        assert_eq!(v["ok"], serde_json::json!(true), "success flag, got: {v}");
         assert!(
             v["result"]["row_count"].as_u64().unwrap() > 0,
             "expected some rows, got: {v}"
@@ -916,7 +944,16 @@ mod tests {
     #[test]
     fn parse_error_returns_structured_json_with_report() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELCT bogus", 5, true, &mut cache, None, None);
+        let v = run_query_json(
+            FIXTURE,
+            "SELCT bogus",
+            5,
+            true,
+            &mut cache,
+            None,
+            None,
+            None,
+        );
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
         assert_eq!(
             v["error"]["kind"],
@@ -942,6 +979,7 @@ mod tests {
             5,
             true,
             &mut cache,
+            None,
             None,
             None,
         );
@@ -1040,6 +1078,7 @@ mod tests {
             5,
             true,
             &mut cache,
+            None,
             None,
             None,
         );
@@ -1262,6 +1301,7 @@ mod tests {
             &mut cache,
             None,
             None,
+            None,
         );
         assert_eq!(v["ok"], serde_json::json!(true), "ok: {v}");
         assert!(
@@ -1387,6 +1427,7 @@ mod tests {
             &mut cache_slot,
             None,
             Some(&retained_arc),
+            None,
         );
         assert_eq!(
             v["ok"],
@@ -1429,6 +1470,7 @@ mod tests {
             &mut cache_slot,
             None,
             Some(&retained_arc),
+            None,
         );
         assert_eq!(v["ok"], serde_json::json!(true), "fast path ok: {v}");
 
@@ -1438,6 +1480,51 @@ mod tests {
             fast_rows.as_u64().unwrap_or(0),
             direct_row_count as u64,
             "fast path and direct call must agree on row_count"
+        );
+    }
+
+    #[test]
+    fn http_rows_limit_caps_result_independently_of_sql_limit() {
+        // rows_limit is an HTTP-level cap applied after the query runs,
+        // independently of any SQL LIMIT clause.
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+
+        // Baseline: how many Thread rows are there?
+        let (_, base_body, _) = state.route(
+            "POST",
+            "/",
+            r#"{"query":"SELECT @objectAddress FROM java.lang.Thread"}"#,
+        );
+        let base: serde_json::Value = serde_json::from_str(&base_body).unwrap();
+        let total = base["result"]["row_count"].as_u64().unwrap();
+        assert!(
+            total > 1,
+            "fixture must have >1 Thread for this test to be meaningful"
+        );
+
+        // With HTTP-level limit=1: must return exactly 1 row and truncated=true.
+        let (status, body, _) = state.route(
+            "POST",
+            "/",
+            r#"{"query":"SELECT @objectAddress FROM java.lang.Thread","limit":1}"#,
+        );
+        assert_eq!(status, 200, "body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(true), "ok: {v}");
+        assert_eq!(
+            v["result"]["rows"].as_array().unwrap().len(),
+            1,
+            "rows capped to 1: {v}"
+        );
+        assert_eq!(
+            v["result"]["row_count"].as_u64().unwrap(),
+            1,
+            "row_count reflects cap: {v}"
+        );
+        assert_eq!(
+            v["result"]["truncated"],
+            serde_json::json!(true),
+            "truncated=true when capped: {v}"
         );
     }
 
