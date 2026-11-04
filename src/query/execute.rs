@@ -997,7 +997,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             | Attr::DominatorClass
             | Attr::DominatorDepth
             | Attr::Superclass
-            | Attr::CollectionSize => QueryValue::Null,
+            | Attr::CollectionSize
+            | Attr::FillRatio => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(
                 self.resolver
                     .class_name(class_id)
@@ -1101,7 +1102,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             | Attr::DominatorClass
             | Attr::DominatorDepth
             | Attr::Superclass
-            | Attr::CollectionSize => QueryValue::Null,
+            | Attr::CollectionSize
+            | Attr::FillRatio => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
             Attr::Length => QueryValue::Int(length as i64),
             // inbound/outbound reference counts need the post-scan ref graph; filled later.
@@ -2740,6 +2742,7 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         Attr::GcRootInfo => "@GCRootInfo".into(),
         Attr::Category => "@category".into(),
         Attr::CollectionSize => "@collectionSize".into(),
+        Attr::FillRatio => "@fillRatio".into(),
         // Array index/slice postfix notation.
         Attr::ArrayIndex { base, .. } => format!("{}[...]", attr_name(base)),
         Attr::ArraySlice { base, .. } => format!("{}[...]", attr_name(base)),

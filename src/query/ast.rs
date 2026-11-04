@@ -148,6 +148,11 @@ pub enum Attr {
     /// (e.g. `java.util.ArrayList.size`). Returns `Null` for unrecognised
     /// classes or when the size field is not present.
     CollectionSize,
+    /// `@fillRatio` — backing-array fill ratio as a float 0.0–1.0.
+    /// `non_null_slots / backing_array_length`. Requires the forward reference
+    /// graph (built during full analysis). Returns `Null` for objects that are
+    /// not known collections or lack a backing array field.
+    FillRatio,
     /// `toString(alias)` — decode a `java.lang.String` instance to its text.
     /// Usable as a WHERE predicate LHS (`WHERE toString(s) LIKE "java.*"`).
     /// Only valid for `java.lang.String` FROM; non-String targets are an error.

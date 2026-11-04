@@ -287,6 +287,7 @@ where
                 "dominatorDepth" => Attr::DominatorDepth,
                 "superclass" => Attr::Superclass,
                 "collectionSize" => Attr::CollectionSize,
+                "fillRatio" => Attr::FillRatio,
                 other => {
                     // Suggest the nearest known @attribute on a typo
                     // (@objectAdress -> @objectAddress). ATTRIBUTES carries the
@@ -1666,6 +1667,7 @@ pub const ATTRIBUTES: &[&str] = &[
     "@dominatorDepth",
     "@superclass",
     "@collectionSize",
+    "@fillRatio",
 ];
 
 /// The union of every completion-candidate slice the parser exposes. The
@@ -5707,6 +5709,19 @@ mod tests {
                 crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::CollectionSize)
             ),
             "expected CollectionSize attr, got: {:?}",
+            q.select[0]
+        );
+    }
+
+    #[test]
+    fn parse_fill_ratio_attr() {
+        let q = parse("SELECT @fillRatio FROM java.util.HashMap").unwrap();
+        assert!(
+            matches!(
+                &q.select[0],
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::FillRatio)
+            ),
+            "expected FillRatio attr, got: {:?}",
             q.select[0]
         );
     }

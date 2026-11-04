@@ -488,6 +488,16 @@ fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
     found
 }
 
+fn pred_any_attr(p: &Predicate, pred: impl Fn(&Attr) -> bool) -> bool {
+    let mut found = false;
+    pred_for_each_attr(p, &mut |a| {
+        if pred(a) {
+            found = true;
+        }
+    });
+    found
+}
+
 /// Returns true if the expression tree contains an `Expr::Method` node whose
 /// name is `"contains"` or `"toString"`. These methods require the string-values
 /// side table (`needs.string_values`) to be armed so their string context is
@@ -1491,6 +1501,26 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         finalize_at = Phase::P3;
     }
 
+    // `@fillRatio` resolves via the forward CSR in the late phase.
+    // If it appears in the query and finalize_at is still P1, bump to P2.
+    let has_fill_ratio = q.select.iter().any(|it| match it {
+        SelectItem::Attr(Attr::FillRatio) => true,
+        SelectItem::Aggregate { arg, .. } => {
+            matches!(&**arg, SelectItem::Attr(Attr::FillRatio))
+        }
+        SelectItem::Expr(e) => expr_any_attr(e, |a| matches!(a, Attr::FillRatio)),
+        _ => false,
+    }) || q
+        .where_
+        .as_ref()
+        .is_some_and(|p| pred_any_attr(p, |a| matches!(a, Attr::FillRatio)))
+        || q.group_by
+            .iter()
+            .any(|e| expr_any_attr(e, |a| matches!(a, Attr::FillRatio)));
+    if has_fill_ratio && finalize_at == Phase::P1 {
+        finalize_at = Phase::P2;
+    }
+
     Ok(QueryPlan {
         kind,
         needs,
@@ -2244,6 +2274,8 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
         Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => {
             needs.array_index = true;
         }
+        // @fillRatio requires the forward reference graph to traverse backing arrays.
+        Attr::FillRatio => needs.ref_walk = true,
         _ => {}
     }
 }

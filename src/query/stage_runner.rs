@@ -171,6 +171,10 @@ pub struct LateCtx<'a> {
     /// `coll_size_per_dense[i]` = element count, or `u32::MAX` if not a collection.
     /// Empty when not available or shorter than `n` (non-collection indices stay u32::MAX).
     pub coll_size_per_dense: &'a [u32],
+    /// Collection descriptors for `@fillRatio` computation. The forward CSR
+    /// (`fwd_off`/`fwd_tgt`/`fwd_field`) must be non-empty for `@fillRatio` to
+    /// return meaningful results; otherwise it returns `Null` silently.
+    pub(crate) coll_descs: &'a [crate::collections::CollDesc],
     /// Absolute path to the dump file. Used by `array_index_rows` to seek to
     /// object records for `s[i]` / `s[start:end]` evaluation. `None` when the
     /// late context is constructed without a file reference (e.g. unit tests).
@@ -758,6 +762,9 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         QueryValue::Int(size as i64)
                     }
                 }
+                SelectItem::Attr(Attr::FillRatio) => compute_fill_ratio(s, ctx)
+                    .map(QueryValue::Float)
+                    .unwrap_or(QueryValue::Null),
                 SelectItem::Attr(Attr::DominatorDepth) => {
                     let mut depth: u32 = 0;
                     let mut cur = s;
@@ -1264,6 +1271,9 @@ fn eval_late_expr_multi(
                     QueryValue::Int(size as i64)
                 }
             }
+            Attr::FillRatio => compute_fill_ratio(idx, ctx)
+                .map(QueryValue::Float)
+                .unwrap_or(QueryValue::Null),
             // @inbounds as a scalar: count of inbound references from the CSR.
             // Returns Null when the inbound index was not built for this query.
             Attr::Inbounds => {
@@ -1497,6 +1507,9 @@ fn project_string_row_item(
                 QueryValue::Int(size as i64)
             }
         }
+        SelectItem::Attr(Attr::FillRatio) => compute_fill_ratio(dense, ctx)
+            .map(QueryValue::Float)
+            .unwrap_or(QueryValue::Null),
         SelectItem::Attr(Attr::ToHex(inner)) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             match eval_late_expr_multi(inner, dense, ret, ctx, like_regexes) {
@@ -1593,6 +1606,9 @@ fn project_array_index_item(
                 QueryValue::Int(size as i64)
             }
         }
+        SelectItem::Attr(Attr::FillRatio) => compute_fill_ratio(dense, ctx)
+            .map(QueryValue::Float)
+            .unwrap_or(QueryValue::Null),
         // `@displayName` and `@classOf` both return the class name of the matched
         // object. Every row in an array-index result came from the query's FROM
         // class, so the FROM class name is the correct value here — consistent with
@@ -2878,6 +2894,9 @@ fn project_late_row(
                     QueryValue::Int(size as i64)
                 }
             }
+            SelectItem::Attr(Attr::FillRatio) => compute_fill_ratio(idx, ctx)
+                .map(QueryValue::Float)
+                .unwrap_or(QueryValue::Null),
             SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                 match ctx.class_name_of(idx) {
                     Some(name) => QueryValue::Str(name.to_string()),
@@ -3003,6 +3022,48 @@ pub(crate) fn run_retained_set(seeds: &[u32], cap: usize, ctx: &LateCtx) -> (Vec
     (out, false)
 }
 
+/// Compute the fill ratio for a collection object: non-null backing-array slots
+/// divided by total backing-array slots. Returns `None` when:
+/// - the forward CSR is empty (ref-walk not armed),
+/// - the object's class has no CollDesc, or
+/// - the CollDesc has no `array_field`.
+fn compute_fill_ratio(obj: u32, ctx: &LateCtx) -> Option<f64> {
+    use crate::collections::find_desc_by_name;
+    if ctx.fwd_off.is_empty() || ctx.coll_descs.is_empty() {
+        return None;
+    }
+    let ci = ctx.class_idx.get(obj as usize).copied().unwrap_or(u32::MAX) as usize;
+    let class_name = ctx.class_names.get(ci)?;
+    let di = find_desc_by_name(class_name, ctx.coll_descs)?;
+    let desc = &ctx.coll_descs[di];
+    let (array_field, _) = desc.array_field.as_ref()?;
+
+    // Follow the backing array edge from obj.
+    if obj as usize + 1 >= ctx.fwd_off.len() {
+        return None;
+    }
+    let (start, end) = (
+        ctx.fwd_off[obj as usize] as usize,
+        ctx.fwd_off[obj as usize + 1] as usize,
+    );
+    let arr_field_id = ctx.field_id(array_field)?;
+    let arr_idx = (start..end)
+        .find(|&k| ctx.fwd_field[k] == arr_field_id)
+        .map(|k| ctx.fwd_tgt[k])?;
+    if arr_idx == u32::MAX || arr_idx as usize + 1 >= ctx.fwd_off.len() {
+        return None;
+    }
+    let (as_, ae) = (
+        ctx.fwd_off[arr_idx as usize] as usize,
+        ctx.fwd_off[arr_idx as usize + 1] as usize,
+    );
+    let capacity = ae - as_;
+    if capacity == 0 {
+        return None;
+    }
+    let non_null = (as_..ae).filter(|&k| ctx.fwd_tgt[k] != u32::MAX).count();
+    Some(non_null as f64 / capacity as f64)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3039,6 +3100,7 @@ mod tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3307,6 +3369,7 @@ mod classof_late_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3436,6 +3499,7 @@ mod classof_late_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3474,6 +3538,7 @@ mod classof_late_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             idom: &[],
             dc_off: &[],
             dc_tgt: &[],
@@ -3592,6 +3657,7 @@ mod dom_ctx_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3642,6 +3708,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3684,6 +3751,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3718,6 +3786,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3755,6 +3824,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3792,6 +3862,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3828,6 +3899,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3865,6 +3937,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3911,6 +3984,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -3954,6 +4028,7 @@ mod dom_run_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4007,6 +4082,7 @@ mod refwalk_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4049,6 +4125,7 @@ mod refwalk_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4389,6 +4466,7 @@ mod edge_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4646,6 +4724,7 @@ mod tostring_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -4826,6 +4905,7 @@ mod tostring_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -5067,6 +5147,7 @@ mod arith_late_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -5257,6 +5338,7 @@ mod arith_late_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,
@@ -5362,6 +5444,7 @@ mod arith_late_tests {
             class_categories: &[],
             class_super_idx: &[],
             coll_size_per_dense: &[],
+            coll_descs: &[],
             dump_path: None,
             offsets: &[],
             id_size: 8,

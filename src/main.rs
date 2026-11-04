@@ -4768,6 +4768,7 @@ fn run(
             class_categories: &class_categories,
             class_super_idx: &g.class_super_idx,
             coll_size_per_dense: &g.coll_size_per_dense,
+            coll_descs: &opts.coll_descs,
             dump_path: Some(std::path::PathBuf::from(input)),
             offsets: &[],
             id_size,
