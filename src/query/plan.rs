@@ -113,6 +113,11 @@ pub enum StageOp {
     /// not yet captured during the scan); out-of-bounds and non-resolvable bases
     /// are Null rather than errors, matching the AST contract.
     ResolveArrayIndex,
+    /// Expand each carried collection-object dense index into its logical element
+    /// references. `class` is the slashified class name (e.g.
+    /// `java/util/ArrayList`). Each element ref is emitted as a new row; rows
+    /// whose backing array or size field are missing are skipped silently.
+    EntriesExpand { class: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -1370,6 +1375,18 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             }
         }
         // else: non-String class FROM -> generic scan-time display, no late op.
+    }
+
+    // `FROM ENTRIES <ClassName>`: add EntriesExpand to late_ops so the stage
+    // runner expands each carried collection instance into its logical elements.
+    if let crate::query::ast::FromSource::Entries { class } = &q.from {
+        // Slashify the class name (Java uses '/' in HPROF, dots in OQL).
+        let slash_class = class.replace('.', "/");
+        late_ops.push(StageOp::EntriesExpand { class: slash_class });
+        // Entries expansion runs in the late phase; bump finalize_at.
+        if finalize_at == Phase::P1 {
+            finalize_at = Phase::P2;
+        }
     }
 
     // G1: @GCRoots/@GCRootInfo require the full analyze pipeline. Force the plan

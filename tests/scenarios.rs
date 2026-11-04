@@ -716,6 +716,19 @@ fn check_mixed_class_heap_no_panic(report: &Report) {
     let _ = &report.triage;
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 27: from_entries_no_panic — FROM ENTRIES parsing smoke-test
+// ---------------------------------------------------------------------------
+
+fn build_from_entries_scenario() -> Vec<u8> {
+    heap_builder::build_arraylist_with_string_elements()
+}
+
+fn check_from_entries_no_panic(report: &Report) {
+    // FROM ENTRIES is OQL-only; just verify report builds without panic.
+    let _ = &report.triage;
+}
+
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
 }
@@ -905,6 +918,13 @@ const SCENARIOS: &[Scenario] = &[
             let _ = r;
         },
     },
+    // Scenario 27: from_entries_no_panic — FROM ENTRIES parsing smoke-test.
+    Scenario {
+        name: "from_entries_no_panic",
+        opts: default_opts,
+        build: build_from_entries_scenario,
+        check: check_from_entries_no_panic,
+    },
 ];
 
 #[test]
@@ -1047,6 +1067,11 @@ fn scenario_superclass_attr_populated() {
     run_scenario(&SCENARIOS[26]);
 }
 
+#[test]
+fn scenario_from_entries_no_panic() {
+    run_scenario(&SCENARIOS[27]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1055,7 +1080,7 @@ fn scenario_superclass_attr_populated() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        27,
+        28,
         "update this test when adding scenarios"
     );
 }

@@ -394,6 +394,7 @@ pub fn default_view_name(q: &crate::query::ast::Query) -> Option<String> {
         }),
         FromSource::Object(addr) => Some(format!("object 0x{addr:x}")),
         FromSource::Subquery(_) => None,
+        FromSource::Entries { class } => Some(format!("ENTRIES {class}")),
     }
 }
 

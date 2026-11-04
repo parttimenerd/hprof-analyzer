@@ -402,6 +402,13 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
             "@GCRoots/@GCRootInfo/@info require the full analysis pipeline; \
              GC-root data is not collected in the query-only path. Run the full \
              report (drop --query-only) to use GC-root queries."
+        } else if entry
+            .plan
+            .late_ops
+            .iter()
+            .any(|op| matches!(op, StageOp::EntriesExpand { .. }))
+        {
+            "FROM ENTRIES is a v1 stub; it is not available in the query-only path."
         } else {
             "@retainedHeapSize requires the full analysis pipeline; \
              it is not available in the query-only path. Run the full \
@@ -520,6 +527,28 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             }
             StageOp::ResolveArrayIndex => {
                 return array_index_rows(entry, q, ctx);
+            }
+            StageOp::EntriesExpand { .. } => {
+                // v1 stub: FROM ENTRIES collection expansion is not yet fully
+                // implemented for the late phase. Return zero rows without
+                // panicking so that existing queries run safely.
+                return QueryResult {
+                    name: entry.name.clone(),
+                    oql: String::new(),
+                    columns: vec![crate::query::model::QueryColumn {
+                        name: "@objectId".to_string(),
+                    }],
+                    rows: Vec::new(),
+                    row_count: 0,
+                    truncated: false,
+                    error: None,
+                    note: Some(
+                        "FROM ENTRIES is a v1 stub: element expansion is not yet implemented."
+                            .to_string(),
+                    ),
+                    viz: None,
+                    elapsed_ms: None,
+                };
             }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.

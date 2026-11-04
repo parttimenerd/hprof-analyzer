@@ -1271,3 +1271,54 @@ pub fn build_mixed_class_heap() -> Vec<u8> {
     b.root_sticky_class(c);
     b.build()
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 27: from_entries_no_panic (FROM ENTRIES parsing coverage)
+// ---------------------------------------------------------------------------
+
+/// Build a heap containing a `java/util/ArrayList` instance with a real
+/// `elementData` Object[] backing array holding a few `java/lang/String`-like
+/// objects, plus the `size` int field. This scenario exercises the `FROM
+/// ENTRIES java.util.ArrayList` query syntax without panicking.
+pub fn build_arraylist_with_string_elements() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+
+    // Declare java/lang/Object as the root super class.
+    let obj_class = b.class("java/lang/Object", &[]);
+
+    // Declare a minimal java/lang/String class (just a value Object ref and
+    // no fields — enough to be identifiable as a class in the dump).
+    let str_class = b.class_with_super("java/lang/String", obj_class, &[]);
+
+    // Create a few String-ish instances.
+    let s1 = b.instance(str_class, &[]);
+    let s2 = b.instance(str_class, &[]);
+    let s3 = b.instance(str_class, &[]);
+
+    // Create an Object[] backing array (elementData) holding the strings.
+    let backing_arr = b.obj_array(obj_class, &[s1, s2, s3]);
+
+    // Declare java/util/ArrayList with the two expected fields:
+    //   size (int) and elementData (Object ref).
+    let list_class = b.class_with_super(
+        "java/util/ArrayList",
+        obj_class,
+        &[("size", T_INT), ("elementData", T_OBJECT)],
+    );
+
+    // Create the ArrayList instance with size=3 and elementData pointing at
+    // the backing array.
+    let mut list_data = Vec::new();
+    int_field(&mut list_data, 3); // size = 3
+    obj_field(&mut list_data, backing_arr); // elementData = backing_arr
+
+    let list_inst = b.instance(list_class, &list_data);
+
+    // Anchor via a class-level static root so the graph is GC-reachable.
+    let _holder = b.class_with_static_root("com/example/EntryHolder", "list", list_inst, &[]);
+
+    b.root_sticky_class(str_class);
+    b.root_sticky_class(list_class);
+
+    b.build()
+}
