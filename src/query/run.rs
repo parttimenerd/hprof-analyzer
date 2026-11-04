@@ -2424,6 +2424,58 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_reachability_consistent_with_filter() {
+        // COUNT(*) with --reachable-only must return the same count as a
+        // row-mode query filtered to the same set. Before the fix, aggregate
+        // executors ignored the reachability pre-filter and counted ALL objects.
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+        let meta = std::fs::metadata(path);
+        match meta {
+            Ok(m) if m.len() >= 1024 => {}
+            _ => return, // fixture absent (CI without LFS)
+        }
+        let cache = ReplCache::build(&crate::source::HprofSource::from(path), true).expect("cache");
+
+        let (q_count, plan_count) = parse_plan_opt("SELECT COUNT(*) FROM java.lang.String");
+        let (q_rows, plan_rows) = parse_plan_opt("SELECT @objectId FROM java.lang.String");
+
+        let count_out =
+            run_resident_only(&cache, &[(q_count, plan_count)], true).expect("count run");
+        let rows_out = run_resident_only(&cache, &[(q_rows, plan_rows)], true).expect("rows run");
+
+        let count_val = match &count_out[0].rows[0][0] {
+            QueryValue::Int(n) => *n as u64,
+            other => panic!("expected Int count, got {other:?}"),
+        };
+        assert_eq!(
+            count_val, rows_out[0].row_count,
+            "COUNT(*) ({count_val}) must match row-mode count ({}) with --reachable-only",
+            rows_out[0].row_count
+        );
+
+        // With --all (no reachability filter), both must agree on the larger total.
+        let (q_count2, plan_count2) = parse_plan_opt("SELECT COUNT(*) FROM java.lang.String");
+        let (q_rows2, plan_rows2) = parse_plan_opt("SELECT @objectId FROM java.lang.String");
+        let count_all =
+            run_resident_only(&cache, &[(q_count2, plan_count2)], false).expect("count-all run");
+        let rows_all =
+            run_resident_only(&cache, &[(q_rows2, plan_rows2)], false).expect("rows-all run");
+        let count_all_val = match &count_all[0].rows[0][0] {
+            QueryValue::Int(n) => *n as u64,
+            other => panic!("expected Int, got {other:?}"),
+        };
+        assert_eq!(
+            count_all_val, rows_all[0].row_count,
+            "COUNT(*) and row-mode must agree with --all too"
+        );
+        // --all should return >= reachable-only (unreachable objects are a superset).
+        assert!(
+            count_all_val >= count_val,
+            "--all count ({count_all_val}) must be >= reachable-only count ({count_val})"
+        );
+    }
+
+    #[test]
     fn repl_cache_builds_from_fixture() {
         let cache = ReplCache::build(
             &crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"),

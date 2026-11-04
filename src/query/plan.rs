@@ -1971,6 +1971,15 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
             continue;
         }
         let bare = strip_alias(&name, q.alias.as_deref());
+        // FROM ENTRIES produces virtual columns `index`/`element` (lists) or
+        // `key`/`value` (maps). These are not actual object fields — skip field
+        // validation for them so `SELECT x.index, x.element FROM ENTRIES ArrayList x`
+        // is accepted.
+        if matches!(q.from, crate::query::ast::FromSource::Entries { .. })
+            && matches!(bare, "index" | "element" | "key" | "value")
+        {
+            continue;
+        }
         if !known.iter().any(|f| f == bare) {
             let bare_lower = bare.to_ascii_lowercase();
             let dist_threshold = if bare_lower.len() <= 4 { 1 } else { 2 };
@@ -3618,6 +3627,27 @@ mod tests {
         let q =
             parse("SELECT @objectId, @usedHeapSize, @displayName FROM java.lang.String").unwrap();
         assert!(validate_fields(&q, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_entries_virtual_columns_accepted() {
+        // `index`/`element` and `key`/`value` are virtual columns produced by
+        // FROM ENTRIES expansion, not actual fields on the collection class.
+        // validate_fields must let them through.
+        let schema = FakeSchema {
+            class: "java.util.ArrayList",
+            fields: vec!["elementData", "size", "modCount"],
+        };
+        let q = parse("SELECT x.index, x.element FROM ENTRIES java.util.ArrayList x").unwrap();
+        assert!(
+            validate_fields(&q, &schema).is_ok(),
+            "FROM ENTRIES virtual columns index/element must pass field validation"
+        );
+        let q2 = parse("SELECT x.key, x.value FROM ENTRIES java.util.HashMap x").unwrap();
+        assert!(
+            validate_fields(&q2, &schema).is_ok(),
+            "FROM ENTRIES virtual columns key/value must pass field validation"
+        );
     }
 
     // ---------- correlated-subquery rejection (Task 22) ----------
