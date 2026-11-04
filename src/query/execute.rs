@@ -2275,6 +2275,24 @@ fn collect_like_in_expr(
     Ok(())
 }
 
+/// Translate a SQL-style LIKE glob pattern to a regex string.
+/// `%` → `.*`, `_` → `.`; all regex metacharacters in literal segments are escaped.
+fn sql_glob_to_regex(pat: &str) -> String {
+    let mut out = String::new();
+    for c in pat.chars() {
+        match c {
+            '%' => out.push_str(".*"),
+            '_' => out.push('.'),
+            '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '\\' | '^' | '$' | '|' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn collect_like_regexes(
     pred: &crate::query::ast::Predicate,
     out: &mut std::collections::HashMap<String, regex::Regex>,
@@ -2293,18 +2311,18 @@ fn collect_like_regexes(
         } => {
             if let Some(Value::Str(pat)) = rhs.as_lit() {
                 if !out.contains_key(pat) {
-                    // Detect SQL-glob habit: `%` as wildcard, `_` as single-char.
-                    // LIKE uses Java-style full-match regex, not SQL globs.
-                    // Give an actionable hint before the regex compile attempt.
-                    if pat.contains('%') && !pat.contains(".*") && !pat.starts_with('^') {
-                        let suggested = pat.replace('%', ".*").replace('_', ".");
-                        return Err(crate::query::QueryError(format!(
-                            "LIKE \"{pat}\": looks like a SQL glob (`%` wildcard), but LIKE \
-                             uses Java-style regex (full-match). \
-                             Did you mean LIKE \"{suggested}\"?"
-                        )));
-                    }
-                    let anchored = format!("^(?:{pat})$");
+                    // Auto-translate SQL globs: `%` → `.*`, `_` → `.` when the pattern looks
+                    // like a SQL glob (has % or _ but lacks regex anchors/wildcards).
+                    // Patterns that already look like regex (start with ^, contain .*, .*) pass through unchanged.
+                    let effective_pat = if (pat.contains('%') || pat.contains('_'))
+                        && !pat.contains(".*")
+                        && !pat.starts_with('^')
+                    {
+                        sql_glob_to_regex(pat)
+                    } else {
+                        pat.clone()
+                    };
+                    let anchored = format!("^(?:{effective_pat})$");
                     let re = regex::Regex::new(&anchored).map_err(|e| {
                         crate::query::QueryError(format!(
                             "invalid regex in LIKE \"{pat}\": {e} \
@@ -4395,5 +4413,58 @@ mod tests {
             vec![0, 1],
             "row-expanding op seeds must not be pruned"
         );
+    }
+
+    #[test]
+    fn like_sql_percent_wildcard_auto_translates() {
+        // %foo% should be auto-translated to .*foo.* and match
+        let q =
+            parse(r#"SELECT @displayName FROM java.lang.String WHERE @displayName LIKE "%foo%""#)
+                .unwrap();
+        let mut regexes = std::collections::HashMap::new();
+        if let Some(pred) = &q.where_ {
+            collect_like_regexes(pred, &mut regexes).unwrap();
+        }
+        // Should compile without error and match strings containing "foo"
+        let re = regexes
+            .get("%foo%")
+            .expect("key should be original pattern %foo%");
+        assert!(re.is_match("xfoobar"), "should match string containing foo");
+        assert!(
+            !re.is_match("xbarbar"),
+            "should not match string without foo"
+        );
+    }
+
+    #[test]
+    fn like_sql_underscore_wildcard_auto_translates() {
+        let q = parse(r#"SELECT @displayName FROM java.lang.String WHERE @displayName LIKE "f_o""#)
+            .unwrap();
+        let mut regexes = std::collections::HashMap::new();
+        if let Some(pred) = &q.where_ {
+            collect_like_regexes(pred, &mut regexes).unwrap();
+        }
+        let re = regexes
+            .get("f_o")
+            .expect("key should be original pattern f_o");
+        assert!(re.is_match("foo"), "f_o should match f + any char + o");
+        assert!(re.is_match("fzo"), "f_o should match fzo");
+        assert!(!re.is_match("fo"), "f_o should not match fo (only 2 chars)");
+    }
+
+    #[test]
+    fn like_regex_pattern_passes_through_unchanged() {
+        // A pattern that already looks like regex (has .*) should not be double-escaped
+        let q =
+            parse(r#"SELECT @displayName FROM java.lang.String WHERE @displayName LIKE ".*foo.*""#)
+                .unwrap();
+        let mut regexes = std::collections::HashMap::new();
+        if let Some(pred) = &q.where_ {
+            collect_like_regexes(pred, &mut regexes).unwrap();
+        }
+        let re = regexes
+            .get(".*foo.*")
+            .expect("regex pattern should be stored as-is");
+        assert!(re.is_match("xfoobar"), "regex .* should also match");
     }
 }
