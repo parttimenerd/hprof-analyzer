@@ -1738,4 +1738,57 @@ mod tests {
             "second column must be 'element'"
         );
     }
+
+    /// OQL-3 / #12: HistogramOnly COUNT(*) in the CLI path (run_single_dump) must
+    /// respect reachable_only and not count unreachable objects. Before the fix,
+    /// run_single_dump counted all objects via pre-scan class tallies in pass2
+    /// hist_tally, which ran before DFN was computed.
+    #[test]
+    fn histogram_count_reachable_matches_scan_count() {
+        use crate::query::DEFAULT_PATH_DEPTH_CAP;
+        use crate::query::model::QueryValue;
+        use crate::query::parse::parse;
+        use crate::query::plan::StageKind;
+        use crate::query::plan::plan_query;
+        use crate::query::run::run_single_dump;
+
+        // Verify the plan is HistogramOnly so we test the right code path.
+        let oql = "SELECT COUNT(*) FROM java.lang.Object";
+        let q = parse(oql).expect("parse");
+        let plan = plan_query(&q, DEFAULT_PATH_DEPTH_CAP).expect("plan");
+        assert_eq!(
+            plan.kind,
+            StageKind::HistogramOnly,
+            "test requires a HistogramOnly plan; got {:?}",
+            plan.kind
+        );
+
+        // COUNT(*) with reachable_only=true must equal the row count from a
+        // non-aggregate SELECT * (which goes through SingleScan with DFN filter).
+        let count_res =
+            run_single_dump(FIXTURE, &[(q, plan)], true).expect("run_single_dump reachable");
+        let count_val = count_res[0]
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .cloned()
+            .unwrap_or(QueryValue::Null);
+        let reachable_count = match count_val {
+            QueryValue::Int(n) => n as u64,
+            other => panic!("unexpected COUNT value: {other:?}"),
+        };
+        // Run the same class through SELECT * to get the true reachable count.
+        let star_oql = "SELECT @objectAddress FROM java.lang.Object";
+        let sq = parse(star_oql).expect("parse star");
+        let splan = plan_query(&sq, DEFAULT_PATH_DEPTH_CAP).expect("plan star");
+        let star_res =
+            run_single_dump(FIXTURE, &[(sq, splan)], true).expect("run_single_dump star");
+        let star_count = star_res[0].row_count as u64;
+
+        assert_eq!(
+            reachable_count, star_count,
+            "HistogramOnly COUNT(*) reachable ({reachable_count}) must match \
+             SELECT * reachable row count ({star_count})"
+        );
+    }
 }

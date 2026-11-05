@@ -1206,7 +1206,19 @@ pub fn run_single_dump(
     queries: &[(Query, QueryPlan)],
     reachable_only: bool,
 ) -> std::io::Result<Vec<QueryResult>> {
-    let (flat, groups) = expand_union_queries(queries);
+    let (mut flat, groups) = expand_union_queries(queries);
+    // When reachable-only is set, demote HistogramOnly plans to SingleScan so
+    // that every object goes through the per-object DFN filter in the pass2 scan
+    // instead of being counted from pre-scan class tallies that include unreachable
+    // objects. Clearing needs.histogram prevents pass2 from building hist_tally.
+    if reachable_only {
+        for (_, plan) in flat.iter_mut() {
+            if plan.kind == crate::query::plan::StageKind::HistogramOnly {
+                plan.kind = crate::query::plan::StageKind::SingleScan;
+                plan.needs.histogram = false;
+            }
+        }
+    }
     // Propagate reachable-only into the scan so pass2 arms the per-row
     // source-index capture (only when on; otherwise nothing is allocated).
     let opts = crate::AnalyzeOptions {
