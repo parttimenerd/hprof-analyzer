@@ -56,6 +56,20 @@ tests/fixtures/*_Query.zip
 # Internal AI-assisted planning/spec docs — not part of the public project.
 docs/superpowers/
 docs/missing-views-plan.md
+docs/OQL_AUDIT_FINDINGS.md
+
+# Internal planning/ideas docs — kept locally but not published.
+DESIGN.md
+JOIN_EXPLORATION.md
+JOIN_IMPLEMENTATION.md
+LEAKCANARY_INSPIRED_PROPOSALS.md
+LEAKCANARY_RESEARCH.md
+PLAN.md
+RESEARCH_FINDINGS.md
+SQL_FEATURES_PROPOSALS.md
+STRING_METRICS_IDEAS.md
+VISUALIZATION_IDEAS*.md
+"VISUALIZATION_IDEAS copy.md"
 # Disk cache directories generated next to docs/samples fixtures.
 docs/samples/*.hprof-cache/
 
