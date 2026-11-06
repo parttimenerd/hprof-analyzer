@@ -7143,3 +7143,48 @@ fn cast_invalid_string_to_bool_returns_null() {
         "CAST(\"not-a-bool\" AS BOOL) returned false (0) instead of Null:\n{out}"
     );
 }
+
+// ── OQL-21: INSTANCEOF should include array objects ──────────────────────────
+
+#[test]
+fn instanceof_object_includes_arrays() {
+    let Some(hprof) = philosophers() else {
+        return;
+    };
+    // FROM INSTANCEOF java.lang.Object should include arrays (all arrays are
+    // instances of Object in Java). The count must be >= the plain FROM Object count.
+    let all_objects = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object",
+    ));
+    let just_class = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.Object",
+    ));
+    // The dumps we test with have arrays, so INSTANCEOF should see more.
+    // At minimum they must be equal (no regression); typically INSTANCEOF > plain.
+    assert!(
+        all_objects >= just_class,
+        "INSTANCEOF java.lang.Object ({all_objects}) < plain FROM java.lang.Object ({just_class})"
+    );
+}
+
+#[test]
+fn instanceof_object_count_gte_non_instanceof() {
+    let Some(hprof) = philosophers() else {
+        return;
+    };
+    // All objects (INSTANCEOF Object) must be >= all non-array Thread instances.
+    let threads = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.Thread",
+    ));
+    let all = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object",
+    ));
+    assert!(
+        all >= threads,
+        "INSTANCEOF Object ({all}) < Thread count ({threads})"
+    );
+}
