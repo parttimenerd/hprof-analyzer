@@ -7069,3 +7069,77 @@ fn query_object_address_in_retained_path_is_non_zero() {
         );
     }
 }
+
+// ── OQL-18: CAST(NULL AS STRING) should return Null, not the string "null" ─
+
+#[test]
+fn cast_null_to_string_returns_null() {
+    let Some(hprof) = philosophers() else {
+        return;
+    };
+    // CAST(NULL AS STRING) must not produce the string literal "null"
+    // — it should produce a NULL cell (displayed as the null placeholder "null"
+    // by the renderer, but let's verify the column header is present and the
+    // query doesn't produce the literal string "null" as a result value by
+    // checking via a LENGTH() wrapping: CAST(NULL AS STRING) -> Null, so
+    // LENGTH(CAST(NULL AS STRING)) -> Null, not 4.
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT LENGTH(CAST(NULL AS STRING)) FROM java.lang.Thread LIMIT 1",
+    );
+    // If CAST(NULL AS STRING) returned "null" then LENGTH would return 4.
+    // If it correctly returns Null then LENGTH returns Null and the cell shows "null"
+    // (the null placeholder) — but crucially not the integer 4.
+    assert!(
+        !out.contains("| 4 |") && !out.contains("|4|"),
+        "CAST(NULL AS STRING) produced string 'null' (LENGTH returned 4):\n{out}"
+    );
+}
+
+// ── OQL-19: expr_name for CAST should include the inner expression ──────────
+
+#[test]
+fn cast_expr_name_includes_inner_expr() {
+    let Some(hprof) = philosophers() else {
+        return;
+    };
+    // The column name for CAST(@usedHeapSize AS FLOAT) should mention both
+    // @usedHeapSize and FLOAT, not just "CAST(AS Float)".
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT CAST(@usedHeapSize AS FLOAT) FROM java.lang.Thread LIMIT 1",
+    );
+    assert!(
+        out.contains("@usedHeapSize") || out.contains("usedHeapSize"),
+        "CAST column name missing inner expr: {out}"
+    );
+    assert!(
+        out.to_uppercase().contains("FLOAT"),
+        "CAST column name missing target type FLOAT: {out}"
+    );
+    assert!(
+        out.to_uppercase().contains("CAST"),
+        "CAST column name missing CAST keyword: {out}"
+    );
+}
+
+// ── OQL-20: Invalid string-to-bool CAST should return Null, not false ───────
+
+#[test]
+fn cast_invalid_string_to_bool_returns_null() {
+    let Some(hprof) = philosophers() else {
+        return;
+    };
+    // "not-a-bool" cannot be parsed as bool — should yield Null.
+    // We detect this by casting to INT: CAST(Null AS INT) -> Null,
+    // CAST(false AS INT) -> 0.  If we get 0, the old wrong behaviour is active.
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT CAST(CAST(\"not-a-bool\" AS BOOL) AS INT) FROM java.lang.Thread LIMIT 1",
+    );
+    // Should NOT produce 0 (which would mean false was returned instead of Null)
+    assert!(
+        !out.contains("| 0 |") && !out.contains("|0|"),
+        "CAST(\"not-a-bool\" AS BOOL) returned false (0) instead of Null:\n{out}"
+    );
+}
