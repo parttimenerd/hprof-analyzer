@@ -4,7 +4,7 @@
 
 use crate::query::ObjectVisitor;
 use crate::query::ast::{
-    AggFunc, ArithOp, Attr, CompareOp, Expr, FromSource, Query, SelectItem, UnaryOp, Value,
+    AggFunc, ArithOp, Attr, CompareOp, Expr, FromSource, OrderBy, Query, SelectItem, UnaryOp, Value,
 };
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
@@ -314,6 +314,11 @@ pub(crate) enum AggAcc {
     /// COUNT(expr): every matched object increments iff the per-object value
     /// is not Null. (MAT semantics: COUNT(expr) counts non-null values.)
     CountExpr { n: i64 },
+    /// COUNT(DISTINCT expr): counts unique non-null values using a HashSet of
+    /// stringified values (QueryValue doesn't implement Hash).
+    CountDistinct {
+        seen: std::collections::HashSet<String>,
+    },
     /// SUM: running total. Starts as Int(0); if any per-object value is Float
     /// the whole running total is promoted to f64. Non-numeric/Null values are
     /// skipped (MAT semantics: SUM ignores nulls).
@@ -335,7 +340,7 @@ pub(crate) enum AggAcc {
 /// `AggAcc::None`; aggregate items get their zero state.
 pub(crate) fn init_agg_acc(item: &SelectItem) -> AggAcc {
     match item {
-        SelectItem::Aggregate { func, arg } => match func {
+        SelectItem::Aggregate { func, arg, .. } => match func {
             AggFunc::Count => {
                 if matches!(arg.as_ref(), SelectItem::Star) {
                     AggAcc::CountStar { n: 0 }
@@ -343,6 +348,9 @@ pub(crate) fn init_agg_acc(item: &SelectItem) -> AggAcc {
                     AggAcc::CountExpr { n: 0 }
                 }
             }
+            AggFunc::CountDistinct => AggAcc::CountDistinct {
+                seen: std::collections::HashSet::new(),
+            },
             AggFunc::Sum => AggAcc::Sum {
                 total: QueryValue::Int(0),
                 any_value: false,
@@ -373,6 +381,11 @@ pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
             // COUNT(expr): count non-null values only (MAT semantics).
             if !matches!(value, QueryValue::Null) {
                 *n += 1;
+            }
+        }
+        AggAcc::CountDistinct { seen } => {
+            if !matches!(value, QueryValue::Null) {
+                seen.insert(format!("{value:?}"));
             }
         }
         AggAcc::Sum { total, any_value } => {
@@ -475,6 +488,7 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
         AggAcc::None => QueryValue::Null,
         AggAcc::CountStar { n } => QueryValue::Int(n),
         AggAcc::CountExpr { n } => QueryValue::Int(n),
+        AggAcc::CountDistinct { seen } => QueryValue::Int(seen.len() as i64),
         AggAcc::Sum { total, any_value } => {
             if any_value {
                 total
@@ -574,7 +588,9 @@ fn eval_having_expr(
             // any AS alias — the alias changes the column name but not the
             // SelectItem variant. This is alias-transparent.
             let pos = query.select.iter().position(|it| match it {
-                SelectItem::Aggregate { func: f, arg: a } => f == func && a == arg,
+                SelectItem::Aggregate {
+                    func: f, arg: a, ..
+                } => f == func && a == arg,
                 _ => false,
             });
             pos.and_then(|i| row.get(i))
@@ -582,14 +598,33 @@ fn eval_having_expr(
                 .unwrap_or(QueryValue::Null)
         }
         Expr::Attr(attr) => {
-            // Non-aggregate column in HAVING — match by column name.
+            // Non-aggregate column in HAVING — match by column name first,
+            // then fall back to GROUP BY key expressions (which may not be in SELECT).
             let name = attr_name(attr);
-            columns
+            if let Some(val) = columns
                 .iter()
                 .position(|c| c.name == name)
                 .and_then(|i| row.get(i))
-                .cloned()
-                .unwrap_or(QueryValue::Null)
+            {
+                val.clone()
+            } else {
+                // Check GROUP BY expressions: the group key values are stored at
+                // the beginning of the row (positions 0..group_by.len()), followed
+                // by aggregate columns.
+                query
+                    .group_by
+                    .iter()
+                    .position(|gb_expr| {
+                        if let Expr::Attr(gb_attr) = gb_expr {
+                            attr_name(gb_attr) == name
+                        } else {
+                            false
+                        }
+                    })
+                    .and_then(|i| row.get(i))
+                    .cloned()
+                    .unwrap_or(QueryValue::Null)
+            }
         }
         Expr::Binary { op, lhs, rhs } => {
             let l = eval_having_expr(lhs, row, query, columns, like_regexes);
@@ -625,6 +660,10 @@ fn eval_having_expr(
             let lv = eval_having_expr(lhs, row, query, columns, like_regexes);
             let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
             if lv == rv { QueryValue::Null } else { lv }
+        }
+        Expr::Cast { expr, target } => {
+            let value = eval_having_expr(expr, row, query, columns, like_regexes);
+            cast_query_value(value, *target)
         }
     }
 }
@@ -952,6 +991,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.resolver.addr_of(src_idx),
             )),
             SelectItem::Expr(e) => self.eval_expr(e, src_idx, class_id, blob),
+            // Window columns are filled in post-scan by apply_window_functions.
+            SelectItem::Window { .. } => QueryValue::Null,
         }
     }
     /// True when the FROM class is java.lang.String (exact or short/slash form).
@@ -1083,6 +1124,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.resolver.addr_of(src_idx),
             )),
             SelectItem::Expr(e) => self.eval_expr_array(e, src_idx, class_name, length),
+            // Window columns are filled in post-scan by apply_window_functions.
+            SelectItem::Window { .. } => QueryValue::Null,
         }
     }
     fn project_array_attr(
@@ -1204,6 +1247,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 let rv = self.eval_expr(rhs, src_idx, class_id, blob);
                 if lv == rv { QueryValue::Null } else { lv }
             }
+            Expr::Cast { expr, target } => {
+                let value = self.eval_expr(expr, src_idx, class_id, blob);
+                cast_query_value(value, *target)
+            }
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -1256,6 +1303,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
                 if lv == rv { QueryValue::Null } else { lv }
             }
+            Expr::Cast { expr, target } => {
+                let value = self.eval_expr_array(expr, src_idx, class_name, length);
+                cast_query_value(value, *target)
+            }
         }
     }
     /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`
@@ -1287,6 +1338,113 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob)
             }
             "length" => self.project_attr(&Attr::Length, src_idx, class_id, blob),
+            // ── String-manipulation functions ──────────────────────────────────
+            // These are dispatched by both the SQL-style LOWER(expr) syntax and
+            // the method-call syntax expr.lower().  The receiver is always the
+            // string expression; for multi-arg forms (substr, concat, replace)
+            // the additional arguments are in `args`.
+            "lower" => match self.eval_expr(receiver, src_idx, class_id, blob) {
+                QueryValue::Str(s) => QueryValue::Str(s.to_lowercase()),
+                _ => QueryValue::Null,
+            },
+            "upper" => match self.eval_expr(receiver, src_idx, class_id, blob) {
+                QueryValue::Str(s) => QueryValue::Str(s.to_uppercase()),
+                _ => QueryValue::Null,
+            },
+            "trim" => match self.eval_expr(receiver, src_idx, class_id, blob) {
+                QueryValue::Str(s) => QueryValue::Str(s.trim().to_string()),
+                _ => QueryValue::Null,
+            },
+            "ltrim" => match self.eval_expr(receiver, src_idx, class_id, blob) {
+                QueryValue::Str(s) => QueryValue::Str(s.trim_start().to_string()),
+                _ => QueryValue::Null,
+            },
+            "rtrim" => match self.eval_expr(receiver, src_idx, class_id, blob) {
+                QueryValue::Str(s) => QueryValue::Str(s.trim_end().to_string()),
+                _ => QueryValue::Null,
+            },
+            // SQL LENGTH(expr): character count of the evaluated string expression.
+            // Uses "strlen" as the internal method name so it does not clash with the
+            // existing "length" arm above, which returns the Java @length attribute.
+            "strlen" => match self.eval_expr(receiver, src_idx, class_id, blob) {
+                QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
+                _ => QueryValue::Null,
+            },
+            "substr" => {
+                let s = self.eval_expr(receiver, src_idx, class_id, blob);
+                match s {
+                    QueryValue::Str(s) => {
+                        let start_val = args
+                            .first()
+                            .map(|a| self.eval_expr(a, src_idx, class_id, blob));
+                        let len_val = args
+                            .get(1)
+                            .map(|a| self.eval_expr(a, src_idx, class_id, blob));
+                        // SQL SUBSTR is 1-based; clamp to 0 for out-of-range starts.
+                        let start = match start_val {
+                            Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
+                            _ => return QueryValue::Null,
+                        };
+                        if start >= s.len() {
+                            return QueryValue::Str(String::new());
+                        }
+                        let result = match len_val {
+                            Some(QueryValue::Int(n)) if n >= 0 => {
+                                let end = (start + n as usize).min(s.len());
+                                s[start..end].to_string()
+                            }
+                            None => s[start..].to_string(),
+                            _ => return QueryValue::Null,
+                        };
+                        QueryValue::Str(result)
+                    }
+                    _ => QueryValue::Null,
+                }
+            }
+            "concat" => {
+                let mut result = match self.eval_expr(receiver, src_idx, class_id, blob) {
+                    QueryValue::Str(s) => s,
+                    QueryValue::Int(i) => i.to_string(),
+                    QueryValue::Float(f) => f.to_string(),
+                    QueryValue::Bool(b) => b.to_string(),
+                    QueryValue::Null => String::new(),
+                    _ => return QueryValue::Null,
+                };
+                for a in args {
+                    match self.eval_expr(a, src_idx, class_id, blob) {
+                        QueryValue::Str(s) => result.push_str(&s),
+                        QueryValue::Int(i) => result.push_str(&i.to_string()),
+                        QueryValue::Float(f) => result.push_str(&f.to_string()),
+                        QueryValue::Bool(b) => result.push_str(&b.to_string()),
+                        QueryValue::Null => {} // SQL CONCAT skips nulls
+                        _ => {}
+                    }
+                }
+                QueryValue::Str(result)
+            }
+            "replace" => {
+                let s = self.eval_expr(receiver, src_idx, class_id, blob);
+                match s {
+                    QueryValue::Str(s) => {
+                        let search = match args
+                            .first()
+                            .map(|a| self.eval_expr(a, src_idx, class_id, blob))
+                        {
+                            Some(QueryValue::Str(s)) => s,
+                            _ => return QueryValue::Null,
+                        };
+                        let replacement = match args
+                            .get(1)
+                            .map(|a| self.eval_expr(a, src_idx, class_id, blob))
+                        {
+                            Some(QueryValue::Str(s)) => s,
+                            _ => return QueryValue::Null,
+                        };
+                        QueryValue::Str(s.replace(&search, &replacement))
+                    }
+                    _ => QueryValue::Null,
+                }
+            }
             _ => self.emulate_jvm_method(receiver, name, args, src_idx, class_id, blob),
         }
     }
@@ -1637,6 +1795,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                         SelectItem::Aggregate { .. } => {
                             finalized.get(i).cloned().unwrap_or(QueryValue::Null)
                         }
+                        // Window columns are filled in post-GROUP-BY by apply_window_functions.
+                        SelectItem::Window { .. } => QueryValue::Null,
                         _ => {
                             // Non-aggregate: find the matching GROUP BY key by position.
                             // group_by_exprs[j] corresponds to key[j]; find the first
@@ -1672,10 +1832,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     rows.push(row);
                 }
             }
+            // Apply window functions (post-GROUP-BY, pre-ORDER-BY).
+            apply_window_functions(&mut rows, &columns, self.query);
             // Apply ORDER BY.
             if let Some(ob) = &self.query.order_by {
-                if let Some(idx) = order_by_column_index(self.query, &columns, &ob.key) {
-                    sort_rows_by_column(&mut rows, idx, ob.dir);
+                let resolved = resolve_order_by_keys(self.query, &columns, ob);
+                if !resolved.is_empty() {
+                    sort_rows_by_columns(&mut rows, &resolved);
                 }
             }
             // Apply LIMIT.
@@ -1742,6 +1905,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             let mut rows = self.rows;
             let mut row_src = self.row_src;
             let mut note = None;
+            // Apply window functions (post-scan, pre-ORDER-BY).
+            apply_window_functions(&mut rows, &columns, self.query);
             // Apply a general ORDER BY sort for the scan-time (non-carry) path.
             // The retained-late path carries indices forward and sorts in
             // stage_runner, so it never reaches here with rows to sort; guard on
@@ -1752,39 +1917,32 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // filtered). We still sort, so the semi-join preserves top-N order.
                 let defer_limit = self.query.from.as_subquery().is_some();
                 if let Some(ob) = &self.query.order_by {
-                    match order_by_column_index(self.query, &columns, &ob.key) {
-                        Some(idx) => {
-                            sort_rows_with_src(&mut rows, &mut row_src, idx, ob.dir);
-                            if !defer_limit {
-                                if let Some(limit) = self.plan.limit {
-                                    if rows.len() > limit as usize {
-                                        rows.truncate(limit as usize);
-                                        if let Some(v) = &mut row_src {
-                                            v.truncate(limit as usize);
-                                        }
-                                        // Truncation after an explicit sort is the intended
-                                        // top-N, not a lost-data warning: leave `truncated`
-                                        // reflecting only scan-cap loss (none on this path).
+                    let resolved = resolve_order_by_keys(self.query, &columns, ob);
+                    if !resolved.is_empty() {
+                        sort_rows_with_src_multi(&mut rows, &mut row_src, &resolved);
+                        if !defer_limit {
+                            if let Some(limit) = self.plan.limit {
+                                if rows.len() > limit as usize {
+                                    rows.truncate(limit as usize);
+                                    if let Some(v) = &mut row_src {
+                                        v.truncate(limit as usize);
                                     }
                                 }
                             }
                         }
-                        None => {
-                            // Key is not a projected column we can order by here
-                            // (e.g. a non-selected field). Keep scan order and say so,
-                            // rather than silently pretending the sort happened.
-                            note = Some(format!(
-                                "ORDER BY `{}` was not applied: the sort key must be a \
-                                 selected column on this query path; rows are in scan order",
-                                attr_name(&ob.key)
-                            ));
-                            if !defer_limit {
-                                if let Some(limit) = self.plan.limit {
-                                    if rows.len() > limit as usize {
-                                        rows.truncate(limit as usize);
-                                        if let Some(v) = &mut row_src {
-                                            v.truncate(limit as usize);
-                                        }
+                    } else {
+                        // No key resolved to a projected column.
+                        note = Some(
+                            "ORDER BY was not applied: the sort key(s) must be \
+                             selected columns on this query path; rows are in scan order"
+                                .to_string(),
+                        );
+                        if !defer_limit {
+                            if let Some(limit) = self.plan.limit {
+                                if rows.len() > limit as usize {
+                                    rows.truncate(limit as usize);
+                                    if let Some(v) = &mut row_src {
+                                        v.truncate(limit as usize);
                                     }
                                 }
                             }
@@ -1888,6 +2046,20 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 })
                 .collect();
             let query_select = self.query.select.as_slice();
+            // Pre-evaluate FILTER predicates before the mutable borrow of group_map.
+            let filter_passes: Vec<bool> = query_select
+                .iter()
+                .map(|item| {
+                    if let SelectItem::Aggregate {
+                        filter: Some(pred), ..
+                    } = item
+                    {
+                        self.eval_pred(pred, src_idx, class_id, blob)
+                    } else {
+                        true
+                    }
+                })
+                .collect();
             #[allow(clippy::unnecessary_unwrap)]
             let entry = self
                 .group_map
@@ -1899,6 +2071,9 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     (key.clone(), init_accs)
                 });
             for (i, acc) in entry.1.iter_mut().enumerate() {
+                if !filter_passes[i] {
+                    continue;
+                }
                 fold_agg_acc(acc, values[i].clone());
             }
             self.matched += 1;
@@ -1909,10 +2084,11 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // (If limit==0 that is handled in finish().)
         if self.agg_acc.is_some() {
             self.matched += 1;
-            // Evaluate each arg value outside the mutable borrow of agg_acc to
-            // satisfy the borrow checker. Collect into a temporary Vec first.
+            // Evaluate each arg value and FILTER predicate outside the mutable
+            // borrow of agg_acc to satisfy the borrow checker.
             let n = self.query.select.len();
             let mut values = Vec::with_capacity(n);
+            let mut filter_passes = Vec::with_capacity(n);
             for item in self.query.select.iter() {
                 let v = match item {
                     SelectItem::Aggregate { arg, .. } => {
@@ -1920,12 +2096,24 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     }
                     _ => QueryValue::Null,
                 };
+                let passes = if let SelectItem::Aggregate {
+                    filter: Some(pred), ..
+                } = item
+                {
+                    self.eval_pred(pred, src_idx, class_id, blob)
+                } else {
+                    true
+                };
                 values.push(v);
+                filter_passes.push(passes);
             }
             #[allow(clippy::unnecessary_unwrap)]
             let accs = self.agg_acc.as_mut().unwrap();
             for (i, acc) in accs.iter_mut().enumerate() {
                 if !matches!(acc, AggAcc::None) {
+                    if !filter_passes[i] {
+                        continue;
+                    }
                     fold_agg_acc(acc, values[i].clone());
                 }
             }
@@ -2008,6 +2196,20 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 })
                 .collect();
             let query_select = self.query.select.as_slice();
+            // Pre-evaluate FILTER predicates before the mutable borrow of group_map.
+            let filter_passes: Vec<bool> = query_select
+                .iter()
+                .map(|item| {
+                    if let SelectItem::Aggregate {
+                        filter: Some(pred), ..
+                    } = item
+                    {
+                        self.array_eval_pred(pred, src_idx, class_name, length)
+                    } else {
+                        true
+                    }
+                })
+                .collect();
             #[allow(clippy::unnecessary_unwrap)]
             let entry = self
                 .group_map
@@ -2019,6 +2221,9 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     (key.clone(), init_accs)
                 });
             for (i, acc) in entry.1.iter_mut().enumerate() {
+                if !filter_passes[i] {
+                    continue;
+                }
                 fold_agg_acc(acc, values[i].clone());
             }
             self.matched += 1;
@@ -2029,6 +2234,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             self.matched += 1;
             let n = self.query.select.len();
             let mut values = Vec::with_capacity(n);
+            let mut filter_passes = Vec::with_capacity(n);
             for item in self.query.select.iter() {
                 let v = match item {
                     SelectItem::Aggregate { arg, .. } => {
@@ -2036,12 +2242,24 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     }
                     _ => QueryValue::Null,
                 };
+                let passes = if let SelectItem::Aggregate {
+                    filter: Some(pred), ..
+                } = item
+                {
+                    self.array_eval_pred(pred, src_idx, class_name, length)
+                } else {
+                    true
+                };
                 values.push(v);
+                filter_passes.push(passes);
             }
             #[allow(clippy::unnecessary_unwrap)]
             let accs = self.agg_acc.as_mut().unwrap();
             for (i, acc) in accs.iter_mut().enumerate() {
                 if !matches!(acc, AggAcc::None) {
+                    if !filter_passes[i] {
+                        continue;
+                    }
                     fold_agg_acc(acc, values[i].clone());
                 }
             }
@@ -2204,6 +2422,13 @@ pub(crate) fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryVal
                     QueryValue::Int(a.wrapping_div(*b))
                 }
             }
+            ArithOp::Mod => {
+                if *b == 0 {
+                    QueryValue::Null
+                } else {
+                    QueryValue::Int(a.wrapping_rem(*b))
+                }
+            }
         },
         // Any Float operand → promote both to f64.
         (QueryValue::Float(a), QueryValue::Float(b)) => match op {
@@ -2211,6 +2436,7 @@ pub(crate) fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryVal
             ArithOp::Sub => QueryValue::Float(a - b),
             ArithOp::Mul => QueryValue::Float(a * b),
             ArithOp::Div => QueryValue::Float(a / b), // IEEE 754: ÷0 → ±inf/NaN
+            ArithOp::Mod => QueryValue::Float(a % b), // IEEE 754: %0 → NaN
         },
         (QueryValue::Int(a), QueryValue::Float(b)) => {
             let a = *a as f64;
@@ -2219,6 +2445,7 @@ pub(crate) fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryVal
                 ArithOp::Sub => QueryValue::Float(a - b),
                 ArithOp::Mul => QueryValue::Float(a * b),
                 ArithOp::Div => QueryValue::Float(a / b),
+                ArithOp::Mod => QueryValue::Float(a % b),
             }
         }
         (QueryValue::Float(a), QueryValue::Int(b)) => {
@@ -2228,6 +2455,7 @@ pub(crate) fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryVal
                 ArithOp::Sub => QueryValue::Float(a - b),
                 ArithOp::Mul => QueryValue::Float(a * b),
                 ArithOp::Div => QueryValue::Float(a / b),
+                ArithOp::Mod => QueryValue::Float(a % b),
             }
         }
         // Null/Str/Bool/ObjRef operands: arithmetic is undefined.
@@ -2246,6 +2474,242 @@ pub(crate) fn unary(op: UnaryOp, v: &QueryValue) -> QueryValue {
             QueryValue::Float(f) => QueryValue::Float(-f),
             _ => QueryValue::Null,
         },
+    }
+}
+
+/// Apply CAST type conversion to a `QueryValue`.
+pub(crate) fn cast_query_value(
+    value: QueryValue,
+    target: crate::query::ast::CastTarget,
+) -> QueryValue {
+    use crate::query::ast::CastTarget;
+    match target {
+        CastTarget::Int => match value {
+            QueryValue::Int(_) => value,
+            QueryValue::Float(f) => QueryValue::Int(f as i64),
+            QueryValue::Str(ref s) => s
+                .parse::<i64>()
+                .map(QueryValue::Int)
+                .unwrap_or(QueryValue::Null),
+            QueryValue::Bool(b) => QueryValue::Int(if b { 1 } else { 0 }),
+            _ => QueryValue::Null,
+        },
+        CastTarget::Float => match value {
+            QueryValue::Float(_) => value,
+            QueryValue::Int(i) => QueryValue::Float(i as f64),
+            QueryValue::Str(ref s) => s
+                .parse::<f64>()
+                .map(QueryValue::Float)
+                .unwrap_or(QueryValue::Null),
+            _ => QueryValue::Null,
+        },
+        CastTarget::Str => match value {
+            QueryValue::Str(_) => value,
+            QueryValue::Int(i) => QueryValue::Str(i.to_string()),
+            QueryValue::Float(f) => QueryValue::Str(f.to_string()),
+            QueryValue::Bool(b) => QueryValue::Str(b.to_string()),
+            QueryValue::Null => QueryValue::Str("null".to_string()),
+            QueryValue::ObjRef { .. } => QueryValue::Null,
+        },
+        CastTarget::Bool => match value {
+            QueryValue::Bool(_) => value,
+            QueryValue::Int(i) => QueryValue::Bool(i != 0),
+            QueryValue::Str(ref s) => QueryValue::Bool(s.eq_ignore_ascii_case("true") || s == "1"),
+            _ => QueryValue::Null,
+        },
+    }
+}
+
+/// Apply window functions to a materialized result set. Modifies rows in-place,
+/// filling in the window-column positions (which were initially Null).
+pub(crate) fn apply_window_functions(
+    rows: &mut [Vec<QueryValue>],
+    columns: &[QueryColumn],
+    query: &Query,
+) {
+    use crate::query::ast::{WindowFunc, WindowSpec};
+    // Collect window columns: (select_position, func, arg, over)
+    let mut window_cols: Vec<(usize, &WindowFunc, Option<&Expr>, &WindowSpec)> = Vec::new();
+    for (i, item) in query.select.iter().enumerate() {
+        if let SelectItem::Window { func, arg, over } = item {
+            window_cols.push((i, func, arg.as_deref(), over));
+        }
+    }
+    if window_cols.is_empty() {
+        return;
+    }
+
+    for &(col_idx, func, arg, spec) in &window_cols {
+        // Resolve partition-by to column indices
+        let part_indices: Vec<usize> = spec
+            .partition_by
+            .iter()
+            .filter_map(|e| {
+                if let Expr::Attr(a) = e {
+                    let name = attr_name(a);
+                    columns.iter().position(|c| c.name == name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Resolve order-by to column indices
+        let ord_keys: Vec<(usize, crate::query::ast::SortDir)> = spec
+            .order_by
+            .iter()
+            .filter_map(|(e, dir)| {
+                if let Expr::Attr(a) = e {
+                    let name = attr_name(a);
+                    columns
+                        .iter()
+                        .position(|c| c.name == name)
+                        .map(|idx| (idx, *dir))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Resolve arg to column index (for LAG/LEAD)
+        let arg_col_idx: Option<usize> = arg.and_then(|a| {
+            if let Expr::Attr(attr) = a {
+                let name = attr_name(attr);
+                columns.iter().position(|c| c.name == name)
+            } else {
+                None
+            }
+        });
+
+        // Group rows by partition key
+        let mut partitions: Vec<Vec<usize>> = Vec::new();
+        let mut part_map: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (row_idx, row) in rows.iter().enumerate() {
+            let key: String = part_indices
+                .iter()
+                .map(|&i| format!("{:?}", row.get(i).unwrap_or(&QueryValue::Null)))
+                .collect::<Vec<_>>()
+                .join("|");
+            let part_idx = *part_map.entry(key).or_insert_with(|| {
+                partitions.push(Vec::new());
+                partitions.len() - 1
+            });
+            partitions[part_idx].push(row_idx);
+        }
+
+        // Within each partition, sort by order-by keys and assign values
+        for partition in &mut partitions {
+            // Sort partition's row indices by the window ORDER BY
+            partition.sort_by(|&a, &b| {
+                for &(oidx, dir) in &ord_keys {
+                    let av = rows[a].get(oidx).unwrap_or(&QueryValue::Null);
+                    let bv = rows[b].get(oidx).unwrap_or(&QueryValue::Null);
+                    let ord = total_cmp_query_value(av, bv);
+                    let ord = match dir {
+                        crate::query::ast::SortDir::Asc => ord,
+                        crate::query::ast::SortDir::Desc => ord.reverse(),
+                    };
+                    if ord != std::cmp::Ordering::Equal {
+                        return ord;
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+
+            // Assign window function values
+            let mut rank = 1i64;
+            let mut dense_rank = 1i64;
+            for (pos, &row_idx) in partition.iter().enumerate() {
+                let value = match func {
+                    WindowFunc::RowNumber => QueryValue::Int(pos as i64 + 1),
+                    WindowFunc::Rank => {
+                        if pos > 0 {
+                            let prev = partition[pos - 1];
+                            let same = ord_keys.iter().all(|&(oidx, _)| {
+                                let a = rows[row_idx].get(oidx).unwrap_or(&QueryValue::Null);
+                                let b = rows[prev].get(oidx).unwrap_or(&QueryValue::Null);
+                                total_cmp_query_value(a, b) == std::cmp::Ordering::Equal
+                            });
+                            if !same {
+                                rank = pos as i64 + 1;
+                            }
+                        }
+                        QueryValue::Int(rank)
+                    }
+                    WindowFunc::DenseRank => {
+                        if pos > 0 {
+                            let prev = partition[pos - 1];
+                            let same = ord_keys.iter().all(|&(oidx, _)| {
+                                let a = rows[row_idx].get(oidx).unwrap_or(&QueryValue::Null);
+                                let b = rows[prev].get(oidx).unwrap_or(&QueryValue::Null);
+                                total_cmp_query_value(a, b) == std::cmp::Ordering::Equal
+                            });
+                            if !same {
+                                dense_rank += 1;
+                            }
+                        }
+                        QueryValue::Int(dense_rank)
+                    }
+                    WindowFunc::Lag {
+                        offset,
+                        default_val,
+                    } => {
+                        let source_pos = pos.checked_sub(*offset as usize);
+                        match source_pos {
+                            Some(sp) => {
+                                let source_row = partition[sp];
+                                arg_col_idx
+                                    .and_then(|ci| rows[source_row].get(ci))
+                                    .cloned()
+                                    .unwrap_or(QueryValue::Null)
+                            }
+                            None => default_val
+                                .as_ref()
+                                .and_then(|e| {
+                                    if let Expr::Lit(v) = e.as_ref() {
+                                        Some(value_to_qv(v))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(QueryValue::Null),
+                        }
+                    }
+                    WindowFunc::Lead {
+                        offset,
+                        default_val,
+                    } => {
+                        let target = pos + *offset as usize;
+                        let source_pos = if target < partition.len() {
+                            Some(target)
+                        } else {
+                            None
+                        };
+                        match source_pos {
+                            Some(sp) => {
+                                let source_row = partition[sp];
+                                arg_col_idx
+                                    .and_then(|ci| rows[source_row].get(ci))
+                                    .cloned()
+                                    .unwrap_or(QueryValue::Null)
+                            }
+                            None => default_val
+                                .as_ref()
+                                .and_then(|e| {
+                                    if let Expr::Lit(v) = e.as_ref() {
+                                        Some(value_to_qv(v))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(QueryValue::Null),
+                        }
+                    }
+                };
+                rows[row_idx][col_idx] = value;
+            }
+        }
     }
 }
 
@@ -2383,6 +2847,9 @@ fn collect_like_in_expr(
             collect_like_in_expr(lhs, out)?;
             collect_like_in_expr(rhs, out)?;
         }
+        Expr::Cast { expr, .. } => {
+            collect_like_in_expr(expr, out)?;
+        }
     }
     Ok(())
 }
@@ -2468,6 +2935,19 @@ pub(crate) fn order_by_column_index(
     })
 }
 
+/// Resolve multi-key ORDER BY to a list of (column_index, direction) pairs.
+/// Keys that don't resolve to a column are silently dropped.
+pub(crate) fn resolve_order_by_keys(
+    q: &Query,
+    columns: &[QueryColumn],
+    ob: &OrderBy,
+) -> Vec<(usize, crate::query::ast::SortDir)> {
+    ob.keys
+        .iter()
+        .filter_map(|(key, dir)| order_by_column_index(q, columns, key).map(|idx| (idx, *dir)))
+        .collect()
+}
+
 /// Strip a leading `alias.` prefix from a rendered name so `s.name` and `name`
 /// compare equal when `s` is the FROM alias.
 fn strip_leading_alias<'n>(name: &'n str, alias: Option<&str>) -> &'n str {
@@ -2481,6 +2961,7 @@ fn strip_leading_alias<'n>(name: &'n str, alias: Option<&str>) -> &'n str {
 
 /// Stable in-place sort of result rows by a single column index, honoring
 /// direction. Uses a total ordering over `QueryValue` (Null sorts first in ASC).
+#[allow(dead_code)]
 pub(crate) fn sort_rows_by_column(
     rows: &mut [Vec<QueryValue>],
     idx: usize,
@@ -2504,6 +2985,7 @@ pub(crate) fn sort_rows_by_column(
 /// non-reachable-only path, so no permutation allocation happens). When `Some`,
 /// it sorts an index permutation by the same comparator and applies it to both
 /// `rows` and `src` so element `i` of each stays paired.
+#[allow(dead_code)]
 pub(crate) fn sort_rows_with_src(
     rows: &mut Vec<Vec<QueryValue>>,
     src: &mut Option<Vec<u32>>,
@@ -2534,11 +3016,75 @@ pub(crate) fn sort_rows_with_src(
     *src_vec = new_src;
 }
 
+/// Multi-key stable sort: sort by the last key first, then by earlier keys.
+/// Stable sort ensures earlier (higher-priority) keys win ties from later keys.
+pub(crate) fn sort_rows_by_columns(
+    rows: &mut [Vec<QueryValue>],
+    keys: &[(usize, crate::query::ast::SortDir)],
+) {
+    use crate::query::ast::SortDir;
+    if keys.is_empty() {
+        return;
+    }
+    rows.sort_by(|a, b| {
+        for &(idx, dir) in keys {
+            let av = a.get(idx).unwrap_or(&QueryValue::Null);
+            let bv = b.get(idx).unwrap_or(&QueryValue::Null);
+            let ord = total_cmp_query_value(av, bv);
+            let ord = match dir {
+                SortDir::Asc => ord,
+                SortDir::Desc => ord.reverse(),
+            };
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+}
+
+/// Multi-key sort with source sidecar.
+pub(crate) fn sort_rows_with_src_multi(
+    rows: &mut Vec<Vec<QueryValue>>,
+    src: &mut Option<Vec<u32>>,
+    keys: &[(usize, crate::query::ast::SortDir)],
+) {
+    use crate::query::ast::SortDir;
+    let Some(src_vec) = src.as_mut() else {
+        sort_rows_by_columns(rows, keys);
+        return;
+    };
+    if keys.is_empty() {
+        return;
+    }
+    let mut perm: Vec<usize> = (0..rows.len()).collect();
+    perm.sort_by(|&a, &b| {
+        for &(idx, dir) in keys {
+            let av = rows[a].get(idx).unwrap_or(&QueryValue::Null);
+            let bv = rows[b].get(idx).unwrap_or(&QueryValue::Null);
+            let ord = total_cmp_query_value(av, bv);
+            let ord = match dir {
+                SortDir::Asc => ord,
+                SortDir::Desc => ord.reverse(),
+            };
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+    let new_rows: Vec<Vec<QueryValue>> =
+        perm.iter().map(|&i| std::mem::take(&mut rows[i])).collect();
+    let new_src: Vec<u32> = perm.iter().map(|&i| src_vec[i]).collect();
+    *rows = new_rows;
+    *src_vec = new_src;
+}
+
 /// A TOTAL ordering over `QueryValue` for sorting. Numeric values compare
 /// numerically (Int/Float mixed via f64); strings lexicographically; bools
 /// false<true; Null sorts before everything. Cross-type falls back to a stable
 /// kind rank so the sort never panics on `f64` NaN or mixed columns.
-fn total_cmp_query_value(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
+pub(crate) fn total_cmp_query_value(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     fn num(v: &QueryValue) -> Option<f64> {
         match v {
@@ -2580,7 +3126,7 @@ pub fn column_name(it: &SelectItem) -> String {
     match it {
         SelectItem::Star => "*".to_string(),
         SelectItem::Attr(a) => attr_name(a),
-        SelectItem::Aggregate { func, arg } => {
+        SelectItem::Aggregate { func, arg, .. } => {
             let f = format!("{func:?}").to_uppercase();
             format!("{f}({})", column_name(arg))
         }
@@ -2595,6 +3141,13 @@ pub fn column_name(it: &SelectItem) -> String {
             None => format!("jsonify({alias})"),
         },
         SelectItem::Expr(e) => expr_name(e),
+        SelectItem::Window { func, .. } => match func {
+            crate::query::ast::WindowFunc::RowNumber => "ROW_NUMBER".to_string(),
+            crate::query::ast::WindowFunc::Rank => "RANK".to_string(),
+            crate::query::ast::WindowFunc::DenseRank => "DENSE_RANK".to_string(),
+            crate::query::ast::WindowFunc::Lag { .. } => "LAG".to_string(),
+            crate::query::ast::WindowFunc::Lead { .. } => "LEAD".to_string(),
+        },
     }
 }
 
@@ -2701,6 +3254,7 @@ pub fn expr_name(e: &Expr) -> String {
                 ArithOp::Sub => " - ",
                 ArithOp::Mul => " * ",
                 ArithOp::Div => " / ",
+                ArithOp::Mod => " % ",
             };
             // Wrap Binary children in parens so nested expressions read correctly.
             let l = if matches!(lhs.as_ref(), Expr::Binary { .. }) {
@@ -2726,6 +3280,16 @@ pub fn expr_name(e: &Expr) -> String {
         Expr::Aggregate { func, arg } => {
             let func_name = match func {
                 AggFunc::Count => "COUNT",
+                AggFunc::CountDistinct => {
+                    return format!(
+                        "COUNT(DISTINCT {})",
+                        match arg.as_ref() {
+                            SelectItem::Star => "*".to_string(),
+                            SelectItem::Attr(a) => attr_name(a),
+                            _ => "_".to_string(),
+                        }
+                    );
+                }
                 AggFunc::Sum => "SUM",
                 AggFunc::Min => "MIN",
                 AggFunc::Max => "MAX",
@@ -2743,6 +3307,7 @@ pub fn expr_name(e: &Expr) -> String {
         Expr::Case { .. } => "CASE".to_string(),
         Expr::Coalesce(_) => "COALESCE".to_string(),
         Expr::NullIf { .. } => "NULLIF".to_string(),
+        Expr::Cast { target, .. } => format!("CAST(AS {target:?})"),
     }
 }
 
@@ -3137,12 +3702,14 @@ mod tests {
         let count_star = SelectItem::Aggregate {
             func: crate::query::ast::AggFunc::Count,
             arg: Box::new(SelectItem::Star),
+            filter: None,
         };
         assert_eq!(column_name(&count_star), "COUNT(*)");
 
         let sum_heap = SelectItem::Aggregate {
             func: crate::query::ast::AggFunc::Sum,
             arg: Box::new(SelectItem::Attr(Attr::UsedHeapSize)),
+            filter: None,
         };
         assert_eq!(column_name(&sum_heap), "SUM(@usedHeapSize)");
     }
@@ -4184,6 +4751,7 @@ mod tests {
         use crate::query::ast::{Attr, Query, SelectItem};
         use crate::query::ast::{ClassSpec, FromSource};
         let q = Query {
+            ctes: vec![],
             distinct: false,
             select: vec![SelectItem::Attr(Attr::ObjectId), SelectItem::Star],
             select_aliases: vec![Some("myid".to_string()), None],

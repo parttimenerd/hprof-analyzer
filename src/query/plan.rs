@@ -370,6 +370,13 @@ fn select_item_display_name(it: &SelectItem) -> String {
         SelectItem::Path { .. } => "path(...)".into(),
         SelectItem::ToString(_) => "toString(...)".into(),
         SelectItem::Jsonify { .. } => "jsonify(...)".into(),
+        SelectItem::Window { func, .. } => match func {
+            crate::query::ast::WindowFunc::RowNumber => "ROW_NUMBER()".into(),
+            crate::query::ast::WindowFunc::Rank => "RANK()".into(),
+            crate::query::ast::WindowFunc::DenseRank => "DENSE_RANK()".into(),
+            crate::query::ast::WindowFunc::Lag { .. } => "LAG(...)".into(),
+            crate::query::ast::WindowFunc::Lead { .. } => "LEAD(...)".into(),
+        },
     }
 }
 
@@ -413,6 +420,7 @@ fn expr_display_name(e: &Expr) -> String {
         Expr::Case { .. } => "CASE".to_string(),
         Expr::Coalesce(_) => "COALESCE".to_string(),
         Expr::NullIf { .. } => "NULLIF".to_string(),
+        Expr::Cast { target, .. } => format!("CAST(AS {target:?})"),
     }
 }
 
@@ -476,6 +484,9 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             expr_for_each_attr(lhs, f);
             expr_for_each_attr(rhs, f);
         }
+        Expr::Cast { expr, .. } => {
+            expr_for_each_attr(expr, f);
+        }
     }
 }
 fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
@@ -527,6 +538,7 @@ fn expr_has_string_method(e: &Expr) -> bool {
         }
         Expr::Coalesce(args) => args.iter().any(expr_has_string_method),
         Expr::NullIf { lhs, rhs } => expr_has_string_method(lhs) || expr_has_string_method(rhs),
+        Expr::Cast { expr, .. } => expr_has_string_method(expr),
     }
 }
 
@@ -596,6 +608,9 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
             expr_for_each_method(lhs, f);
             expr_for_each_method(rhs, f);
         }
+        Expr::Cast { expr, .. } => {
+            expr_for_each_method(expr, f);
+        }
     }
 }
 
@@ -615,6 +630,8 @@ fn select_item_for_each_method<'a>(it: &'a SelectItem, f: &mut impl FnMut(&'a st
         // jsonify(s) carries only the FROM alias and a literal depth — no Expr
         // node can hide inside it, so there is no method to visit.
         SelectItem::Jsonify { .. } => {}
+        // Window functions carry Expr trees but don't need method-dispatch planning.
+        SelectItem::Window { .. } => {}
     }
 }
 
@@ -657,8 +674,10 @@ fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
         pred_for_each_method(pred, &mut check);
     }
     if let Some(ob) = &q.order_by {
-        if let Attr::ToHex(inner) = &ob.key {
-            expr_for_each_method(inner, &mut check);
+        for (key, _dir) in &ob.keys {
+            if let Attr::ToHex(inner) = key {
+                expr_for_each_method(inner, &mut check);
+            }
         }
     }
     if let Some(name) = bad {
@@ -741,15 +760,20 @@ fn rewrite_value_array_expr(e: Expr) -> Expr {
             lhs: Box::new(rewrite_value_array_expr(*lhs)),
             rhs: Box::new(rewrite_value_array_expr(*rhs)),
         },
+        Expr::Cast { expr, target } => Expr::Cast {
+            expr: Box::new(rewrite_value_array_expr(*expr)),
+            target,
+        },
     }
 }
 
 fn rewrite_value_array_select_item(item: SelectItem) -> SelectItem {
     match item {
         SelectItem::Attr(a) => SelectItem::Attr(rewrite_value_array_attr(a)),
-        SelectItem::Aggregate { func, arg } => SelectItem::Aggregate {
+        SelectItem::Aggregate { func, arg, filter } => SelectItem::Aggregate {
             func,
             arg: Box::new(rewrite_value_array_select_item(*arg)),
+            filter,
         },
         SelectItem::Expr(e) => SelectItem::Expr(Box::new(rewrite_value_array_expr(*e))),
         other => other,
@@ -954,6 +978,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
                     needs.string_values = true;
                 }
             }
+            // Window functions are post-processing; no scan-time needs to note here.
+            SelectItem::Window { .. } => {}
         }
     }
 
@@ -1472,7 +1498,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             if is_aggregate {
                 let has_group_by = !q.group_by.is_empty();
                 let ok = q.select.iter().all(|it| match it {
-                    SelectItem::Aggregate { func, arg } => {
+                    SelectItem::Aggregate { func, arg, .. } => {
                         matches!(func, AggFunc::Count)
                             && matches!(
                                 arg.as_ref(),
@@ -1698,7 +1724,10 @@ fn enforce_in_subquery_projection(inner: &Query) -> Result<(), QueryError> {
 fn uses_retained(q: &Query) -> bool {
     let in_select = q.select.iter().any(select_uses_retained);
     let in_where = q.where_.as_ref().map(pred_uses_retained).unwrap_or(false);
-    let in_order = matches!(&q.order_by, Some(ob) if ob.key == Attr::RetainedHeapSize);
+    let in_order = q
+        .order_by
+        .as_ref()
+        .is_some_and(|ob| ob.keys.iter().any(|(k, _)| *k == Attr::RetainedHeapSize));
     let in_group_by = q
         .group_by
         .iter()
@@ -1736,7 +1765,14 @@ fn uses_dominator_of(q: &Query) -> bool {
     });
     // Check ORDER BY key for dominator attrs so ORDER BY @dominatorDepth works
     // without the attr also being in SELECT.
-    let in_order_by = matches!(&q.order_by, Some(ob) if matches!(ob.key, Attr::DominatorDepth | Attr::DominatorClass | Attr::DominatorOf(_)));
+    let in_order_by = q.order_by.as_ref().is_some_and(|ob| {
+        ob.keys.iter().any(|(k, _)| {
+            matches!(
+                k,
+                Attr::DominatorDepth | Attr::DominatorClass | Attr::DominatorOf(_)
+            )
+        })
+    });
     in_select || in_where || in_group_by || in_order_by
 }
 
@@ -1803,7 +1839,7 @@ fn uses_class_metadata(q: &Query) -> bool {
     let in_order_by = q
         .order_by
         .as_ref()
-        .is_some_and(|ob| is_class_meta_attr(&ob.key));
+        .is_some_and(|ob| ob.keys.iter().any(|(k, _)| is_class_meta_attr(k)));
     in_select || in_where || in_group_by || in_order_by
 }
 
@@ -1925,6 +1961,28 @@ pub(crate) fn pred_uses_edge(p: &Predicate) -> bool {
     }
 }
 
+/// True if any comparison in the predicate tree references an `ArrayIndex` or
+/// `ArraySlice` attribute. Such predicates cannot be evaluated during the pass2
+/// scan (array element data is only available by seeking into the dump file at
+/// `P2` time), so a carry-mode scan must skip them and defer to `array_index_rows`
+/// which reads each element and evaluates WHERE after the value is resolved.
+pub(crate) fn pred_uses_array_index(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_uses_array_index(a) || pred_uses_array_index(b)
+        }
+        Predicate::Not(a) => pred_uses_array_index(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| {
+                matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. })
+            }) || expr_any_attr(rhs, |a| {
+                matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. })
+            })
+        }
+        _ => false,
+    }
+}
+
 /// The maximum RefPath hop count across every `Attr::RefPath` reachable in a
 /// SELECT projection (following aggregate arguments). `0` if none.
 fn select_refpath_hops(it: &SelectItem) -> usize {
@@ -2002,15 +2060,17 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
         collect_pred_fields(pred, &mut referenced);
     }
     if let Some(ob) = &q.order_by {
-        if let Attr::Field(name) = &ob.key {
-            // Skip if the name matches a SELECT column alias: ORDER BY foo where
-            // foo is `... AS foo` is a reference to an output column, not a field.
-            let is_alias = q
-                .select_aliases
-                .iter()
-                .any(|a| a.as_deref() == Some(name.as_str()));
-            if !is_alias {
-                referenced.push(name.clone());
+        for (key, _dir) in &ob.keys {
+            if let Attr::Field(name) = key {
+                // Skip if the name matches a SELECT column alias: ORDER BY foo where
+                // foo is `... AS foo` is a reference to an output column, not a field.
+                let is_alias = q
+                    .select_aliases
+                    .iter()
+                    .any(|a| a.as_deref() == Some(name.as_str()));
+                if !is_alias {
+                    referenced.push(name.clone());
+                }
             }
         }
     }
@@ -2182,6 +2242,8 @@ fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
                     heads.insert(h.to_string());
                 }
             }),
+            // Window functions don't introduce correlation via alias heads.
+            SelectItem::Window { .. } => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -2225,7 +2287,25 @@ fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::Hash
 fn reject_if_correlated(inner: &Query) -> Result<(), QueryError> {
     if let Some(head) = referenced_alias_heads(inner).into_iter().next() {
         return Err(QueryError(format!(
-            "correlated subqueries are not supported: inner query references outer alias `{head}`"
+            "correlated subqueries are not yet supported: inner query references outer alias \
+             `{head}`. Use a non-correlated subquery instead (the inner query must not \
+             reference bindings from the enclosing query)"
+        )));
+    }
+    Ok(())
+}
+
+/// Same as [`reject_if_correlated`] but emits an EXISTS-specific actionable
+/// message explaining that correlated EXISTS (where the inner query references
+/// the outer row alias) requires per-row re-execution which is not yet
+/// implemented.
+fn reject_if_correlated_exists(inner: &Query) -> Result<(), QueryError> {
+    if let Some(head) = referenced_alias_heads(inner).into_iter().next() {
+        return Err(QueryError(format!(
+            "correlated EXISTS is not yet supported: inner query references outer alias `{head}`. \
+             Correlated EXISTS requires per-outer-row subquery re-execution which is not yet \
+             implemented. Use a non-correlated EXISTS (the inner query must be independent of the \
+             outer query), or rewrite as a non-correlated IN subquery."
         )));
     }
     Ok(())
@@ -2250,7 +2330,10 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
         }
         Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
         Predicate::Exists { inner, .. } => {
-            reject_if_correlated(inner)?;
+            // Use the EXISTS-specific rejection so users get a targeted message
+            // explaining that correlated EXISTS is planned but not yet supported,
+            // and pointing them toward non-correlated alternatives.
+            reject_if_correlated_exists(inner)?;
             if let Some(p) = &inner.where_ {
                 reject_in_subqueries_if_correlated(p)?;
             }
@@ -2271,7 +2354,7 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
 /// planner before this check is reached).
 fn agg_histogram_answerable(item: &SelectItem) -> bool {
     match item {
-        SelectItem::Aggregate { func, arg } => matches!(
+        SelectItem::Aggregate { func, arg, .. } => matches!(
             (func, arg.as_ref()),
             (AggFunc::Count, SelectItem::Star)
                 | (AggFunc::Sum, SelectItem::Attr(Attr::UsedHeapSize))
@@ -2317,6 +2400,10 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
             expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, needs));
             Ok(())
         }
+        // Window functions are not valid as aggregate arguments.
+        SelectItem::Window { .. } => Err(QueryError(
+            "a window function may not be used as an aggregate argument".into(),
+        )),
     }
 }
 
@@ -2365,18 +2452,22 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
         Predicate::Compare { lhs, rhs, .. } => {
             let lhs_attr = lhs.as_attr();
             let rhs_val = rhs.as_lit();
-            // Reject ArrayIndex/ArraySlice in WHERE predicates at plan time.
+            // Array indexing in WHERE is deferred to the late phase (P2) where
+            // array values have been resolved. Advance finalize_at if needed.
+            // The `needs.array_index` flag set here causes the planner to emit a
+            // `ResolveArrayIndex` late op and push `finalize_at` to at least P2,
+            // routing the query through `array_index_rows` where per-row array
+            // reads and WHERE filtering both happen.
             let is_array_attr =
                 |a: &Attr| matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. });
             if lhs_attr.is_some_and(is_array_attr)
                 || expr_any_attr(lhs, is_array_attr)
                 || expr_any_attr(rhs, is_array_attr)
             {
-                return Err(QueryError(
-                    "array indexing is not supported in WHERE predicates — \
-                     use array access in SELECT columns only"
-                        .into(),
-                ));
+                // Don't reject — note the need so finalize_at is advanced to P2
+                // and `array_index_rows` (which reads the dump for each element)
+                // handles both projection and WHERE filtering.
+                needs.array_index = true;
             }
             // Folded plain-compare fast path (unchanged behavior): lhs is a single attr.
             if let Some(a) = lhs_attr {

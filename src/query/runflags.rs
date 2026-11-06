@@ -184,6 +184,12 @@ fn scan_select_item(item: &SelectItem, used: &mut BranchUse) {
         // An arithmetic/method-call column: recurse into the expression so a
         // buried @inbounds/@outbounds still arms its edge index.
         SelectItem::Expr(e) => scan_expr(e, used),
+        // Window functions: scan the arg expression (if any) for edge features.
+        SelectItem::Window { arg, .. } => {
+            if let Some(e) = arg {
+                scan_expr(e, used);
+            }
+        }
     }
 }
 
@@ -221,6 +227,9 @@ fn scan_expr(e: &Expr, used: &mut BranchUse) {
         Expr::NullIf { lhs, rhs } => {
             scan_expr(lhs, used);
             scan_expr(rhs, used);
+        }
+        Expr::Cast { expr, .. } => {
+            scan_expr(expr, used);
         }
     }
 }

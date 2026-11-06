@@ -250,6 +250,9 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 collect_expr(lhs, out);
                 collect_expr(rhs, out);
             }
+            Expr::Cast { expr, .. } => {
+                collect_expr(expr, out);
+            }
         }
     }
     fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
@@ -288,6 +291,8 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Expr(_) => {
                 unreachable!("Expr select item reached before arithmetic wiring")
             }
+            // Window functions carry no RefPath hops to collect.
+            SelectItem::Window { .. } => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -380,6 +385,9 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 collect_expr(lhs, out);
                 collect_expr(rhs, out);
             }
+            Expr::Cast { expr, .. } => {
+                collect_expr(expr, out);
+            }
         }
     }
     fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
@@ -417,6 +425,8 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Expr(_) => {
                 unreachable!("Expr select item reached before arithmetic wiring")
             }
+            // Window functions carry no RefPath tail fields.
+            SelectItem::Window { .. } => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -466,6 +476,7 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
             }
             Expr::Coalesce(args) => args.iter().any(expr_has),
             Expr::NullIf { lhs, rhs } => expr_has(lhs) || expr_has(rhs),
+            Expr::Cast { expr, .. } => expr_has(expr),
         }
     }
     fn pred_has(p: &Predicate) -> bool {
@@ -531,6 +542,7 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             }
             Expr::Coalesce(args) => args.iter().any(expr_has),
             Expr::NullIf { lhs, rhs } => expr_has(lhs) || expr_has(rhs),
+            Expr::Cast { expr, .. } => expr_has(expr),
         }
     }
     fn pred_has(p: &Predicate) -> bool {

@@ -15,8 +15,9 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, ArithOp, Attr, ClassSpec, CompareOp, Expr, FromSource, OrderBy, PathOperand,
-    Predicate, Query, RefRole, SelectItem, SortDir, UnaryOp, Value,
+    AggFunc, ArithOp, Attr, CastTarget, ClassSpec, CompareOp, Expr, FromSource, OrderBy,
+    PathOperand, Predicate, Query, RefRole, SelectItem, SortDir, UnaryOp, Value, WindowFunc,
+    WindowSpec,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -63,6 +64,8 @@ pub enum Token {
     Minus,
     #[token("/")]
     Divide,
+    #[token("%")]
+    Percent,
 
     // @attribute — capture the name after '@' (must be non-empty).
     #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
@@ -145,6 +148,7 @@ fn token_display(t: &Token) -> String {
         Token::Plus => "'+'".into(),
         Token::Minus => "'-'".into(),
         Token::Divide => "'/'".into(),
+        Token::Percent => "'%'".into(),
         Token::At(s) => format!("'@{s}'"),
         Token::Str(s) => format!("\"{s}\""),
         Token::Float(f) => format!("{f}"),
@@ -392,6 +396,112 @@ where
                 rhs: Box::new(rhs),
             });
 
+        let cast_target = ident_ci("INT")
+            .or(ident_ci("INTEGER"))
+            .to(CastTarget::Int)
+            .or(ident_ci("FLOAT")
+                .or(ident_ci("DOUBLE"))
+                .to(CastTarget::Float))
+            .or(ident_ci("STRING")
+                .or(ident_ci("VARCHAR"))
+                .to(CastTarget::Str))
+            .or(ident_ci("BOOL")
+                .or(ident_ci("BOOLEAN"))
+                .to(CastTarget::Bool));
+
+        let cast_expr = ident_ci("CAST")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr.clone())
+            .then_ignore(ident_ci("AS"))
+            .then(cast_target)
+            .then_ignore(just(Token::RParen))
+            .map(|(inner, target)| Expr::Cast {
+                expr: Box::new(inner),
+                target,
+            });
+
+        // SQL-style string functions parsed as method calls so they flow through
+        // the existing `dispatch_method` path without a new AST variant.
+        // LOWER(expr), UPPER(expr), TRIM(expr), LTRIM(expr), RTRIM(expr), LENGTH(expr)
+        // → Expr::Method { receiver: expr, name: "<lower-cased>", args: [] }
+        // NOTE: SQL LENGTH maps to the internal method name "strlen" to avoid
+        // clashing with the existing "length" arm in dispatch_method, which
+        // returns the Java array/string @length attribute (object-level), not
+        // the character count of an arbitrary string expression result.
+        let string_fn_1arg = ident_ci("LOWER")
+            .to("lower")
+            .or(ident_ci("UPPER").to("upper"))
+            .or(ident_ci("TRIM").to("trim"))
+            .or(ident_ci("LTRIM").to("ltrim"))
+            .or(ident_ci("RTRIM").to("rtrim"))
+            .or(ident_ci("LENGTH").to("strlen"))
+            .then_ignore(just(Token::LParen))
+            .then(expr.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|(name, arg): (&str, Expr)| Expr::Method {
+                receiver: Box::new(arg),
+                name: name.to_string(),
+                args: vec![],
+            });
+
+        // SUBSTR(expr, start [, length]) / SUBSTRING(expr, start [, length])
+        // → Expr::Method { receiver: expr, name: "substr", args: [start] }
+        //   or args: [start, length]
+        let substr_fn = ident_ci("SUBSTR")
+            .or(ident_ci("SUBSTRING"))
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::Comma))
+            .then(expr.clone())
+            .then(just(Token::Comma).ignore_then(expr.clone()).or_not())
+            .then_ignore(just(Token::RParen))
+            .map(|((receiver, start), len)| {
+                let mut args = vec![start];
+                if let Some(l) = len {
+                    args.push(l);
+                }
+                Expr::Method {
+                    receiver: Box::new(receiver),
+                    name: "substr".to_string(),
+                    args,
+                }
+            });
+
+        // CONCAT(expr, expr [, expr]*) — at least two args; the first becomes
+        // the receiver and the rest are args, so concat dispatches naturally.
+        let concat_fn = ident_ci("CONCAT")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .at_least(2)
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(Token::RParen))
+            .map(|mut args| {
+                let receiver = args.remove(0);
+                Expr::Method {
+                    receiver: Box::new(receiver),
+                    name: "concat".to_string(),
+                    args,
+                }
+            });
+
+        // REPLACE(expr, search, replacement)
+        let replace_fn = ident_ci("REPLACE")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::Comma))
+            .then(expr.clone())
+            .then_ignore(just(Token::Comma))
+            .then(expr.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|((receiver, search), replacement)| Expr::Method {
+                receiver: Box::new(receiver),
+                name: "replace".to_string(),
+                args: vec![search, replacement],
+            });
+
         // `receiver.name(args)` — the greedy Ident regex swallows `s.getName` as a
         // single token. We match any dotted ident (contains `.`, does NOT end with
         // `.`) immediately followed by `(…)`, splitting on the last `.` to separate
@@ -436,6 +546,11 @@ where
 
         let primary = agg_expr_arm
             .or(method_call)
+            .or(cast_expr)
+            .or(string_fn_1arg)
+            .or(substr_fn)
+            .or(concat_fn)
+            .or(replace_fn)
             .or(coalesce_expr)
             .or(nullif_expr)
             .or(tohex)
@@ -507,6 +622,7 @@ where
             just(Token::Star)
                 .to(ArithOp::Mul)
                 .or(just(Token::Divide).to(ArithOp::Div))
+                .or(just(Token::Percent).to(ArithOp::Mod))
                 .then(unary)
                 .repeated(),
             |lhs, (op, rhs)| Expr::Binary {
@@ -883,18 +999,50 @@ where
         // Guard: `AS RETAINED` is NOT consumed here — it belongs to the retained_set
         // modifier parsed at the SELECT level.
         let select_item = recursive(|item| {
+            let filter_clause = ident_ci("FILTER")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident_ci("WHERE"))
+                .ignore_then(predicate.clone())
+                .then_ignore(just(Token::RParen))
+                .or_not();
+
+            // COUNT(DISTINCT expr) — must come before the generic agg combinator.
+            let count_distinct = ident_ci("COUNT")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident_ci("DISTINCT"))
+                .ignore_then(item.clone())
+                .then_ignore(just(Token::RParen))
+                .then(filter_clause.clone())
+                .map(
+                    |((arg, _alias), filter): ((SelectItem, Option<String>), Option<Predicate>)| {
+                        (
+                            SelectItem::Aggregate {
+                                func: AggFunc::CountDistinct,
+                                arg: Box::new(arg),
+                                filter,
+                            },
+                            None::<String>,
+                        )
+                    },
+                );
+
             let agg = select! {
                 Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
             }
             .then_ignore(just(Token::LParen))
             .then(item.clone())
             .then_ignore(just(Token::RParen))
+            .then(filter_clause.clone())
             .map(
-                |(func, (arg, _alias)): (AggFunc, (SelectItem, Option<String>))| {
+                |((func, (arg, _alias)), filter): (
+                    (AggFunc, (SelectItem, Option<String>)),
+                    Option<Predicate>,
+                )| {
                     (
                         SelectItem::Aggregate {
                             func,
                             arg: Box::new(arg),
+                            filter,
                         },
                         None::<String>,
                     )
@@ -922,6 +1070,7 @@ where
                         SelectItem::Aggregate {
                             func: AggFunc::Percentile(clamped),
                             arg: Box::new(arg),
+                            filter: None,
                         },
                         None::<String>,
                     )
@@ -993,9 +1142,15 @@ where
                 // Peek at the next token: if it's an arithmetic op, bail and let
                 // expr_item parse the full `@attr + ...` expression instead.
                 .then(
-                    one_of([Token::Plus, Token::Minus, Token::Star, Token::Divide])
-                        .rewind()
-                        .or_not(),
+                    one_of([
+                        Token::Plus,
+                        Token::Minus,
+                        Token::Star,
+                        Token::Divide,
+                        Token::Percent,
+                    ])
+                    .rewind()
+                    .or_not(),
                 )
                 .map(
                     |((prefix, name), next_arith): ((Option<String>, String), _)| {
@@ -1037,10 +1192,159 @@ where
                 };
                 (item, None::<String>)
             });
+            // Window specification: OVER ([PARTITION BY expr, ...] [ORDER BY expr [ASC|DESC], ...])
+            let window_order_by_item = expr.clone().then(
+                ident_ci("ASC")
+                    .to(SortDir::Asc)
+                    .or(ident_ci("DESC").to(SortDir::Desc))
+                    .or_not()
+                    .map(|d| d.unwrap_or(SortDir::Asc)),
+            );
+            let window_spec = ident_ci("OVER")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(
+                    ident_ci("PARTITION")
+                        .ignore_then(ident_ci("BY"))
+                        .ignore_then(
+                            expr.clone()
+                                .separated_by(just(Token::Comma))
+                                .at_least(1)
+                                .collect::<Vec<_>>(),
+                        )
+                        .or_not()
+                        .map(|v| v.unwrap_or_default()),
+                )
+                .then(
+                    ident_ci("ORDER")
+                        .ignore_then(ident_ci("BY"))
+                        .ignore_then(
+                            window_order_by_item
+                                .separated_by(just(Token::Comma))
+                                .at_least(1)
+                                .collect::<Vec<_>>(),
+                        )
+                        .or_not()
+                        .map(|v| v.unwrap_or_default()),
+                )
+                .then_ignore(just(Token::RParen))
+                .map(|(partition_by, order_by)| WindowSpec {
+                    partition_by,
+                    order_by,
+                });
+
+            // ROW_NUMBER() OVER (...)
+            let row_number = ident_ci("ROW_NUMBER")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(just(Token::RParen))
+                .ignore_then(window_spec.clone())
+                .map(|over| {
+                    (
+                        SelectItem::Window {
+                            func: WindowFunc::RowNumber,
+                            arg: None,
+                            over,
+                        },
+                        None::<String>,
+                    )
+                });
+
+            // RANK() OVER (...)
+            let rank_fn = ident_ci("RANK")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(just(Token::RParen))
+                .ignore_then(window_spec.clone())
+                .map(|over| {
+                    (
+                        SelectItem::Window {
+                            func: WindowFunc::Rank,
+                            arg: None,
+                            over,
+                        },
+                        None::<String>,
+                    )
+                });
+
+            // DENSE_RANK() OVER (...)
+            let dense_rank = ident_ci("DENSE_RANK")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(just(Token::RParen))
+                .ignore_then(window_spec.clone())
+                .map(|over| {
+                    (
+                        SelectItem::Window {
+                            func: WindowFunc::DenseRank,
+                            arg: None,
+                            over,
+                        },
+                        None::<String>,
+                    )
+                });
+
+            // LAG(expr [, offset [, default]]) OVER (...)
+            let lag_fn = ident_ci("LAG")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(expr.clone())
+                .then(
+                    just(Token::Comma)
+                        .ignore_then(select! { Token::Int(n) => n })
+                        .or_not()
+                        .map(|n| n.unwrap_or(1) as u32),
+                )
+                .then(just(Token::Comma).ignore_then(expr.clone()).or_not())
+                .then_ignore(just(Token::RParen))
+                .then(window_spec.clone())
+                .map(|(((arg_expr, offset), default_val), over)| {
+                    (
+                        SelectItem::Window {
+                            func: WindowFunc::Lag {
+                                offset,
+                                default_val: default_val.map(Box::new),
+                            },
+                            arg: Some(Box::new(arg_expr)),
+                            over,
+                        },
+                        None::<String>,
+                    )
+                });
+
+            // LEAD(expr [, offset [, default]]) OVER (...)
+            let lead_fn = ident_ci("LEAD")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(expr.clone())
+                .then(
+                    just(Token::Comma)
+                        .ignore_then(select! { Token::Int(n) => n })
+                        .or_not()
+                        .map(|n| n.unwrap_or(1) as u32),
+                )
+                .then(just(Token::Comma).ignore_then(expr.clone()).or_not())
+                .then_ignore(just(Token::RParen))
+                .then(window_spec.clone())
+                .map(|(((arg_expr, offset), default_val), over)| {
+                    (
+                        SelectItem::Window {
+                            func: WindowFunc::Lead {
+                                offset,
+                                default_val: default_val.map(Box::new),
+                            },
+                            arg: Some(Box::new(arg_expr)),
+                            over,
+                        },
+                        None::<String>,
+                    )
+                });
+
             // IMPORTANT: `star` must come before `expr_item`.
             // `case_item` before `expr_item` so CASE is not swallowed as a bare field.
             // `select_attr_item` before `expr_item` so alias attr names get column headers.
-            let base_item = percentile_item
+            // Window functions come before count_distinct/agg to avoid keyword conflicts.
+            let base_item = row_number
+                .or(rank_fn)
+                .or(dense_rank)
+                .or(lag_fn)
+                .or(lead_fn)
+                .or(count_distinct)
+                .or(percentile_item)
                 .or(agg)
                 .or(path_item)
                 .or(tostring_item)
@@ -1128,15 +1432,20 @@ where
             .then(
                 ident_ci("ORDER")
                     .ignore_then(ident_ci("BY"))
-                    .ignore_then(attr.clone())
-                    .then(
-                        ident_ci("ASC")
-                            .to(SortDir::Asc)
-                            .or(ident_ci("DESC").to(SortDir::Desc))
-                            .or_not()
-                            .map(|d| d.unwrap_or(SortDir::Asc)),
+                    .ignore_then(
+                        attr.clone()
+                            .then(
+                                ident_ci("ASC")
+                                    .to(SortDir::Asc)
+                                    .or(ident_ci("DESC").to(SortDir::Desc))
+                                    .or_not()
+                                    .map(|d| d.unwrap_or(SortDir::Asc)),
+                            )
+                            .separated_by(just(Token::Comma))
+                            .at_least(1)
+                            .collect::<Vec<_>>(),
                     )
-                    .map(|(key, dir)| OrderBy { key, dir })
+                    .map(|keys| OrderBy { keys })
                     .or_not(),
             )
             .then(
@@ -1186,6 +1495,7 @@ where
                     offset,
                 )| {
                     let mut q = Query {
+                        ctes: vec![],
                         distinct,
                         select,
                         select_aliases,
@@ -1331,7 +1641,9 @@ fn normalize_query_ref_paths(q: &mut Query) {
         normalize_predicate(pred, alias.as_deref());
     }
     if let Some(ob) = &mut q.order_by {
-        normalize_attr(&mut ob.key, alias.as_deref());
+        for (key, _dir) in &mut ob.keys {
+            normalize_attr(key, alias.as_deref());
+        }
     }
     for e in &mut q.group_by {
         normalize_expr(e, alias.as_deref());
@@ -1379,6 +1691,9 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
                 *item = SelectItem::Attr(a.clone());
             }
         }
+        // Window functions carry their own expressions; no alias-normalization needed
+        // for the OVER clause (partition/order exprs already use column names, not aliases).
+        SelectItem::Window { .. } => {}
     }
 }
 
@@ -1468,6 +1783,9 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
         Expr::NullIf { lhs, rhs } => {
             normalize_expr(lhs, alias);
             normalize_expr(rhs, alias);
+        }
+        Expr::Cast { expr, .. } => {
+            normalize_expr(expr, alias);
         }
     }
 }
@@ -1613,6 +1931,17 @@ pub const FUNCS: &[&str] = &[
     "dominators",
     "pathToRoot",
     "dominatorof",
+    // SQL-style string functions (also available as method-call syntax).
+    "LOWER",
+    "UPPER",
+    "TRIM",
+    "LTRIM",
+    "RTRIM",
+    "LENGTH",
+    "SUBSTR",
+    "SUBSTRING",
+    "CONCAT",
+    "REPLACE",
 ];
 
 /// Supported method-call names for `receiver.name(args)` dispatch. Single source
@@ -1641,6 +1970,16 @@ pub const METHODS: &[&str] = &[
     "getUsedHeapSize",
     "getRetainedHeapSize",
     "getClazz",
+    // String-manipulation methods (also reachable via SQL-style function syntax).
+    "lower",
+    "upper",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "strlen", // SQL LENGTH(expr) → char count of a string expression result
+    "substr",
+    "concat",
+    "replace",
 ];
 
 /// `@`-prefixed built-in attribute names (matching the `attr` parser's arms),
@@ -2165,6 +2504,7 @@ mod tests {
     ) -> Query {
         let n = select.len();
         Query {
+            ctes: vec![],
             distinct,
             select,
             select_aliases: vec![None; n],
@@ -2197,6 +2537,7 @@ mod tests {
         SelectItem::Aggregate {
             func,
             arg: Box::new(arg),
+            filter: None,
         }
     }
 
@@ -3504,13 +3845,14 @@ mod tests {
     fn parses_order_by_desc() {
         let q = parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap();
         let ob = q.order_by.expect("ORDER BY parsed");
-        assert_eq!(ob.key, Attr::RetainedHeapSize);
-        assert_eq!(ob.dir, SortDir::Desc);
+        assert_eq!(ob.keys.len(), 1);
+        assert_eq!(ob.keys[0].0, Attr::RetainedHeapSize);
+        assert_eq!(ob.keys[0].1, SortDir::Desc);
     }
     #[test]
     fn order_by_defaults_to_asc() {
         let q = parse("SELECT @objectId FROM C ORDER BY @usedHeapSize").unwrap();
-        assert_eq!(q.order_by.unwrap().dir, SortDir::Asc);
+        assert_eq!(q.order_by.unwrap().keys[0].1, SortDir::Asc);
     }
     #[test]
     fn order_by_before_limit() {
@@ -3946,8 +4288,8 @@ mod tests {
         let q = parse("SELECT * FROM java.lang.String s ORDER BY s.@retainedHeapSize DESC")
             .expect("should parse");
         assert_eq!(
-            q.order_by.map(|o| (o.key, o.dir)),
-            Some((Attr::RetainedHeapSize, SortDir::Desc))
+            q.order_by.map(|o| o.keys.into_iter().next()),
+            Some(Some((Attr::RetainedHeapSize, SortDir::Desc)))
         );
     }
 
@@ -4857,6 +5199,7 @@ mod tests {
             SelectItem::Aggregate {
                 func: AggFunc::Count,
                 arg,
+                ..
             } => {
                 assert_eq!(
                     arg.as_ref(),
@@ -4934,6 +5277,7 @@ mod tests {
             SelectItem::Aggregate {
                 func: AggFunc::Sum,
                 arg,
+                ..
             } => {
                 assert_eq!(
                     arg.as_ref(),

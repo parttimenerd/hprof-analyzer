@@ -5,6 +5,10 @@
 /// chain (empty for a single query); branches are flat, never nested.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Query {
+    /// Common Table Expressions from the leading `WITH` clause (empty for
+    /// queries without a `WITH`). Only the top-level query carries CTEs; UNION
+    /// branches and subqueries always have this field empty.
+    pub ctes: Vec<Cte>,
     pub distinct: bool,
     pub select: Vec<SelectItem>,
     /// Per-column AS alias names, parallel to `select`; `None` means no alias.
@@ -43,11 +47,11 @@ pub enum SortDir {
     Desc,
 }
 
-/// Our extension over MAT OQL: `ORDER BY <attr> [ASC|DESC]`.
+/// Our extension over MAT OQL: `ORDER BY <key> [ASC|DESC] [, <key> [ASC|DESC]]…`
+/// Multi-key: left-most key is primary, ties broken by secondary, etc.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OrderBy {
-    pub key: Attr,
-    pub dir: SortDir,
+    pub keys: Vec<(Attr, SortDir)>,
 }
 
 /// One projected column.
@@ -58,7 +62,14 @@ pub enum SelectItem {
     /// An attribute or named field of the FROM alias, e.g. `@usedHeapSize`, `name`.
     Attr(Attr),
     /// An aggregate over all matched instances, e.g. `COUNT(*)`, `SUM(@usedHeapSize)`.
-    Aggregate { func: AggFunc, arg: Box<SelectItem> },
+    /// Optional `FILTER (WHERE pred)` restricts which rows contribute.
+    Aggregate {
+        func: AggFunc,
+        arg: Box<SelectItem>,
+        /// `COUNT(*) FILTER (WHERE @category = "jdk")` — only rows matching
+        /// this predicate contribute to this aggregate. `None` = all rows.
+        filter: Option<Predicate>,
+    },
     /// `path(a, b)` — a shortest reference path between two operands. Each operand
     /// is either a bound alias (the FROM object) or a class name.
     Path { from: PathOperand, to: PathOperand },
@@ -79,6 +90,13 @@ pub enum SelectItem {
     /// An arithmetic expression column, e.g. `@usedHeapSize * 2`. Only emitted
     /// when the item actually contains an operator; a bare attr stays `Attr`.
     Expr(Box<Expr>),
+    /// A window function call: `ROW_NUMBER() OVER (...)`, `LAG(expr, n) OVER (...)`.
+    Window {
+        func: WindowFunc,
+        /// The argument expression for LAG/LEAD (None for ROW_NUMBER/RANK/DENSE_RANK).
+        arg: Option<Box<Expr>>,
+        over: WindowSpec,
+    },
 }
 
 /// One operand of a `path(a, b)` select item: a bound alias or a class name.
@@ -93,6 +111,8 @@ pub enum PathOperand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AggFunc {
     Count,
+    /// COUNT(DISTINCT expr): count of unique non-null values.
+    CountDistinct,
     Sum,
     Min,
     Max,
@@ -250,6 +270,11 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// `CAST(expr AS type)` — explicit type conversion.
+    Cast {
+        expr: Box<Expr>,
+        target: CastTarget,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -258,6 +283,43 @@ pub enum ArithOp {
     Sub,
     Mul,
     Div,
+    /// `%` — modulo (remainder). `a % 0` → Null; `i64::MIN % -1` uses
+    /// `wrapping_rem` (Java `long` semantics).
+    Mod,
+}
+
+/// Target type for `CAST(expr AS type)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum CastTarget {
+    Int,
+    Float,
+    Str,
+    Bool,
+}
+
+/// A window function type.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub enum WindowFunc {
+    RowNumber,
+    Rank,
+    DenseRank,
+    /// LAG(expr, offset, default) — value from `offset` rows before.
+    Lag {
+        offset: u32,
+        default_val: Option<Box<Expr>>,
+    },
+    /// LEAD(expr, offset, default) — value from `offset` rows after.
+    Lead {
+        offset: u32,
+        default_val: Option<Box<Expr>>,
+    },
+}
+
+/// Window specification: OVER ([PARTITION BY ...] [ORDER BY ...]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct WindowSpec {
+    pub partition_by: Vec<Expr>,
+    pub order_by: Vec<(Expr, SortDir)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -414,4 +476,24 @@ pub enum Value {
     Str(String),
     Bool(bool),
     Null,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Feature #11: Common Table Expressions (WITH / CTE)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A single Common Table Expression defined in a `WITH` clause:
+/// `WITH <name> AS (<query>)`.
+///
+/// CTEs are stored on the top-level [`Query`] in the `ctes` field. The planner
+/// resolves `FROM <name>` references to `FromSource::CteRef` when the name
+/// matches a CTE bound in the same statement. Execution materialises each CTE
+/// result once (in declaration order) before running the main query body.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Cte {
+    /// The name bound by `WITH <name> AS (...)`. Must be unique within the
+    /// same `WITH` clause (enforced at plan time).
+    pub name: String,
+    /// The query body that produces the CTE's rows.
+    pub query: Query,
 }

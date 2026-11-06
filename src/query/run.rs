@@ -1727,7 +1727,7 @@ pub struct UnionGroup {
     pub except_count: usize,
     /// ORDER BY column name and direction from the head query — used to re-sort
     /// the concatenated UNION result so the global ORDER BY is respected.
-    pub order_by: Option<(String, crate::query::ast::SortDir)>,
+    pub order_by: Vec<(String, crate::query::ast::SortDir)>,
 }
 
 /// Flatten a caller's query list so every `UNION` branch becomes its own scan
@@ -1797,7 +1797,13 @@ pub fn expand_union_queries(
             order_by: q
                 .order_by
                 .as_ref()
-                .map(|ob| (crate::query::execute::attr_name(&ob.key), ob.dir)),
+                .map(|ob| {
+                    ob.keys
+                        .iter()
+                        .map(|(key, dir)| (crate::query::execute::attr_name(key), *dir))
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
     }
     (flat, groups)
@@ -1829,7 +1835,7 @@ pub fn collapse_union_results(
             // When ORDER BY is present, collect all rows first so the global sort
             // can pick the correct top-N after re-ordering; the LIMIT is applied
             // post-sort below. Otherwise cap early to bound memory.
-            let has_order_by = g.order_by.is_some();
+            let has_order_by = !g.order_by.is_empty();
             let cap = if has_order_by {
                 crate::query::OVERALL_UNION_CAP
             } else {
@@ -1844,9 +1850,20 @@ pub fn collapse_union_results(
         // Each branch was sorted independently; concatenation breaks the global
         // order. Apply the LIMIT after sorting so the top-N is correct.
         if g.count > 1 {
-            if let Some((ref col_name, ref dir)) = g.order_by {
-                if let Some(idx) = result.columns.iter().position(|c| &c.name == col_name) {
-                    crate::query::execute::sort_rows_by_column(&mut result.rows, idx, *dir);
+            if !g.order_by.is_empty() {
+                let resolved: Vec<(usize, crate::query::ast::SortDir)> = g
+                    .order_by
+                    .iter()
+                    .filter_map(|(col_name, dir)| {
+                        result
+                            .columns
+                            .iter()
+                            .position(|c| &c.name == col_name)
+                            .map(|idx| (idx, *dir))
+                    })
+                    .collect();
+                if !resolved.is_empty() {
+                    crate::query::execute::sort_rows_by_columns(&mut result.rows, &resolved);
                 }
                 // Apply the union-wide LIMIT now that rows are globally sorted.
                 if let Some(lim) = g.union_limit {
@@ -3062,7 +3079,7 @@ mod tests {
                     offset: None,
                     intersect_count: 0,
                     except_count: 0,
-                    order_by: None,
+                    order_by: vec![],
                 },
                 UnionGroup {
                     head: 1,
@@ -3073,7 +3090,7 @@ mod tests {
                     offset: None,
                     intersect_count: 0,
                     except_count: 0,
-                    order_by: None,
+                    order_by: vec![],
                 },
             ]
         );
@@ -3100,7 +3117,7 @@ mod tests {
                 offset: None,
                 intersect_count: 0,
                 except_count: 0,
-                order_by: None,
+                order_by: vec![],
             },
             UnionGroup {
                 head: 1,
@@ -3111,7 +3128,7 @@ mod tests {
                 offset: None,
                 intersect_count: 0,
                 except_count: 0,
-                order_by: None,
+                order_by: vec![],
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -3137,7 +3154,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 1);
@@ -3162,7 +3179,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3, "all rows returned");
@@ -3182,7 +3199,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         assert!(out[0].rows.is_empty(), "LIMIT 0 → no rows");
@@ -3203,7 +3220,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 5);
@@ -3224,7 +3241,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3);
@@ -3276,7 +3293,7 @@ mod tests {
                 offset: None,
                 intersect_count: 0,
                 except_count: 0,
-                order_by: None,
+                order_by: vec![],
             },
             UnionGroup {
                 head: 1,
@@ -3287,7 +3304,7 @@ mod tests {
                 offset: None,
                 intersect_count: 0,
                 except_count: 0,
-                order_by: None,
+                order_by: vec![],
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -3310,7 +3327,7 @@ mod tests {
                 offset: None,
                 intersect_count: 0,
                 except_count: 0,
-                order_by: None,
+                order_by: vec![],
             }],
         )
     }
@@ -3377,7 +3394,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].row_count, 4, "cross-branch dupes removed: 1,2,3,4");
@@ -3424,7 +3441,7 @@ mod tests {
             offset: None,
             intersect_count: 0,
             except_count: 0,
-            order_by: None,
+            order_by: vec![],
         }];
         let out = collapse_union_results(flat, &groups);
         // Two NaN rows should also dedup (Debug format is total: "Float(NaN)" == "Float(NaN)").

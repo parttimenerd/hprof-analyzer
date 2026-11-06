@@ -70,7 +70,7 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
 /// anything that still reaches here degrades to Null rather than panicking.
 fn eval_agg(item: &SelectItem, count: u64, shallow: u64) -> (String, QueryValue) {
     match item {
-        SelectItem::Aggregate { func, arg } => {
+        SelectItem::Aggregate { func, arg, .. } => {
             let label = column_name(item);
             let arg_is_shallow = matches!(arg.as_ref(), SelectItem::Attr(Attr::UsedHeapSize));
             let v = match func {
@@ -256,6 +256,7 @@ mod tests {
         let item = SelectItem::Aggregate {
             func: AggFunc::Sum,
             arg: Box::new(SelectItem::Attr(Attr::ObjectId)),
+            filter: None,
         };
         let (_label, val) = eval_agg(&item, 50, 1200);
         assert_eq!(val, QueryValue::Null);
@@ -267,6 +268,7 @@ mod tests {
         let item = SelectItem::Aggregate {
             func: AggFunc::Min,
             arg: Box::new(SelectItem::Attr(Attr::UsedHeapSize)),
+            filter: None,
         };
         let (_label, val) = eval_agg(&item, 50, 1200);
         assert_eq!(val, QueryValue::Null);
@@ -278,6 +280,7 @@ mod tests {
         let item = SelectItem::Aggregate {
             func: AggFunc::Max,
             arg: Box::new(SelectItem::Attr(Attr::UsedHeapSize)),
+            filter: None,
         };
         let (_label, val) = eval_agg(&item, 50, 1200);
         assert_eq!(val, QueryValue::Null);
@@ -299,6 +302,7 @@ mod tests {
         let item = SelectItem::Aggregate {
             func: AggFunc::Avg,
             arg: Box::new(SelectItem::Attr(Attr::UsedHeapSize)),
+            filter: None,
         };
         let (_label, val) = eval_agg(&item, 0, 0);
         assert_eq!(val, QueryValue::Null);

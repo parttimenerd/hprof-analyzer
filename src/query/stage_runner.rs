@@ -837,8 +837,9 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
 
     let mut truncated = entry.carry.truncated() || ctx.refwalk_truncated;
     if let Some(ob) = &q.order_by {
-        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
-            crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir);
+        let resolved = crate::query::execute::resolve_order_by_keys(q, &columns, ob);
+        if !resolved.is_empty() {
+            crate::query::execute::sort_rows_by_columns(&mut rows, &resolved);
         }
     }
     if let Some(limit) = stage_limit(q) {
@@ -971,9 +972,9 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                 });
             }
             if let Some(ob) = &q.order_by {
-                if let Some(ci) = crate::query::execute::order_by_column_index(q, &columns, &ob.key)
-                {
-                    crate::query::execute::sort_rows_by_column(&mut out_rows, ci, ob.dir);
+                let resolved = crate::query::execute::resolve_order_by_keys(q, &columns, ob);
+                if !resolved.is_empty() {
+                    crate::query::execute::sort_rows_by_columns(&mut out_rows, &resolved);
                 }
             }
             let mut truncated = truncated;
@@ -1047,8 +1048,9 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
     let mut out_rows = out_rows;
 
     if let Some(ob) = &q.order_by {
-        if let Some(ci) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
-            crate::query::execute::sort_rows_by_column(&mut out_rows, ci, ob.dir);
+        let resolved = crate::query::execute::resolve_order_by_keys(q, &columns, ob);
+        if !resolved.is_empty() {
+            crate::query::execute::sort_rows_by_columns(&mut out_rows, &resolved);
         }
     }
 
@@ -1097,6 +1099,7 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
         }
         Expr::Coalesce(args) => args.iter().any(|a| expr_has_attr(a, pred)),
         Expr::NullIf { lhs, rhs } => expr_has_attr(lhs, pred) || expr_has_attr(rhs, pred),
+        Expr::Cast { expr, .. } => expr_has_attr(expr, pred),
     }
 }
 fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
@@ -1118,6 +1121,7 @@ fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
         }
         Expr::Coalesce(args) => args.iter().any(|a| expr_has_attr_dyn(a, pred)),
         Expr::NullIf { lhs, rhs } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
+        Expr::Cast { expr, .. } => expr_has_attr_dyn(expr, pred),
     }
 }
 fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
@@ -1293,6 +1297,90 @@ fn eval_late_expr_multi(
                 Some(re) => QueryValue::Int(re.targets_of(idx).len() as i64),
                 None => QueryValue::Null,
             },
+            // ArrayIndex/ArraySlice: read one element (or a slice) from the
+            // dump file at the object's byte offset. Requires `ctx.dump_path`
+            // and `ctx.offsets` to be set (REPL/MCP path via `ReplCache`).
+            // Returns Null when offsets are unavailable — consistent with the
+            // SELECT projection in `array_index_rows`. This enables WHERE
+            // filtering against array-valued attributes in the late phase.
+            #[cfg(feature = "native")]
+            Attr::ArrayIndex { base, index } => {
+                if ctx.dump_path.is_none() || ctx.offsets.is_empty() {
+                    return QueryValue::Null;
+                }
+                let alias = ""; // alias-stripping in resolve_base_dense uses this
+                let ret_val = *ctx.retained.get(idx as usize).unwrap_or(&0);
+                let base_dense = resolve_base_dense(base, alias, idx, ret_val, ctx, like_regexes);
+                let Some(offset) = ctx
+                    .offsets
+                    .get(base_dense as usize)
+                    .copied()
+                    .filter(|&o| o != 0)
+                else {
+                    return QueryValue::Null;
+                };
+                let idx_val = eval_late_expr_multi(index, idx, ret_val, ctx, like_regexes);
+                let skip = match &idx_val {
+                    QueryValue::Int(n) if *n >= 0 => *n as u64,
+                    _ => return QueryValue::Null,
+                };
+                let path = ctx.dump_path.as_deref().unwrap();
+                match read_array_for_ctx(path, offset, ctx.id_size, skip, 1) {
+                    Some(arr) => arr
+                        .values
+                        .into_iter()
+                        .next()
+                        .map(field_value_to_query_value)
+                        .unwrap_or(QueryValue::Null),
+                    None => QueryValue::Null,
+                }
+            }
+            #[cfg(feature = "native")]
+            Attr::ArraySlice { base, start, end } => {
+                if ctx.dump_path.is_none() || ctx.offsets.is_empty() {
+                    return QueryValue::Null;
+                }
+                let alias = "";
+                let ret_val = *ctx.retained.get(idx as usize).unwrap_or(&0);
+                let base_dense = resolve_base_dense(base, alias, idx, ret_val, ctx, like_regexes);
+                let Some(offset) = ctx
+                    .offsets
+                    .get(base_dense as usize)
+                    .copied()
+                    .filter(|&o| o != 0)
+                else {
+                    return QueryValue::Null;
+                };
+                let skip = start
+                    .as_deref()
+                    .map(
+                        |e| match eval_late_expr_multi(e, idx, ret_val, ctx, like_regexes) {
+                            QueryValue::Int(n) if n >= 0 => n as u64,
+                            _ => 0,
+                        },
+                    )
+                    .unwrap_or(0);
+                let cap = match (start.as_deref(), end.as_deref()) {
+                    (_, Some(e)) => {
+                        let end_val = match eval_late_expr_multi(e, idx, ret_val, ctx, like_regexes)
+                        {
+                            QueryValue::Int(n) if n >= 0 => n as u64,
+                            _ => return QueryValue::Null,
+                        };
+                        (end_val.saturating_sub(skip)) as usize
+                    }
+                    _ => crate::objread::MAX_ARRAY_ELEMENTS,
+                };
+                let path = ctx.dump_path.as_deref().unwrap();
+                match read_array_for_ctx(path, offset, ctx.id_size, skip, cap) {
+                    Some(arr) => {
+                        let values: Vec<serde_json::Value> =
+                            arr.values.iter().map(field_value_to_json).collect();
+                        QueryValue::Str(serde_json::to_string(&values).unwrap_or_default())
+                    }
+                    None => QueryValue::Null,
+                }
+            }
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1328,6 +1416,10 @@ fn eval_late_expr_multi(
             let lv = eval_late_expr_multi(lhs, idx, ret, ctx, like_regexes);
             let rv = eval_late_expr_multi(rhs, idx, ret, ctx, like_regexes);
             if lv == rv { QueryValue::Null } else { lv }
+        }
+        Expr::Cast { expr, target } => {
+            let value = eval_late_expr_multi(expr, idx, ret, ctx, like_regexes);
+            crate::query::execute::cast_query_value(value, *target)
         }
         Expr::Aggregate { .. } | Expr::Method { .. } => QueryValue::Null,
     }
@@ -1691,6 +1783,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
         crate::query::plan::pred_uses_retained(p)
             || crate::query::plan::pred_uses_tostring(p)
             || crate::query::plan::pred_uses_refpath(p)
+            || crate::query::plan::pred_uses_array_index(p)
     });
     let have_offsets = ctx.dump_path.is_some() && !ctx.offsets.is_empty();
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
@@ -1808,8 +1901,9 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
         rows.push(row);
     }
     if let Some(ob) = &q.order_by {
-        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
-            crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir);
+        let resolved = crate::query::execute::resolve_order_by_keys(q, &columns, ob);
+        if !resolved.is_empty() {
+            crate::query::execute::sort_rows_by_columns(&mut rows, &resolved);
         }
     }
     let mut truncated = entry.carry.truncated();
@@ -2077,7 +2171,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                 .map(|it| match it {
                     SelectItem::Aggregate { func, .. } => {
                         let start = match func {
-                            AggFunc::Count => QueryValue::Int(0),
+                            AggFunc::Count | AggFunc::CountDistinct => QueryValue::Int(0),
                             AggFunc::Sum => QueryValue::Int(0),
                             AggFunc::Min => QueryValue::Null,
                             AggFunc::Max => QueryValue::Null,
@@ -2094,7 +2188,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         });
         // Accumulate each SELECT item's aggregate.
         for (i, it) in q.select.iter().enumerate() {
-            let SelectItem::Aggregate { func, arg } = it else {
+            let SelectItem::Aggregate { func, arg, .. } = it else {
                 continue;
             };
             let val = match arg.as_ref() {
@@ -2192,6 +2286,15 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                         };
                     }
                 }
+                AggFunc::CountDistinct => {
+                    // COUNT(DISTINCT) in the late phase: treat as COUNT(expr) (no HashSet available).
+                    let count_this = val != QueryValue::Null;
+                    if count_this {
+                        if let QueryValue::Int(n) = acc {
+                            *n += 1;
+                        }
+                    }
+                }
                 AggFunc::Percentile(_) | AggFunc::Median => {} // not supported in late phase
             }
         }
@@ -2252,15 +2355,15 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     let mut order_by_note: Option<String> = None;
     if let Some(ob) = &q.order_by {
         let cols = query_columns(q);
-        match crate::query::execute::order_by_column_index(q, &cols, &ob.key) {
-            Some(col_idx) => crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir),
-            None => {
-                order_by_note = Some(format!(
-                    "ORDER BY `{}` was not applied: the sort key must be a \
-                     selected column on this query path; rows are in scan order",
-                    crate::query::execute::attr_name(&ob.key)
-                ));
-            }
+        let resolved = crate::query::execute::resolve_order_by_keys(q, &cols, ob);
+        if !resolved.is_empty() {
+            crate::query::execute::sort_rows_by_columns(&mut rows, &resolved);
+        } else {
+            order_by_note = Some(
+                "ORDER BY was not applied: the sort key(s) must be \
+                 selected columns on this query path; rows are in scan order"
+                    .to_string(),
+            );
         }
     }
 
@@ -2516,7 +2619,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
             .map(|it| match it {
                 SelectItem::Aggregate { func, .. } => {
                     let start = match func {
-                        AggFunc::Count => QueryValue::Int(0),
+                        AggFunc::Count | AggFunc::CountDistinct => QueryValue::Int(0),
                         AggFunc::Sum => QueryValue::Int(0),
                         AggFunc::Min | AggFunc::Max => QueryValue::Null,
                         AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => {
@@ -2535,7 +2638,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 continue;
             }
             for (i, it) in q.select.iter().enumerate() {
-                let SelectItem::Aggregate { func, arg } = it else {
+                let SelectItem::Aggregate { func, arg, .. } = it else {
                     continue;
                 };
                 let val = match arg.as_ref() {
@@ -2633,6 +2736,15 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                             };
                         }
                     }
+                    AggFunc::CountDistinct => {
+                        // COUNT(DISTINCT) in the late phase: treat as COUNT(expr).
+                        let count_this = val != QueryValue::Null;
+                        if count_this {
+                            if let QueryValue::Int(n) = acc {
+                                *n += 1;
+                            }
+                        }
+                    }
                     AggFunc::Percentile(_) | AggFunc::Median => {} // unsupported in late phase
                 }
             }
@@ -2703,11 +2815,11 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let order_by_retained = q
         .order_by
         .as_ref()
-        .is_some_and(|ob| ob.key == Attr::RetainedHeapSize);
+        .is_some_and(|ob| ob.keys.len() == 1 && ob.keys[0].0 == Attr::RetainedHeapSize);
 
     if order_by_retained {
         // Fast path: sort (idx,ret) pairs before projection, then cap.
-        let dir = q.order_by.as_ref().unwrap().dir;
+        let dir = q.order_by.as_ref().unwrap().keys[0].1;
         rows.sort_by_key(|(_, r)| *r);
         if dir == SortDir::Desc {
             rows.reverse();
@@ -2747,17 +2859,15 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let mut truncated = entry.carry.truncated();
     let mut order_by_note: Option<String> = None;
     if let Some(ob) = &q.order_by {
-        match crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
-            Some(col_idx) => {
-                crate::query::execute::sort_rows_by_column(&mut out_rows, col_idx, ob.dir);
-            }
-            None => {
-                order_by_note = Some(format!(
-                    "ORDER BY `{}` was not applied: the sort key must be a \
-                     selected column on this query path; rows are in scan order",
-                    crate::query::execute::attr_name(&ob.key)
-                ));
-            }
+        let resolved = crate::query::execute::resolve_order_by_keys(q, &columns, ob);
+        if !resolved.is_empty() {
+            crate::query::execute::sort_rows_by_columns(&mut out_rows, &resolved);
+        } else {
+            order_by_note = Some(
+                "ORDER BY was not applied: the sort key(s) must be \
+                 selected columns on this query path; rows are in scan order"
+                    .to_string(),
+            );
         }
     }
     if let Some(limit) = stage_limit(q) {

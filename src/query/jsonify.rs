@@ -1469,6 +1469,7 @@ mod tests {
 
     fn jsonify_query(class: &str, depth: Option<u32>) -> Query {
         Query {
+            ctes: vec![],
             distinct: false,
             select: vec![SelectItem::Jsonify {
                 alias: "s".into(),

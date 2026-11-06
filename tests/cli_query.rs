@@ -4640,8 +4640,7 @@ fn extract_data_rows(stdout: &str) -> Vec<&str> {
 }
 
 /// `s.getName()` must produce the same value as `@displayName` for the same
-/// FROM class (Thread). Currently stubs to Null, so the outputs differ — this
-/// test must FAIL before the implementation and PASS after.
+/// FROM class (Thread). `getName()` maps to `Attr::DisplayName` at scan time.
 #[test]
 fn method_alias_getname_equals_class() {
     let Some(hprof) = philosophers() else { return };

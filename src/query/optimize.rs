@@ -177,7 +177,15 @@ pub fn order_by_selectivity(_plan: &mut QueryPlan, _stats: &SchemaStats) {
 pub fn optimize(mut plan: QueryPlan, query: &Query, stats: &SchemaStats) -> QueryPlan {
     reorder_predicates(&mut plan);
     order_by_selectivity(&mut plan, stats);
-    pushdown_limit(&mut plan);
+    // Block limit pushdown when window functions are present — we must see the
+    // full result set before window evaluation can assign correct ranks/lags.
+    let has_window = query
+        .select
+        .iter()
+        .any(|s| matches!(s, crate::query::ast::SelectItem::Window { .. }));
+    if !has_window {
+        pushdown_limit(&mut plan);
+    }
     defer_projections(&mut plan, query);
     eliminate_dead_needs(&mut plan);
     narrow_carry(&mut plan);
