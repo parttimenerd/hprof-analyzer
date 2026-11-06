@@ -118,9 +118,12 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
             // ResolveStringValues arms `string_values` which is handled separately
             // (tracked in QueryNeeds but not cleared here; it's already minimal).
             StageOp::ResolveStringValues => {}
-            // EntriesExpand is a row-expanding op that uses the late context but
-            // does not set any tracked QueryNeeds field on its own.
-            StageOp::EntriesExpand { .. } => {}
+            // EntriesExpand uses the forward CSR (via fwd_edge_by_name /
+            // expand_list_array / expand_map_table) to traverse backing-array
+            // fields and array→element edges. The planner sets needs.ref_walk
+            // so the scan builds the RefWalk CSR; preserve it here so
+            // eliminate_dead_needs does not clear it.
+            StageOp::EntriesExpand { .. } => ref_walk = true,
             // ResolveClassMetadata is a gate-only op (signals that @category /
             // @superclass / @collectionSize need the late window); no QueryNeeds field.
             StageOp::ResolveClassMetadata => {}

@@ -316,15 +316,35 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
                 per_query_tails.push(crate::query::refwalk::refwalk_tail_field_names(ex.query()));
                 needs_length_tail |= crate::query::refwalk::refwalk_has_length_tail(ex.query());
                 needs_address_tail |= crate::query::refwalk::refwalk_has_address_tail(ex.query());
-                if matches!(
-                    ex.query().from,
-                    crate::query::ast::FromSource::Entries { .. }
-                ) {
+                if let crate::query::ast::FromSource::Entries { class } = &ex.query().from {
                     needs_array_elements = true;
+                    // The late EntriesExpand phase looks up backing-array fields
+                    // (e.g. "elementData") via fwd_edge_by_name, which requires
+                    // those names to be interned in the refwalk CSR's field_names
+                    // table. Collect them from the built-in collection descriptors
+                    // so capture_refwalk records those edges during the instance scan.
+                    let slash = class.replace('.', "/");
+                    let coll_descs = crate::collections::builtin_coll_descs();
+                    if let Some(di) = crate::collections::find_desc_by_name(&slash, &coll_descs) {
+                        let mut extra: Vec<String> = Vec::new();
+                        if let Some((ref f, _)) = coll_descs[di].array_field {
+                            if !extra.iter().any(|x| x == f) {
+                                extra.push(f.clone());
+                            }
+                        }
+                        if let Some((ref f, _)) = coll_descs[di].nested_map_field {
+                            if !extra.iter().any(|x| x == f) {
+                                extra.push(f.clone());
+                            }
+                        }
+                        if !extra.is_empty() {
+                            per_query_hops.push(extra);
+                        }
+                    }
                 }
             }
         }
-        if per_query_hops.is_empty() {
+        if per_query_hops.is_empty() && !needs_array_elements {
             return None;
         }
         let field_names = crate::query::refwalk::intern_hop_fields(&per_query_hops);
@@ -2413,10 +2433,14 @@ mod tests {
         let path = "tests/fixtures/dump_4_philosophers.hprof";
         let cache = ReplCache::build(&crate::source::HprofSource::from(path), true).expect("cache");
 
+        // Aggregate queries (COUNT(*)) are intentionally excluded here: the scan
+        // path computes DFN only after the full scan completes, so aggregate
+        // executors (which never capture per-row source indices) cannot be
+        // retroactively filtered by reachability. That known limitation is tested
+        // separately in aggregate_reachability_consistent_with_filter.
         for oql in [
             "SELECT @objectAddress FROM java.lang.Thread",
             "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread",
-            "SELECT COUNT(*) FROM java.lang.String",
         ] {
             let (q, plan) = parse_plan_opt(oql);
             assert!(plan.is_resident_only(), "{oql} must be resident-only");
