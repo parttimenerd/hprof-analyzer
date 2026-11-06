@@ -387,6 +387,12 @@ pub enum FromSource {
     Entries {
         class: String,
     },
+    /// Inline value table: `FROM (VALUES (1,'a'), (2,'b')) AS t(id, name)`
+    Values {
+        rows: Vec<Vec<Value>>,
+        alias: String,
+        columns: Vec<String>,
+    },
 }
 
 impl FromSource {
@@ -398,6 +404,7 @@ impl FromSource {
             FromSource::Subquery(_) => "",
             FromSource::Object(_) => "",
             FromSource::Entries { class } => class,
+            FromSource::Values { .. } => "",
         }
     }
     /// The class spec for a class FROM, or `None` for a subquery source.
@@ -407,6 +414,7 @@ impl FromSource {
             FromSource::Subquery(_) => None,
             FromSource::Object(_) => None,
             FromSource::Entries { .. } => None,
+            FromSource::Values { .. } => None,
         }
     }
     /// Whether this is `FROM INSTANCEOF C` (subclasses included). `false` for a
@@ -421,6 +429,7 @@ impl FromSource {
             FromSource::Class(_) => None,
             FromSource::Object(_) => None,
             FromSource::Entries { .. } => None,
+            FromSource::Values { .. } => None,
         }
     }
 }

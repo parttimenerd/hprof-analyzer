@@ -3,7 +3,9 @@
 //! rejected here (not in the parser) with a message naming the construct.
 
 use crate::query::QueryError;
-use crate::query::ast::{AggFunc, Attr, Expr, Predicate, Query, RefRole, SelectItem, Value};
+use crate::query::ast::{
+    AggFunc, Attr, Expr, FromSource, Predicate, Query, RefRole, SelectItem, Value,
+};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
 
@@ -878,6 +880,39 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // standard RefPath and handles it for free.
     let q_owned = rewrite_value_array_in_query(q.clone());
     let q = &q_owned;
+
+    // VALUES inline table: executed without any heap scan.
+    // Return a stub plan; `run_single_dump` (and `run_oql_escalated`) short-circuit
+    // on `FromSource::Values` before the scan even starts.
+    if let FromSource::Values { columns, .. } = &q.from {
+        let select_arity = if q.select.len() == 1 && matches!(q.select[0], SelectItem::Star) {
+            columns.len()
+        } else {
+            q.select.len()
+        };
+        return Ok(QueryPlan {
+            kind: StageKind::SingleScan,
+            needs: QueryNeeds::default(),
+            where_terms: Vec::new(),
+            finalize_at: Phase::P1,
+            carry: CarryLayout::IndexOnly,
+            late_ops: Vec::new(),
+            limit: scan_limit(q),
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
+            select_arity,
+            union_branches: Vec::new(),
+            union_limit: None,
+            from_subplan: None,
+            in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
+        });
+    }
 
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.

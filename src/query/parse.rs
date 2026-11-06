@@ -751,7 +751,59 @@ where
         let from_entries = ident_ci("ENTRIES")
             .ignore_then(any_ident().labelled("collection class name"))
             .map(|class| FromSource::Entries { class });
-        let from_source = from_subquery
+        // `FROM (VALUES (v1, v2, ...), ...) AS alias(col1, col2, ...)` — inline table.
+        // Parsed BEFORE from_subquery since both start with '(', but this is nested
+        // inside the FROM block after "FROM" is already consumed, so we just need to
+        // distinguish `(VALUES ...)` from `(SELECT ...)`.
+        // Literal values allowed in a VALUES row.
+        let value_lit = {
+            let lit_val = select! {
+                Token::Int(n) => Value::Int(n),
+                Token::Float(f) => Value::Float(f),
+                Token::Str(s) => Value::Str(s),
+            };
+            let null_val = ident_ci("NULL").to(Value::Null);
+            let bool_val = ident_ci("TRUE")
+                .to(Value::Bool(true))
+                .or(ident_ci("FALSE").to(Value::Bool(false)));
+            null_val.or(bool_val).or(lit_val)
+        };
+        let values_row = just(Token::LParen)
+            .ignore_then(
+                value_lit
+                    .clone()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(Token::RParen));
+        let from_values = just(Token::LParen)
+            .ignore_then(
+                ident_ci("VALUES").ignore_then(
+                    values_row
+                        .separated_by(just(Token::Comma))
+                        .at_least(1)
+                        .collect::<Vec<_>>(),
+                ),
+            )
+            .then_ignore(just(Token::RParen))
+            .then_ignore(ident_ci("AS").or_not())
+            .then(any_ident().labelled("VALUES table alias"))
+            .then_ignore(just(Token::LParen))
+            .then(
+                any_ident()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(Token::RParen))
+            .map(|((rows, alias), columns)| FromSource::Values {
+                rows,
+                alias,
+                columns,
+            });
+        let from_source = from_values
+            .or(from_subquery)
             .or(from_object)
             .or(instanceof_addr)
             .or(from_object_expr)

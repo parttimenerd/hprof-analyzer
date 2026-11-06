@@ -1230,11 +1230,159 @@ fn resume_with_retained(
     slotted.into_iter().map(|(_, r)| r).collect()
 }
 
+/// Execute a `FROM (VALUES (...), ...) AS alias(col1, col2, ...)` query entirely
+/// in-memory, without touching the HPROF file. Applies ORDER BY and LIMIT
+/// directly to the materialized rows.
+pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
+    use crate::query::ast::{FromSource, Value};
+    use crate::query::execute::{resolve_order_by_keys, sort_rows_by_columns};
+    use crate::query::model::QueryColumn;
+
+    let (col_names, value_rows) = match &q.from {
+        FromSource::Values { columns, rows, .. } => (columns, rows),
+        _ => {
+            return QueryResult {
+                name: String::new(),
+                oql: String::new(),
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: 0,
+                truncated: false,
+                error: Some("execute_values_query called on non-VALUES query".into()),
+                note: None,
+                viz: None,
+                elapsed_ms: None,
+            };
+        }
+    };
+
+    // Map Value → QueryValue.
+    let value_to_qv = |v: &Value| -> QueryValue {
+        match v {
+            Value::Int(n) => QueryValue::Int(*n),
+            Value::Float(f) => QueryValue::Float(*f),
+            Value::Str(s) => QueryValue::Str(s.clone()),
+            Value::Bool(b) => QueryValue::Bool(*b),
+            Value::Null => QueryValue::Null,
+        }
+    };
+
+    // Determine output columns.
+    let is_star = q.select.len() == 1 && matches!(q.select[0], crate::query::ast::SelectItem::Star);
+    let out_cols: Vec<QueryColumn> = if is_star {
+        col_names
+            .iter()
+            .map(|c| QueryColumn { name: c.clone() })
+            .collect()
+    } else {
+        q.select_aliases
+            .iter()
+            .zip(q.select.iter())
+            .enumerate()
+            .map(|(i, (alias, item))| {
+                let name = alias.clone().unwrap_or_else(|| {
+                    // Derive column name: for a plain field ref, use the field name.
+                    match item {
+                        crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
+                            f.clone()
+                        }
+                        _ => col_names
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| format!("col{i}")),
+                    }
+                });
+                QueryColumn { name }
+            })
+            .collect()
+    };
+
+    // Build rows: for each value row, project columns.
+    let mut rows: Vec<Vec<QueryValue>> = value_rows
+        .iter()
+        .map(|row| {
+            if is_star {
+                row.iter().map(&value_to_qv).collect()
+            } else {
+                // For non-star projections, resolve column references by name.
+                q.select
+                    .iter()
+                    .map(|item| match item {
+                        crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
+                            // Find column by name.
+                            if let Some(pos) = col_names.iter().position(|c| c == f) {
+                                row.get(pos).map(&value_to_qv).unwrap_or(QueryValue::Null)
+                            } else {
+                                QueryValue::Null
+                            }
+                        }
+                        crate::query::ast::SelectItem::Expr(expr) => {
+                            if let crate::query::ast::Expr::Lit(v) = expr.as_ref() {
+                                value_to_qv(v)
+                            } else {
+                                QueryValue::Null
+                            }
+                        }
+                        crate::query::ast::SelectItem::Star => {
+                            // Fallback: first column.
+                            row.first().map(&value_to_qv).unwrap_or(QueryValue::Null)
+                        }
+                        _ => QueryValue::Null,
+                    })
+                    .collect()
+            }
+        })
+        .collect();
+
+    // Apply ORDER BY using existing multi-key sort helper.
+    if let Some(order_by) = &q.order_by {
+        let keys = resolve_order_by_keys(q, &out_cols, order_by);
+        sort_rows_by_columns(&mut rows, &keys);
+    }
+
+    // Apply LIMIT.
+    let truncated = if let Some(lim) = plan.limit {
+        if rows.len() > lim as usize {
+            rows.truncate(lim as usize);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let row_count = rows.len() as u64;
+    QueryResult {
+        name: String::new(),
+        oql: String::new(),
+        columns: out_cols,
+        rows,
+        row_count,
+        truncated,
+        error: None,
+        note: None,
+        viz: None,
+        elapsed_ms: None,
+    }
+}
+
 pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],
     reachable_only: bool,
 ) -> std::io::Result<Vec<QueryResult>> {
+    // Short-circuit VALUES-only batches: no HPROF scan needed.
+    if queries
+        .iter()
+        .all(|(q, _)| matches!(q.from, crate::query::ast::FromSource::Values { .. }))
+    {
+        let results = queries
+            .iter()
+            .map(|(q, plan)| execute_values_query(q, plan))
+            .collect();
+        return Ok(results);
+    }
     let (mut flat, groups) = expand_union_queries(queries);
     // When reachable-only is set, demote HistogramOnly plans to SingleScan so
     // that every object goes through the per-object DFN filter in the pass2 scan

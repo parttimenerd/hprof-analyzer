@@ -3352,7 +3352,17 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             || p.needs.gc_roots
     });
 
-    let mut query_results = if uses_subqueries {
+    // Short-circuit VALUES-only batches: no HPROF scan needed at all.
+    let mut query_results = if parsed
+        .iter()
+        .all(|(q, _)| matches!(q.from, crate::query::ast::FromSource::Values { .. }))
+    {
+        let results: Vec<query::model::QueryResult> = parsed
+            .iter()
+            .map(|(q, plan)| query::run::execute_values_query(q, plan))
+            .collect();
+        query::run::collapse_union_results(results, &union_groups)
+    } else if uses_subqueries {
         query::run::run_single_dump(input, &parsed, opts.reachable_only)?
     } else if needs_full {
         run_oql_escalated(input, &flat, &union_groups, opts.reachable_only, &opts)?
