@@ -843,10 +843,17 @@ impl Pass2 {
                     shallow_total: shallow_totals[ci],
                 })
                 .collect();
-            for (slot, (q, plan)) in queries.iter().enumerate() {
-                if plan.kind == crate::query::plan::StageKind::HistogramOnly {
-                    let r = crate::query::histogram::run_histogram(q, plan, &summaries);
-                    query_state.push_finished(slot, r);
+            // Under `reachable_only` the caller re-runs HistogramOnly queries
+            // with a post-DFN reachable-only class histogram (OQL-1 fix).
+            // Skip here to avoid producing all-objects counts that would be
+            // overwritten anyway — and that would silently return wrong results
+            // if the caller forgets to replace them.
+            if !opts.reachable_only {
+                for (slot, (q, plan)) in queries.iter().enumerate() {
+                    if plan.kind == crate::query::plan::StageKind::HistogramOnly {
+                        let r = crate::query::histogram::run_histogram(q, plan, &summaries);
+                        query_state.push_finished(slot, r);
+                    }
                 }
             }
         }

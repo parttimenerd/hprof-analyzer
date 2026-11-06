@@ -1273,10 +1273,79 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Expr::Unary { op, arg } => {
                 unary(*op, &self.eval_expr_array(arg, src_idx, class_name, length))
             }
-            Expr::Method { name, .. } => match name.as_str() {
-                // Arrays expose only `length`/`size`; everything else is Null for now.
+            Expr::Method {
+                name,
+                receiver,
+                args,
+            } => match name.as_str() {
+                // Arrays expose `length`/`size` natively.
                 "length" | "size" => QueryValue::Int(length as i64),
-                _ => QueryValue::Null,
+                // String functions work on any string-valued receiver (including
+                // Lit expressions) regardless of whether the source row is an array.
+                method => {
+                    let recv_val = self.eval_expr_array(receiver, src_idx, class_name, length);
+                    match recv_val {
+                        QueryValue::Str(s) => match method {
+                            "lower" => QueryValue::Str(s.to_lowercase()),
+                            "upper" => QueryValue::Str(s.to_uppercase()),
+                            "trim" => QueryValue::Str(s.trim().to_string()),
+                            "ltrim" => QueryValue::Str(s.trim_start().to_string()),
+                            "rtrim" => QueryValue::Str(s.trim_end().to_string()),
+                            "strlen" => QueryValue::Int(s.chars().count() as i64),
+                            "concat" => {
+                                let suffix = args
+                                    .first()
+                                    .map(|a| self.eval_expr_array(a, src_idx, class_name, length))
+                                    .unwrap_or(QueryValue::Null);
+                                if let QueryValue::Str(r) = suffix {
+                                    QueryValue::Str(s + &r)
+                                } else {
+                                    QueryValue::Null
+                                }
+                            }
+                            "replace" => {
+                                let from_val = args
+                                    .first()
+                                    .map(|a| self.eval_expr_array(a, src_idx, class_name, length));
+                                let to_val = args
+                                    .get(1)
+                                    .map(|a| self.eval_expr_array(a, src_idx, class_name, length));
+                                match (from_val, to_val) {
+                                    (Some(QueryValue::Str(from)), Some(QueryValue::Str(to))) => {
+                                        QueryValue::Str(s.replace(from.as_str(), &to))
+                                    }
+                                    _ => QueryValue::Null,
+                                }
+                            }
+                            "substr" => {
+                                let start_val = args
+                                    .first()
+                                    .map(|a| self.eval_expr_array(a, src_idx, class_name, length));
+                                let len_val = args
+                                    .get(1)
+                                    .map(|a| self.eval_expr_array(a, src_idx, class_name, length));
+                                let start_char = match start_val {
+                                    Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
+                                    _ => return QueryValue::Null,
+                                };
+                                let chars: Vec<char> = s.chars().collect();
+                                if start_char >= chars.len() {
+                                    return QueryValue::Str(String::new());
+                                }
+                                match len_val {
+                                    Some(QueryValue::Int(n)) if n >= 0 => {
+                                        let end = (start_char + n as usize).min(chars.len());
+                                        QueryValue::Str(chars[start_char..end].iter().collect())
+                                    }
+                                    None => QueryValue::Str(chars[start_char..].iter().collect()),
+                                    _ => QueryValue::Null,
+                                }
+                            }
+                            _ => QueryValue::Null,
+                        },
+                        _ => QueryValue::Null,
+                    }
+                }
             },
             Expr::Aggregate { .. } => QueryValue::Null,
             Expr::Case { branches, else_ } => {
@@ -1382,19 +1451,21 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                             .get(1)
                             .map(|a| self.eval_expr(a, src_idx, class_id, blob));
                         // SQL SUBSTR is 1-based; clamp to 0 for out-of-range starts.
-                        let start = match start_val {
+                        let start_char = match start_val {
                             Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
                             _ => return QueryValue::Null,
                         };
-                        if start >= s.len() {
+                        // Work in char positions to avoid UTF-8 byte-boundary panics.
+                        let chars: Vec<char> = s.chars().collect();
+                        if start_char >= chars.len() {
                             return QueryValue::Str(String::new());
                         }
                         let result = match len_val {
                             Some(QueryValue::Int(n)) if n >= 0 => {
-                                let end = (start + n as usize).min(s.len());
-                                s[start..end].to_string()
+                                let end = (start_char + n as usize).min(chars.len());
+                                chars[start_char..end].iter().collect()
                             }
-                            None => s[start..].to_string(),
+                            None => chars[start_char..].iter().collect(),
                             _ => return QueryValue::Null,
                         };
                         QueryValue::Str(result)

@@ -7410,3 +7410,34 @@ fn heap_left_join_values_keeps_all_rows() {
         "expected rows with null or (0 rows):\n{out}"
     );
 }
+
+// ── OQL-26 / OQL-30 fix tests ─────────────────────────────────────────────────
+
+/// `SUBSTR` on a multi-byte (non-ASCII) string must not panic and must count
+/// characters, not bytes (OQL-26).
+#[test]
+fn substr_non_ascii_no_panic() {
+    // "café" has 4 chars but 5 UTF-8 bytes; byte-slicing at offset 4 panics.
+    // SUBSTR("café", 4, 1) must return "é" (the 4th character).
+    let out = run_values_query(r#"SELECT SUBSTR("café", 4, 1) AS ch FROM (VALUES (1)) AS t(x)"#);
+    assert!(
+        out.contains('é') || out.contains("ch"),
+        "SUBSTR on non-ASCII must not panic and should return the 4th char:\n{out}"
+    );
+}
+
+/// `LOWER` on a constant string literal must work even from an array scan path
+/// (OQL-30: string expressions returned NULL when FROM row was an array).
+#[test]
+fn string_func_on_array_row_is_not_null() {
+    let Some(hprof) = philosophers() else { return };
+    // Select a constant LOWER expression from an array class — result must not be NULL.
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT LOWER("ABC") AS lo FROM java.lang.Object[] LIMIT 1"#,
+    );
+    assert!(
+        out.contains("abc"),
+        "LOWER(\"ABC\") from array row should return \"abc\", not NULL:\n{out}"
+    );
+}

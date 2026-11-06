@@ -183,6 +183,63 @@ pub struct QueryParams {
     /// OQL EXAMPLES (for custom queries):
     ///   "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM java.lang.String ORDER BY ret DESC LIMIT 10"
     ///   "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"
+    ///
+    /// OQL LANGUAGE FEATURES:
+    ///
+    /// BASIC SELECT:
+    ///   SELECT @objectId, @usedHeapSize, @displayName FROM java.lang.Thread
+    ///   SELECT * FROM INSTANCEOF java.util.List                 -- match subclasses too
+    ///   SELECT @objectId FROM java.lang.String s WHERE s.value[0] > 65  -- array subscript in WHERE
+    ///
+    /// CAST & TYPE CHECKS:
+    ///   SELECT CAST(@objectId AS STRING) FROM java.lang.Thread  -- cast to STRING, INT, LONG, FLOAT, BOOL
+    ///   SELECT @displayName FROM java.lang.Object x WHERE x IS NOT NULL
+    ///
+    /// STRING FUNCTIONS:
+    ///   SELECT upper(s.value), lower(s.value), length(s.value) FROM java.lang.String s
+    ///   SELECT trim(s.value), substring(s.value, 0, 10) FROM java.lang.String s
+    ///   SELECT concat(s.value, '!') FROM java.lang.String s WHERE s.value LIKE '%error%'
+    ///
+    /// AGGREGATES & GROUP BY:
+    ///   SELECT classof(x), COUNT(*), SUM(@usedHeapSize) FROM INSTANCEOF java.lang.Object x GROUP BY classof(x)
+    ///   SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY n DESC
+    ///   SELECT classof(x), COUNT(DISTINCT @usedHeapSize) FROM INSTANCEOF java.lang.Object x GROUP BY classof(x)
+    ///   SELECT MIN(@usedHeapSize), MAX(@usedHeapSize), AVG(@usedHeapSize) FROM java.lang.String
+    ///   SELECT PERCENTILE(@usedHeapSize, 50) AS p50 FROM java.lang.String
+    ///
+    /// VALUES INLINE TABLE (no dump scan needed):
+    ///   SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
+    ///   SELECT id * 2 FROM VALUES (10), (20), (30) AS t(id) ORDER BY id DESC
+    ///
+    /// JOIN (combining a heap scan with inline data):
+    ///   SELECT t.name, v.label
+    ///     FROM java.lang.Thread t
+    ///     INNER JOIN VALUES ('main', 'primary'), ('worker', 'pool') AS v(name, label)
+    ///     ON t.name = v.name
+    ///   SELECT t.name, v.label
+    ///     FROM java.lang.Thread t
+    ///     LEFT JOIN VALUES ('main', 'primary') AS v(name, label)
+    ///     ON t.name = v.name     -- unmatched rows get NULL for v.label
+    ///
+    /// WINDOW FUNCTIONS (ORDER BY + LIMIT apply globally):
+    ///   SELECT @objectId, ROW_NUMBER() OVER () AS rn FROM java.lang.String LIMIT 5
+    ///   SELECT @objectId, RANK() OVER (ORDER BY @usedHeapSize DESC) AS rank FROM java.lang.String
+    ///
+    /// ARITHMETIC & MODULO:
+    ///   SELECT @usedHeapSize % 1024 AS remainder FROM java.lang.String
+    ///   SELECT @usedHeapSize / 1024.0 AS kb FROM java.lang.String
+    ///
+    /// UNION / INTERSECT / EXCEPT:
+    ///   SELECT @objectId FROM java.lang.Thread UNION SELECT @objectId FROM java.lang.Runnable
+    ///   SELECT @objectId FROM java.lang.Thread INTERSECT SELECT @objectId FROM java.lang.Runnable
+    ///
+    /// SUBQUERIES:
+    ///   SELECT @objectId FROM java.lang.Thread WHERE @objectId IN (SELECT @objectId FROM java.lang.Thread WHERE name = 'main')
+    ///   SELECT @objectId FROM (SELECT @objectId, name FROM java.lang.Thread) t WHERE t.name = 'main'
+    ///
+    /// WITH (CTEs):
+    ///   WITH big AS (SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 100)
+    ///   SELECT @objectId FROM big
     pub oql: String,
     /// Include GC-unreachable objects in results. By default, only GC-reachable
     /// objects are returned (Eclipse MAT parity). Set to true to include all

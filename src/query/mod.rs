@@ -24,6 +24,7 @@ pub mod server;
 pub mod stage_runner;
 pub mod stringvals;
 pub mod viz;
+pub mod vtable;
 
 use std::fmt;
 

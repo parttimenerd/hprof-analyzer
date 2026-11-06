@@ -287,6 +287,180 @@ to continue; the precise cause needs verification against a clean build. Keep
 per-query LIMIT enforcement independent of whether sibling queries require a
 full scan.
 
+### OQL-23. Late-phase `COUNT(DISTINCT ...)` counts every non-null value
+
+With `--all`, `COUNT(DISTINCT @retainedHeapSize)` returned **203,782**, the
+same as `COUNT(@retainedHeapSize)`. As an independent oracle, projecting all
+retained-size values and counting unique values gave **388**. The scan-time
+control also distinguished `COUNT(DISTINCT @usedHeapSize)` (**17**) from
+`COUNT(@usedHeapSize)` (**203,782**). In `stage_runner.rs`, both retained-size
+aggregate paths explicitly implement `CountDistinct` as a non-null count, and
+the planner accepts the retained-size form. Use a distinct-value set in the
+late phase or reject this aggregate there; do not silently return the ordinary
+count.
+
+### OQL-24. `FILTER` is ignored or evaluated too early for retained aggregates
+
+With `--all`,
+`COUNT(@retainedHeapSize) FILTER (WHERE @usedHeapSize > 100)` returned
+**203,782**, while the equivalent qualifying population
+`COUNT(*) ... WHERE @usedHeapSize > 100` is **438**. The late aggregate path is
+not applying the aggregate's FILTER predicate. A retained-size FILTER also
+misbehaves: `COUNT(*) FILTER (WHERE @retainedHeapSize > 1000)` returned **0**,
+whereas the corresponding WHERE query returned **505**. In `plan.rs`, aggregate
+planning collects needs from the argument but not the FILTER predicate; in
+`stage_runner.rs`, the retained aggregate loops fold values without testing
+`filter`. Collect FILTER dependencies and evaluate each predicate at the phase
+where its attributes are available.
+
+### OQL-25. Subqueries outside WHERE are not planned
+
+Subqueries inside expressions other than the top-level WHERE predicate are not
+collected into execution subplans. On the fixture, an `EXISTS` filter over the
+nonempty Thread class returned **0** for `COUNT(*)`, and
+`CASE WHEN EXISTS (SELECT * FROM java.lang.Thread) THEN 1 ELSE 0 END` returned
+**0** instead of **1**. An `IN (subquery)` inside an aggregate FILTER panicked
+with `IN(<subquery>) predicate must be resolved at plan time`. The planner only
+collects IN/EXISTS subplans from `q.where_`; discover them in aggregate FILTERs
+and SELECT-expression predicates too, or reject those placements before scan.
+
+### OQL-26. `SUBSTR` slices UTF-8 strings by byte offsets and can panic
+
+`SUBSTR("café", 4, 1)` panicked with a Rust string-boundary error: the one-based
+start is treated as a character position, but the implementation slices the
+UTF-8 string using byte offsets. A valid query over non-ASCII text can therefore
+terminate the CLI instead of returning the fourth character (`é`). Convert
+character positions to byte boundaries (or reject unsupported input safely)
+before slicing.
+
+### OQL-27. Unsupported HAVING predicates silently keep every group
+
+`HAVING EXISTS (SELECT * FROM java.lang.String WHERE @objectId < 0)` returned
+both object-category groups, even though the subquery count was zero. The
+HAVING evaluator's fallback arm returns `true` for predicate variants it does
+not handle, including subqueries. Either evaluate the predicate with planned
+subquery results or return an actionable unsupported-expression error; never
+silently retain all groups.
+
+### OQL-28. `String.toString()` returns NULL instead of the string contents
+
+On the fixture, `SELECT toString(s) FROM java.lang.String s LIMIT 3` returned
+decoded string values, while `SELECT s.toString() FROM java.lang.String s
+LIMIT 3` returned three NULLs. A Java String's `toString()` should return its
+contents. The method-call projection does not arm the late String-value capture
+path that the function form uses; route it through the same resolution or
+reject it rather than returning NULL.
+
+### OQL-29. Mixed integer/float comparisons lose precision above 2^53
+
+The predicate `9007199254740993 = 9007199254740992.0` matched an object, while
+the corresponding `!=` predicate matched none. These values are not equal: the
+integer is one greater than the exactly represented floating-point value. Same-
+type integer controls behaved correctly. The comparison converts the integer
+to `f64`, rounding it to the float's value; `qv_value_eq` uses the same
+conversion for cross-type `.equals()`. Compare the values without lossy
+coercion, or document a deliberately approximate numeric comparison contract.
+
+### OQL-30. String expressions return NULL when the FROM row is an array
+
+`LOWER("ABC")` and `LENGTH("abc")` returned NULL when selected from
+`java.lang.Object[]`, but returned `"abc"` and `3` respectively from
+`java.lang.Object`. These constant expressions do not depend on the source row;
+their results should not change based on whether the scan visits an instance or
+an array. `eval_expr_array` currently returns NULL for method expressions other
+than array `length`/`size`; evaluate supported string operations consistently
+in both paths.
+
+### OQL-31. Scalar method expressions in HAVING evaluate as NULL
+
+`HAVING LOWER(@category) = "jdk"` returned no groups, while the direct
+`HAVING @category = "jdk"` control returned the `jdk` group. The HAVING
+expression evaluator maps `Expr::Method` to NULL instead of evaluating supported
+operations such as `LOWER`; implement the same expression semantics as the row
+evaluator or reject unsupported HAVING expressions explicitly.
+
+### OQL-32. `INSTANCEOF` does not match implemented interfaces
+
+With `--all`, `java.lang.Thread` had 29 instances, but
+`FROM INSTANCEOF java.lang.Runnable` returned zero. The fixture also had 362
+`java.util.HashMap` instances, while `FROM INSTANCEOF java.util.Map` returned
+zero. Both classes implement the queried interface. `LiveResolver::is_instance_of`
+walks only `super_id`, and `ClassInfo` does not retain implemented-interface
+metadata. Include interface transitive closure in assignability checks; the OQL
+guide itself uses `INSTANCEOF java.util.Map` as an example.
+
+### OQL-33. `COUNT(DISTINCT ...)` treats positive and negative zero as different
+
+`0.0 = -0.0` matched all 203,782 objects, but
+`COUNT(DISTINCT CASE WHEN @objectId < 100000 THEN 0.0 ELSE -0.0 END)` returned
+**2**. The aggregate's distinct accumulator keys values by debug-formatted
+strings, which distinguishes `Float(0.0)` from `Float(-0.0)` even though numeric
+comparison considers them equal. Likewise, `1 = 1.0` matched all rows, while
+`COUNT(DISTINCT CASE WHEN @objectId < 100000 THEN 1 ELSE 1.0 END)` returned **2**.
+The analogous GROUP BY expression also produced two groups for `0.0` and
+`-0.0`. Use canonical numeric equality/hash semantics for distinct and group
+keys.
+
+### OQL-34. Array `WHERE ... INSTANCEOF` uses exact class-name matching
+
+`SELECT COUNT(*) FROM java.lang.Object[] a WHERE a INSTANCEOF java.lang.Object`
+returned **0**, although the same exact array-class source contains 2,418
+objects. The `Cloneable` predicate also returned zero, and
+`String[] WHERE ... INSTANCEOF Object[]` failed to match its 450 rows. This is
+separate from the `FROM INSTANCEOF` array gap above: `array_eval_pred` uses the
+ordinary class-name matcher instead of Java array assignability, so WHERE and
+FROM class matching disagree. Apply the same array-aware assignability rules in
+both paths.
+
+### OQL-35. `NULLIF` uses variant equality instead of query equality
+
+`NULLIF(1, 1.0)` returned the integer `1`, even though the query comparison
+`1 = 1.0` is true. `NULLIF` is documented to return NULL when its operands are
+equal, but the expression evaluators compare `QueryValue` variants directly
+instead of using the numeric cross-type comparison semantics. Use the same
+equality routine as predicates for `NULLIF`.
+
+### OQL-36. Dotted method calls silently ignore unsupported argument counts
+
+`SELECT s.getObjectAddress(1) FROM java.lang.String s LIMIT 1` succeeded and
+returned exactly the same address as the zero-argument `s.getObjectAddress()`
+call. `getObjectAddress` takes no arguments, but the dotted-call parser accepts
+an arbitrary argument list and planning validates only the method name; dispatch
+ignores `args` for this method. This can silently accept malformed calls (and
+extra arguments to other methods) instead of reporting an arity error. Validate
+method argument counts during planning, including allowed overloads and
+variadic methods.
+
+### OQL-37. Java `String.length()` returns NULL
+
+`SELECT s.length() FROM java.lang.String s LIMIT 3` returned NULL for all three
+rows, while `toString(s)` decoded those same rows as `org.renaissance`,
+`org.renaissance.core`, and `org.renaissance`. The parser and method table
+recognize `length()` as supported, but dispatch maps it to `Attr::Length`, whose
+instance-row projection returns NULL; only the array-row path supplies an
+actual length. Implement String length from its decoded value/backing storage,
+or reject the String receiver explicitly instead of returning NULL.
+
+### OQL-38. LIKE regex alternation is escaped when the pattern contains `_`
+
+The guide says LIKE accepts SQL globs and regex patterns, but the pattern
+`foo_bar|baz` is classified as a glob solely because it contains `_`. With
+`--all`, `WHERE "baz" LIKE "foo_bar|baz"` returned **0**, while the equivalent
+anchored regex `WHERE "baz" LIKE "^(?:foo_bar|baz)$"` returned **134,277**.
+The glob conversion changes `_` to `.` and escapes `|`, destroying regex
+alternation. The heuristic should not silently reinterpret valid regex syntax;
+provide an unambiguous pattern mode or improve regex/glob detection.
+
+### OQL-39. Method-expression column names omit the receiver expression
+
+`SELECT LOWER("ABC") ...` returned the value `"abc"` but labeled its column
+`lower()`. `SELECT SUBSTR("abcdef", 2, 3) ...` returned `"bcd"` but labeled
+the column `substr(2, 3)`. `expr_name` renders an `Expr::Method` from only its
+method name and additional arguments, omitting the receiver (the first
+SQL-function operand). This produces misleading and potentially colliding
+result-column metadata. Include the receiver in the rendered default name, as
+well as the method arguments.
+
 ## Checks that passed in this run
 
 The tested scalar forms (field/arithmetic projections, `@superclass`,
@@ -307,8 +481,9 @@ smoke tests, not comprehensive correctness proof.
   `LIMIT 0` contract, multiple and non-address-LHS `IN` predicates,
   short-circuit `IN`/`EXISTS` alignment, address-valued and nested subqueries,
   unprojected `ORDER BY`, CAST NULL propagation/default column naming/invalid
-  boolean strings, array `INSTANCEOF`, and `FROM ENTRIES` planning/execution
-  paths.
+  boolean strings, Java String `length()`, LIKE regex/glob classification,
+  method-expression column names, array `INSTANCEOF`, and `FROM ENTRIES`
+  planning/execution paths.
 - Test report-mode `FROM ENTRIES` with the actual graph/capability contract and
   make unsupported states fail with the right actionable message.
 - Update README/OQL examples, restrictions, and HTTP response schema only after

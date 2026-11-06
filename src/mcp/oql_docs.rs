@@ -119,6 +119,118 @@ SELECT @objectId AS idx, dominators(s) FROM java.lang.String s LIMIT 10
 ```
 
 Useful to find which object dominates each string (i.e. what keeps it alive).
+
+## CAST
+
+Convert a value to a target type:
+
+```sql
+SELECT CAST(@objectId AS STRING) FROM java.lang.Thread
+SELECT CAST(@usedHeapSize AS FLOAT) / 1024.0 AS kb FROM java.lang.String
+```
+
+Supported target types: `STRING`, `INT`, `LONG`, `FLOAT`, `BOOL`.
+
+## VALUES inline table (no dump scan needed)
+
+Create an in-memory table without scanning the heap dump:
+
+```sql
+SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
+SELECT id * 2 AS doubled FROM VALUES (10), (20), (30) AS t(id) ORDER BY id DESC
+```
+
+Useful for building lookup tables, constant sets, or testing query logic.
+
+## JOIN
+
+Combine heap query results with inline data (VALUES) or virtual tables:
+
+```sql
+-- INNER JOIN: only keeps rows where the join condition matches
+SELECT t.name, v.label
+  FROM java.lang.Thread t
+  INNER JOIN VALUES ('main', 'primary'), ('worker-1', 'pool') AS v(name, label)
+  ON t.name = v.name
+
+-- LEFT JOIN: keeps all LHS rows; unmatched RHS columns are NULL
+SELECT t.name, v.label
+  FROM java.lang.Thread t
+  LEFT JOIN VALUES ('main', 'primary') AS v(name, label)
+  ON t.name = v.name
+
+-- Bare JOIN is equivalent to INNER JOIN
+SELECT t.name, v.label
+  FROM java.lang.Thread t
+  JOIN VALUES ('main', 'primary') AS v(name, label)
+  ON t.name = v.name
+```
+
+The JOIN ON clause must use equality (`=`). Virtual tables (`classes`, `gc_roots`, `threads`)
+are also supported as the RHS source when querying a dump (not in VALUES-only queries):
+
+```sql
+-- Join heap objects with the classes virtual table
+SELECT c.class_name, c.instance_count, c.shallow_total
+  FROM classes c
+  ORDER BY c.shallow_total DESC LIMIT 10
+
+-- Annotate threads with their class names via the classes virtual table
+SELECT t.name, t.serial, c.class_name
+  FROM java.lang.Thread t
+  LEFT JOIN classes c ON t.serial = c.instance_count
+```
+
+Virtual table columns:
+- `classes`: `class_name`, `instance_count`, `shallow_total`, `retained_total`
+- `gc_roots`: `dense_idx`, `root_type`, `root_type_name`
+- `threads`: `serial`, `obj_idx`, `name`, `is_daemon`, `priority`
+
+## String functions
+
+| Function | Description |
+|----------|-------------|
+| `upper(s)` | Convert string to uppercase |
+| `lower(s)` | Convert string to lowercase |
+| `length(s)` | String length in characters |
+| `trim(s)` | Remove leading/trailing whitespace |
+| `substring(s, start, len)` | Extract substring |
+| `concat(a, b)` | Concatenate two strings |
+| `replace(s, from, to)` | Replace all occurrences |
+
+These work on string columns including `toString(x)` and field values.
+
+## Arithmetic
+
+All basic operators are supported: `+`, `-`, `*`, `/`, `%` (modulo):
+
+```sql
+SELECT @usedHeapSize % 1024 AS remainder FROM java.lang.String
+SELECT @usedHeapSize / 1024 AS kb, @usedHeapSize / 1024 / 1024 AS mb FROM java.lang.String
+```
+
+## Window functions
+
+```sql
+SELECT @objectId, ROW_NUMBER() OVER () AS rn FROM java.lang.String LIMIT 5
+SELECT @objectId, RANK() OVER (ORDER BY @usedHeapSize DESC) AS rank FROM java.lang.String
+SELECT @objectId, DENSE_RANK() OVER (ORDER BY @usedHeapSize DESC) AS drank FROM java.lang.String
+```
+
+Window functions are evaluated after all filtering/grouping but before ORDER BY/LIMIT.
+
+## WITH (CTEs)
+
+Named subqueries defined before the main query:
+
+```sql
+WITH big AS (
+  SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 100
+)
+SELECT @objectId FROM big LIMIT 10
+```
+
+Multiple CTEs can be chained with commas.
 "#;
 
 // ── Attributes ────────────────────────────────────────────────────────────────
@@ -368,6 +480,106 @@ SELECT s[0] FROM byte[] s LIMIT 10
 ```sql
 -- First 4 bytes as a JSON array
 SELECT s[0:4] FROM byte[] s WHERE s.@length >= 4 LIMIT 5
+```
+
+## VALUES inline table (no dump required)
+
+```sql
+-- Basic inline table
+SELECT * FROM VALUES (1, 'low'), (2, 'medium'), (3, 'high') AS t(id, label)
+```
+
+```sql
+-- Build a lookup table for known thread names
+SELECT id * 10 AS score FROM VALUES (1), (2), (3) AS t(id) ORDER BY score DESC
+```
+
+## JOIN with inline data
+
+```sql
+-- Enrich thread results with a label from an inline lookup table
+SELECT t.name, v.category
+  FROM java.lang.Thread t
+  INNER JOIN VALUES
+    ('main',           'primary'),
+    ('Finalizer',      'jvm-internal'),
+    ('Reference Handler', 'jvm-internal')
+  AS v(name, category)
+  ON t.name = v.name
+```
+
+```sql
+-- LEFT JOIN: see which threads are NOT in the known list (label = NULL)
+SELECT t.name, v.category
+  FROM java.lang.Thread t
+  LEFT JOIN VALUES ('main', 'primary') AS v(name, category)
+  ON t.name = v.name
+```
+
+## CAST and string functions
+
+```sql
+-- Cast object ID to string for concatenation
+SELECT concat('obj-', CAST(@objectId AS STRING)) AS label FROM java.lang.String LIMIT 5
+```
+
+```sql
+-- Normalize class names to uppercase for comparison
+SELECT upper(classof(x)) AS cls, COUNT(*) AS n
+  FROM INSTANCEOF java.lang.Object x
+  GROUP BY upper(classof(x)) ORDER BY n DESC LIMIT 10
+```
+
+```sql
+-- Substring of toString
+SELECT substring(toString(s), 0, 20) AS prefix, COUNT(*) AS n
+  FROM java.lang.String s
+  GROUP BY substring(toString(s), 0, 20) ORDER BY n DESC LIMIT 20
+```
+
+## Arithmetic and modulo
+
+```sql
+-- Sizes in KB (integer division) and remainder
+SELECT @usedHeapSize / 1024 AS kb, @usedHeapSize % 1024 AS rem
+  FROM java.lang.String WHERE @usedHeapSize > 1024 LIMIT 10
+```
+
+## WITH (CTEs) and subqueries
+
+```sql
+-- CTE: identify large strings then count them
+WITH large AS (
+  SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 200
+)
+SELECT COUNT(*) AS large_string_count FROM large
+```
+
+```sql
+-- Subquery in FROM: filter threads to those with a specific name pattern
+SELECT t.name FROM (
+  SELECT @objectId AS id, name FROM java.lang.Thread
+) t WHERE t.name LIKE '%worker%' LIMIT 20
+```
+
+## COUNT(DISTINCT ...) and HAVING
+
+```sql
+-- Classes with more than one distinct shallow size (non-uniform instances)
+SELECT classof(x) AS cls, COUNT(DISTINCT @usedHeapSize) AS size_variants
+  FROM INSTANCEOF java.lang.Object x
+  GROUP BY classof(x)
+  HAVING COUNT(DISTINCT @usedHeapSize) > 1
+  ORDER BY size_variants DESC LIMIT 20
+```
+
+```sql
+-- String groups with more than 100 duplicates
+SELECT toString(s) AS value, COUNT(*) AS n
+  FROM java.lang.String s
+  GROUP BY toString(s)
+  HAVING COUNT(*) > 100
+  ORDER BY n DESC LIMIT 20
 ```
 
 ## Working with object indices
