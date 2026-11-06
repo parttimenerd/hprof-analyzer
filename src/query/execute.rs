@@ -4,7 +4,8 @@
 
 use crate::query::ObjectVisitor;
 use crate::query::ast::{
-    AggFunc, ArithOp, Attr, CompareOp, Expr, FromSource, OrderBy, Query, SelectItem, UnaryOp, Value,
+    AggFunc, ArithOp, Attr, CastTarget, CompareOp, Expr, FromSource, OrderBy, Query, SelectItem,
+    UnaryOp, Value,
 };
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
@@ -2482,7 +2483,6 @@ pub(crate) fn cast_query_value(
     value: QueryValue,
     target: crate::query::ast::CastTarget,
 ) -> QueryValue {
-    use crate::query::ast::CastTarget;
     match target {
         CastTarget::Int => match value {
             QueryValue::Int(_) => value,
@@ -2508,13 +2508,21 @@ pub(crate) fn cast_query_value(
             QueryValue::Int(i) => QueryValue::Str(i.to_string()),
             QueryValue::Float(f) => QueryValue::Str(f.to_string()),
             QueryValue::Bool(b) => QueryValue::Str(b.to_string()),
-            QueryValue::Null => QueryValue::Str("null".to_string()),
+            QueryValue::Null => QueryValue::Null,
             QueryValue::ObjRef { .. } => QueryValue::Null,
         },
         CastTarget::Bool => match value {
             QueryValue::Bool(_) => value,
             QueryValue::Int(i) => QueryValue::Bool(i != 0),
-            QueryValue::Str(ref s) => QueryValue::Bool(s.eq_ignore_ascii_case("true") || s == "1"),
+            QueryValue::Str(ref s) => {
+                if s.eq_ignore_ascii_case("true") || s == "1" {
+                    QueryValue::Bool(true)
+                } else if s.eq_ignore_ascii_case("false") || s == "0" {
+                    QueryValue::Bool(false)
+                } else {
+                    QueryValue::Null
+                }
+            }
             _ => QueryValue::Null,
         },
     }
@@ -3307,7 +3315,15 @@ pub fn expr_name(e: &Expr) -> String {
         Expr::Case { .. } => "CASE".to_string(),
         Expr::Coalesce(_) => "COALESCE".to_string(),
         Expr::NullIf { .. } => "NULLIF".to_string(),
-        Expr::Cast { target, .. } => format!("CAST(AS {target:?})"),
+        Expr::Cast { expr, target } => {
+            let target_str = match target {
+                CastTarget::Int => "INT",
+                CastTarget::Float => "FLOAT",
+                CastTarget::Str => "STRING",
+                CastTarget::Bool => "BOOL",
+            };
+            format!("CAST({} AS {target_str})", expr_name(expr))
+        }
     }
 }
 
