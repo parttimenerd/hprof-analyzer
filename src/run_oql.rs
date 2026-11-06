@@ -507,6 +507,24 @@ pub(crate) fn run_oql_escalated(
             }
             if let Some(src) = row_src_by_slot.get(&slot) {
                 query::run::filter_result_by_src(r, src, dfn);
+                // Re-apply per-query LIMIT after reachability pruning (mirrors the
+                // fast path in run_single_dump). When a sibling query forces
+                // escalation the scan could not early-stop, so the result may
+                // exceed plan.limit after pruning (OQL-22).
+                let is_subquery_outer = flat
+                    .get(slot)
+                    .map(|(q, _)| q.from.as_subquery().is_some())
+                    .unwrap_or(false);
+                if !is_subquery_outer {
+                    if let Some(limit) = flat.get(slot).and_then(|(_, p)| p.limit) {
+                        let lim = limit as usize;
+                        if r.rows.len() > lim {
+                            r.rows.truncate(lim);
+                            r.row_count = lim as u64;
+                            r.truncated = true;
+                        }
+                    }
+                }
             }
         }
     }
