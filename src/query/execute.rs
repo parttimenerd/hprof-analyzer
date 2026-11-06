@@ -302,6 +302,11 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// at the start of each `where_passes`/`array_where_passes` call, matching
     /// the encounter order used by `collect_in_subplans` at plan time.
     in_cursor: std::cell::Cell<usize>,
+    /// ORDER BY attrs that are not present in the projected columns. Evaluated
+    /// per matched row and appended as trailing hidden values so `finish_with_src`
+    /// can sort on them even when they were not selected. Empty when all ORDER BY
+    /// keys appear in the SELECT list (the common case, zero overhead).
+    extra_sort_attrs: Vec<Attr>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -386,7 +391,7 @@ pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
         }
         AggAcc::CountDistinct { seen } => {
             if !matches!(value, QueryValue::Null) {
-                seen.insert(format!("{value:?}"));
+                seen.insert(canonical_distinct_key(&value));
             }
         }
         AggAcc::Sum { total, any_value } => {
@@ -561,7 +566,10 @@ pub(crate) fn eval_having_term(
             };
             compare_values(&lv, *op, &rv, like_re)
         }
-        _ => true,
+        // Unsupported predicates in HAVING (e.g. EXISTS/IN subqueries) do not
+        // silently keep all groups — they reject all groups until proper support
+        // is wired into the HAVING evaluator (OQL-27).
+        _ => false,
     }
 }
 
@@ -636,7 +644,16 @@ fn eval_having_expr(
             *op,
             &eval_having_expr(arg, row, query, columns, like_regexes),
         ),
-        Expr::Method { .. } => QueryValue::Null,
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
+            // String manipulation methods in HAVING (e.g. HAVING LOWER(@category) = "jdk").
+            // Evaluate the receiver against the HAVING row, then apply the string op.
+            let recv_val = eval_having_expr(receiver, row, query, columns, like_regexes);
+            eval_having_string_method(&recv_val, name, args, row, query, columns, like_regexes)
+        }
         Expr::Case { branches, else_ } => {
             for (pred, then_expr) in branches {
                 if eval_having_term(pred, row, query, columns, like_regexes) {
@@ -660,12 +677,106 @@ fn eval_having_expr(
         Expr::NullIf { lhs, rhs } => {
             let lv = eval_having_expr(lhs, row, query, columns, like_regexes);
             let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
-            if lv == rv { QueryValue::Null } else { lv }
+            if qv_value_eq(&lv, &rv) {
+                QueryValue::Null
+            } else {
+                lv
+            }
         }
         Expr::Cast { expr, target } => {
             let value = eval_having_expr(expr, row, query, columns, like_regexes);
             cast_query_value(value, *target)
         }
+    }
+}
+
+/// Apply a string method to a HAVING receiver value (e.g. LOWER(@category)).
+/// Covers the same string ops as `dispatch_method`; returns Null for unsupported.
+fn eval_having_string_method(
+    recv: &QueryValue,
+    name: &str,
+    args: &[Expr],
+    row: &[QueryValue],
+    query: &Query,
+    columns: &[QueryColumn],
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> QueryValue {
+    match name {
+        "lower" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.to_lowercase()),
+            _ => QueryValue::Null,
+        },
+        "upper" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.to_uppercase()),
+            _ => QueryValue::Null,
+        },
+        "trim" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.trim().to_string()),
+            _ => QueryValue::Null,
+        },
+        "ltrim" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.trim_start().to_string()),
+            _ => QueryValue::Null,
+        },
+        "rtrim" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.trim_end().to_string()),
+            _ => QueryValue::Null,
+        },
+        "strlen" => match recv {
+            QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
+            _ => QueryValue::Null,
+        },
+        "substr" => {
+            if let QueryValue::Str(s) = recv {
+                let start_val = args
+                    .first()
+                    .map(|a| eval_having_expr(a, row, query, columns, like_regexes));
+                let len_val = args
+                    .get(1)
+                    .map(|a| eval_having_expr(a, row, query, columns, like_regexes));
+                let start_char = match start_val {
+                    Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
+                    _ => return QueryValue::Null,
+                };
+                let chars: Vec<char> = s.chars().collect();
+                if start_char >= chars.len() {
+                    return QueryValue::Str(String::new());
+                }
+                let result: String = match len_val {
+                    Some(QueryValue::Int(n)) if n >= 0 => {
+                        let end = (start_char + n as usize).min(chars.len());
+                        chars[start_char..end].iter().collect()
+                    }
+                    None => chars[start_char..].iter().collect(),
+                    _ => return QueryValue::Null,
+                };
+                QueryValue::Str(result)
+            } else {
+                QueryValue::Null
+            }
+        }
+        "concat" => {
+            let mut result = match recv {
+                QueryValue::Str(s) => s.clone(),
+                QueryValue::Int(i) => i.to_string(),
+                QueryValue::Float(f) => f.to_string(),
+                QueryValue::Bool(b) => b.to_string(),
+                QueryValue::Null => String::new(),
+                _ => return QueryValue::Null,
+            };
+            for a in args {
+                match eval_having_expr(a, row, query, columns, like_regexes) {
+                    QueryValue::Str(s) => result.push_str(&s),
+                    QueryValue::Int(i) => result.push_str(&i.to_string()),
+                    QueryValue::Float(f) => result.push_str(&f.to_string()),
+                    QueryValue::Bool(b) => result.push_str(&b.to_string()),
+                    QueryValue::Null => {}
+                    _ => {}
+                }
+            }
+            QueryValue::Str(result)
+        }
+        _ => QueryValue::Null,
     }
 }
 
@@ -730,6 +841,28 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         } else {
             None
         };
+        // ORDER BY keys that don't appear in the projected columns are appended
+        // as hidden trailing values at scan time so `finish_with_src` can sort on
+        // them. Computed here once; zero-cost (empty vec) for the common case.
+        let projected_names: Vec<String> =
+            query_columns(query).into_iter().map(|c| c.name).collect();
+        let extra_sort_attrs: Vec<Attr> = query
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.keys
+                    .iter()
+                    .filter(|(key, _)| {
+                        let kname = attr_name(key);
+                        let bare = strip_leading_alias(&kname, query.alias.as_deref());
+                        !projected_names.iter().any(|cn| {
+                            cn == &kname || strip_leading_alias(cn, query.alias.as_deref()) == bare
+                        })
+                    })
+                    .map(|(key, _)| key.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             query,
             plan,
@@ -748,6 +881,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             exists_bools: Vec::new(),
             exists_cursor: std::cell::Cell::new(0),
             in_cursor: std::cell::Cell::new(0),
+            extra_sort_attrs,
         }
     }
 
@@ -780,6 +914,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             exists_bools: Vec::new(),
             exists_cursor: std::cell::Cell::new(0),
             in_cursor: std::cell::Cell::new(0),
+            // Carry mode finishes in stage_runner, not here; ORDER BY is handled
+            // there. No extra sort attrs needed at scan time.
+            extra_sort_attrs: Vec::new(),
         }
     }
 
@@ -949,11 +1086,17 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         name
     }
     fn project_row(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> Vec<QueryValue> {
-        self.query
+        let mut row: Vec<QueryValue> = self
+            .query
             .select
             .iter()
             .map(|item| self.project_item(item, src_idx, class_id, blob))
-            .collect()
+            .collect();
+        // Append hidden trailing values for ORDER BY keys not in the SELECT list.
+        for attr in &self.extra_sort_attrs {
+            row.push(self.project_attr(attr, src_idx, class_id, blob));
+        }
+        row
     }
     fn project_item(
         &self,
@@ -1091,11 +1234,16 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// no resolvable class-object address, so identity/class attrs are served
     /// from `class_name`, `@length` from `length`, and named fields are Null.
     fn project_array_row(&self, src_idx: usize, class_name: &str, length: u32) -> Vec<QueryValue> {
-        self.query
+        let mut row: Vec<QueryValue> = self
+            .query
             .select
             .iter()
             .map(|item| self.project_array_item(item, src_idx, class_name, length))
-            .collect()
+            .collect();
+        for attr in &self.extra_sort_attrs {
+            row.push(self.project_array_attr(attr, src_idx, class_name, length));
+        }
+        row
     }
     fn project_array_item(
         &self,
@@ -1246,7 +1394,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Expr::NullIf { lhs, rhs } => {
                 let lv = self.eval_expr(lhs, src_idx, class_id, blob);
                 let rv = self.eval_expr(rhs, src_idx, class_id, blob);
-                if lv == rv { QueryValue::Null } else { lv }
+                if qv_value_eq(&lv, &rv) {
+                    QueryValue::Null
+                } else {
+                    lv
+                }
             }
             Expr::Cast { expr, target } => {
                 let value = self.eval_expr(expr, src_idx, class_id, blob);
@@ -1371,7 +1523,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Expr::NullIf { lhs, rhs } => {
                 let lv = self.eval_expr_array(lhs, src_idx, class_name, length);
                 let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
-                if lv == rv { QueryValue::Null } else { lv }
+                if qv_value_eq(&lv, &rv) {
+                    QueryValue::Null
+                } else {
+                    lv
+                }
             }
             Expr::Cast { expr, target } => {
                 let value = self.eval_expr_array(expr, src_idx, class_name, length);
@@ -1680,12 +1836,30 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         use crate::query::ast::Predicate as P;
         match pred {
             P::And(a, b) => {
-                self.eval_pred(a, src_idx, class_id, blob)
-                    && self.eval_pred(b, src_idx, class_id, blob)
+                let a_val = self.eval_pred(a, src_idx, class_id, blob);
+                if !a_val {
+                    // Short-circuit: skip b, but advance cursors by b's node count
+                    // so subsequent predicates (siblings in the term list) consume
+                    // the right entries from in_sets / exists_bools.
+                    self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
+                    self.exists_cursor
+                        .set(self.exists_cursor.get() + count_exists_nodes(b));
+                    false
+                } else {
+                    self.eval_pred(b, src_idx, class_id, blob)
+                }
             }
             P::Or(a, b) => {
-                self.eval_pred(a, src_idx, class_id, blob)
-                    || self.eval_pred(b, src_idx, class_id, blob)
+                let a_val = self.eval_pred(a, src_idx, class_id, blob);
+                if a_val {
+                    // Short-circuit: skip b, but advance cursors.
+                    self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
+                    self.exists_cursor
+                        .set(self.exists_cursor.get() + count_exists_nodes(b));
+                    true
+                } else {
+                    self.eval_pred(b, src_idx, class_id, blob)
+                }
             }
             P::Not(a) => !self.eval_pred(a, src_idx, class_id, blob),
             P::InstanceOf(cname) => {
@@ -1808,12 +1982,26 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         use crate::query::ast::Predicate as P;
         match pred {
             P::And(a, b) => {
-                self.array_eval_pred(a, src_idx, class_name, length)
-                    && self.array_eval_pred(b, src_idx, class_name, length)
+                let a_val = self.array_eval_pred(a, src_idx, class_name, length);
+                if !a_val {
+                    self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
+                    self.exists_cursor
+                        .set(self.exists_cursor.get() + count_exists_nodes(b));
+                    false
+                } else {
+                    self.array_eval_pred(b, src_idx, class_name, length)
+                }
             }
             P::Or(a, b) => {
-                self.array_eval_pred(a, src_idx, class_name, length)
-                    || self.array_eval_pred(b, src_idx, class_name, length)
+                let a_val = self.array_eval_pred(a, src_idx, class_name, length);
+                if a_val {
+                    self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
+                    self.exists_cursor
+                        .set(self.exists_cursor.get() + count_exists_nodes(b));
+                    true
+                } else {
+                    self.array_eval_pred(b, src_idx, class_name, length)
+                }
             }
             P::Not(a) => !self.array_eval_pred(a, src_idx, class_name, length),
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
@@ -1976,7 +2164,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         } else {
             let mut rows = self.rows;
             let mut row_src = self.row_src;
-            let mut note = None;
+            let note: Option<String> = None;
             // Apply window functions (post-scan, pre-ORDER-BY).
             apply_window_functions(&mut rows, &columns, self.query);
             // Apply a general ORDER BY sort for the scan-time (non-carry) path.
@@ -1988,37 +2176,55 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // run.rs (truncating here would cap rows the semi-join has not yet
                 // filtered). We still sort, so the semi-join preserves top-N order.
                 let defer_limit = self.query.from.as_subquery().is_some();
+                let extra_n = self.extra_sort_attrs.len();
                 if let Some(ob) = &self.query.order_by {
-                    let resolved = resolve_order_by_keys(self.query, &columns, ob);
+                    // Build column indices for this ORDER BY. Keys present in the
+                    // SELECT list resolve to their projected column index as usual.
+                    // Keys that were not selected were appended as trailing hidden
+                    // values by `project_row`/`project_array_row`; map them to
+                    // indices starting at `columns.len()`.
+                    let mut extra_pos = 0usize;
+                    let resolved: Vec<(usize, crate::query::ast::SortDir)> = ob
+                        .keys
+                        .iter()
+                        .filter_map(|(key, dir)| {
+                            if let Some(col_idx) = order_by_column_index(self.query, &columns, key)
+                            {
+                                Some((col_idx, *dir))
+                            } else if extra_pos < extra_n {
+                                let idx = columns.len() + extra_pos;
+                                extra_pos += 1;
+                                Some((idx, *dir))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
                     if !resolved.is_empty() {
                         sort_rows_with_src_multi(&mut rows, &mut row_src, &resolved);
-                        if !defer_limit {
-                            if let Some(limit) = self.plan.limit {
-                                if rows.len() > limit as usize {
-                                    rows.truncate(limit as usize);
-                                    if let Some(v) = &mut row_src {
-                                        v.truncate(limit as usize);
-                                    }
+                    }
+                    // Strip trailing hidden sort-key values so output rows match
+                    // the declared SELECT list width.
+                    if extra_n > 0 {
+                        for row in &mut rows {
+                            row.truncate(columns.len());
+                        }
+                    }
+                    if !defer_limit {
+                        if let Some(limit) = self.plan.limit {
+                            if rows.len() > limit as usize {
+                                rows.truncate(limit as usize);
+                                if let Some(v) = &mut row_src {
+                                    v.truncate(limit as usize);
                                 }
                             }
                         }
-                    } else {
-                        // No key resolved to a projected column.
-                        note = Some(
-                            "ORDER BY was not applied: the sort key(s) must be \
-                             selected columns on this query path; rows are in scan order"
-                                .to_string(),
-                        );
-                        if !defer_limit {
-                            if let Some(limit) = self.plan.limit {
-                                if rows.len() > limit as usize {
-                                    rows.truncate(limit as usize);
-                                    if let Some(v) = &mut row_src {
-                                        v.truncate(limit as usize);
-                                    }
-                                }
-                            }
-                        }
+                    }
+                } else if extra_n > 0 {
+                    // No ORDER BY but we appended extra attrs (shouldn't happen
+                    // because extra_sort_attrs is empty when order_by is None).
+                    for row in &mut rows {
+                        row.truncate(columns.len());
                     }
                 }
             }
@@ -2105,7 +2311,11 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 .iter()
                 .map(|e| self.eval_expr(e, src_idx, class_id, blob))
                 .collect();
-            let key_str = format!("{key:?}");
+            let key_str: String = key
+                .iter()
+                .map(canonical_distinct_key)
+                .collect::<Vec<_>>()
+                .join("\x00");
             let values: Vec<QueryValue> = self
                 .query
                 .select
@@ -2260,7 +2470,11 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                 .iter()
                 .map(|e| self.eval_expr_array(e, src_idx, class_name, length))
                 .collect();
-            let key_str = format!("{key:?}");
+            let key_str: String = key
+                .iter()
+                .map(canonical_distinct_key)
+                .collect::<Vec<_>>()
+                .join("\x00");
             let values: Vec<QueryValue> = self
                 .query
                 .select
@@ -2371,6 +2585,32 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
 /// this means the planner failed to rewrite the predicate — a wiring bug.
 fn in_subquery_unresolved() -> bool {
     unreachable!("IN(<subquery>) predicate must be resolved at plan time, not during the scan")
+}
+
+/// Count the number of `InSubquery` nodes in a predicate subtree (DFS order,
+/// matching `collect_in_subplans`). Used to advance `in_cursor` when a branch
+/// is skipped by short-circuit evaluation, so the cursor stays aligned.
+fn count_in_nodes(p: &crate::query::ast::Predicate) -> usize {
+    use crate::query::ast::Predicate as P;
+    match p {
+        P::And(a, b) | P::Or(a, b) => count_in_nodes(a) + count_in_nodes(b),
+        P::Not(a) => count_in_nodes(a),
+        P::InSubquery { .. } => 1,
+        P::Compare { .. } | P::InstanceOf(_) | P::Exists { .. } => 0,
+    }
+}
+
+/// Count the number of `Exists` nodes in a predicate subtree (DFS order,
+/// matching `collect_exists_subplans`). Used to advance `exists_cursor` when a
+/// branch is skipped by short-circuit evaluation.
+fn count_exists_nodes(p: &crate::query::ast::Predicate) -> usize {
+    use crate::query::ast::Predicate as P;
+    match p {
+        P::And(a, b) | P::Or(a, b) => count_exists_nodes(a) + count_exists_nodes(b),
+        P::Not(a) => count_exists_nodes(a),
+        P::Exists { .. } => 1,
+        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } => 0,
+    }
 }
 
 /// Match an object's dotted class name against a FROM pattern (exact, or a
@@ -3010,16 +3250,23 @@ fn collect_like_regexes(
             if let Some(Value::Str(pat)) = rhs.as_lit() {
                 if !out.contains_key(pat) {
                     // Auto-translate SQL globs: `%` → `.*`, `_` → `.` when the pattern looks
-                    // like a SQL glob (has % or _ but lacks regex anchors/wildcards).
-                    // Patterns that already look like regex (start with ^, contain .*, .*) pass through unchanged.
-                    let effective_pat = if (pat.contains('%') || pat.contains('_'))
-                        && !pat.contains(".*")
-                        && !pat.starts_with('^')
-                    {
-                        sql_glob_to_regex(pat)
-                    } else {
-                        pat.clone()
-                    };
+                    // like a SQL glob (has % or _ but lacks regex anchors/wildcards/alternation).
+                    // Patterns that already look like regex (start with ^, contain .*, or contain
+                    // regex-specific metacharacters like `|`, `(`, `)`) pass through unchanged.
+                    // OQL-38: a pattern like "foo_bar|baz" must NOT be glob-translated because
+                    // it contains `|` (alternation) — translating `_` to `.` and escaping `|`
+                    // would destroy the regex semantics.
+                    let has_regex_chars = pat.contains(".*")
+                        || pat.starts_with('^')
+                        || pat.contains('|')
+                        || pat.contains('(')
+                        || pat.contains(')');
+                    let effective_pat =
+                        if (pat.contains('%') || pat.contains('_')) && !has_regex_chars {
+                            sql_glob_to_regex(pat)
+                        } else {
+                            pat.clone()
+                        };
                     let anchored = format!("^(?:{effective_pat})$");
                     let re = regex::Regex::new(&anchored).map_err(|e| {
                         crate::query::QueryError(format!(
@@ -3295,6 +3542,13 @@ pub(crate) fn query_columns(q: &Query) -> Vec<QueryColumn> {
 
 /// Value equality for `x.equals(y)`. Object refs compare by identity (dense
 /// index); scalars compare by value; mixed types are unequal. NOTE: this is
+/// Semantic value equality for OQL expressions: numeric cross-type comparison
+/// (e.g. `1 = 1.0`), positive/negative zero equality for floats, and reference
+/// identity for object refs. Used by NULLIF and `equals()` method dispatch.
+pub(crate) fn qv_value_eq_pub(a: &QueryValue, b: &QueryValue) -> bool {
+    qv_value_eq(a, b)
+}
+
 /// NOT Java `Object.equals()` — user-defined overrides are unreachable in a
 /// static heap reader (no live JVM); this is reference-identity + primitive
 /// value equality only.
@@ -3314,6 +3568,32 @@ fn qv_value_eq(a: &QueryValue, b: &QueryValue) -> bool {
         (ObjRef { index: i, .. }, ObjRef { index: j, .. }) => i == j,
         // Mixed / incomparable types are unequal (never panics).
         _ => false,
+    }
+}
+
+/// Canonical string key for COUNT(DISTINCT) hashing.
+/// Normalizes numeric types so that `1` and `1.0` hash identically (OQL-33),
+/// and so that `0.0` and `-0.0` hash identically.
+/// Non-numeric types use their debug representation as before.
+/// Canonical string key for COUNT(DISTINCT) hashing.
+/// Normalizes numeric types so that `1` and `1.0` hash identically (OQL-33),
+/// and so that `0.0` and `-0.0` hash identically.
+/// Non-numeric types use their debug representation as before.
+pub(crate) fn canonical_distinct_key_pub(v: &QueryValue) -> String {
+    canonical_distinct_key(v)
+}
+
+fn canonical_distinct_key(v: &QueryValue) -> String {
+    match v {
+        // Canonicalize all numeric values through f64 so 1 == 1.0 and 0.0 == -0.0.
+        QueryValue::Int(i) => format!("N:{}", *i as f64),
+        QueryValue::Float(f) => {
+            // Normalize -0.0 → +0.0 so they hash the same.
+            let n = if *f == 0.0 { 0.0f64 } else { *f };
+            format!("N:{n}")
+        }
+        // Non-numeric: keep debug form (exact match required).
+        other => format!("{other:?}"),
     }
 }
 
@@ -3392,10 +3672,21 @@ pub fn expr_name(e: &Expr) -> String {
             UnaryOp::Neg => format!("-{}", expr_name(arg)),
             UnaryOp::Pos => expr_name(arg),
         },
-        Expr::Method { name, args, .. } => format!(
-            "{name}({})",
-            args.iter().map(expr_name).collect::<Vec<_>>().join(", ")
-        ), // D2 fills this
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
+            let receiver_str = expr_name(receiver);
+            if args.is_empty() {
+                format!("{receiver_str}.{name}()")
+            } else {
+                format!(
+                    "{receiver_str}.{name}({})",
+                    args.iter().map(expr_name).collect::<Vec<_>>().join(", ")
+                )
+            }
+        }
         Expr::Aggregate { func, arg } => {
             let func_name = match func {
                 AggFunc::Count => "COUNT",

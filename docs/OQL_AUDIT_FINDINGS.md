@@ -461,6 +461,94 @@ SQL-function operand). This produces misleading and potentially colliding
 result-column metadata. Include the receiver in the rendered default name, as
 well as the method arguments.
 
+### OQL-40. Window `PARTITION BY` silently ignores unselected keys
+
+`ROW_NUMBER() OVER (PARTITION BY @objectId)` should restart at 1 for every
+Thread, since `@objectId` is unique. Without projecting that key,
+`SELECT ROW_NUMBER() OVER (PARTITION BY @objectId) FROM java.lang.Thread LIMIT 3`
+returned **1, 2, 3**. Adding `@objectId` to the SELECT list made the same query
+return **1, 1, 1**. `apply_window_functions` resolves partition keys only by
+searching projected columns and silently drops keys it cannot resolve. Carry
+window keys independently of output columns, or reject unselected keys with an
+actionable error.
+
+### OQL-41. `LAG`/`LEAD` return NULL for non-attribute arguments
+
+`LAG(@objectId) OVER (ORDER BY @objectId)` returned the preceding Thread ID as
+expected, but `LAG(@objectId + 1) OVER (ORDER BY @objectId)` returned NULL for
+every row, including rows with a predecessor. The parser accepts an expression
+argument, but `apply_window_functions` resolves the argument only when it is a
+bare `Expr::Attr`; all other forms produce no source column and silently
+default to NULL. Evaluate the argument expression per source row or reject
+unsupported argument forms during planning.
+
+### OQL-42. `LAG`/`LEAD` silently discard non-literal defaults
+
+The parser accepts an expression as the third `LAG`/`LEAD` argument, but the
+window evaluator uses the default only when it is an `Expr::Lit`. At the first
+Thread, `LAG(@objectId, 1, 123)` returned **123**, while
+`LAG(@objectId, 1, @objectId)` returned NULL instead of that row's ID (**65,980**).
+Likewise, a one-row `LEAD(@objectId, 1, @objectId)` query returned NULL at the
+partition boundary. Evaluate default expressions in the current row context or
+reject non-literal defaults during planning.
+
+### OQL-43. Oversized `LAG`/`LEAD` offsets wrap to smaller offsets
+
+The parser casts the parsed integer offset to `u32` without range checking.
+Consequently, `LAG(@objectId, 4294967296, 123)` returned each current ID, as if
+the offset were **0**, instead of the default **123** because no predecessor
+exists at that distance. An offset of `4294967297` behaved like **1** and
+returned the preceding row. Reject offsets above `u32::MAX` (or use a wider,
+checked representation) rather than silently changing the requested offset.
+
+### OQL-44. `LIMIT` truncates input before window functions run
+
+`ROW_NUMBER() OVER (ORDER BY @objectId DESC)` should rank the full Thread
+partition before a top-level `LIMIT` trims output. The limited query returned
+**3, 2, 1** for the first three scan-order Thread IDs, while the same query
+without `LIMIT` gave those rows **29, 28, 27**. The scan-time early-stop checks
+for a top-level `ORDER BY` but not for window functions; `apply_window_functions`
+then ranks only the collected prefix. Defer LIMIT until after window evaluation.
+
+### OQL-45. Array-row `CONCAT` ignores arguments after the second operand
+
+`CONCAT("a", "b", "c")` returned `"abc"` from `java.lang.Object` rows but
+`"ab"` from `java.lang.Object[]` rows. The array expression evaluator's
+`concat` branch reads only `args.first()`, while the instance evaluator folds
+all remaining arguments. Honor every variadic argument in both row paths.
+
+### OQL-46. `HAVING` mishandles an unselected `GROUP BY` key
+
+`SELECT COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @category
+HAVING @category = "jdk"` returned no groups, while adding `@category` to the
+SELECT list returned the matching `jdk` group with **203,052** objects. The
+HAVING evaluator resolves an unselected attribute by treating its GROUP BY
+position as a position in the output row; that row contains only selected
+columns, so it reads the aggregate value instead of the hidden group key.
+Evaluate HAVING against the retained group-key vector, independent of SELECT
+projection.
+
+### OQL-47. `REPLACE` is not evaluated in `HAVING`
+
+`HAVING REPLACE(@category, "jdk", "jdk") = "jdk"` returned no groups, while
+the equivalent direct predicate `HAVING @category = "jdk"` returned the
+`jdk` group. `eval_having_string_method` implements several string operations
+but has no `replace` arm, so this supported expression becomes NULL and filters
+out the matching group. Implement the same `REPLACE` semantics used by ordinary
+row expressions, or reject it explicitly during planning.
+
+### OQL-48. HAVING aggregate lookup ignores the selected aggregate's FILTER
+
+Source inspection shows `eval_having_expr` resolves a HAVING aggregate by
+matching only its function and argument against `query.select`; it ignores the
+selected aggregate's `FILTER` clause. Thus, if the first matching projection is
+`COUNT(*) FILTER (WHERE ...)`, a separate `HAVING COUNT(*) > n` can read that
+filtered count instead of the unfiltered group count. A discriminating runtime
+check is still pending: the local debug binary appears not to honor ordinary
+scan-time aggregate FILTERs, so its result cannot validate this current-source
+path. Resolve HAVING aggregates independently or include filter identity and
+semantics in the lookup.
+
 ## Checks that passed in this run
 
 The tested scalar forms (field/arithmetic projections, `@superclass`,
@@ -482,8 +570,11 @@ smoke tests, not comprehensive correctness proof.
   short-circuit `IN`/`EXISTS` alignment, address-valued and nested subqueries,
   unprojected `ORDER BY`, CAST NULL propagation/default column naming/invalid
   boolean strings, Java String `length()`, LIKE regex/glob classification,
-  method-expression column names, array `INSTANCEOF`, and `FROM ENTRIES`
-  planning/execution paths.
+  method-expression column names, window partition keys/arguments/defaults and
+  offset bounds/LIMIT ordering, array `INSTANCEOF`, and `FROM ENTRIES`
+  planning/execution paths, including variadic string functions on array rows
+  and HAVING with unselected group keys, string methods, and FILTER-bound
+  aggregates.
 - Test report-mode `FROM ENTRIES` with the actual graph/capability contract and
   make unsupported states fail with the right actionable message.
 - Update README/OQL examples, restrictions, and HTTP response schema only after

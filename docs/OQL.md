@@ -861,7 +861,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 
 | Area | MAT | hprof-analyzer |
 |------|-----|----------------|
-| **Unreachable objects** | Discarded at index time — queries only see GC-reachable objects | By default matches MAT (reachable-only). Pass `--all` / `all=true` to include unreachable objects. Useful when a dump has many unreachable objects and a query returns 0 rows. |
+| **Unreachable objects** | Discarded at index time — queries only see GC-reachable objects | `heap query` defaults to reachable-only (MAT parity). Pass `--all` / `all=true` to include unreachable objects. `heap report` and `heap analyze` default to all objects; pass `--reachable-only` to restrict. |
 | **`s.count` / `s.offset` on String** | Works (pre-JDK9 layout) | "Unknown field" — use `s.value`, `s.coder`, `s.hash` (modern JDK) |
 | **Integer `/0`** | Throws `ArithmeticException` | Returns `NULL` — analyzer never crashes on a bad row |
 | **`toString()` on non-String** | Calls JVM `toString()` via reflection | Returns `NULL` — static analysis cannot invoke live JVM methods |

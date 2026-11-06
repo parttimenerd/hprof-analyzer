@@ -581,98 +581,6 @@ fn pred_for_each_attr(p: &Predicate, f: &mut impl FnMut(&Attr)) {
     }
 }
 
-/// Visit every `Expr::Method` name reachable from an `Expr` tree (including the
-/// method receiver and its arguments, and any `Attr::ToHex(inner)` sub-expr),
-/// calling `f` with each method name. Used by the plan-time method validator.
-fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
-    match e {
-        Expr::Attr(a) => {
-            if let Attr::ToHex(inner) = a {
-                expr_for_each_method(inner, f);
-            }
-        }
-        Expr::Lit(_) => {}
-        Expr::Binary { lhs, rhs, .. } => {
-            expr_for_each_method(lhs, f);
-            expr_for_each_method(rhs, f);
-        }
-        Expr::Unary { arg, .. } => expr_for_each_method(arg, f),
-        Expr::Method {
-            receiver,
-            name,
-            args,
-        } => {
-            f(name.as_str());
-            expr_for_each_method(receiver, f);
-            for a in args {
-                expr_for_each_method(a, f);
-            }
-        }
-        Expr::Aggregate { .. } => {} // no Method nodes in aggregate position
-        Expr::Case { branches, else_ } => {
-            for (_, then_expr) in branches {
-                expr_for_each_method(then_expr, f);
-            }
-            if let Some(e) = else_ {
-                expr_for_each_method(e, f);
-            }
-        }
-        Expr::Coalesce(args) => {
-            for arg in args {
-                expr_for_each_method(arg, f);
-            }
-        }
-        Expr::NullIf { lhs, rhs } => {
-            expr_for_each_method(lhs, f);
-            expr_for_each_method(rhs, f);
-        }
-        Expr::Cast { expr, .. } => {
-            expr_for_each_method(expr, f);
-        }
-    }
-}
-
-/// Visit every `Expr::Method` name reachable from a `SelectItem` (recursing into
-/// aggregate args, `toString`/`path` carry no Expr method nodes but `Attr` can
-/// via `toHex`). Mirrors `expr_for_each_attr`'s coverage.
-fn select_item_for_each_method<'a>(it: &'a SelectItem, f: &mut impl FnMut(&'a str)) {
-    match it {
-        SelectItem::Expr(e) => expr_for_each_method(e, f),
-        SelectItem::Attr(a) => {
-            if let Attr::ToHex(inner) = a {
-                expr_for_each_method(inner, f);
-            }
-        }
-        SelectItem::Aggregate { arg, .. } => select_item_for_each_method(arg, f),
-        SelectItem::Star | SelectItem::Path { .. } | SelectItem::ToString(_) => {}
-        // jsonify(s) carries only the FROM alias and a literal depth — no Expr
-        // node can hide inside it, so there is no method to visit.
-        SelectItem::Jsonify { .. } => {}
-        // Window functions carry Expr trees but don't need method-dispatch planning.
-        SelectItem::Window { .. } => {}
-    }
-}
-
-/// Visit every `Expr::Method` name reachable from a `Predicate` tree (both sides
-/// of every Compare). Mirrors the predicate walkers used for ref-path analysis.
-fn pred_for_each_method<'a>(p: &'a Predicate, f: &mut impl FnMut(&'a str)) {
-    match p {
-        Predicate::And(a, b) | Predicate::Or(a, b) => {
-            pred_for_each_method(a, f);
-            pred_for_each_method(b, f);
-        }
-        Predicate::Not(inner) => pred_for_each_method(inner, f),
-        Predicate::Compare { lhs, rhs, .. } => {
-            expr_for_each_method(lhs, f);
-            expr_for_each_method(rhs, f);
-        }
-        // InSubquery's inner is validated when it is planned as its own query;
-        // its `lhs` is an `Attr` (no method node).
-        // EXISTS inner is planned as its own query; it carries no outer method nodes.
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => {}
-    }
-}
-
 /// Reject any `receiver.method(args)` whose method name is not in
 /// [`crate::query::parse::METHODS`]. A scan-time `QueryValue` cannot carry an
 /// error, so unsupported/unknown method names must be caught here at plan time
@@ -680,21 +588,82 @@ fn pred_for_each_method<'a>(p: &'a Predicate, f: &mut impl FnMut(&'a str)) {
 /// indexed object-array element access is rejected with an array-access hint.
 fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
     let mut bad: Option<String> = None;
-    let mut check = |name: &str| {
-        if bad.is_none() && !crate::query::parse::METHODS.contains(&name) {
-            bad = Some(name.to_string());
+    let mut arity_err: Option<String> = None;
+    let mut check = |name: &str, arg_count: usize| {
+        if !crate::query::parse::METHODS.contains(&name) {
+            if bad.is_none() {
+                bad = Some(name.to_string());
+            }
+            return;
+        }
+        // Validate argument count (OQL-36).
+        let expected: Option<std::ops::RangeInclusive<usize>> = match name {
+            // Zero-argument methods:
+            "length"
+            | "size"
+            | "toString"
+            | "getName"
+            | "getObjectAddress"
+            | "getObjectId"
+            | "getUsedHeapSize"
+            | "getRetainedHeapSize"
+            | "getClazz"
+            | "intValue"
+            | "longValue"
+            | "shortValue"
+            | "byteValue"
+            | "floatValue"
+            | "doubleValue"
+            | "booleanValue"
+            | "charValue"
+            | "lower"
+            | "upper"
+            | "trim"
+            | "ltrim"
+            | "rtrim"
+            | "strlen"
+            | "getKey"
+            | "getValue" => Some(0..=0),
+            // One-argument methods:
+            "equals" | "contains" => Some(1..=1),
+            // substr: 1 or 2 args (start, optional length):
+            "substr" => Some(1..=2),
+            // concat/replace: 1+ or exactly 2 args respectively:
+            "replace" => Some(2..=2),
+            "concat" => Some(1..=usize::MAX),
+            _ => None,
+        };
+        if let Some(range) = expected {
+            if !range.contains(&arg_count) && arity_err.is_none() {
+                let min = *range.start();
+                let max = *range.end();
+                if min == max {
+                    arity_err = Some(format!(
+                        "method `{name}()` expects {min} argument(s) but got {arg_count}"
+                    ));
+                } else if max == usize::MAX {
+                    arity_err = Some(format!(
+                        "method `{name}()` expects at least {min} argument(s) but got {arg_count}"
+                    ));
+                } else {
+                    arity_err = Some(format!(
+                        "method `{name}()` expects {min}–{max} argument(s) but got {arg_count}"
+                    ));
+                }
+            }
         }
     };
+    // We need the full Expr tree to check args. Walk manually.
     for item in &q.select {
-        select_item_for_each_method(item, &mut check);
+        check_method_arity_in_select_item(item, &mut check);
     }
     if let Some(pred) = &q.where_ {
-        pred_for_each_method(pred, &mut check);
+        check_method_arity_in_pred(pred, &mut check);
     }
     if let Some(ob) = &q.order_by {
         for (key, _dir) in &ob.keys {
-            if let Attr::ToHex(inner) = key {
-                expr_for_each_method(inner, &mut check);
+            if let crate::query::ast::Attr::ToHex(inner) = key {
+                check_method_arity_in_expr(inner, &mut check);
             }
         }
     }
@@ -707,7 +676,80 @@ fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
              a list, then a field/scalar tail on that array)."
         )));
     }
+    if let Some(msg) = arity_err {
+        return Err(QueryError(msg));
+    }
     Ok(())
+}
+
+fn check_method_arity_in_expr(e: &Expr, check: &mut impl FnMut(&str, usize)) {
+    match e {
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
+            check(name.as_str(), args.len());
+            check_method_arity_in_expr(receiver, check);
+            for a in args {
+                check_method_arity_in_expr(a, check);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            check_method_arity_in_expr(lhs, check);
+            check_method_arity_in_expr(rhs, check);
+        }
+        Expr::Unary { arg, .. } => check_method_arity_in_expr(arg, check),
+        Expr::Case { branches, else_ } => {
+            for (_, ex) in branches {
+                check_method_arity_in_expr(ex, check);
+            }
+            if let Some(e) = else_ {
+                check_method_arity_in_expr(e, check);
+            }
+        }
+        Expr::Coalesce(args) => {
+            for a in args {
+                check_method_arity_in_expr(a, check);
+            }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            check_method_arity_in_expr(lhs, check);
+            check_method_arity_in_expr(rhs, check);
+        }
+        Expr::Cast { expr, .. } => check_method_arity_in_expr(expr, check),
+        Expr::Attr(_) | Expr::Lit(_) | Expr::Aggregate { .. } => {}
+    }
+}
+
+fn check_method_arity_in_select_item(item: &SelectItem, check: &mut impl FnMut(&str, usize)) {
+    use crate::query::ast::SelectItem as SI;
+    match item {
+        SI::Expr(e) => check_method_arity_in_expr(e, check),
+        SI::Attr(Attr::ToHex(e)) => check_method_arity_in_expr(e, check),
+        SI::Aggregate { arg, filter, .. } => {
+            check_method_arity_in_select_item(arg, check);
+            if let Some(pred) = filter {
+                check_method_arity_in_pred(pred, check);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn check_method_arity_in_pred(pred: &Predicate, check: &mut impl FnMut(&str, usize)) {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            check_method_arity_in_pred(a, check);
+            check_method_arity_in_pred(b, check);
+        }
+        Predicate::Not(a) => check_method_arity_in_pred(a, check),
+        Predicate::Compare { lhs, rhs, .. } => {
+            check_method_arity_in_expr(lhs, check);
+            check_method_arity_in_expr(rhs, check);
+        }
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => {}
+    }
 }
 
 /// Rewrite `Attr::ValueArray` in an `Attr` node to a 1-hop `RefPath` that

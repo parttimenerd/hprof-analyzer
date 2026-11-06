@@ -1415,13 +1415,132 @@ fn eval_late_expr_multi(
         Expr::NullIf { lhs, rhs } => {
             let lv = eval_late_expr_multi(lhs, idx, ret, ctx, like_regexes);
             let rv = eval_late_expr_multi(rhs, idx, ret, ctx, like_regexes);
-            if lv == rv { QueryValue::Null } else { lv }
+            if crate::query::execute::qv_value_eq_pub(&lv, &rv) {
+                QueryValue::Null
+            } else {
+                lv
+            }
         }
         Expr::Cast { expr, target } => {
             let value = eval_late_expr_multi(expr, idx, ret, ctx, like_regexes);
             crate::query::execute::cast_query_value(value, *target)
         }
-        Expr::Aggregate { .. } | Expr::Method { .. } => QueryValue::Null,
+        Expr::Aggregate { .. } => QueryValue::Null,
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
+            // String methods in late expressions (e.g. s.toString(), s.length()).
+            // Evaluate the receiver in the late context first.
+            let recv_val = eval_late_expr_multi(receiver, idx, ret, ctx, like_regexes);
+            eval_late_string_method(&recv_val, name, args, idx, ret, ctx, like_regexes)
+        }
+    }
+}
+
+/// Evaluate a string method call in the late phase.
+/// Handles toString(), length(), lower(), upper(), trim(), strlen(), substr(), concat(), replace().
+fn eval_late_string_method(
+    recv: &QueryValue,
+    name: &str,
+    args: &[Expr],
+    idx: u32,
+    ret: u64,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> QueryValue {
+    match name {
+        // toString() on a String object: return the decoded string value.
+        // Attr::ToString dispatches through string_value; Expr::Method routes here.
+        "toString" => match recv {
+            QueryValue::Str(s) if !s.contains('@') => recv.clone(),
+            // ObjRef or display-form string: look up in the late string table.
+            _ => ctx
+                .string_value(idx)
+                .map(|s| QueryValue::Str(s.to_string()))
+                .unwrap_or(QueryValue::Null),
+        },
+        // length() on a String: character count of the decoded text.
+        "length" => match ctx.string_value(idx) {
+            Some(s) => QueryValue::Int(s.chars().count() as i64),
+            None => QueryValue::Null,
+        },
+        "lower" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.to_lowercase()),
+            _ => QueryValue::Null,
+        },
+        "upper" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.to_uppercase()),
+            _ => QueryValue::Null,
+        },
+        "trim" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.trim().to_string()),
+            _ => QueryValue::Null,
+        },
+        "ltrim" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.trim_start().to_string()),
+            _ => QueryValue::Null,
+        },
+        "rtrim" => match recv {
+            QueryValue::Str(s) => QueryValue::Str(s.trim_end().to_string()),
+            _ => QueryValue::Null,
+        },
+        "strlen" => match recv {
+            QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
+            _ => QueryValue::Null,
+        },
+        "substr" => {
+            if let QueryValue::Str(s) = recv {
+                let start_val = args
+                    .first()
+                    .map(|a| eval_late_expr_multi(a, idx, ret, ctx, like_regexes));
+                let len_val = args
+                    .get(1)
+                    .map(|a| eval_late_expr_multi(a, idx, ret, ctx, like_regexes));
+                let start_char = match start_val {
+                    Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
+                    _ => return QueryValue::Null,
+                };
+                let chars: Vec<char> = s.chars().collect();
+                if start_char >= chars.len() {
+                    return QueryValue::Str(String::new());
+                }
+                let result: String = match len_val {
+                    Some(QueryValue::Int(n)) if n >= 0 => {
+                        let end = (start_char + n as usize).min(chars.len());
+                        chars[start_char..end].iter().collect()
+                    }
+                    None => chars[start_char..].iter().collect(),
+                    _ => return QueryValue::Null,
+                };
+                QueryValue::Str(result)
+            } else {
+                QueryValue::Null
+            }
+        }
+        "concat" => {
+            let mut result = match recv {
+                QueryValue::Str(s) => s.clone(),
+                QueryValue::Int(i) => i.to_string(),
+                QueryValue::Float(f) => f.to_string(),
+                QueryValue::Bool(b) => b.to_string(),
+                QueryValue::Null => String::new(),
+                _ => return QueryValue::Null,
+            };
+            for a in args {
+                match eval_late_expr_multi(a, idx, ret, ctx, like_regexes) {
+                    QueryValue::Str(s) => result.push_str(&s),
+                    QueryValue::Int(i) => result.push_str(&i.to_string()),
+                    QueryValue::Float(f) => result.push_str(&f.to_string()),
+                    QueryValue::Bool(b) => result.push_str(&b.to_string()),
+                    QueryValue::Null => {}
+                    _ => {}
+                }
+            }
+            QueryValue::Str(result)
+        }
+        _ => QueryValue::Null,
     }
 }
 
@@ -2149,6 +2268,19 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     // Accumulator is (running: QueryValue, count: u64) for each SELECT aggregate.
     type GroupState = (Vec<QueryValue>, Vec<(QueryValue, u64)>);
     let mut groups: HashMap<String, GroupState> = HashMap::new();
+    // Parallel distinct-value sets for COUNT(DISTINCT) per group per select item.
+    // Key = group key_str, value = per-select-item HashSet (None for non-distinct items).
+    let mut distinct_sets: HashMap<String, Vec<Option<std::collections::HashSet<String>>>> =
+        HashMap::new();
+    let has_count_distinct = q.select.iter().any(|it| {
+        matches!(
+            it,
+            SelectItem::Aggregate {
+                func: AggFunc::CountDistinct,
+                ..
+            }
+        )
+    });
 
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
@@ -2162,9 +2294,13 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             .iter()
             .map(|ge| eval_late_gb_key(ge, idx, ret, ctx))
             .collect();
-        // Stable string representation for grouping.
-        let key_str = format!("{key:?}");
-        let accs = groups.entry(key_str).or_insert_with(|| {
+        // Stable string representation for grouping with canonical numeric equality (OQL-33).
+        let key_str: String = key
+            .iter()
+            .map(crate::query::execute::canonical_distinct_key_pub)
+            .collect::<Vec<_>>()
+            .join("\x00");
+        let accs = groups.entry(key_str.clone()).or_insert_with(|| {
             let init: Vec<(QueryValue, u64)> = q
                 .select
                 .iter()
@@ -2186,6 +2322,27 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                 .collect();
             (key.clone(), init)
         });
+        // Initialize distinct sets for this group when first seen.
+        if has_count_distinct {
+            distinct_sets.entry(key_str.clone()).or_insert_with(|| {
+                q.select
+                    .iter()
+                    .map(|it| {
+                        if matches!(
+                            it,
+                            SelectItem::Aggregate {
+                                func: AggFunc::CountDistinct,
+                                ..
+                            }
+                        ) {
+                            Some(std::collections::HashSet::new())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            });
+        }
         // Accumulate each SELECT item's aggregate.
         for (i, it) in q.select.iter().enumerate() {
             let SelectItem::Aggregate { func, arg, .. } = it else {
@@ -2287,11 +2444,15 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                     }
                 }
                 AggFunc::CountDistinct => {
-                    // COUNT(DISTINCT) in the late phase: treat as COUNT(expr) (no HashSet available).
-                    let count_this = val != QueryValue::Null;
-                    if count_this {
-                        if let QueryValue::Int(n) = acc {
-                            *n += 1;
+                    // COUNT(DISTINCT) in the late phase: track distinct values via distinct_sets.
+                    // The `acc` Int is updated to the set size after each insertion (OQL-23).
+                    if val != QueryValue::Null {
+                        let key_str_ref = &key_str;
+                        if let Some(sets) = distinct_sets.get_mut(key_str_ref) {
+                            if let Some(Some(set)) = sets.get_mut(i) {
+                                set.insert(crate::query::execute::canonical_distinct_key_pub(&val));
+                                *acc = QueryValue::Int(set.len() as i64);
+                            }
                         }
                     }
                 }
@@ -2631,6 +2792,24 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 _ => (QueryValue::Null, 0),
             })
             .collect();
+        // Parallel distinct sets for COUNT(DISTINCT) (OQL-23).
+        let mut distinct_sets: Vec<Option<std::collections::HashSet<String>>> = q
+            .select
+            .iter()
+            .map(|it| {
+                if matches!(
+                    it,
+                    SelectItem::Aggregate {
+                        func: AggFunc::CountDistinct,
+                        ..
+                    }
+                ) {
+                    Some(std::collections::HashSet::new())
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         for idx in entry.carry.indices() {
             let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
@@ -2737,11 +2916,11 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                         }
                     }
                     AggFunc::CountDistinct => {
-                        // COUNT(DISTINCT) in the late phase: treat as COUNT(expr).
-                        let count_this = val != QueryValue::Null;
-                        if count_this {
-                            if let QueryValue::Int(n) = acc {
-                                *n += 1;
+                        // COUNT(DISTINCT) in the late phase: track distinct values (OQL-23).
+                        if val != QueryValue::Null {
+                            if let Some(Some(set)) = distinct_sets.get_mut(i) {
+                                set.insert(crate::query::execute::canonical_distinct_key_pub(&val));
+                                *acc = QueryValue::Int(set.len() as i64);
                             }
                         }
                     }
