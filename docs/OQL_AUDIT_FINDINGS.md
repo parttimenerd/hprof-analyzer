@@ -223,53 +223,6 @@ before the matching object-ID test returned one. The `exists_cursor` is likewise
 advanced only when an `EXISTS` node is reached; bind each result to its
 predicate, or prevent cursor drift under short-circuit evaluation.
 
-### OQL-18. `CAST(NULL AS STRING)` turns NULL into the text `"null"`
-
-Source inspection of `cast_query_value` shows that `CAST(NULL AS INT)`, `FLOAT`,
-and `BOOL` preserve NULL, but the `STRING` arm converts it to
-`QueryValue::Str("null")`. This breaks normal NULL propagation and makes, for
-example, `COALESCE(CAST(NULL AS STRING), "fallback")` return `"null"` instead
-of the fallback. Preserve `QueryValue::Null` for string casts. This is a
-source-level finding; runtime confirmation is pending because the local debug
-binary does not recognize the CAST syntax present in the current source, and
-the repository requires builds/tests to run on the ThinkStation.
-
-### OQL-19. CAST column names omit the cast expression
-
-`expr_name` formats `Expr::Cast` as `CAST(AS {target:?})` and ignores the inner
-expression. Thus a projection like `CAST(@usedHeapSize AS FLOAT)` gets an
-invalid/incomplete default column name such as `CAST(AS Float)`, affecting JSON
-metadata and any later lookup by column name. Include the operand in the
-rendered name; runtime confirmation is likewise pending a current build.
-
-### OQL-20. Invalid string-to-boolean casts silently become `false`
-
-The `BOOL` cast arm maps only case-insensitive `"true"` and `"1"` to true;
-every other string becomes false. Thus an invalid value such as
-`CAST("not-a-bool" AS BOOL)` is indistinguishable from an intentional false
-value, unlike invalid string-to-INT/FLOAT casts, which return NULL. Validate the
-accepted false spellings (for example `"false"` and `"0"`) and return NULL or
-an actionable cast error for other strings. This is source-level only pending a
-current build that can parse CAST.
-
-### OQL-21. `INSTANCEOF java.lang.Object` excludes array objects
-
-With `--all`, `FROM ".*"` matched 239,355 objects and a regex matching array
-class names matched 35,573. `FROM INSTANCEOF java.lang.Object`
-matched only 203,782 — exactly the non-array remainder. `FROM INSTANCEOF
-java.lang.Cloneable` and `FROM INSTANCEOF java.io.Serializable` each returned
-zero as well. Java arrays are instances of `Object` and implement both marker
-interfaces, so they should be included. The array visitor currently compares
-the array class name directly to the requested class instead of applying Java
-array assignability / the `INSTANCEOF` rule. Handle arrays as `Object` and as
-instances of `Cloneable` and `Serializable` when matching `INSTANCEOF`.
-Array covariance is also missing: exact `java.lang.Object[]` matched 2,418
-objects and exact `java.lang.String[]` matched 450, while
-`INSTANCEOF java.lang.Object[]` still returned only 2,418. Since `String[]` is
-assignable to `Object[]`, the latter query should include at least those 450
-String arrays as well. In the current source, `visit_array` uses the ordinary
-class-name matcher rather than the `INSTANCEOF` hierarchy/assignability path.
-
 ### OQL-22. A GROUP BY query in a batch can disable a sibling row query's LIMIT
 
 With default reachable-only filtering, running these two queries together
@@ -324,15 +277,6 @@ with `IN(<subquery>) predicate must be resolved at plan time`. The planner only
 collects IN/EXISTS subplans from `q.where_`; discover them in aggregate FILTERs
 and SELECT-expression predicates too, or reject those placements before scan.
 
-### OQL-26. `SUBSTR` slices UTF-8 strings by byte offsets and can panic
-
-`SUBSTR("café", 4, 1)` panicked with a Rust string-boundary error: the one-based
-start is treated as a character position, but the implementation slices the
-UTF-8 string using byte offsets. A valid query over non-ASCII text can therefore
-terminate the CLI instead of returning the fourth character (`é`). Convert
-character positions to byte boundaries (or reject unsupported input safely)
-before slicing.
-
 ### OQL-27. Unsupported HAVING predicates silently keep every group
 
 `HAVING EXISTS (SELECT * FROM java.lang.String WHERE @objectId < 0)` returned
@@ -360,16 +304,6 @@ type integer controls behaved correctly. The comparison converts the integer
 to `f64`, rounding it to the float's value; `qv_value_eq` uses the same
 conversion for cross-type `.equals()`. Compare the values without lossy
 coercion, or document a deliberately approximate numeric comparison contract.
-
-### OQL-30. String expressions return NULL when the FROM row is an array
-
-`LOWER("ABC")` and `LENGTH("abc")` returned NULL when selected from
-`java.lang.Object[]`, but returned `"abc"` and `3` respectively from
-`java.lang.Object`. These constant expressions do not depend on the source row;
-their results should not change based on whether the scan visits an instance or
-an array. `eval_expr_array` currently returns NULL for method expressions other
-than array `length`/`size`; evaluate supported string operations consistently
-in both paths.
 
 ### OQL-31. Scalar method expressions in HAVING evaluate as NULL
 
@@ -451,15 +385,13 @@ The glob conversion changes `_` to `.` and escapes `|`, destroying regex
 alternation. The heuristic should not silently reinterpret valid regex syntax;
 provide an unambiguous pattern mode or improve regex/glob detection.
 
-### OQL-39. Method-expression column names omit the receiver expression
+### OQL-39. [Stale] Method-expression column names omitted the receiver
 
-`SELECT LOWER("ABC") ...` returned the value `"abc"` but labeled its column
-`lower()`. `SELECT SUBSTR("abcdef", 2, 3) ...` returned `"bcd"` but labeled
-the column `substr(2, 3)`. `expr_name` renders an `Expr::Method` from only its
-method name and additional arguments, omitting the receiver (the first
-SQL-function operand). This produces misleading and potentially colliding
-result-column metadata. Include the receiver in the rendered default name, as
-well as the method arguments.
+This finding no longer reproduces in the current worktree/binary:
+`SELECT LOWER("ABC") ...` now labels its column `"ABC".lower()`, and
+`SELECT SUBSTR("abcdef", 2, 3) ...` labels its column
+`"abcdef".substr(2, 3)`. Current `expr_name` includes the receiver. Retain this
+entry as audit history, not as an active bug.
 
 ### OQL-40. Window `PARTITION BY` silently ignores unselected keys
 
@@ -549,6 +481,17 @@ scan-time aggregate FILTERs, so its result cannot validate this current-source
 path. Resolve HAVING aggregates independently or include filter identity and
 semantics in the lookup.
 
+### OQL-49. HAVING aggregates must also appear in SELECT
+
+`SELECT @category FROM INSTANCEOF java.lang.Object GROUP BY @category
+HAVING COUNT(*) > 1000` returned no groups, while adding `COUNT(*)` to the
+projection returned the `jdk` group with **203,052** objects. The HAVING
+evaluator looks up aggregate values only among `query.select` items and returns
+NULL when no matching aggregate is projected. SQL-style HAVING must be able to
+evaluate an aggregate independently of the SELECT list; compute the required
+aggregate for HAVING or reject the construct explicitly rather than silently
+filtering every group.
+
 ## Checks that passed in this run
 
 The tested scalar forms (field/arithmetic projections, `@superclass`,
@@ -565,16 +508,14 @@ smoke tests, not comprehensive correctness proof.
 - Build and run OQL regression tests on the ThinkStation, following the repo's
   `CLAUDE.md` constraint; sync with `rsync` first.
 - Add failing regression tests before production changes for reachable
-  aggregates/grouping, limit-after-reachability, HTTP row-limit override,
-  `LIMIT 0` contract, multiple and non-address-LHS `IN` predicates,
-  short-circuit `IN`/`EXISTS` alignment, address-valued and nested subqueries,
-  unprojected `ORDER BY`, CAST NULL propagation/default column naming/invalid
-  boolean strings, Java String `length()`, LIKE regex/glob classification,
-  method-expression column names, window partition keys/arguments/defaults and
-  offset bounds/LIMIT ordering, array `INSTANCEOF`, and `FROM ENTRIES`
-  planning/execution paths, including variadic string functions on array rows
-  and HAVING with unselected group keys, string methods, and FILTER-bound
-  aggregates.
+  aggregates/grouping, limit-after-reachability, multiple and non-address-LHS
+  `IN` predicates, short-circuit `IN`/`EXISTS` alignment, address-valued and
+  nested subqueries, unprojected `ORDER BY`, Java String `length()`, LIKE
+  regex/glob classification, method-expression column names, window partition
+  keys/arguments/defaults and offset bounds/LIMIT ordering, array `INSTANCEOF`,
+  and `FROM ENTRIES` planning/execution paths, including variadic string
+  functions on array rows and HAVING with unselected group keys, unprojected
+  aggregates, string methods, and FILTER-bound aggregates.
 - Test report-mode `FROM ENTRIES` with the actual graph/capability contract and
   make unsupported states fail with the right actionable message.
 - Update README/OQL examples, restrictions, and HTTP response schema only after
