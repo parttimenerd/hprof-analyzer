@@ -964,6 +964,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                         crate::query::execute::eval_having_term(
                             &term.pred,
                             row,
+                            &[],
                             q,
                             &columns,
                             &like_regexes,
@@ -2345,9 +2346,15 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         }
         // Accumulate each SELECT item's aggregate.
         for (i, it) in q.select.iter().enumerate() {
-            let SelectItem::Aggregate { func, arg, .. } = it else {
+            let SelectItem::Aggregate { func, arg, filter } = it else {
                 continue;
             };
+            // OQL-24: evaluate FILTER predicate before accumulating.
+            if let Some(pred) = filter {
+                if !eval_late_pred_multi(pred, idx, ret, ctx, &like_regexes) {
+                    continue;
+                }
+            }
             let val = match arg.as_ref() {
                 SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
                 SelectItem::Attr(Attr::UsedHeapSize) => {
@@ -2507,7 +2514,14 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         let columns = query_columns(q);
         rows.retain(|row| {
             entry.plan.having_terms.iter().all(|term| {
-                crate::query::execute::eval_having_term(&term.pred, row, q, &columns, &like_regexes)
+                crate::query::execute::eval_having_term(
+                    &term.pred,
+                    row,
+                    &[],
+                    q,
+                    &columns,
+                    &like_regexes,
+                )
             })
         });
     }
@@ -2817,9 +2831,15 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 continue;
             }
             for (i, it) in q.select.iter().enumerate() {
-                let SelectItem::Aggregate { func, arg, .. } = it else {
+                let SelectItem::Aggregate { func, arg, filter } = it else {
                     continue;
                 };
+                // OQL-24: evaluate FILTER predicate before accumulating.
+                if let Some(pred) = filter {
+                    if !eval_late_pred_multi(pred, idx, ret, ctx, &like_regexes) {
+                        continue;
+                    }
+                }
                 let val = match arg.as_ref() {
                     SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
                     SelectItem::Attr(Attr::UsedHeapSize) => {
@@ -2958,6 +2978,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                 crate::query::execute::eval_having_term(
                     &term.pred,
                     &row,
+                    &[],
                     q,
                     &columns,
                     &like_regexes,

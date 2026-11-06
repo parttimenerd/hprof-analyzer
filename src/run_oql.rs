@@ -253,6 +253,25 @@ pub(crate) fn run_oql_escalated(
         query_state.prune_cross_phase_reachable(dfn);
     }
 
+    // HistogramOnly queries are skipped inside Pass2 when reachable_only is set
+    // (to avoid producing all-objects counts). Re-run them here with a reachable
+    // class histogram so they count only GC-reachable objects (OQL-1 fix mirror).
+    if reachable_only {
+        if let Some(dfn) = reach_dfn.as_deref() {
+            eprintln!("DEBUG: g.shallow.len={} g.class_idx.len={} dfn.len={}", g.shallow.len(), g.class_idx.len(), dfn.len());
+            let reachable_summaries = query::histogram::build_reachable_summaries(
+                &g.class_idx,
+                dfn,
+                Some(&g.shallow),
+                &g.class_names,
+            );
+            eprintln!("DEBUG: summaries len={}, first few sums: {:?}", reachable_summaries.len(), reachable_summaries.iter().take(3).map(|s| (s.name, s.shallow_total)).collect::<Vec<_>>());
+            for (slot, r) in query::histogram::run_histogram_batch(flat, &reachable_summaries) {
+                query_state.push_finished(slot, r);
+            }
+        }
+    }
+
     // Edge-retention hook (mirrors run()): build the query-gated forward store
     // and bounded inbound CSR from the LIVE forward CSR. Under Codec::None
     // g.class_idx is dense, so borrow it in place (no restore).

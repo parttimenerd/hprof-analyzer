@@ -538,7 +538,7 @@ fn expr_has_string_method(e: &Expr) -> bool {
             receiver,
             args,
         } => {
-            if name == "contains" || name == "toString" {
+            if name == "contains" || name == "toString" || name == "length" {
                 return true;
             }
             if expr_has_string_method(receiver) {
@@ -1042,9 +1042,15 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
 
     for item in &q.select {
         match item {
-            SelectItem::Aggregate { arg, .. } => {
+            SelectItem::Aggregate { arg, filter, .. } => {
                 is_aggregate = true;
                 note_attr_need(arg, &mut needs)?;
+                // OQL-25: collect needs and subqueries from aggregate FILTER predicates.
+                if let Some(pred) = filter {
+                    collect_pred_needs(pred, &mut needs)?;
+                    collect_in_subplans(pred, &mut in_subplans, depth_cap)?;
+                    collect_exists_subplans(pred, &mut exists_subplans, depth_cap)?;
+                }
             }
             SelectItem::Star => {}
             SelectItem::Attr(a) => note_attr_need_attr(a, &mut needs),
@@ -1073,7 +1079,34 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
                 }
             }
             // Window functions are post-processing; no scan-time needs to note here.
-            SelectItem::Window { .. } => {}
+            // OQL-41: reject non-attribute LAG/LEAD args — only bare @attr is
+            // evaluated per-row in apply_window_functions; expressions silently
+            // return NULL (the executor resolves only Expr::Attr to a column index).
+            // OQL-42: reject non-literal LAG/LEAD defaults for the same reason.
+            SelectItem::Window { func, arg, .. } => match func {
+                crate::query::ast::WindowFunc::Lag { default_val, .. }
+                | crate::query::ast::WindowFunc::Lead { default_val, .. } => {
+                    if let Some(arg_expr) = arg {
+                        if !matches!(arg_expr.as_ref(), Expr::Attr(_)) {
+                            return Err(QueryError(
+                                "LAG/LEAD argument must be a bare attribute (e.g. @objectId, \
+                                     fieldName); expression arguments are not supported"
+                                    .into(),
+                            ));
+                        }
+                    }
+                    if let Some(default_expr) = default_val {
+                        if !matches!(default_expr.as_ref(), Expr::Lit(_)) {
+                            return Err(QueryError(
+                                "LAG/LEAD default must be a literal constant (e.g. 0, \
+                                     \"none\"); expression defaults are not supported"
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            },
         }
     }
 
@@ -1140,6 +1173,10 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     if let Some(having) = &q.having {
         collect_pred_needs(having, &mut needs)?;
         flatten_and(having.clone(), &mut having_terms);
+        // OQL-49: every aggregate in HAVING must also appear in SELECT so the
+        // HAVING evaluator can look it up in the projected row. Reject early with
+        // an actionable error rather than silently filtering every group.
+        validate_having_aggregates_in_select(having, &q.select)?;
     }
 
     // Register needs for GROUP BY key expressions.
@@ -2636,6 +2673,87 @@ fn flatten_and(pred: Predicate, out: &mut Vec<Conjunct>) {
             out.push(Conjunct { pred: other, cost });
         }
     }
+}
+
+/// Walk a HAVING predicate and collect all `Expr::Aggregate` sub-expressions.
+fn collect_having_aggs<'a>(pred: &'a Predicate, out: &mut Vec<&'a Expr>) {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_having_aggs(a, out);
+            collect_having_aggs(b, out);
+        }
+        Predicate::Not(a) => collect_having_aggs(a, out),
+        Predicate::Compare { lhs, rhs, .. } => {
+            collect_agg_exprs(lhs, out);
+            collect_agg_exprs(rhs, out);
+        }
+        _ => {}
+    }
+}
+
+fn collect_agg_exprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match e {
+        Expr::Aggregate { .. } => out.push(e),
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_agg_exprs(lhs, out);
+            collect_agg_exprs(rhs, out);
+        }
+        Expr::Unary { arg, .. } => collect_agg_exprs(arg, out),
+        Expr::Method { receiver, args, .. } => {
+            collect_agg_exprs(receiver, out);
+            for a in args {
+                collect_agg_exprs(a, out);
+            }
+        }
+        Expr::Case { branches, else_ } => {
+            for (_, e) in branches {
+                collect_agg_exprs(e, out);
+            }
+            if let Some(e) = else_ {
+                collect_agg_exprs(e, out);
+            }
+        }
+        Expr::Coalesce(args) => {
+            for a in args {
+                collect_agg_exprs(a, out);
+            }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            collect_agg_exprs(lhs, out);
+            collect_agg_exprs(rhs, out);
+        }
+        Expr::Cast { expr, .. } => collect_agg_exprs(expr, out),
+        Expr::Attr(_) | Expr::Lit(_) => {}
+    }
+}
+
+/// OQL-49: reject if any HAVING aggregate is not also in SELECT.
+fn validate_having_aggregates_in_select(
+    having: &Predicate,
+    select: &[SelectItem],
+) -> Result<(), QueryError> {
+    let mut aggs: Vec<&Expr> = Vec::new();
+    collect_having_aggs(having, &mut aggs);
+    for agg in aggs {
+        let Expr::Aggregate { func, arg } = agg else {
+            continue;
+        };
+        let in_select = select.iter().any(|it| match it {
+            SelectItem::Aggregate {
+                func: f, arg: a, ..
+            } => f == func && a == arg,
+            _ => false,
+        });
+        if !in_select {
+            let agg_name = crate::query::execute::expr_name(agg);
+            return Err(QueryError(format!(
+                "HAVING uses aggregate `{agg_name}` that does not appear in SELECT; \
+                 add `{agg_name}` to the SELECT list so HAVING can evaluate it, \
+                 e.g. SELECT @category, {agg_name} FROM ... GROUP BY @category HAVING {agg_name} > 0"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn pred_cost(pred: &Predicate) -> PredCost {

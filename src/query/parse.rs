@@ -1340,7 +1340,22 @@ where
                     just(Token::Comma)
                         .ignore_then(select! { Token::Int(n) => n })
                         .or_not()
-                        .map(|n| n.unwrap_or(1) as u32),
+                        .validate(|n_opt, e, emitter| {
+                            let n = n_opt.unwrap_or(1);
+                            if n < 0 || n > u32::MAX as i64 {
+                                emitter.emit(chumsky::error::Rich::custom(
+                                    e.span(),
+                                    format!(
+                                        "LAG/LEAD offset {n} is out of range; \
+                                         must be 0..={} (u32::MAX)",
+                                        u32::MAX
+                                    ),
+                                ));
+                                0u32
+                            } else {
+                                n as u32
+                            }
+                        }),
                 )
                 .then(just(Token::Comma).ignore_then(expr.clone()).or_not())
                 .then_ignore(just(Token::RParen))
@@ -1367,7 +1382,22 @@ where
                     just(Token::Comma)
                         .ignore_then(select! { Token::Int(n) => n })
                         .or_not()
-                        .map(|n| n.unwrap_or(1) as u32),
+                        .validate(|n_opt, e, emitter| {
+                            let n = n_opt.unwrap_or(1);
+                            if n < 0 || n > u32::MAX as i64 {
+                                emitter.emit(chumsky::error::Rich::custom(
+                                    e.span(),
+                                    format!(
+                                        "LAG/LEAD offset {n} is out of range; \
+                                         must be 0..={} (u32::MAX)",
+                                        u32::MAX
+                                    ),
+                                ));
+                                0u32
+                            } else {
+                                n as u32
+                            }
+                        }),
                 )
                 .then(just(Token::Comma).ignore_then(expr.clone()).or_not())
                 .then_ignore(just(Token::RParen))

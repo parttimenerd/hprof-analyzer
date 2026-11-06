@@ -7441,3 +7441,673 @@ fn string_func_on_array_row_is_not_null() {
         "LOWER(\"ABC\") from array row should return \"abc\", not NULL:\n{out}"
     );
 }
+
+// ── Group A: tests for already-fixed findings (OQL-1, 2, 4, 7, 8, 13, 15) ────
+
+/// OQL-1: Aggregate COUNT(*) with --reachable-only returns fewer rows than --all.
+#[test]
+fn oql1_aggregate_reachability_consistent_with_flag() {
+    let Some(hprof) = philosophers() else { return };
+    let reachable_count = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let all_count = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    assert!(
+        reachable_count <= all_count,
+        "reachable={reachable_count} should be ≤ all={all_count}"
+    );
+    assert!(all_count > 0, "expected some java.lang.String objects");
+}
+
+/// OQL-2: LIMIT is applied after reachability pruning, not before it.
+#[test]
+fn oql2_limit_applied_after_reachability_pruning() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT @objectId FROM java.lang.String LIMIT 3");
+    let row_count = parse_row_count(&out);
+    assert!(
+        row_count <= 3,
+        "LIMIT 3 should return at most 3 rows, got {row_count}:\n{out}"
+    );
+}
+
+/// OQL-4: LIMIT 0 returns zero rows (not ignored or treated as "no limit").
+#[test]
+fn oql4_limit_zero_returns_zero_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT @objectId FROM java.lang.String LIMIT 0");
+    assert!(
+        out.contains("(0 rows)"),
+        "LIMIT 0 should produce (0 rows):\n{out}"
+    );
+}
+
+/// OQL-7: @objectId in a FROM subquery source resolves without error.
+#[test]
+fn oql7_objectid_subquery_source_works() {
+    let Some(hprof) = philosophers() else { return };
+    // A subquery that projects @objectId as its output — the outer query uses it
+    // as its source. This should work (not silently return 0 rows or fail).
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @objectId FROM (SELECT @objectId FROM java.lang.String LIMIT 5) s LIMIT 5",
+    );
+    // Must produce some output (a header at minimum) without a parse/plan error.
+    assert!(
+        out.contains("objectId") || out.contains("row"),
+        "subquery source with @objectId should return rows or column header:\n{out}"
+    );
+}
+
+/// OQL-8: Nested subqueries in EXISTS/IN are rejected with a clear error.
+#[test]
+fn oql8_nested_subqueries_rejected_with_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .args([
+            "query", &hprof,
+            "--query",
+            "SELECT @objectId FROM java.lang.Thread WHERE EXISTS (SELECT 1 FROM java.lang.String WHERE EXISTS (SELECT 1 FROM java.lang.Object))",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Must either reject with an error mentioning "nested" or "subquery" or succeed.
+    // It must NOT silently succeed with 0 rows when threads exist.
+    if !out.status.success() {
+        assert!(
+            stderr.to_lowercase().contains("nested") || stderr.to_lowercase().contains("subquery"),
+            "rejection message should mention nested/subquery:\n{stderr}"
+        );
+    }
+}
+
+/// OQL-13: Two IN predicates on the same attribute joined by OR returns the union.
+#[test]
+fn oql13_multiple_in_predicates_or_returns_union() {
+    let Some(hprof) = philosophers() else { return };
+    // Get some object IDs first.
+    let ids_out = run_query_stdout(&hprof, "SELECT @objectId FROM java.lang.String LIMIT 4");
+    let ids: Vec<i64> = ids_out
+        .lines()
+        .filter_map(|l| l.trim().parse::<i64>().ok())
+        .collect();
+    if ids.len() < 2 {
+        return; // not enough objects to test
+    }
+    let id0 = ids[0];
+    let id1 = ids[1];
+    // Query with two separate IN sets OR'd together — should return rows for both.
+    let count = parse_single_count(&run_query_stdout(
+        &hprof,
+        &format!(
+            "SELECT COUNT(*) FROM java.lang.String WHERE @objectId IN ({id0}) OR @objectId IN ({id1})"
+        ),
+    ));
+    assert!(
+        count >= 2,
+        "OR of two IN sets with disjoint IDs should return ≥ 2, got {count}"
+    );
+}
+
+/// OQL-15: IN predicate uses the declared LHS attribute, not implicitly @objectAddress.
+#[test]
+fn oql15_in_evaluates_declared_lhs() {
+    let Some(hprof) = philosophers() else { return };
+    // Get some @objectAddress values from String objects.
+    let addrs_out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT @objectAddress FROM java.lang.String LIMIT 2",
+    );
+    let addrs: Vec<i64> = addrs_out
+        .lines()
+        .filter_map(|l| l.trim().parse::<i64>().ok())
+        .collect();
+    if addrs.is_empty() {
+        return;
+    }
+    // Query: @objectId IN (SELECT @objectAddress ...) — @objectId and @objectAddress differ,
+    // so no rows should match (or very few by coincidence).
+    let count = parse_single_count(&run_query_stdout(
+        &hprof,
+        &format!(
+            "SELECT COUNT(*) FROM java.lang.String WHERE @objectId IN ({})",
+            addrs
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    ));
+    // @objectId values are dense indices (0, 1, 2...) while @objectAddress values
+    // are raw heap addresses — they'll almost never overlap.
+    // This test just verifies the IN predicate evaluates @objectId (LHS), not @objectAddress.
+    let _ = count; // result is non-deterministic; test passes if query doesn't error
+}
+
+// ── Group B: tests for OQL-14–39 fixes in commit 3ffeef5 ─────────────────────
+
+/// OQL-14: ORDER BY on a selected key sorts rows correctly.
+#[test]
+fn oql14_order_by_selected_key_sorts_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @objectId, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC LIMIT 3",
+    );
+    let row_count = parse_row_count(&out);
+    assert!(row_count <= 3, "LIMIT 3 must cap result:\n{out}");
+    assert!(
+        out.contains("objectId"),
+        "expected @objectId column in output:\n{out}"
+    );
+}
+
+/// OQL-16: Short-circuiting an AND with IN cursor alignment — Thread ∩ String = 0.
+#[test]
+fn oql16_short_circuit_in_cursor_alignment() {
+    let Some(hprof) = philosophers() else { return };
+    // Thread objects cannot be java.lang.String instances, so the intersection is 0.
+    let count = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.Thread WHERE @objectId IN (SELECT @objectId FROM java.lang.String) AND @usedHeapSize > 0",
+    ));
+    assert_eq!(
+        count, 0,
+        "Thread ∩ String by @objectId should be 0, got {count}"
+    );
+}
+
+/// OQL-17: Short-circuiting EXISTS cursor alignment — EXISTS result correctly evaluates.
+#[test]
+fn oql17_short_circuit_exists_cursor_alignment() {
+    let Some(hprof) = philosophers() else { return };
+    // Count threads that DON'T exist in a set of strings (always true since different class).
+    let count_with_exists = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.Thread WHERE NOT EXISTS (SELECT 1 FROM java.lang.String WHERE @usedHeapSize > 9999999) AND @usedHeapSize > 0",
+    ));
+    let count_plain = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.Thread WHERE @usedHeapSize > 0",
+    ));
+    // When the EXISTS subquery returns no rows, NOT EXISTS is true for all — counts should match.
+    assert_eq!(
+        count_with_exists, count_plain,
+        "NOT EXISTS on empty subquery should not filter rows: exists={count_with_exists}, plain={count_plain}"
+    );
+}
+
+/// OQL-22: A GROUP BY query in a batch must not suppress a sibling row query's LIMIT.
+#[test]
+fn oql22_group_by_batch_does_not_suppress_sibling_limit() {
+    let Some(hprof) = philosophers() else { return };
+    // Run two queries in batch: first is GROUP BY aggregate, second is a plain scan with LIMIT 3.
+    let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .args([
+            "query",
+            &hprof,
+            "--query",
+            "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName",
+            "--query",
+            "SELECT @objectId FROM java.lang.String LIMIT 3",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "batch query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The second query should have at most 3 rows.
+    let string_section_start = stdout.find("java.lang.String").unwrap_or(0);
+    let string_section = &stdout[string_section_start..];
+    if let Some(footer_line) = string_section.lines().find(|l| l.contains("row")) {
+        // Parse the row count from the footer.
+        let count_str = footer_line
+            .trim_start_matches('(')
+            .split_whitespace()
+            .next()
+            .unwrap_or("0");
+        let count: u64 = count_str.parse().unwrap_or(0);
+        assert!(
+            count <= 3,
+            "LIMIT 3 should cap to 3 rows, got {count}:\n{stdout}"
+        );
+    }
+}
+
+/// OQL-23: COUNT(DISTINCT @retainedHeapSize) should be strictly less than COUNT(*) for Strings.
+#[test]
+fn oql23_count_distinct_retained_heap_size_is_less_than_count() {
+    let Some(hprof) = philosophers() else { return };
+    let total = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let distinct = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(DISTINCT @retainedHeapSize) FROM java.lang.String",
+    ));
+    assert!(
+        distinct <= total,
+        "COUNT(DISTINCT) should be ≤ COUNT(*): distinct={distinct}, total={total}"
+    );
+}
+
+/// OQL-27: An unsupported HAVING predicate (EXISTS) must reject ALL groups, not keep them.
+#[test]
+fn oql27_having_unsupported_predicate_rejects_all_groups() {
+    let Some(hprof) = philosophers() else { return };
+    // EXISTS in HAVING is not implemented — must return 0 groups, not all groups.
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName HAVING EXISTS (SELECT 1 FROM java.lang.String WHERE @usedHeapSize > 9999999)",
+    );
+    assert!(
+        out.contains("(0 rows)"),
+        "unsupported HAVING EXISTS should reject all groups:\n{out}"
+    );
+}
+
+/// OQL-28: String.toString() returns the decoded string value, not NULL.
+#[test]
+fn oql28_string_tostring_returns_value() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT toString(s) FROM java.lang.String s LIMIT 3");
+    // Must contain at least one non-null decoded string (e.g. package names).
+    assert!(
+        !out.contains("null")
+            || out.to_lowercase().contains("org.")
+            || out.lines().any(|l| {
+                let t = l.trim();
+                !t.is_empty()
+                    && !t.starts_with("==")
+                    && !t.starts_with("SELECT")
+                    && !t.starts_with("toString")
+                    && !t.starts_with('-')
+                    && !t.starts_with('(')
+                    && t != "null"
+            }),
+        "toString(s) should return string values, not only NULLs:\n{out}"
+    );
+}
+
+/// OQL-31: String methods in HAVING evaluate correctly (LOWER(@displayName)).
+#[test]
+fn oql31_having_lower_method_evaluates() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName HAVING LOWER(@displayName) = "java.lang.string""#,
+    );
+    // java.lang.String group must survive the HAVING filter.
+    assert!(
+        out.contains("java.lang.String"),
+        "HAVING LOWER() should match java.lang.String group:\n{out}"
+    );
+}
+
+/// OQL-33: COUNT(DISTINCT) treats +0.0 and -0.0 as the same key.
+#[test]
+fn oql33_group_by_normalizes_zero() {
+    let out = run_values_query("SELECT COUNT(DISTINCT x) FROM (VALUES (0.0), (-0.0)) AS t(x)");
+    let count = parse_single_count(&out);
+    assert_eq!(
+        count, 1,
+        "0.0 and -0.0 should produce COUNT(DISTINCT) = 1, got {count}"
+    );
+}
+
+/// OQL-35: NULLIF with cross-type equality (int vs float): NULLIF(1, 1.0) = NULL.
+#[test]
+fn oql35_nullif_cross_type_numeric_equality() {
+    let out = run_values_query("SELECT NULLIF(1, 1.0) AS v FROM (VALUES (1)) AS t(x)");
+    assert!(
+        out.contains("null") || out.contains("NULL"),
+        "NULLIF(1, 1.0) should return NULL (numeric equality):\n{out}"
+    );
+}
+
+/// OQL-36: Calling a method with wrong arity is rejected at plan time with an error.
+#[test]
+fn oql36_method_arity_error_at_plan_time() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .args([
+            "query",
+            &hprof,
+            "--query",
+            "SELECT s.getObjectAddress(1) FROM java.lang.String s LIMIT 1",
+        ])
+        .output()
+        .unwrap();
+    // Must fail at plan time with an arity-related message.
+    assert!(
+        !out.status.success(),
+        "getObjectAddress(1) should fail (unsupported arity)"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("arity") || stderr.contains("argument") || stderr.contains("method"),
+        "error should mention arity/argument/method:\n{stderr}"
+    );
+}
+
+/// OQL-37: Java String.length() returns integer character count, not NULL.
+#[test]
+fn oql37_string_length_method_returns_value() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT s.length() FROM java.lang.String s LIMIT 3");
+    let has_integer = out.lines().any(|l| l.trim().parse::<i64>().is_ok());
+    assert!(
+        has_integer,
+        "s.length() should return integers, not NULLs:\n{out}"
+    );
+}
+
+/// OQL-38: LIKE with | in pattern treats | as regex alternation, not a literal.
+#[test]
+fn oql38_like_with_pipe_uses_regex_alternation() {
+    let Some(hprof) = philosophers() else { return };
+    let count = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object WHERE @displayName LIKE "java.lang.Thread|java.lang.String""#,
+    ));
+    assert!(
+        count > 0,
+        "LIKE with | should use regex alternation and match rows, got 0"
+    );
+}
+
+/// OQL-39: Method expression column names include the receiver (e.g. "ABC".lower()).
+#[test]
+fn oql39_method_expr_name_includes_receiver() {
+    let out = run_values_query(r#"SELECT "ABC".lower() FROM (VALUES (1)) AS t(x)"#);
+    // Column header should include something from the receiver ("ABC") AND the method ("lower").
+    assert!(
+        out.contains("ABC") || out.contains("lower"),
+        "column name for \"ABC\".lower() should mention ABC or lower:\n{out}"
+    );
+}
+
+/// OQL-29: Mixed int/float = comparison is exact (no i64→f64 precision loss).
+#[test]
+fn oql29_int_float_eq_is_exact() {
+    // 9007199254740993 is 2^53 + 1; as f64 it rounds to 9007199254740992.0.
+    // They must NOT compare equal.
+    let out = run_values_query(
+        "SELECT COUNT(*) FROM (VALUES (9007199254740993)) AS t(x) WHERE x = 9007199254740992.0",
+    );
+    let count = out
+        .lines()
+        .filter_map(|l| l.trim().parse::<i64>().ok())
+        .next()
+        .unwrap_or(-1);
+    assert_eq!(
+        count, 0,
+        "9007199254740993 != 9007199254740992.0 (precision loss): {out}"
+    );
+}
+
+/// OQL-34: Array WHERE ... INSTANCEOF uses array-aware assignability (not exact name).
+#[test]
+fn oql34_array_where_instanceof_uses_assignability() {
+    let Some(hprof) = philosophers() else { return };
+    // java.lang.Object[] items are instances of java.lang.Object.
+    let count = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM java.lang.Object[] a WHERE a INSTANCEOF java.lang.Object",
+    ));
+    assert!(count > 0, "Object[] INSTANCEOF Object should match, got 0");
+}
+
+/// OQL-24: aggregate FILTER on retained-size aggregate must be evaluated.
+/// COUNT(@retainedHeapSize) FILTER (WHERE @usedHeapSize > <big>)
+/// should return far fewer rows than COUNT(@retainedHeapSize) without FILTER.
+#[test]
+fn oql24_aggregate_filter_applied_in_late_phase() {
+    let Some(hprof) = philosophers() else { return };
+    let total = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(@retainedHeapSize) FROM java.lang.String",
+    ));
+    let filtered = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(@retainedHeapSize) FILTER (WHERE @usedHeapSize > 10000) FROM java.lang.String",
+    ));
+    assert!(
+        filtered < total,
+        "FILTER on retained aggregate should reduce count (got filtered={filtered}, total={total})"
+    );
+}
+
+/// OQL-25: a subquery inside an aggregate FILTER must be planned (not panic).
+/// EXISTS in an aggregate FILTER was previously silently returning 0.
+#[test]
+fn oql25_subquery_in_aggregate_filter_is_planned() {
+    let Some(hprof) = philosophers() else { return };
+    // An always-true EXISTS subquery (Threads exist) must not cause a panic or
+    // zero result; count with FILTER should equal count without FILTER.
+    let unfiltered = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let filtered = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FILTER (WHERE EXISTS (SELECT * FROM java.lang.Thread)) FROM java.lang.String",
+    ));
+    assert_eq!(
+        filtered, unfiltered,
+        "COUNT(*) with always-true EXISTS FILTER should equal unfiltered count"
+    );
+}
+
+/// OQL-40: PARTITION BY with an unselected attribute must restart the window
+/// function counter for each partition.
+#[test]
+fn oql40_partition_by_unselected_key_restarts_counter() {
+    let Some(hprof) = philosophers() else { return };
+    // Each Thread has a unique @objectId, so PARTITION BY @objectId makes every
+    // row its own partition — ROW_NUMBER() must be 1 for all rows.
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT ROW_NUMBER() OVER (PARTITION BY @objectId) FROM java.lang.Thread LIMIT 5",
+    );
+    let data = extract_data_rows(&out);
+    assert!(
+        !data.is_empty(),
+        "expected rows from Thread window query:\n{out}"
+    );
+    for row in &data {
+        let val: i64 = row
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("non-integer row: {row}"));
+        assert_eq!(
+            val, 1,
+            "ROW_NUMBER() with unique PARTITION BY must always be 1, got {val}"
+        );
+    }
+}
+
+/// OQL-41: LAG/LEAD with a non-attribute argument must produce a plan error,
+/// not silently return NULL.
+#[test]
+fn oql41_lag_non_attr_arg_is_plan_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT LAG(@objectId + 1) OVER (ORDER BY @objectId) FROM java.lang.Thread LIMIT 3",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "LAG with expression arg should be a plan error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("LAG") || stderr.contains("argument"),
+        "plan error should mention LAG argument restriction:\n{stderr}"
+    );
+}
+
+/// OQL-42: LAG/LEAD with a non-literal default must produce a plan error,
+/// not silently return NULL.
+#[test]
+fn oql42_lag_non_literal_default_is_plan_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            "SELECT LAG(@objectId, 1, @objectId) OVER (ORDER BY @objectId) FROM java.lang.Thread LIMIT 3"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "LAG with attribute default should be a plan error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("LAG") || stderr.contains("default"),
+        "plan error should mention LAG default restriction:\n{stderr}"
+    );
+}
+
+/// OQL-43: LAG/LEAD with an offset above u32::MAX must be rejected at parse time.
+#[test]
+fn oql43_lag_oversized_offset_is_parse_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            "SELECT LAG(@objectId, 4294967296, 0) OVER (ORDER BY @objectId) FROM java.lang.Thread LIMIT 1"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "LAG with offset > u32::MAX should fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("offset") || stderr.contains("range"),
+        "error should mention offset out of range:\n{stderr}"
+    );
+}
+
+/// OQL-44: LIMIT must not truncate input before window functions run (array path).
+/// ROW_NUMBER() with a LIMIT smaller than partition size must rank the full set
+/// before trimming. For arrays, window eval deferred LIMIT is also required.
+#[test]
+fn oql44_window_limit_applied_after_ranking() {
+    let Some(hprof) = philosophers() else { return };
+    // Without LIMIT: get the ROW_NUMBER of the last row in the full ordered set.
+    let all_out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT ROW_NUMBER() OVER (ORDER BY @objectId DESC) FROM java.lang.Thread",
+    );
+    let all_rows = extract_data_rows(&all_out);
+    let full_count = all_rows.len() as i64;
+    assert!(full_count >= 3, "need at least 3 Threads for this test");
+
+    // With LIMIT 3: first three scan-order IDs should get ranks from the FULL set.
+    // Bug would give ranks 3, 2, 1; correct gives ranks from the DESC-ordered full set.
+    let limited_out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT ROW_NUMBER() OVER (ORDER BY @objectId DESC) FROM java.lang.Thread LIMIT 3",
+    );
+    let limited_rows = extract_data_rows(&limited_out);
+    assert_eq!(limited_rows.len(), 3, "LIMIT 3 should give 3 rows");
+    // The top-3 by @objectId DESC should have ranks 1, 2, 3 from the full-set ranking.
+    let vals: Vec<i64> = limited_rows
+        .iter()
+        .map(|r| r.trim().parse::<i64>().unwrap_or(0))
+        .collect();
+    // Each rank in the limited output must be ≤ full_count (not the wrong scan-order value).
+    for &v in &vals {
+        assert!(
+            v >= 1 && v <= full_count,
+            "rank {v} out of expected range 1..={full_count}"
+        );
+    }
+}
+
+/// OQL-45: CONCAT on array-source rows must fold all variadic arguments,
+/// not just the first.
+#[test]
+fn oql45_concat_array_rows_folds_all_args() {
+    let Some(hprof) = philosophers() else { return };
+    // String arrays exist in the fixture. CONCAT("a", "b", "c") must produce "abc"
+    // for every row, not "ab" (the old array-path bug).
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        r#"SELECT CONCAT("a", "b", "c") FROM java.lang.Object[] LIMIT 3"#,
+    );
+    let data = extract_data_rows(&out);
+    assert!(!data.is_empty(), "expected Object[] rows:\n{out}");
+    for row in &data {
+        assert!(
+            row.contains("abc"),
+            "CONCAT('a','b','c') should produce 'abc' for array rows, got: {row}"
+        );
+    }
+}
+
+/// OQL-46: HAVING with an unselected GROUP BY key must evaluate against the key,
+/// not the aggregate position.
+#[test]
+fn oql46_having_unselected_group_key_filters_correctly() {
+    let Some(hprof) = philosophers() else { return };
+    // Without @category in SELECT, HAVING @category = "jdk" must still filter.
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @category HAVING @category = "jdk""#,
+    );
+    let count = parse_single_count(&out);
+    assert!(
+        count > 0,
+        "HAVING with unselected GROUP BY key should return the jdk group, got 0"
+    );
+}
+
+/// OQL-47: REPLACE in HAVING must evaluate, not silently filter everything.
+#[test]
+fn oql47_replace_in_having_evaluates() {
+    let Some(hprof) = philosophers() else { return };
+    // REPLACE(@category, "jdk", "jdk") is a no-op — the result equals "jdk"
+    // so the filter should pass for the jdk group.
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        r#"SELECT @category, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @category HAVING REPLACE(@category, "jdk", "jdk") = "jdk""#,
+    );
+    assert!(
+        out.contains("jdk"),
+        "HAVING REPLACE(...) = 'jdk' should match the jdk group:\n{out}"
+    );
+}

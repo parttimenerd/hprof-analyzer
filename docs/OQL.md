@@ -320,8 +320,8 @@ marked ¹ require the full analysis pipeline.
 | `@retainedHeapSize`¹ | Int | Total heap retained exclusively by this object |
 | `@displayName` | Str | Class name (dot-form) |
 | `@length` | Int | Array length; `null` for non-arrays |
-| `@inbounds`¹ | Obj | Incoming reference objects — **must be the sole SELECT item** |
-| `@outbounds`¹ | Obj | Outgoing reference objects — **must be the sole SELECT item** |
+| `@inbounds`¹ | Obj | Incoming reference objects — **must be the sole SELECT item** (row-expanding: one row per referencing object) |
+| `@outbounds`¹ | Obj | Outgoing reference objects — **must be the sole SELECT item** (row-expanding: one row per referenced object) |
 | `@category` | Str | Classifier bucket: `"jdk"`, `"framework"`, `"other"`, or a user-defined name |
 | `@superclass` | Str | Pretty class name of the immediate superclass; `null` for `java.lang.Object` |
 | `@collectionSize` | Int | Logical element count from the collection's size field; `null` for non-collections |
@@ -748,6 +748,18 @@ Every `POST /` and `POST /query` response is a JSON object with an `ok` field:
 The `result` object shape is described by `GET /schema`. Errors also use this
 envelope — they are **not** plain HTTP error bodies.
 
+The `QueryResult` fields returned in `result`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `columns` | array | Column metadata: `[{"name":"…","kind":"…"}]` |
+| `rows` | array | Array of rows; each row is an array of values |
+| `row_count` | integer | Number of rows (may differ from `rows.length` if truncated) |
+| `truncated` | bool | `true` if rows were capped by `LIMIT` or HTTP `limit` |
+| `elapsed_ms` | integer | Server-side query time in milliseconds |
+| `warning` | string? | Optional advisory warning (e.g. missing index, `--all` hint) |
+
+
 ### Error responses
 
 All endpoints return structured JSON errors:
@@ -868,6 +880,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | **`get(n)` indexed access** | Works on arrays/collections | Rejected — dereference the backing field directly (e.g. `a.elementData`) |
 | **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Rejected — aggregate the inner query instead |
 | **`LIKE` pattern syntax** | Regex only | Both SQL globs (`%`, `_`) and regex accepted; `%` auto-translates to `.*` |
+| **`FROM INSTANCEOF <interface>`** | Returns implementing classes | Returns 0 rows — HPROF CLASS_DUMP records do not include implemented-interface metadata; interface assignability cannot be determined statically. Use the concrete class or a common abstract superclass instead (e.g. `FROM INSTANCEOF java.util.AbstractMap` instead of `FROM INSTANCEOF java.util.Map`). |
 
 ### Not yet supported
 

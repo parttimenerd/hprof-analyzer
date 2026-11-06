@@ -307,6 +307,10 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// can sort on them even when they were not selected. Empty when all ORDER BY
     /// keys appear in the SELECT list (the common case, zero overhead).
     extra_sort_attrs: Vec<Attr>,
+    /// PARTITION BY attrs not in the projected columns, appended as hidden
+    /// trailing values after the ORDER BY extras so `apply_window_functions`
+    /// can resolve them (OQL-40). Stripped after window evaluation.
+    extra_window_attrs: Vec<Attr>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -531,10 +535,13 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
 }
 
 /// Evaluate a HAVING predicate against a finalized GROUP BY output row.
-/// `row` is parallel to `columns`; `query` is needed for alias resolution.
+/// `row` is parallel to `columns` (projected SELECT output).
+/// `key` is parallel to `query.group_by` (raw GROUP BY key values, including
+/// unselected keys that do not appear in `row`).
 pub(crate) fn eval_having_term(
     pred: &crate::query::ast::Predicate,
     row: &[QueryValue],
+    key: &[QueryValue],
     query: &Query,
     columns: &[QueryColumn],
     like_regexes: &std::collections::HashMap<String, regex::Regex>,
@@ -542,17 +549,17 @@ pub(crate) fn eval_having_term(
     use crate::query::ast::Predicate as P;
     match pred {
         P::And(a, b) => {
-            eval_having_term(a, row, query, columns, like_regexes)
-                && eval_having_term(b, row, query, columns, like_regexes)
+            eval_having_term(a, row, key, query, columns, like_regexes)
+                && eval_having_term(b, row, key, query, columns, like_regexes)
         }
         P::Or(a, b) => {
-            eval_having_term(a, row, query, columns, like_regexes)
-                || eval_having_term(b, row, query, columns, like_regexes)
+            eval_having_term(a, row, key, query, columns, like_regexes)
+                || eval_having_term(b, row, key, query, columns, like_regexes)
         }
-        P::Not(inner) => !eval_having_term(inner, row, query, columns, like_regexes),
+        P::Not(inner) => !eval_having_term(inner, row, key, query, columns, like_regexes),
         P::Compare { lhs, op, rhs } => {
-            let lv = eval_having_expr(lhs, row, query, columns, like_regexes);
-            let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
+            let lv = eval_having_expr(lhs, row, key, query, columns, like_regexes);
+            let rv = eval_having_expr(rhs, row, key, query, columns, like_regexes);
             let like_re = if matches!(op, CompareOp::Like | CompareOp::NotLike) {
                 rhs.as_lit().and_then(|v| {
                     if let Value::Str(pat) = v {
@@ -575,11 +582,13 @@ pub(crate) fn eval_having_term(
 
 /// Evaluate a HAVING expression against a finalized GROUP BY output row.
 /// Aggregate expressions (COUNT(*), SUM(...)) look up their result column by name.
-/// Attribute expressions look up by column name.
+/// Attribute expressions look up by column name in `columns`, or by position in
+/// `key` for unselected GROUP BY keys (OQL-46).
 /// Literals convert directly.
 fn eval_having_expr(
     e: &Expr,
     row: &[QueryValue],
+    key: &[QueryValue],
     query: &Query,
     columns: &[QueryColumn],
     like_regexes: &std::collections::HashMap<String, regex::Regex>,
@@ -593,22 +602,37 @@ fn eval_having_expr(
             Value::Null => QueryValue::Null,
         },
         Expr::Aggregate { func, arg } => {
-            // Find this aggregate by structural match in query.select, bypassing
-            // any AS alias — the alias changes the column name but not the
-            // SelectItem variant. This is alias-transparent.
+            // Find this aggregate by structural match in query.select, including
+            // any FILTER clause (OQL-48: an aggregate with FILTER is not the same
+            // as one without). Bypasses AS alias — alias changes the column name
+            // but not the SelectItem variant. This is alias-transparent.
             let pos = query.select.iter().position(|it| match it {
                 SelectItem::Aggregate {
-                    func: f, arg: a, ..
-                } => f == func && a == arg,
+                    func: f,
+                    arg: a,
+                    filter: fi,
+                    ..
+                } => f == func && a == arg && fi.is_none(),
                 _ => false,
+            });
+            // Fall back to a FILTER-bearing aggregate with matching func/arg only
+            // if no unfiltered match exists.
+            let pos = pos.or_else(|| {
+                query.select.iter().position(|it| match it {
+                    SelectItem::Aggregate {
+                        func: f, arg: a, ..
+                    } => f == func && a == arg,
+                    _ => false,
+                })
             });
             pos.and_then(|i| row.get(i))
                 .cloned()
                 .unwrap_or(QueryValue::Null)
         }
         Expr::Attr(attr) => {
-            // Non-aggregate column in HAVING — match by column name first,
-            // then fall back to GROUP BY key expressions (which may not be in SELECT).
+            // Non-aggregate column in HAVING — match by column name in the projected
+            // SELECT output first, then fall back to the raw GROUP BY key vector for
+            // unselected keys (OQL-46). `key` is indexed by group_by position.
             let name = attr_name(attr);
             if let Some(val) = columns
                 .iter()
@@ -617,9 +641,7 @@ fn eval_having_expr(
             {
                 val.clone()
             } else {
-                // Check GROUP BY expressions: the group key values are stored at
-                // the beginning of the row (positions 0..group_by.len()), followed
-                // by aggregate columns.
+                // Check GROUP BY expressions and return the corresponding key value.
                 query
                     .group_by
                     .iter()
@@ -630,19 +652,19 @@ fn eval_having_expr(
                             false
                         }
                     })
-                    .and_then(|i| row.get(i))
+                    .and_then(|i| key.get(i))
                     .cloned()
                     .unwrap_or(QueryValue::Null)
             }
         }
         Expr::Binary { op, lhs, rhs } => {
-            let l = eval_having_expr(lhs, row, query, columns, like_regexes);
-            let r = eval_having_expr(rhs, row, query, columns, like_regexes);
+            let l = eval_having_expr(lhs, row, key, query, columns, like_regexes);
+            let r = eval_having_expr(rhs, row, key, query, columns, like_regexes);
             arith(&l, *op, &r)
         }
         Expr::Unary { op, arg } => unary(
             *op,
-            &eval_having_expr(arg, row, query, columns, like_regexes),
+            &eval_having_expr(arg, row, key, query, columns, like_regexes),
         ),
         Expr::Method {
             receiver,
@@ -651,23 +673,32 @@ fn eval_having_expr(
         } => {
             // String manipulation methods in HAVING (e.g. HAVING LOWER(@category) = "jdk").
             // Evaluate the receiver against the HAVING row, then apply the string op.
-            let recv_val = eval_having_expr(receiver, row, query, columns, like_regexes);
-            eval_having_string_method(&recv_val, name, args, row, query, columns, like_regexes)
+            let recv_val = eval_having_expr(receiver, row, key, query, columns, like_regexes);
+            eval_having_string_method(
+                &recv_val,
+                name,
+                args,
+                row,
+                key,
+                query,
+                columns,
+                like_regexes,
+            )
         }
         Expr::Case { branches, else_ } => {
             for (pred, then_expr) in branches {
-                if eval_having_term(pred, row, query, columns, like_regexes) {
-                    return eval_having_expr(then_expr, row, query, columns, like_regexes);
+                if eval_having_term(pred, row, key, query, columns, like_regexes) {
+                    return eval_having_expr(then_expr, row, key, query, columns, like_regexes);
                 }
             }
             match else_ {
-                Some(e) => eval_having_expr(e, row, query, columns, like_regexes),
+                Some(e) => eval_having_expr(e, row, key, query, columns, like_regexes),
                 None => QueryValue::Null,
             }
         }
         Expr::Coalesce(args) => {
             for arg in args {
-                let v = eval_having_expr(arg, row, query, columns, like_regexes);
+                let v = eval_having_expr(arg, row, key, query, columns, like_regexes);
                 if !matches!(v, QueryValue::Null) {
                     return v;
                 }
@@ -675,8 +706,8 @@ fn eval_having_expr(
             QueryValue::Null
         }
         Expr::NullIf { lhs, rhs } => {
-            let lv = eval_having_expr(lhs, row, query, columns, like_regexes);
-            let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
+            let lv = eval_having_expr(lhs, row, key, query, columns, like_regexes);
+            let rv = eval_having_expr(rhs, row, key, query, columns, like_regexes);
             if qv_value_eq(&lv, &rv) {
                 QueryValue::Null
             } else {
@@ -684,7 +715,7 @@ fn eval_having_expr(
             }
         }
         Expr::Cast { expr, target } => {
-            let value = eval_having_expr(expr, row, query, columns, like_regexes);
+            let value = eval_having_expr(expr, row, key, query, columns, like_regexes);
             cast_query_value(value, *target)
         }
     }
@@ -697,6 +728,7 @@ fn eval_having_string_method(
     name: &str,
     args: &[Expr],
     row: &[QueryValue],
+    key: &[QueryValue],
     query: &Query,
     columns: &[QueryColumn],
     like_regexes: &std::collections::HashMap<String, regex::Regex>,
@@ -730,10 +762,10 @@ fn eval_having_string_method(
             if let QueryValue::Str(s) = recv {
                 let start_val = args
                     .first()
-                    .map(|a| eval_having_expr(a, row, query, columns, like_regexes));
+                    .map(|a| eval_having_expr(a, row, key, query, columns, like_regexes));
                 let len_val = args
                     .get(1)
-                    .map(|a| eval_having_expr(a, row, query, columns, like_regexes));
+                    .map(|a| eval_having_expr(a, row, key, query, columns, like_regexes));
                 let start_char = match start_val {
                     Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
                     _ => return QueryValue::Null,
@@ -765,7 +797,7 @@ fn eval_having_string_method(
                 _ => return QueryValue::Null,
             };
             for a in args {
-                match eval_having_expr(a, row, query, columns, like_regexes) {
+                match eval_having_expr(a, row, key, query, columns, like_regexes) {
                     QueryValue::Str(s) => result.push_str(&s),
                     QueryValue::Int(i) => result.push_str(&i.to_string()),
                     QueryValue::Float(f) => result.push_str(&f.to_string()),
@@ -776,6 +808,26 @@ fn eval_having_string_method(
             }
             QueryValue::Str(result)
         }
+        "replace" => match recv {
+            QueryValue::Str(s) => {
+                let search = match args
+                    .first()
+                    .map(|a| eval_having_expr(a, row, key, query, columns, like_regexes))
+                {
+                    Some(QueryValue::Str(s)) => s,
+                    _ => return QueryValue::Null,
+                };
+                let replacement = match args
+                    .get(1)
+                    .map(|a| eval_having_expr(a, row, key, query, columns, like_regexes))
+                {
+                    Some(QueryValue::Str(s)) => s,
+                    _ => return QueryValue::Null,
+                };
+                QueryValue::Str(s.replace(search.as_str(), replacement.as_str()))
+            }
+            _ => QueryValue::Null,
+        },
         _ => QueryValue::Null,
     }
 }
@@ -863,6 +915,30 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     .collect()
             })
             .unwrap_or_default();
+        // OQL-40: PARTITION BY attrs not in projected columns are appended as
+        // hidden trailing values (after extra_sort_attrs) so apply_window_functions
+        // can partition on them. Deduplicated to avoid redundant appends.
+        let extra_sort_names: Vec<String> = extra_sort_attrs.iter().map(attr_name).collect();
+        let mut extra_window_attrs: Vec<Attr> = Vec::new();
+        let mut window_attr_seen: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for item in &query.select {
+            if let SelectItem::Window { over, .. } = item {
+                for pb_expr in &over.partition_by {
+                    if let Expr::Attr(pb_attr) = pb_expr {
+                        let pname = attr_name(pb_attr);
+                        let bare = strip_leading_alias(&pname, query.alias.as_deref());
+                        let in_projected = projected_names.iter().any(|cn| {
+                            cn == &pname || strip_leading_alias(cn, query.alias.as_deref()) == bare
+                        });
+                        let in_extra_sort = extra_sort_names.iter().any(|n| n == &pname);
+                        if !in_projected && !in_extra_sort && window_attr_seen.insert(pname) {
+                            extra_window_attrs.push(pb_attr.clone());
+                        }
+                    }
+                }
+            }
+        }
         Self {
             query,
             plan,
@@ -882,6 +958,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             exists_cursor: std::cell::Cell::new(0),
             in_cursor: std::cell::Cell::new(0),
             extra_sort_attrs,
+            extra_window_attrs,
         }
     }
 
@@ -917,6 +994,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // Carry mode finishes in stage_runner, not here; ORDER BY is handled
             // there. No extra sort attrs needed at scan time.
             extra_sort_attrs: Vec::new(),
+            extra_window_attrs: Vec::new(),
         }
     }
 
@@ -1096,6 +1174,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         for attr in &self.extra_sort_attrs {
             row.push(self.project_attr(attr, src_idx, class_id, blob));
         }
+        // Append hidden trailing values for PARTITION BY keys not in the SELECT list (OQL-40).
+        for attr in &self.extra_window_attrs {
+            row.push(self.project_attr(attr, src_idx, class_id, blob));
+        }
         row
     }
     fn project_item(
@@ -1241,6 +1323,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             .map(|item| self.project_array_item(item, src_idx, class_name, length))
             .collect();
         for attr in &self.extra_sort_attrs {
+            row.push(self.project_array_attr(attr, src_idx, class_name, length));
+        }
+        // Append hidden trailing values for PARTITION BY keys not in the SELECT list (OQL-40).
+        for attr in &self.extra_window_attrs {
             row.push(self.project_array_attr(attr, src_idx, class_name, length));
         }
         row
@@ -1445,15 +1531,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                             "rtrim" => QueryValue::Str(s.trim_end().to_string()),
                             "strlen" => QueryValue::Int(s.chars().count() as i64),
                             "concat" => {
-                                let suffix = args
-                                    .first()
-                                    .map(|a| self.eval_expr_array(a, src_idx, class_name, length))
-                                    .unwrap_or(QueryValue::Null);
-                                if let QueryValue::Str(r) = suffix {
-                                    QueryValue::Str(s + &r)
-                                } else {
-                                    QueryValue::Null
+                                // Fold all variadic args (OQL-45: was only reading args.first()).
+                                let mut result = s;
+                                for a in args {
+                                    match self.eval_expr_array(a, src_idx, class_name, length) {
+                                        QueryValue::Str(r) => result.push_str(&r),
+                                        QueryValue::Int(i) => result.push_str(&i.to_string()),
+                                        QueryValue::Float(f) => result.push_str(&f.to_string()),
+                                        QueryValue::Bool(b) => result.push_str(&b.to_string()),
+                                        QueryValue::Null => {}
+                                        _ => {}
+                                    }
                                 }
+                                QueryValue::Str(result)
                             }
                             "replace" => {
                                 let from_val = args
@@ -1563,7 +1653,16 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             "toString" => {
                 self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob)
             }
-            "length" => self.project_attr(&Attr::Length, src_idx, class_id, blob),
+            // OQL-37: length() on a String instance must return character count.
+            // Evaluate the receiver: if it resolves to a Str, return chars().count();
+            // otherwise fall back to the @length attribute (array length).
+            "length" => {
+                let recv_val = self.eval_expr(receiver, src_idx, class_id, blob);
+                match recv_val {
+                    QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
+                    _ => self.project_attr(&Attr::Length, src_idx, class_id, blob),
+                }
+            }
             // ── String-manipulation functions ──────────────────────────────────
             // These are dispatched by both the SQL-style LOWER(expr) syntax and
             // the method-call syntax expr.lower().  The receiver is always the
@@ -2004,7 +2103,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 }
             }
             P::Not(a) => !self.array_eval_pred(a, src_idx, class_name, length),
-            P::InstanceOf(cname) => class_name_matches(class_name, cname),
+            P::InstanceOf(cname) => {
+                // OQL-34: use array-aware assignability (same as FROM INSTANCEOF for arrays).
+                let spec = crate::query::ast::ClassSpec {
+                    class_name: cname.clone(),
+                    instanceof: true,
+                    is_regex: false,
+                };
+                array_instanceof_matches(class_name, &spec, None)
+            }
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Exists { .. } => {
                 let idx = self.exists_cursor.get();
@@ -2086,7 +2193,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     .collect();
                 // Apply HAVING filter.
                 let having_ok = self.plan.having_terms.iter().all(|term| {
-                    eval_having_term(&term.pred, &row, self.query, &columns, &self.like_regexes)
+                    eval_having_term(
+                        &term.pred,
+                        &row,
+                        &key,
+                        self.query,
+                        &columns,
+                        &self.like_regexes,
+                    )
                 });
                 if having_ok {
                     rows.push(row);
@@ -2411,8 +2525,16 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // Reachable-only (row_src armed): can't early-stop because the post-scan
         // DFN prune may remove some of these rows, leaving fewer than LIMIT rows.
         // LIMIT is re-applied post-prune in resume_with_string_values.
-        // No-ORDER-BY, no-subquery, no-reachable-only queries keep the early-stop.
+        // Window functions: must see the full matched set before assigning ranks/lags,
+        // so early-stop is blocked when any window column is present (OQL-44).
+        // No-ORDER-BY, no-window, no-subquery, no-reachable-only queries keep the early-stop.
+        let has_window = self
+            .query
+            .select
+            .iter()
+            .any(|s| matches!(s, SelectItem::Window { .. }));
         if self.query.order_by.is_none()
+            && !has_window
             && self.query.from.as_subquery().is_none()
             && self.row_src.is_none()
         {
@@ -2559,7 +2681,15 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // See the ORDER BY / FROM-subquery note in `visit_instance`: don't
         // early-stop when a sort or a semi-join is pending. Also skip early-stop
         // when reachable-only (row_src armed): see visit_instance for rationale.
+        // OQL-44: also skip early-stop when window functions are present — they
+        // need the full matched set before ranking/lag can be computed.
+        let has_window = self
+            .query
+            .select
+            .iter()
+            .any(|s| matches!(s, SelectItem::Window { .. }));
         if self.query.order_by.is_none()
+            && !has_window
             && self.query.from.as_subquery().is_none()
             && self.row_src.is_none()
         {
@@ -3101,6 +3231,11 @@ pub(crate) fn compare_values(
             !is_like
         };
     }
+    // OQL-29: Eq/Ne use exact cross-type comparison to avoid i64→f64 precision loss.
+    if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+        let eq = qv_value_eq(lv, rv);
+        return if matches!(op, CompareOp::Eq) { eq } else { !eq };
+    }
     let ord = match (lv, rv) {
         (QueryValue::Int(a), QueryValue::Int(b)) => (*a).partial_cmp(b),
         (QueryValue::Int(a), QueryValue::Float(b)) => (*a as f64).partial_cmp(b),
@@ -3112,10 +3247,9 @@ pub(crate) fn compare_values(
         _ => None,
     };
     match ord {
-        None => matches!(op, CompareOp::Ne),
+        None => false,
         Some(o) => match op {
-            CompareOp::Eq => o.is_eq(),
-            CompareOp::Ne => o.is_ne(),
+            CompareOp::Eq | CompareOp::Ne => unreachable!("handled above"),
             CompareOp::Lt => o.is_lt(),
             CompareOp::Le => o.is_le(),
             CompareOp::Gt => o.is_gt(),
@@ -3560,9 +3694,17 @@ fn qv_value_eq(a: &QueryValue, b: &QueryValue) -> bool {
         (Int(x), Int(y)) => x == y,
         (Float(x), Float(y)) => x == y,
         (Str(x), Str(y)) => x == y,
-        // Numeric cross-type: compare Int and Float by value so `i.equals(1)` and
-        // `f.equals(1.0)` behave intuitively across the boxing boundary.
-        (Int(x), Float(y)) | (Float(y), Int(x)) => (*x as f64) == *y,
+        // Numeric cross-type: compare Int and Float without lossy f64 cast (OQL-29).
+        // A float is exactly equal to an integer only when it is finite, its value
+        // fits in i64, and the round-trip is exact (i.e. f as i64 as f64 == f).
+        (Int(x), Float(y)) | (Float(y), Int(x)) => {
+            if !y.is_finite() {
+                false
+            } else {
+                let yi = *y as i64;
+                (yi as f64) == *y && yi == *x
+            }
+        }
         // Object refs compare by heap identity (dense index); the class label is
         // display metadata and does not affect identity.
         (ObjRef { index: i, .. }, ObjRef { index: j, .. }) => i == j,

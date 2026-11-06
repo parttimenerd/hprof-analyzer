@@ -492,6 +492,173 @@ evaluate an aggregate independently of the SELECT list; compute the required
 aggregate for HAVING or reject the construct explicitly rather than silently
 filtering every group.
 
+### OQL-50. `MEDIAN` returns the lower middle value for even-sized samples
+
+`MEDIAN` is currently accumulated as `PERCENTILE(..., 50)` and finalized with
+the nearest-rank rule. For an even-sized sample, that returns the lower middle
+value rather than the conventional arithmetic mean of the two middle values.
+Reproducer on the fixture (run with `--all`):
+
+```sql
+SELECT MEDIAN(CASE WHEN @objectId = 2 THEN 1 ELSE 2 END)
+FROM INSTANCEOF java.lang.Object WHERE @objectId < 4
+```
+
+The two matched values are 1 and 2. Expected conventional median: **1.5**;
+actual: **1.0**. The odd-sized control with values 1, 2, 3 returns **2.0**;
+`PERCENTILE(..., 50)` on the two-value sample also returns **1.0**, confirming
+that `MEDIAN` shares the nearest-rank percentile implementation. Implement the
+even-sample median separately, or explicitly document that `MEDIAN` means
+nearest-rank 50th percentile if that is the intended contract.
+
+### OQL-51. Grouped `SELECT *` is accepted but returns NULL
+
+Reproducer on the fixture (run with `--all`):
+
+```sql
+SELECT *, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @category
+```
+
+Actual: the query succeeds with two groups, but the `*` column is NULL in both
+rows; the explicit-key control
+`SELECT @category, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @category`
+returns `jdk` and `other` as expected. The planner's GROUP BY validation skips
+`SelectItem::Star` because it has no expression to compare to a group key, and
+the late grouped-row builder maps unmatched non-aggregate items to NULL. Since
+`*` cannot represent a grouped row unless all of its expanded columns are valid
+group keys, reject it in grouped SELECTs (or define and implement its grouped
+semantics) instead of silently returning NULL.
+
+### OQL-53. `MIN`/`MAX` with NaN depend on input order
+
+Floating division by zero produces NaN, and `total_cmp_query_value` defines NaN
+as sorting after finite numbers. But the scan-time `MIN`/`MAX` accumulator uses
+`<=`/`>=`; comparisons with NaN are false, so it replaces the saved extremum
+with whichever value arrives last. Reproducer pair on the fixture (run with
+`--all`):
+
+```sql
+SELECT MIN(CASE WHEN @objectId = 2 THEN 0.0 / 0.0 ELSE 5.0 END),
+       MAX(CASE WHEN @objectId = 2 THEN 0.0 / 0.0 ELSE 5.0 END)
+FROM INSTANCEOF java.lang.Object WHERE @objectId < 4
+```
+
+Actual: `MIN = 5.0`, `MAX = 5.0`. Reverse which row yields NaN:
+
+```sql
+SELECT MIN(CASE WHEN @objectId = 2 THEN 5.0 ELSE 0.0 / 0.0 END),
+       MAX(CASE WHEN @objectId = 2 THEN 5.0 ELSE 0.0 / 0.0 END)
+FROM INSTANCEOF java.lang.Object WHERE @objectId < 4
+```
+
+Actual: both JSON values are `null` (the underlying extrema are NaN). Under the
+existing total-order policy, both input orders should give `MIN = 5.0` and
+`MAX = NaN`; use the same explicit NaN ordering in the aggregate accumulator.
+
+### OQL-52. Late-phase grouped aggregates ignore their `FILTER`
+
+Reproducer on the fixture (run with `--all`):
+
+```sql
+SELECT @category, COUNT(*) FILTER (WHERE @objectId = 2)
+FROM INSTANCEOF java.lang.Object GROUP BY @category
+```
+
+Actual: returns the unfiltered counts, `jdk = 203,052` and `other = 730`. The
+control `SELECT @category, COUNT(*) FROM INSTANCEOF java.lang.Object
+WHERE @objectId = 2 GROUP BY @category` returns only `jdk = 1`, so the filtered
+aggregate should return `jdk = 1` and `other = 0`. In
+`stage_runner.rs::join_retained_group_by`, the aggregate loop matches
+`SelectItem::Aggregate { func, arg, .. }` and folds every row without evaluating
+the `filter` predicate. This is the late grouped path and differs from OQL-24's
+retained-size aggregate path; apply each aggregate's filter before folding.
+
+### OQL-54. Late grouped `MEDIAN`/`PERCENTILE` silently return zero
+
+Reproducer on the fixture (run with `--all`):
+
+```sql
+SELECT @category, MEDIAN(@usedHeapSize)
+FROM INSTANCEOF java.lang.Object GROUP BY @category
+```
+
+Actual: both groups return **0**. The control
+`SELECT @category, MIN(@usedHeapSize), MAX(@usedHeapSize) FROM INSTANCEOF
+java.lang.Object GROUP BY @category` shows `jdk` sizes range from **16** to
+**144**, and `other` from **16** to **128**; therefore a median of zero is
+outside either group's data range. `PERCENTILE(@usedHeapSize, 50)` in the same
+grouped query also returns zero. In `join_retained_group_by`, the accumulators
+start at `Int(0)` and `AggFunc::Median`/`Percentile` are a no-op, but the
+planner accepts these aggregates on the late GROUP BY path. Implement them
+there or reject the combination during planning.
+
+### OQL-55. Server returns pre-OFFSET rows for inline `VALUES` queries
+
+Reproducer: POST this query to the OQL server's `POST /` endpoint:
+
+```sql
+SELECT x FROM (VALUES (3), (1), (2)) AS t(x)
+ORDER BY x LIMIT 1 OFFSET 1
+```
+
+Expected: one row, `x = 2`. Actual: two rows, `x = 1` and `x = 2`. The same
+query through the CLI returns only `x = 2`. `plan.rs::scan_limit` correctly
+sets the scan cap to `LIMIT + OFFSET` (2 here), but the VALUES-only server path
+returns `execute_values_query` directly, which truncates to that cap without
+draining the offset. The CLI's later `collapse_union_results` performs the
+OFFSET and final LIMIT; the server's `run_single_dump` VALUES fast path bypasses
+that collapse step. Apply OFFSET and the post-offset LIMIT in the VALUES fast
+path, or route its results through the common collapse logic.
+
+### OQL-56. Inline `VALUES` projections silently turn expressions into NULL
+
+Reproducer on the fixture:
+
+```sql
+SELECT x + 1 FROM (VALUES (3), (1)) AS t(x)
+```
+
+Expected rows: **4**, **2**. Actual: two NULLs. The direct-column control
+`SELECT x FROM (VALUES (3), (1)) AS t(x)` returns **3**, **1**, and the ordinary
+heap-row control `SELECT @objectId + 1 FROM java.lang.Object LIMIT 2` evaluates
+arithmetic successfully. In `execute_values_query`, the projection handles
+field attributes and literal expressions only; every other expression falls
+through to NULL. Evaluate supported expressions with the VALUES row as context,
+or reject unsupported projections instead of silently returning NULL.
+
+### OQL-57. Inline `VALUES` queries ignore `WHERE`
+
+Reproducer on the fixture:
+
+```sql
+SELECT x FROM (VALUES (3), (1), (2)) AS t(x) WHERE x < 0
+```
+
+Expected: zero rows. Actual: all three rows (`3`, `1`, `2`). A selective
+control, `SELECT x FROM (VALUES (3), (1), (2)) AS t(x) WHERE x > 1 ORDER BY x`,
+also returns all three rows instead of only `2` and `3`. `execute_values_query`
+materializes the VALUES rows and proceeds to JOIN, ORDER BY, and LIMIT without
+evaluating `q.where`; the accepted predicate is silently ignored. Evaluate the
+WHERE expression against each VALUES row or reject WHERE on this source.
+
+### OQL-58. Array rows return NULL for supported object-identity methods
+
+Reproducer on the fixture (run with `--all`):
+
+```sql
+SELECT a.getObjectAddress(), @objectAddress, a.getObjectId(), @objectId
+FROM INSTANCEOF byte[] a LIMIT 1
+```
+
+Expected: each method value matches its corresponding attribute. Actual: the
+method columns are NULL, while `@objectAddress` is **2148538552** and
+`@objectId` is **178**. The control query on `java.lang.Thread` returns matching
+method/attribute pairs (**2153790184** and **65980**). Planning accepts these
+zero-argument method names, and ordinary instance evaluation dispatches them to
+the corresponding attributes, but `eval_expr_array` handles only array
+`length`/`size` and string methods; these identity methods fall through to NULL.
+Route them to the array attribute projection, or reject them for array rows.
+
 ## Checks that passed in this run
 
 The tested scalar forms (field/arithmetic projections, `@superclass`,
@@ -516,6 +683,20 @@ smoke tests, not comprehensive correctness proof.
   and `FROM ENTRIES` planning/execution paths, including variadic string
   functions on array rows and HAVING with unselected group keys, unprojected
   aggregates, string methods, and FILTER-bound aggregates.
+  Include even-sized `MEDIAN` samples and compare against an odd-sized control.
+  Also verify grouped `SELECT *` is rejected or has explicitly defined output.
+  Test `FILTER` on grouped late-phase aggregates against equivalent WHERE
+  controls. Test `MIN`/`MAX` with finite values and NaN in both input orders.
+  Also test `MEDIAN`/`PERCENTILE` with late GROUP BY keys or require a planning
+  error for unsupported combinations.
+  Exercise `ORDER BY`/`LIMIT`/`OFFSET` on inline `VALUES` through both CLI and
+  HTTP paths; assert that HTTP does not return the pre-offset scan prefix.
+  Also exercise computed projections over inline `VALUES` and compare against
+  equivalent direct-column and ordinary-row expressions.
+  Verify inline `VALUES` WHERE predicates filter rows, including an
+  always-false predicate that must return an empty result.
+  Compare supported object-identity methods with `@objectAddress` and
+  `@objectId` on array rows and ordinary instance rows.
 - Test report-mode `FROM ENTRIES` with the actual graph/capability contract and
   make unsupported states fail with the right actionable message.
 - Update README/OQL examples, restrictions, and HTTP response schema only after
