@@ -853,12 +853,21 @@ pub(crate) fn resume_with_string_values(
                 // Re-apply LIMIT after DFN prune: the scan skipped the early-stop
                 // (because some of the N scanned rows might have been unreachable
                 // and pruned here), so the result may still exceed plan.limit.
-                if let Some(limit) = flat.get(*slot).and_then(|(_, p)| p.limit) {
-                    let lim = limit as usize;
-                    if r.rows.len() > lim {
-                        r.rows.truncate(lim);
-                        r.row_count = lim as u64;
-                        r.truncated = true;
+                // FROM-subquery queries defer their LIMIT to after the semi-join
+                // in run_single_dump (SW-6); skip re-capping them here so the
+                // semi-join sees the full reachable outer row set.
+                let is_subquery_outer = flat
+                    .get(*slot)
+                    .map(|(q, _)| q.from.as_subquery().is_some())
+                    .unwrap_or(false);
+                if !is_subquery_outer {
+                    if let Some(limit) = flat.get(*slot).and_then(|(_, p)| p.limit) {
+                        let lim = limit as usize;
+                        if r.rows.len() > lim {
+                            r.rows.truncate(lim);
+                            r.row_count = lim as u64;
+                            r.truncated = true;
+                        }
                     }
                 }
             }

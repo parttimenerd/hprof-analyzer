@@ -3340,12 +3340,15 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
     // which builds them and produces real rows, instead of the old "requires the
     // full analysis pipeline" error. RefWalk-only queries also set `ref_walk` and
     // will escalate here; that is harmless (the full pipeline resolves them too).
+    // `instance_string` (GROUP BY @displayName) requires `run_oql_escalated` to
+    // resolve class names in the late phase; the scan-only path cannot finalize it.
     let needs_full = parsed.iter().any(|(_, p)| {
         !p.late_ops.is_empty()
             || p.needs.retained
             || p.needs.dominator_children
             || p.needs.ref_walk
             || p.needs.gc_roots
+            || p.needs.instance_string
     });
 
     let mut query_results = if uses_subqueries {
