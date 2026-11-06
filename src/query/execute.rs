@@ -2163,6 +2163,11 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         let class_ok = self.query.from.as_subquery().is_some()
             || matches!(self.query.from, FromSource::Object(_))
             || match self.query.from.class_spec() {
+                Some(spec) if spec.instanceof => {
+                    // Arrays are instances of Object, Cloneable, Serializable.
+                    // Array covariance: T[] instanceof S[] iff T instanceof S.
+                    array_instanceof_matches(class_name, spec, self.from_regex.as_ref())
+                }
                 Some(spec) => class_name_matches_spec(class_name, spec, self.from_regex.as_ref()),
                 None => false,
             };
@@ -2367,6 +2372,41 @@ pub fn class_name_matches_spec(
         };
     }
     class_name_matches(name_dotted, &spec.class_name)
+}
+
+/// For `FROM INSTANCEOF C` matching arrays: applies Java array assignability rules.
+/// - All arrays are instances of Object, Cloneable, Serializable.
+/// - T[] instanceof S[] iff T instanceof S (covariance).
+/// - Primitive arrays (int[], char[], etc.) are not instances of Object[] but
+///   ARE instances of Object/Cloneable/Serializable.
+pub fn array_instanceof_matches(
+    class_name: &str, // the array's class name, e.g. "char[]" or "java.lang.String[]"
+    spec: &crate::query::ast::ClassSpec,
+    from_regex: Option<&regex::Regex>,
+) -> bool {
+    let target = &spec.class_name;
+    // All arrays are instances of these three.
+    if target == "java.lang.Object"
+        || target == "java.lang.Cloneable"
+        || target == "java.io.Serializable"
+    {
+        return true;
+    }
+    // Array covariance: "T[] instanceof S[]" — strip the trailing "[]" from both.
+    if let (Some(arr_elem), Some(target_elem)) =
+        (class_name.strip_suffix("[]"), target.strip_suffix("[]"))
+    {
+        // Recurse with a spec for the element type.
+        let elem_spec = crate::query::ast::ClassSpec {
+            class_name: target_elem.to_string(),
+            instanceof: true,
+            is_regex: spec.is_regex,
+        };
+        // Use exact name matching for the element type.
+        return class_name_matches_spec(arr_elem, &elem_spec, from_regex);
+    }
+    // No other assignability applies.
+    false
 }
 
 /// Byte-wise equality treating `/` and `.` as the same separator.
