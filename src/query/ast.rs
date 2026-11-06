@@ -18,6 +18,8 @@ pub struct Query {
     pub retained_set: bool,
     pub from: FromSource,
     pub alias: Option<String>,
+    /// JOIN clauses attached to this query's FROM (empty when no JOINs are used).
+    pub joins: Vec<JoinClause>,
     pub where_: Option<Predicate>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<u64>,
@@ -505,4 +507,64 @@ pub struct Cte {
     pub name: String,
     /// The query body that produces the CTE's rows.
     pub query: Query,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// JOIN support
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Kind of a SQL JOIN clause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum JoinKind {
+    /// `INNER JOIN` — only rows with a matching RHS row are emitted.
+    Inner,
+    /// `LEFT JOIN` / `LEFT OUTER JOIN` — all LHS rows are emitted; unmatched
+    /// rows get `Null` for all RHS columns.
+    Left,
+}
+
+/// The right-hand side source of a JOIN clause.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub enum JoinSource {
+    /// An inline VALUES table: `JOIN (VALUES (…), …) AS t(a, b) ON …`
+    Values {
+        rows: Vec<Vec<Value>>,
+        alias: String,
+        columns: Vec<String>,
+    },
+    /// A named virtual table provided by the engine: `JOIN __classes__ AS c ON …`
+    /// Virtual table names are double-underscore-delimited identifiers.
+    VirtualTable { name: String, alias: String },
+    /// A subquery: `JOIN (SELECT … FROM …) AS t ON …`
+    Subquery { query: Box<Query>, alias: String },
+}
+
+impl JoinSource {
+    /// The alias bound for the RHS table (used to resolve column refs like `t.name`).
+    #[allow(dead_code)]
+    pub fn alias(&self) -> &str {
+        match self {
+            JoinSource::Values { alias, .. } => alias,
+            JoinSource::VirtualTable { alias, .. } => alias,
+            JoinSource::Subquery { alias, .. } => alias,
+        }
+    }
+}
+
+/// The ON condition of a JOIN: `ON lhs_alias.col = rhs_alias.col`.
+/// We support only equality predicates for now (hash-join implementation).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct JoinOn {
+    /// LHS column expression (typically `alias.field` or an `@attr`).
+    pub lhs: Expr,
+    /// RHS column expression (typically `rhs_alias.field`).
+    pub rhs: Expr,
+}
+
+/// A single JOIN clause attached to a FROM.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct JoinClause {
+    pub kind: JoinKind,
+    pub source: JoinSource,
+    pub on: JoinOn,
 }

@@ -349,6 +349,23 @@ enum Cmd {
     /// Fast query-only path (no full report): retained-size, dominator, and
     /// reference-graph attributes (@retainedHeapSize, dominators(x), @inbounds,
     /// path(a,b), ...) need the full report instead. See docs/OQL.md.
+    ///
+    /// OQL FEATURES AVAILABLE IN THE QUERY-ONLY PATH:
+    ///   SELECT, WHERE, ORDER BY, LIMIT, OFFSET, GROUP BY, HAVING, UNION,
+    ///   INTERSECT, EXCEPT, DISTINCT, WITH (CTEs), subqueries (IN/FROM),
+    ///   INSTANCEOF, CLASS, ENTRIES, CAST, string functions (upper/lower/
+    ///   length/trim/substring/concat/replace), arithmetic (+/-/*//%),
+    ///   @displayName, @objectId, @usedHeapSize, classof(), toString(),
+    ///   jsonify(), array subscript (s[0]/s[0:3]), PERCENTILE/MEDIAN,
+    ///   VALUES inline table, INNER JOIN / LEFT JOIN with VALUES.
+    ///
+    /// EXAMPLES:
+    ///   hprof-analyzer query dump.hprof --query "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY 2 DESC LIMIT 10"
+    ///   hprof-analyzer query dump.hprof --query "SELECT * FROM VALUES (1,'a'),(2,'b') AS t(id,name)"
+    ///   hprof-analyzer query dump.hprof --query "SELECT t.name, v.label FROM java.lang.Thread t INNER JOIN VALUES ('main','primary') AS v(name,label) ON t.name = v.name"
+    #[command(
+        after_help = "For the full OQL grammar, see `docs/OQL.md` or run `hprof-analyzer query dump.hprof --server` and GET /help."
+    )]
     Query {
         /// Path to the .hprof dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
         #[arg(value_hint = ValueHint::FilePath)]
@@ -3391,9 +3408,9 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
         let (
             g,
             _inbound,
-            _fwd_off_c,
-            _fwd_tgt_c,
-            _in_c,
+            _shallow_c,
+            class_idx_c,
+            _alloc_serial_c,
             query_state,
             refwalk_csr,
             string_values,
@@ -3407,6 +3424,12 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             &mut no_in_sets,
             &mut no_exists_bools,
         )?;
+        let class_idx: Vec<u32> = class_idx_c.restore().unwrap_or_default();
+        let class_names: Vec<String> = g
+            .class_names
+            .iter()
+            .map(|n| crate::report::format::pretty_class_name(n))
+            .collect();
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
@@ -3421,6 +3444,25 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
         let rpo = opts.reachable_only.then(|| {
             crate::rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets)
         });
+        // OQL-1: HistogramOnly queries were deferred by Pass2 under reachable_only.
+        // Run them now using a class histogram filtered to GC-reachable objects only.
+        // This makes COUNT(*) and SUM(@usedHeapSize) respect the reachability filter,
+        // consistent with per-object projection queries on the same population.
+        let mut query_state = query_state;
+        if opts.reachable_only {
+            if let Some(dfn) = rpo.as_ref().map(|r| r.dfn.as_slice()) {
+                let reachable_summaries = query::histogram::build_reachable_summaries(
+                    &class_idx,
+                    dfn,
+                    None, // shallow sizes not needed for COUNT(*); SUM returns Null
+                    &class_names,
+                );
+                for (slot, r) in query::histogram::run_histogram_batch(&flat, &reachable_summaries)
+                {
+                    query_state.push_finished(slot, r);
+                }
+            }
+        }
         let flat_results = query::run::resume_with_string_values(
             query_state,
             &flat,
@@ -3429,6 +3471,8 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             rpo.as_ref().map(|r| r.dfn.as_slice()),
             &addr_vec,
             None,
+            &class_idx,
+            &class_names,
         );
 
         query::run::collapse_union_results(flat_results, &union_groups)

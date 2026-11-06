@@ -63,7 +63,70 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
     }
 }
 
-/// Evaluate one aggregate SELECT item against the count/shallow accumulators.
+/// Build `ClassSummary` rows from dense-object data for the GC-reachable
+/// subset of a heap dump.
+///
+/// Called post-DFN to produce a reachable-only histogram for HistogramOnly
+/// queries under `--reachable-only` (OQL-1 fix).
+///
+/// * `class_idx[i]`  — class row index for dense object `i`
+/// * `dfn[i]`        — DFN stamp for dense object `i`; `u32::MAX` = unreachable
+/// * `shallow[i]`    — shallow size (bytes) for dense object `i`; `None` when
+///   not available (SUM/AVG queries will return Null)
+/// * `class_names`   — display names, one per class row index (pretty form)
+pub fn build_reachable_summaries<'a>(
+    class_idx: &[u32],
+    dfn: &[u32],
+    shallow: Option<&[u32]>,
+    class_names: &'a [String],
+) -> Vec<ClassSummary<'a>> {
+    let n_classes = class_names.len();
+    let mut counts = vec![0u64; n_classes];
+    let mut shallow_totals = vec![0u64; n_classes];
+    let n = class_idx.len().min(dfn.len());
+    for i in 0..n {
+        if dfn[i] == u32::MAX {
+            continue; // unreachable
+        }
+        let ci = class_idx[i] as usize;
+        if ci >= n_classes {
+            continue; // out-of-range guard
+        }
+        counts[ci] += 1;
+        if let Some(sh) = shallow {
+            if i < sh.len() {
+                shallow_totals[ci] += sh[i] as u64;
+            }
+        }
+    }
+    class_names
+        .iter()
+        .zip(counts.iter())
+        .zip(shallow_totals.iter())
+        .map(|((name, &count), &shallow_total)| ClassSummary {
+            name: name.as_str(),
+            count,
+            shallow_total,
+        })
+        .collect()
+}
+
+/// Run all HistogramOnly queries in `flat` against `summaries` and return
+/// `(slot, QueryResult)` pairs ready to be merged into the final result list.
+///
+/// Used by `run_single_dump` / `run_oql_query` after DFN is available to
+/// produce reachable-only histogram results (OQL-1 fix).
+pub fn run_histogram_batch<'a>(
+    flat: &'a [(crate::query::ast::Query, crate::query::plan::QueryPlan)],
+    summaries: &[ClassSummary<'a>],
+) -> Vec<(usize, crate::query::model::QueryResult)> {
+    flat.iter()
+        .enumerate()
+        .filter(|(_, (_, plan))| plan.kind == crate::query::plan::StageKind::HistogramOnly)
+        .map(|(slot, (q, plan))| (slot, run_histogram(q, plan, summaries)))
+        .collect()
+}
+
 /// Foundation slice supports COUNT(*) and SUM/AVG over @usedHeapSize only (the
 /// two scalars a class summary carries). Other aggregate args resolve to Null —
 /// the planner keeps such queries as SingleScan when they need per-object data;

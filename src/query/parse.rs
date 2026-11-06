@@ -15,9 +15,9 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, ArithOp, Attr, CastTarget, ClassSpec, CompareOp, Expr, FromSource, OrderBy,
-    PathOperand, Predicate, Query, RefRole, SelectItem, SortDir, UnaryOp, Value, WindowFunc,
-    WindowSpec,
+    AggFunc, ArithOp, Attr, CastTarget, ClassSpec, CompareOp, Expr, FromSource, JoinClause,
+    JoinKind, JoinOn, JoinSource, OrderBy, PathOperand, Predicate, Query, RefRole, SelectItem,
+    SortDir, UnaryOp, Value, WindowFunc, WindowSpec,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -1463,6 +1463,84 @@ where
                 objects_of_class.or(objects_noop).or(from_source)
             })
             .then(any_ident().and_is(reserved_ident().not()).or_not())
+            // JOIN clauses: (INNER | LEFT (OUTER?)?) JOIN <source> AS alias (cols) ON expr = expr
+            .then({
+                // RHS source: VALUES inline table, virtual table name, or subquery.
+                let join_values_src = just(Token::LParen)
+                    .ignore_then(
+                        ident_ci("VALUES")
+                            .ignore_then(
+                                just(Token::LParen)
+                                    .ignore_then(
+                                        value_lit
+                                            .clone()
+                                            .separated_by(just(Token::Comma))
+                                            .at_least(1)
+                                            .collect::<Vec<_>>(),
+                                    )
+                                    .then_ignore(just(Token::RParen))
+                                    .separated_by(just(Token::Comma))
+                                    .at_least(1)
+                                    .collect::<Vec<_>>(),
+                            )
+                            .then_ignore(just(Token::RParen))
+                            .then_ignore(ident_ci("AS").or_not())
+                            .then(any_ident())
+                            .then_ignore(just(Token::LParen))
+                            .then(
+                                any_ident()
+                                    .separated_by(just(Token::Comma))
+                                    .at_least(1)
+                                    .collect::<Vec<_>>(),
+                            )
+                            .then_ignore(just(Token::RParen))
+                            .map(|((rows, alias), columns)| JoinSource::Values {
+                                rows,
+                                alias,
+                                columns,
+                            }),
+                    )
+                    .or(
+                        // Subquery: (SELECT ...) AS alias
+                        just(Token::LParen)
+                            .ignore_then(base_query.clone())
+                            .then_ignore(just(Token::RParen))
+                            .then_ignore(ident_ci("AS").or_not())
+                            .then(any_ident())
+                            .map(|(query, alias)| JoinSource::Subquery {
+                                query: Box::new(query),
+                                alias,
+                            }),
+                    )
+                    .or(
+                        // Virtual table: __name__ AS alias (double-underscore delimited)
+                        any_ident()
+                            .filter(|s: &String| s.starts_with("__") && s.ends_with("__"))
+                            .then_ignore(ident_ci("AS").or_not())
+                            .then(any_ident())
+                            .map(|(name, alias)| JoinSource::VirtualTable { name, alias }),
+                    );
+                // ON condition: expr = expr (equality only for now)
+                let join_on = ident_ci("ON")
+                    .ignore_then(expr.clone())
+                    .then_ignore(just(Token::Eq))
+                    .then(expr.clone())
+                    .map(|(lhs, rhs)| JoinOn { lhs, rhs });
+                // A single JOIN clause: (INNER | LEFT OUTER? | <bare>) JOIN ... ON ...
+                // The kind is: LEFT -> Left, everything else -> Inner.
+                let join_kind = ident_ci("LEFT")
+                    .then_ignore(ident_ci("OUTER").or_not())
+                    .to(JoinKind::Left)
+                    .or(ident_ci("INNER").to(JoinKind::Inner))
+                    .or_not()
+                    .map(|k| k.unwrap_or(JoinKind::Inner));
+                let one_join = join_kind
+                    .then_ignore(ident_ci("JOIN"))
+                    .then(join_values_src)
+                    .then(join_on)
+                    .map(|((kind, source), on)| JoinClause { kind, source, on });
+                one_join.repeated().collect::<Vec<_>>()
+            })
             .then(ident_ci("WHERE").ignore_then(predicate.clone()).or_not())
             // GROUP BY <expr> [, <expr>]*
             .then(
@@ -1525,14 +1603,17 @@ where
                                             (
                                                 (
                                                     (
-                                                        (distinct, leading_retained),
-                                                        (select, select_aliases),
+                                                        (
+                                                            (distinct, leading_retained),
+                                                            (select, select_aliases),
+                                                        ),
+                                                        trailing_retained,
                                                     ),
-                                                    trailing_retained,
+                                                    from,
                                                 ),
-                                                from,
+                                                alias,
                                             ),
-                                            alias,
+                                            joins,
                                         ),
                                         where_,
                                     ),
@@ -1554,6 +1635,7 @@ where
                         retained_set: leading_retained || trailing_retained,
                         from,
                         alias,
+                        joins,
                         where_,
                         order_by,
                         limit,
@@ -1966,6 +2048,12 @@ pub const RESERVED: &[&str] = &[
     // Set operation keywords.
     "INTERSECT",
     "EXCEPT",
+    // JOIN keywords.
+    "JOIN",
+    "INNER",
+    "LEFT",
+    "OUTER",
+    "ON",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -2567,6 +2655,7 @@ mod tests {
                 is_regex: false,
             }),
             alias: alias.map(|s| s.into()),
+            joins: Vec::new(),
             where_,
             order_by: None,
             limit,

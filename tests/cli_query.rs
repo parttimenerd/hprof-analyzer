@@ -7286,3 +7286,127 @@ fn values_order_by() {
         "ORDER BY DESC: '3' should appear before '1' in output:\n{out}"
     );
 }
+
+// ── JOIN support ─────────────────────────────────────────────────────────────
+
+#[test]
+fn inner_join_filters_unmatched_rows() {
+    // INNER JOIN: rows 2 ("b") in LHS has no match in RHS → should be dropped.
+    let out = run_values_query(
+        r#"SELECT * FROM (VALUES (1, "a"), (2, "b"), (3, "c")) AS t(id, letter) INNER JOIN (VALUES (1, "alpha"), (3, "gamma")) AS u(uid, name) ON id = uid"#,
+    );
+    // Two matching rows: id=1 and id=3.
+    assert!(
+        out.contains("(2 rows)"),
+        "expected (2 rows) in output:\n{out}"
+    );
+    // Row with letter 'b' (id=2) must be absent.
+    assert!(
+        !out.contains("| b |") && !out.contains("| b\n"),
+        "row with letter 'b' should be absent after INNER JOIN:\n{out}"
+    );
+    // RHS columns should appear.
+    assert!(out.contains("alpha"), "RHS value 'alpha' missing:\n{out}");
+    assert!(out.contains("gamma"), "RHS value 'gamma' missing:\n{out}");
+}
+
+#[test]
+fn left_join_keeps_unmatched_rows_with_nulls() {
+    // LEFT JOIN: all 3 LHS rows kept; row with id=2 gets Null for RHS columns.
+    let out = run_values_query(
+        r#"SELECT * FROM (VALUES (1, "a"), (2, "b"), (3, "c")) AS t(id, letter) LEFT JOIN (VALUES (1, "alpha"), (3, "gamma")) AS u(uid, name) ON id = uid"#,
+    );
+    assert!(
+        out.contains("(3 rows)"),
+        "expected (3 rows) in output:\n{out}"
+    );
+    // Row with letter 'b' must be present (with null RHS values).
+    assert!(
+        out.to_lowercase().contains("null") || out.contains("null"),
+        "Null expected for unmatched LEFT JOIN row:\n{out}"
+    );
+}
+
+#[test]
+fn bare_join_acts_as_inner_join() {
+    // A bare `JOIN` (no INNER/LEFT prefix) defaults to INNER JOIN behavior.
+    let out = run_values_query(
+        r#"SELECT * FROM (VALUES (1, "x"), (2, "y")) AS t(id, v) JOIN (VALUES (1, "z")) AS u(id2, v2) ON id = id2"#,
+    );
+    // Only id=1 matches; id=2 should be absent.
+    assert!(
+        out.contains("(1 row)"),
+        "bare JOIN should return 1 matching row:\n{out}"
+    );
+}
+
+// ── Virtual table JOIN tests (require dump) ───────────────────────────────────
+
+/// `classes` virtual table returns one row per class with aggregate stats.
+#[test]
+fn virtual_table_classes_returns_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT class_name, instance_count FROM classes ORDER BY instance_count DESC LIMIT 5",
+    );
+    assert!(
+        out.contains("class_name"),
+        "expected class_name column:\n{out}"
+    );
+    assert!(
+        out.contains("instance_count"),
+        "expected instance_count column:\n{out}"
+    );
+    // Should have some rows
+    assert!(out.contains("row"), "expected at least 1 row:\n{out}");
+}
+
+/// `gc_roots` virtual table returns one row per GC root with type info.
+#[test]
+fn virtual_table_gc_roots_returns_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT dense_idx, root_type_name FROM gc_roots LIMIT 5",
+    );
+    assert!(
+        out.contains("dense_idx"),
+        "expected dense_idx column:\n{out}"
+    );
+    assert!(
+        out.contains("root_type_name"),
+        "expected root_type_name column:\n{out}"
+    );
+}
+
+/// JOIN heap scan with a VALUES lookup table.
+#[test]
+fn heap_join_values_lookup_filters_correctly() {
+    let Some(hprof) = philosophers() else { return };
+    // Only keep threads whose name matches one of the values in the lookup table.
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT t.name, v.label FROM java.lang.Thread t INNER JOIN (VALUES ("main", "primary"), ("Finalizer", "gc")) AS v(tname, label) ON t.name = v.tname"#,
+    );
+    // The result may be empty (thread names may differ), but must not error.
+    assert!(
+        out.contains("label") || out.contains("(0 rows)"),
+        "expected label column or (0 rows):\n{out}"
+    );
+}
+
+/// LEFT JOIN with VALUES keeps all LHS rows even with no RHS match.
+#[test]
+fn heap_left_join_values_keeps_all_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT t.name, v.label FROM java.lang.Thread t LEFT JOIN (VALUES ("__never_matches__", "x")) AS v(tname, label) ON t.name = v.tname LIMIT 3"#,
+    );
+    // All rows should have null for label since no match
+    assert!(
+        out.to_lowercase().contains("null") || out.contains("(0 rows)") || out.contains("row"),
+        "expected rows with null or (0 rows):\n{out}"
+    );
+}

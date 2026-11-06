@@ -694,6 +694,11 @@ pub(crate) fn resume_with_string_values(
     // correctly for carry-mode (toString) entries. Pass empty slice/None when not needed.
     addr_of: &[u64],
     shallow_opt: Option<&[u32]>,
+    // Optional: dense-object-index → class-histogram row, and class name strings.
+    // Pass empty slices when not available. When populated, GROUP BY @displayName
+    // and related class-name queries work in the query-only fast path.
+    class_idx: &[u32],
+    class_names: &[String],
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{self, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES};
@@ -757,8 +762,8 @@ pub(crate) fn resume_with_string_values(
         // `@info` entries route to `resume_without_late_ctx` for an actionable
         // error); the empty map keeps this path byte-identical.
         gc_root_tags: &stage_runner::EMPTY_GC_ROOT_TAGS,
-        class_idx: &[],
-        class_names: &[],
+        class_idx,
+        class_names,
         class_categories: &[],
         class_super_idx: &[],
         coll_size_per_dense: &[],
@@ -768,12 +773,14 @@ pub(crate) fn resume_with_string_values(
         id_size: 8,
     };
 
-    // Split pending entries into three routes. toString-only and refwalk entries
-    // are resolved here with the ctx above (string ctx and refwalk ctx are the
-    // same struct; only the fields each op reads differ). Entries needing OTHER
-    // late data (retained sizes, dominators, edges) go through
-    // `resume_without_late_ctx` which produces actionable errors — the query-only
-    // path never builds those structures, so their behavior is unchanged.
+    // Split pending entries into four routes.
+    // - toString-only: resolved with the string_values map above.
+    // - refwalk: driven by the query AST via refpath_rows.
+    // - array-index: resolved with the ctx above.
+    // - GroupBy @displayName / instance_string: needs class_idx/class_names, handled via
+    //   run_entry_pub when those arrays are populated (i.e. when the caller passes them).
+    // Everything else goes through `resume_without_late_ctx` which produces actionable
+    // errors — the query-only path never builds retained sizes, dominators, or edges.
     let (finished, pending) = state.into_parts();
     let mut slotted: Vec<(usize, crate::query::model::QueryResult)> = finished;
     let mut other_state = crate::query::execute::QueryExecState::new();
@@ -816,7 +823,23 @@ pub(crate) fn resume_with_string_values(
                 });
         let is_refwalk = needs_only_refwalk;
         let is_array_index = needs_only_array_index;
-        if is_string_only || is_refwalk || is_array_index {
+        // GROUP BY @displayName / @classOf queries: `finalize_at = P2`, `late_ops` is
+        // empty (the plan comment says "No extra late op"), `kind = GroupBy`, and
+        // `needs.instance_string = true`. They call `join_retained_group_by` via
+        // `run_entry_pub` → `join_retained` dispatch, which resolves class names from
+        // `ctx.class_idx` / `ctx.class_names`. Route them here only when those arrays
+        // are populated (caller passes them); otherwise fall through to the error path.
+        let is_group_by_instance_string =
+            entry.plan.kind == crate::query::plan::StageKind::GroupBy
+                && entry.plan.needs.instance_string
+                && !entry.plan.needs.retained
+                && !entry.plan.needs.dominator_children
+                && !entry.plan.needs.gc_roots
+                && !entry.plan.late_ops.iter().any(|op| {
+                    matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+                })
+                && !class_idx.is_empty();
+        if is_string_only || is_refwalk || is_array_index || is_group_by_instance_string {
             let q = &flat[entry.slot].0;
             let r = stage_runner::run_entry_pub(&entry, q, &ctx);
             slotted.push((entry.slot, r));
@@ -993,8 +1016,17 @@ pub fn run_resident_only(
     } else {
         Vec::new()
     };
-    let flat_results =
-        resume_with_string_values(state, &flat, sv, None, dfn, &addr_vec, Some(&cache.shallow));
+    let flat_results = resume_with_string_values(
+        state,
+        &flat,
+        sv,
+        None,
+        dfn,
+        &addr_vec,
+        Some(&cache.shallow),
+        &cache.class_idx,
+        &cache.class_names,
+    );
     let mut flat_results = flat_results;
     // jsonify(...) columns carry an ObjRef placeholder out of the scan; expand
     // them here, while the ReplCache (dump path + offsets.bin + pass-1 tables)
@@ -1005,6 +1037,20 @@ pub fn run_resident_only(
         &flat,
         Some(cache as &dyn crate::query::jsonify::JsonifySession),
     );
+    // Apply JOIN clauses. Virtual-table sources need a Graph (not available
+    // in the resident-only path); VALUES-source JOINs work with graph=None.
+    let flat_results: Vec<_> = flat_results
+        .into_iter()
+        .enumerate()
+        .map(|(slot, result)| {
+            if let Some((_, plan)) = flat.get(slot) {
+                if !plan.join_plans.is_empty() {
+                    return apply_joins_to_result(result, &plan.join_plans, None);
+                }
+            }
+            result
+        })
+        .collect();
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -1107,6 +1153,19 @@ pub fn run_resident_with_retained(
         &flat,
         Some(cache as &dyn crate::query::jsonify::JsonifySession),
     );
+    // Apply JOIN clauses (virtual-table sources need a Graph; not available here).
+    let flat_results: Vec<_> = flat_results
+        .into_iter()
+        .enumerate()
+        .map(|(slot, result)| {
+            if let Some((_, plan)) = flat.get(slot) {
+                if !plan.join_plans.is_empty() {
+                    return apply_joins_to_result(result, &plan.join_plans, None);
+                }
+            }
+            result
+        })
+        .collect();
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -1298,7 +1357,7 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
     };
 
     // Build rows: for each value row, project columns.
-    let mut rows: Vec<Vec<QueryValue>> = value_rows
+    let rows: Vec<Vec<QueryValue>> = value_rows
         .iter()
         .map(|row| {
             if is_star {
@@ -1334,16 +1393,33 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         })
         .collect();
 
+    // Build an intermediate result (before JOINs, ORDER BY, and LIMIT).
+    let intermediate = QueryResult {
+        name: String::new(),
+        oql: String::new(),
+        columns: out_cols,
+        rows,
+        row_count: 0, // placeholder; will be recomputed after JOINs
+        truncated: false,
+        error: None,
+        note: None,
+        viz: None,
+        elapsed_ms: None,
+    };
+
+    // Apply JOIN clauses (expands columns by appending RHS columns).
+    let mut joined = apply_joins_to_result(intermediate, &plan.join_plans, None);
+
     // Apply ORDER BY using existing multi-key sort helper.
     if let Some(order_by) = &q.order_by {
-        let keys = resolve_order_by_keys(q, &out_cols, order_by);
-        sort_rows_by_columns(&mut rows, &keys);
+        let keys = resolve_order_by_keys(q, &joined.columns, order_by);
+        sort_rows_by_columns(&mut joined.rows, &keys);
     }
 
     // Apply LIMIT.
     let truncated = if let Some(lim) = plan.limit {
-        if rows.len() > lim as usize {
-            rows.truncate(lim as usize);
+        if joined.rows.len() > lim as usize {
+            joined.rows.truncate(lim as usize);
             true
         } else {
             false
@@ -1352,12 +1428,12 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         false
     };
 
-    let row_count = rows.len() as u64;
+    let row_count = joined.rows.len() as u64;
     QueryResult {
         name: String::new(),
         oql: String::new(),
-        columns: out_cols,
-        rows,
+        columns: joined.columns,
+        rows: joined.rows,
         row_count,
         truncated,
         error: None,
@@ -1365,6 +1441,271 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         viz: None,
         elapsed_ms: None,
     }
+}
+
+/// Evaluate a simple `Expr` against a row given column names.
+/// Returns `Null` for unsupported expression types.
+fn eval_expr_on_row(
+    expr: &crate::query::ast::Expr,
+    col_names: &[String],
+    row: &[crate::query::model::QueryValue],
+) -> crate::query::model::QueryValue {
+    use crate::query::ast::{Attr, Expr, Value};
+    use crate::query::model::QueryValue;
+    match expr {
+        Expr::Lit(v) => match v {
+            Value::Int(n) => QueryValue::Int(*n),
+            Value::Float(f) => QueryValue::Float(*f),
+            Value::Str(s) => QueryValue::Str(s.clone()),
+            Value::Bool(b) => QueryValue::Bool(*b),
+            Value::Null => QueryValue::Null,
+        },
+        Expr::Attr(Attr::Field(f)) => {
+            if let Some(pos) = col_names.iter().position(|c| c == f) {
+                row.get(pos).cloned().unwrap_or(QueryValue::Null)
+            } else {
+                QueryValue::Null
+            }
+        }
+        // For other expression types (complex exprs) return Null for now.
+        _ => QueryValue::Null,
+    }
+}
+
+/// Materialise a JOIN RHS source into `(column_names, rows)`.
+fn materialise_join_source(
+    source: &crate::query::ast::JoinSource,
+    graph: Option<&crate::pass2::Graph>,
+) -> (Vec<String>, Vec<Vec<crate::query::model::QueryValue>>) {
+    use crate::query::ast::{JoinSource, Value};
+    use crate::query::model::QueryValue;
+    let value_to_qv = |v: &Value| -> QueryValue {
+        match v {
+            Value::Int(n) => QueryValue::Int(*n),
+            Value::Float(f) => QueryValue::Float(*f),
+            Value::Str(s) => QueryValue::Str(s.clone()),
+            Value::Bool(b) => QueryValue::Bool(*b),
+            Value::Null => QueryValue::Null,
+        }
+    };
+    match source {
+        JoinSource::Values { rows, columns, .. } => {
+            let mat_rows: Vec<Vec<QueryValue>> = rows
+                .iter()
+                .map(|row| row.iter().map(&value_to_qv).collect())
+                .collect();
+            (columns.clone(), mat_rows)
+        }
+        JoinSource::VirtualTable { name, .. } => {
+            let Some(g) = graph else {
+                return (Vec::new(), Vec::new());
+            };
+            match name.to_ascii_lowercase().as_str() {
+                "classes" => {
+                    let cols = vec![
+                        "class_name".to_string(),
+                        "instance_count".to_string(),
+                        "shallow_total".to_string(),
+                        "retained_total".to_string(),
+                    ];
+                    let n = g.class_names.len();
+                    let mut inst = vec![0u64; n];
+                    let mut shallow = vec![0u64; n];
+                    for i in 0..g.n {
+                        let ci = g.class_idx[i] as usize;
+                        if ci < n {
+                            inst[ci] += 1;
+                            shallow[ci] += g.shallow[i] as u64;
+                        }
+                    }
+                    let mut retained = vec![0u64; n];
+                    if !g.retained.is_empty() {
+                        for i in 0..g.n {
+                            let ci = g.class_idx[i] as usize;
+                            if ci < n {
+                                retained[ci] += g.retained[i];
+                            }
+                        }
+                    }
+                    let rows = (0..n)
+                        .map(|ci| {
+                            vec![
+                                QueryValue::Str(g.class_names[ci].clone()),
+                                QueryValue::Int(inst[ci] as i64),
+                                QueryValue::Int(shallow[ci] as i64),
+                                QueryValue::Int(retained[ci] as i64),
+                            ]
+                        })
+                        .collect();
+                    (cols, rows)
+                }
+                "gc_roots" => {
+                    let cols = vec![
+                        "dense_idx".to_string(),
+                        "root_type".to_string(),
+                        "root_type_name".to_string(),
+                    ];
+                    let rows = g
+                        .gc_root_indices
+                        .iter()
+                        .zip(g.gc_root_types.iter())
+                        .map(|(&idx, &t)| {
+                            vec![
+                                QueryValue::Int(idx as i64),
+                                QueryValue::Int(t as i64),
+                                QueryValue::Str(gc_root_type_name(t)),
+                            ]
+                        })
+                        .collect();
+                    (cols, rows)
+                }
+                "threads" => {
+                    let cols = vec![
+                        "serial".to_string(),
+                        "obj_idx".to_string(),
+                        "name".to_string(),
+                        "is_daemon".to_string(),
+                        "priority".to_string(),
+                    ];
+                    let rows = g
+                        .thread_stacks
+                        .iter()
+                        .map(|ts| {
+                            let props = g.thread_props.get(&ts.thread_serial);
+                            vec![
+                                QueryValue::Int(ts.thread_serial as i64),
+                                QueryValue::Int(ts.thread_obj_idx as i64),
+                                QueryValue::Str(props.map(|p| p.name.clone()).unwrap_or_default()),
+                                QueryValue::Bool(props.map(|p| p.is_daemon).unwrap_or(false)),
+                                QueryValue::Int(props.map(|p| p.priority as i64).unwrap_or(0)),
+                            ]
+                        })
+                        .collect();
+                    (cols, rows)
+                }
+                _ => (Vec::new(), Vec::new()),
+            }
+        }
+        // Subquery JOINs not yet supported; return empty (no crash).
+        JoinSource::Subquery { .. } => (Vec::new(), Vec::new()),
+    }
+}
+
+fn gc_root_type_name(tag: u8) -> String {
+    match tag {
+        0x01 => "JNI Global".into(),
+        0x02 => "JNI Local".into(),
+        0x03 => "Java Frame".into(),
+        0x05 => "Sticky Class".into(),
+        0x08 => "Thread Object".into(),
+        _ => format!("root_type_0x{tag:02x}"),
+    }
+}
+
+/// Apply JOIN clauses to a materialized LHS result, returning the new (expanded)
+/// result. Each JOIN appends columns from the RHS to each LHS row.
+///
+/// For INNER JOIN: rows with no RHS match are dropped.
+/// For LEFT JOIN: rows with no RHS match get Null for all RHS columns.
+pub fn apply_joins_to_result(
+    mut result: crate::query::model::QueryResult,
+    joins: &[crate::query::plan::JoinPlan],
+    graph: Option<&crate::pass2::Graph>,
+) -> crate::query::model::QueryResult {
+    use crate::query::model::{QueryColumn, QueryValue};
+    if joins.is_empty() {
+        return result;
+    }
+    for join_plan in joins {
+        let (rhs_cols, rhs_rows) = materialise_join_source(&join_plan.source, graph);
+        if rhs_cols.is_empty() {
+            // Unsupported source type or empty — for INNER JOIN filter everything out,
+            // for LEFT JOIN keep LHS unchanged (append all Nulls).
+            match join_plan.kind {
+                crate::query::ast::JoinKind::Inner => {
+                    result.rows.clear();
+                    result.row_count = 0;
+                }
+                crate::query::ast::JoinKind::Left => {
+                    // No columns to append — leave rows unchanged.
+                }
+            }
+            continue;
+        }
+
+        // Get current LHS column names (for ON evaluation).
+        let lhs_col_names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
+
+        // Build hash map: rhs_key_string → Vec<rhs_row>
+        // We use a string representation of the key value (instead of QueryValue directly)
+        // since f64 doesn't implement Hash.
+        let rhs_col_names = rhs_cols.clone();
+        let qv_to_key = |qv: &crate::query::model::QueryValue| -> String {
+            use crate::query::model::QueryValue as QV;
+            match qv {
+                QV::Null => "\x00null".to_string(),
+                QV::Bool(b) => format!("\x01{b}"),
+                QV::Int(n) => format!("\x02{n}"),
+                QV::Float(f) => format!("\x03{f:?}"),
+                QV::Str(s) => format!("\x04{s}"),
+                QV::ObjRef { index, .. } => format!("\x05{index}"),
+            }
+        };
+        let mut rhs_map: std::collections::HashMap<
+            String,
+            Vec<Vec<crate::query::model::QueryValue>>,
+        > = std::collections::HashMap::new();
+        for rhs_row in &rhs_rows {
+            let key = qv_to_key(&eval_expr_on_row(
+                &join_plan.on.rhs,
+                &rhs_col_names,
+                rhs_row,
+            ));
+            rhs_map.entry(key).or_default().push(rhs_row.clone());
+        }
+
+        // Expand output columns.
+        let null_rhs_row: Vec<QueryValue> = rhs_cols.iter().map(|_| QueryValue::Null).collect();
+        let mut new_cols: Vec<QueryColumn> = result.columns.clone();
+        for c in &rhs_cols {
+            new_cols.push(QueryColumn { name: c.clone() });
+        }
+
+        // Join each LHS row.
+        let mut new_rows: Vec<Vec<QueryValue>> = Vec::new();
+        for lhs_row in &result.rows {
+            let lhs_key = qv_to_key(&eval_expr_on_row(
+                &join_plan.on.lhs,
+                &lhs_col_names,
+                lhs_row,
+            ));
+            if let Some(matching_rhs_rows) = rhs_map.get(&lhs_key) {
+                for rhs_row in matching_rhs_rows {
+                    let mut combined = lhs_row.clone();
+                    combined.extend_from_slice(rhs_row);
+                    new_rows.push(combined);
+                }
+            } else {
+                match join_plan.kind {
+                    crate::query::ast::JoinKind::Inner => {
+                        // No match: drop this LHS row.
+                    }
+                    crate::query::ast::JoinKind::Left => {
+                        // No match: emit LHS + Nulls.
+                        let mut combined = lhs_row.clone();
+                        combined.extend_from_slice(&null_rhs_row);
+                        new_rows.push(combined);
+                    }
+                }
+            }
+        }
+
+        let row_count = new_rows.len() as u64;
+        result.columns = new_cols;
+        result.rows = new_rows;
+        result.row_count = row_count;
+    }
+    result
 }
 
 pub fn run_single_dump(
@@ -1383,21 +1724,12 @@ pub fn run_single_dump(
             .collect();
         return Ok(results);
     }
-    let (mut flat, groups) = expand_union_queries(queries);
-    // When reachable-only is set, demote HistogramOnly plans to SingleScan so
-    // that every object goes through the per-object DFN filter in the pass2 scan
-    // instead of being counted from pre-scan class tallies that include unreachable
-    // objects. Clearing needs.histogram prevents pass2 from building hist_tally.
-    if reachable_only {
-        for (_, plan) in flat.iter_mut() {
-            if plan.kind == crate::query::plan::StageKind::HistogramOnly {
-                plan.kind = crate::query::plan::StageKind::SingleScan;
-                plan.needs.histogram = false;
-            }
-        }
-    }
+    let (flat, groups) = expand_union_queries(queries);
     // Propagate reachable-only into the scan so pass2 arms the per-row
     // source-index capture (only when on; otherwise nothing is allocated).
+    // HistogramOnly queries are intentionally NOT demoted to SingleScan here;
+    // they are skipped by Pass2 under reachable_only and re-run post-DFN with a
+    // reachable-only class histogram (OQL-1 fix).
     let opts = crate::AnalyzeOptions {
         reachable_only,
         ..crate::AnalyzeOptions::default()
@@ -1423,21 +1755,48 @@ pub fn run_single_dump(
         };
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
-        let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
-            &source,
-            p1,
-            crate::cvec::Codec::Deflate9,
-            &opts,
-            &flat,
-            &mut empty,
-            &mut empty_exists,
-        )?;
+        let (g, _, _shallow_c, class_idx_c, _, state, refwalk_csr, string_values, _sv_trunc) =
+            crate::pass2::Pass2::build(
+                &source,
+                p1,
+                crate::cvec::Codec::Deflate9,
+                &opts,
+                &flat,
+                &mut empty,
+                &mut empty_exists,
+            )?;
+        // Extract class name mapping needed for GROUP BY @displayName / @classOf.
+        let class_idx: Vec<u32> = class_idx_c.restore().unwrap_or_default();
+        let class_names: Vec<String> = g
+            .class_names
+            .iter()
+            .map(|n| crate::report::format::pretty_class_name(n))
+            .collect();
         // Compute GC-reachability up front (only when reachable-only) and prune
         // each flat result by its captured source index inside the resume layer,
         // BEFORE UNION-collapse — so `@objectAddress` rows prune correctly.
         let rpo = reachable_only.then(|| {
             crate::rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets)
         });
+        // OQL-1: HistogramOnly queries were deferred by Pass2 under reachable_only.
+        // Run them now with a reachable-only class histogram so COUNT(*)
+        // and SUM(@usedHeapSize) reflect the same population as other queries.
+        let mut state = state;
+        if reachable_only {
+            if let Some(dfn) = rpo.as_ref().map(|r| r.dfn.as_slice()) {
+                let reachable_summaries = crate::query::histogram::build_reachable_summaries(
+                    &class_idx,
+                    dfn,
+                    None,
+                    &class_names,
+                );
+                for (slot, r) in
+                    crate::query::histogram::run_histogram_batch(&flat, &reachable_summaries)
+                {
+                    state.push_finished(slot, r);
+                }
+            }
+        }
         let flat_results = resume_with_string_values(
             state,
             &flat,
@@ -1446,6 +1805,8 @@ pub fn run_single_dump(
             rpo.as_ref().map(|r| r.dfn.as_slice()),
             &addr_vec,
             None,
+            &class_idx,
+            &class_names,
         );
         let mut flat_results = flat_results;
         // The scan path consumed its `Pass1` into `Pass2::build`, so it has no
@@ -1453,6 +1814,19 @@ pub fn run_single_dump(
         // makes every jsonify cell say exactly that instead of coming back as a
         // bare ObjRef — see `jsonify::NO_SESSION_NOTE`.
         crate::query::jsonify::expand_results(&mut flat_results, &flat, None);
+        // Apply JOIN clauses to each flat result using the Graph from this scan.
+        let flat_results: Vec<_> = flat_results
+            .into_iter()
+            .enumerate()
+            .map(|(slot, result)| {
+                if let Some((_, plan)) = flat.get(slot) {
+                    if !plan.join_plans.is_empty() {
+                        return apply_joins_to_result(result, &plan.join_plans, Some(&g));
+                    }
+                }
+                result
+            })
+            .collect();
         let collapsed = collapse_union_results(flat_results, &groups);
         return Ok(collapsed);
     }
@@ -1580,16 +1954,31 @@ pub fn run_single_dump(
     } else {
         Vec::new()
     };
-    let (outer_g, .., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
-        crate::pass2::Pass2::build(
-            &source_outer,
-            p1_outer,
-            crate::cvec::Codec::Deflate9,
-            &opts,
-            &flat,
-            &mut in_sets_by_slot,
-            &mut exists_bools_by_slot,
-        )?;
+    let (
+        outer_g,
+        _,
+        _outer_shallow_c,
+        outer_class_idx_c,
+        _,
+        outer_state,
+        outer_refwalk_csr,
+        outer_sv,
+        _outer_sv_trunc,
+    ) = crate::pass2::Pass2::build(
+        &source_outer,
+        p1_outer,
+        crate::cvec::Codec::Deflate9,
+        &opts,
+        &flat,
+        &mut in_sets_by_slot,
+        &mut exists_bools_by_slot,
+    )?;
+    let outer_class_idx: Vec<u32> = outer_class_idx_c.restore().unwrap_or_default();
+    let outer_class_names: Vec<String> = outer_g
+        .class_names
+        .iter()
+        .map(|n| crate::report::format::pretty_class_name(n))
+        .collect();
     // Reachable-only prune happens INSIDE resume (below), keyed by each flat
     // slot's scan-captured source index, BEFORE the FROM semi-join — so the
     // sidecar stays aligned with the rows (the semi-join then operates only on
@@ -1602,6 +1991,23 @@ pub fn run_single_dump(
             &outer_g.fwd_targets,
         )
     });
+    // OQL-1: add reachable-only HistogramOnly results for the outer scan too.
+    let mut outer_state = outer_state;
+    if reachable_only {
+        if let Some(dfn) = outer_rpo.as_ref().map(|r| r.dfn.as_slice()) {
+            let reachable_summaries = crate::query::histogram::build_reachable_summaries(
+                &outer_class_idx,
+                dfn,
+                None,
+                &outer_class_names,
+            );
+            for (slot, r) in
+                crate::query::histogram::run_histogram_batch(&flat, &reachable_summaries)
+            {
+                outer_state.push_finished(slot, r);
+            }
+        }
+    }
     let mut flat_results = resume_with_string_values(
         outer_state,
         &flat,
@@ -1610,6 +2016,8 @@ pub fn run_single_dump(
         outer_rpo.as_ref().map(|r| r.dfn.as_slice()),
         &outer_addr_vec,
         None,
+        &outer_class_idx,
+        &outer_class_names,
     );
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
@@ -1665,6 +2073,19 @@ pub fn run_single_dump(
     // expands rows that actually survive into the result. It degrades loudly: the
     // scan path has no pass-1 tables to decode with (see `jsonify::NO_SESSION_NOTE`).
     crate::query::jsonify::expand_results(&mut flat_results, &flat, None);
+    // Apply JOIN clauses to each flat result using the outer scan's Graph.
+    let flat_results: Vec<_> = flat_results
+        .into_iter()
+        .enumerate()
+        .map(|(slot, result)| {
+            if let Some((_, plan)) = flat.get(slot) {
+                if !plan.join_plans.is_empty() {
+                    return apply_joins_to_result(result, &plan.join_plans, Some(&outer_g));
+                }
+            }
+            result
+        })
+        .collect();
     Ok(collapse_union_results(flat_results, &groups))
 }
 /// joined by object identity) or an IN-predicate membership set (on some LHS).

@@ -4818,6 +4818,7 @@ mod tests {
                 is_regex: false,
             }),
             alias: None,
+            joins: Vec::new(),
             where_: None,
             order_by: None,
             limit: None,

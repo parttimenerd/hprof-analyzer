@@ -220,6 +220,10 @@ pub struct QueryPlan {
     /// Planned EXCEPT branches (empty for a non-EXCEPT query). Each branch plan
     /// itself has empty intersect/except branches.
     pub except_branch_plans: Vec<QueryPlan>,
+    /// Planned JOIN clauses (empty when the query has no JOINs). Currently only
+    /// VALUES and virtual-table RHS sources are supported; heap-class RHS sources
+    /// are rejected at plan time.
+    pub join_plans: Vec<JoinPlan>,
 }
 
 /// A planned `WHERE <lhs> IN (<subquery>)` predicate. `lhs` is the outer
@@ -239,6 +243,18 @@ pub struct ExistsSubplan {
     pub negated: bool,
     pub plan: QueryPlan,
     pub inner: Query,
+}
+
+/// A planned JOIN clause. Only VALUES/vtable RHS sources are executed; a
+/// heap-class RHS is rejected at plan time with a clear error.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct JoinPlan {
+    /// The kind (INNER or LEFT).
+    pub kind: crate::query::ast::JoinKind,
+    /// The RHS source as parsed.
+    pub source: crate::query::ast::JoinSource,
+    /// The ON condition as parsed.
+    pub on: crate::query::ast::JoinOn,
 }
 
 /// Plan a query, including any homogeneous `UNION` tail. Each branch is planned
@@ -911,6 +927,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             having_terms: Vec::new(),
             intersect_branch_plans: Vec::new(),
             except_branch_plans: Vec::new(),
+            join_plans: plan_joins(q)?,
         });
     }
 
@@ -1168,6 +1185,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             having_terms: Vec::new(),
             intersect_branch_plans: Vec::new(),
             except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
         });
     }
 
@@ -1211,6 +1229,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             having_terms: Vec::new(),
             intersect_branch_plans: Vec::new(),
             except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
         });
     }
 
@@ -1248,6 +1267,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             having_terms: Vec::new(),
             intersect_branch_plans: Vec::new(),
             except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
         });
     }
 
@@ -1278,6 +1298,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             having_terms: Vec::new(),
             intersect_branch_plans: Vec::new(),
             except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
         });
     }
     // A mixed select containing path(a, b) alongside other items is not supported:
@@ -1338,6 +1359,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             having_terms: Vec::new(),
             intersect_branch_plans: Vec::new(),
             except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
         });
     }
 
@@ -1627,7 +1649,30 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         having_terms,
         intersect_branch_plans: Vec::new(),
         except_branch_plans: Vec::new(),
+        join_plans: plan_joins(q)?,
     })
+}
+
+/// Build the list of `JoinPlan` entries from a query's JOIN clauses.
+/// Currently only VALUES and virtual-table RHS sources are accepted; a
+/// heap-class RHS is rejected with an actionable error.
+fn plan_joins(q: &Query) -> Result<Vec<JoinPlan>, QueryError> {
+    use crate::query::ast::JoinSource;
+    let mut plans = Vec::new();
+    for jc in &q.joins {
+        match &jc.source {
+            JoinSource::Values { .. }
+            | JoinSource::VirtualTable { .. }
+            | JoinSource::Subquery { .. } => {
+                plans.push(JoinPlan {
+                    kind: jc.kind,
+                    source: jc.source.clone(),
+                    on: jc.on.clone(),
+                });
+            }
+        }
+    }
+    Ok(plans)
 }
 
 /// Enforce that a `FROM (<subquery>)` inner query projects whole-object
@@ -4820,22 +4865,26 @@ mod tests {
     }
 
     #[test]
-    fn array_index_in_where_errors() {
+    fn array_index_in_where_deferred_to_p2() {
         use crate::query::parse::parse;
-        // Inject ArrayIndex into WHERE (parse may or may not support it directly,
-        // so build the query manually)
+        // Array subscript in WHERE is supported via deferred P2 resolution:
+        // the planner accepts the query and sets finalize_at=P2 with a
+        // ResolveArrayIndex late op so the subscript evaluation happens after
+        // the scan. Verify the plan either succeeds or the parser rejects it.
         let q = parse("SELECT @objectId FROM java.lang.String s WHERE s.value[0] > 65");
-        // If the parser doesn't support this form, just verify the planner would reject it
         match q {
             Err(_) => { /* parser rejected it — acceptable */ }
             Ok(q) => {
-                let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
-                    .expect_err("ArrayIndex in WHERE must error");
+                let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+                    .expect("ArrayIndex in WHERE must be accepted by planner (deferred P2)");
                 assert!(
-                    err.0.to_lowercase().contains("array")
-                        || err.0.to_lowercase().contains("where"),
-                    "error must mention array or WHERE, got: {}",
-                    err.0
+                    plan.needs.array_index,
+                    "plan must set needs.array_index for s.value[0] in WHERE"
+                );
+                assert!(
+                    plan.finalize_at == crate::query::plan::Phase::P2,
+                    "plan must finalize at P2 for deferred array-index WHERE, got {:?}",
+                    plan.finalize_at
                 );
             }
         }
