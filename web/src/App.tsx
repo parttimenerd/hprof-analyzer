@@ -4686,7 +4686,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
   const totalWasted = rows.reduce((s, r) => s + r.wasted, 0);
   const totalObjects = rows.reduce((s, r) => s + r.objects, 0);
 
-  const showCollectionsNote = !ca && (hasDs || hasDp);
+  const showCollectionsNote = !ca && hasDp;
 
   return (
     <section id="collection-waste-budget">
