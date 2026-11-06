@@ -3477,8 +3477,9 @@ fn arith_projection_with_alias() {
 }
 
 /// CORE: `SELECT SUM(@usedHeapSize * 2) FROM java.lang.String` must return
-/// 1188480 (= 2 × SUM(@usedHeapSize) = 2 × 594240). This exercises the new
-/// scan-time aggregate accumulator for aggregate-over-expression.
+/// 1188480 (= 2 × 594240 = all-objects SUM × 2; scan-time aggregation runs
+/// before reachability pruning). This exercises the scan-time aggregate
+/// accumulator for aggregate-over-expression.
 #[test]
 fn scan_agg_sum_over_expression_equals_2x_plain_sum() {
     let Some(hprof) = philosophers() else { return };
@@ -3513,8 +3514,9 @@ fn scan_agg_sum_over_expression_equals_2x_plain_sum() {
     );
 }
 
-/// REGRESSION: `SELECT SUM(@usedHeapSize) FROM java.lang.String` must still
-/// return 594240 (histogram fast-path must be unaffected by the accumulator).
+/// REGRESSION: `SELECT SUM(@usedHeapSize) FROM java.lang.String` must return
+/// 559944 (= 23331 reachable × 24 bytes). Under `reachable_only=true`
+/// (the default) the histogram fast-path filters to GC-reachable objects only.
 #[test]
 fn histogram_sum_regression_still_correct() {
     let Some(hprof) = philosophers() else { return };
@@ -3522,12 +3524,14 @@ fn histogram_sum_regression_still_correct() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.lines().any(|l| l.trim() == "594240"),
-        "histogram SUM regression: expected 594240, got:\n{stdout}"
+        stdout.lines().any(|l| l.trim() == "559944"),
+        "histogram SUM: expected 559944 (reachable-only), got:\n{stdout}"
     );
 }
 
-/// REGRESSION: `SELECT COUNT(*) FROM java.lang.String` must still return 24760.
+/// REGRESSION: `SELECT COUNT(*) FROM java.lang.String` must return 23331
+/// (reachable-only default). The histogram fast-path filters to GC-reachable
+/// objects when `reachable_only=true`.
 #[test]
 fn histogram_count_regression_still_correct() {
     let Some(hprof) = philosophers() else { return };
@@ -3535,8 +3539,8 @@ fn histogram_count_regression_still_correct() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.lines().any(|l| l.trim() == "24760"),
-        "histogram COUNT regression: expected 24760, got:\n{stdout}"
+        stdout.lines().any(|l| l.trim() == "23331"),
+        "histogram COUNT: expected 23331 (reachable-only), got:\n{stdout}"
     );
 }
 
@@ -3573,9 +3577,9 @@ fn scan_agg_avg_over_expression() {
 }
 
 /// WHERE-filtered aggregate routes to SingleScan (WHERE present). The sum of
-/// `@usedHeapSize` for all Strings where `@usedHeapSize > 0` must equal the
-/// full SUM from the histogram path (594240), proving the scan accumulator
-/// matches the histogram for the same data.
+/// `@usedHeapSize` for all Strings where `@usedHeapSize > 0` must equal
+/// 594240 — every String has @usedHeapSize == 24 > 0, so all 24760 objects
+/// contribute (scan-time aggregation runs before reachability pruning).
 #[test]
 fn scan_agg_sum_with_where_matches_histogram_total() {
     let Some(hprof) = philosophers() else { return };
@@ -3589,7 +3593,7 @@ fn scan_agg_sum_with_where_matches_histogram_total() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Must equal 594240 — every String has @usedHeapSize == 24 > 0.
+    // Must equal 594240 — every String has @usedHeapSize == 24 > 0, all 24760 contribute.
     assert!(
         stdout.lines().any(|l| l.trim() == "594240"),
         "scan SUM with WHERE must equal histogram SUM 594240, got:\n{stdout}"

@@ -1901,6 +1901,9 @@ pub fn run_single_dump(
         std::collections::HashMap::new();
     let mut exists_bools_by_slot: std::collections::HashMap<usize, Vec<bool>> =
         std::collections::HashMap::new();
+    // outer_slot → inner row count for CountFromSubquery outer plans.
+    let mut count_from_subquery_by_slot: std::collections::HashMap<usize, u64> =
+        std::collections::HashMap::new();
     for (inner_idx, meta) in inners.iter().enumerate() {
         let res = &inner_results[inner_idx];
         // If the inner subquery errored (e.g. it needs @retainedHeapSize but the
@@ -1924,10 +1927,20 @@ pub fn run_single_dump(
                 );
             }
             SubqueryRole::From => {
-                let mut idx: Vec<u32> =
-                    res.rows.iter().filter_map(|r| row_dense_index(r)).collect();
-                idx.sort_unstable();
-                from_index_by_slot.insert(meta.outer_slot, (idx, res.truncated));
+                // Check if the outer query is a CountFromSubquery — in that case
+                // the outer heap scan is not needed; we just record the inner count.
+                let outer_is_count = flat
+                    .get(meta.outer_slot)
+                    .map(|(_, p)| p.kind == crate::query::plan::StageKind::CountFromSubquery)
+                    == Some(true);
+                if outer_is_count {
+                    count_from_subquery_by_slot.insert(meta.outer_slot, res.row_count);
+                } else {
+                    let mut idx: Vec<u32> =
+                        res.rows.iter().filter_map(|r| row_dense_index(r)).collect();
+                    idx.sort_unstable();
+                    from_index_by_slot.insert(meta.outer_slot, (idx, res.truncated));
+                }
             }
             SubqueryRole::Exists { negated } => {
                 // EXISTS: inner produced ≥1 row → true (before negation).
@@ -2062,6 +2075,18 @@ pub fn run_single_dump(
         if *inner_trunc {
             r.truncated = true;
         }
+    }
+
+    // CountFromSubquery: the outer scan produced nothing (the plan has no needs);
+    // inject the inner row count directly as a single-row COUNT(*) result.
+    for (slot, count) in &count_from_subquery_by_slot {
+        let r = &mut flat_results[*slot];
+        let (q, _) = &flat[*slot];
+        let columns = crate::query::execute::query_columns(q);
+        r.columns = columns;
+        r.rows = vec![vec![QueryValue::Int(*count as i64)]];
+        r.row_count = 1;
+        r.truncated = false;
     }
 
     // Reachable-only pruning is fully applied by now: inner membership/identity

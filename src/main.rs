@@ -3408,7 +3408,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
         let (
             g,
             _inbound,
-            _shallow_c,
+            shallow_c,
             class_idx_c,
             _alloc_serial_c,
             query_state,
@@ -3425,6 +3425,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             &mut no_exists_bools,
         )?;
         let class_idx: Vec<u32> = class_idx_c.restore().unwrap_or_default();
+        let shallow: Vec<u32> = shallow_c.restore().unwrap_or_default();
         let class_names: Vec<String> = g
             .class_names
             .iter()
@@ -3454,7 +3455,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
                 let reachable_summaries = query::histogram::build_reachable_summaries(
                     &class_idx,
                     dfn,
-                    None, // shallow sizes not needed for COUNT(*); SUM returns Null
+                    Some(&shallow),
                     &class_names,
                 );
                 for (slot, r) in query::histogram::run_histogram_batch(&flat, &reachable_summaries)

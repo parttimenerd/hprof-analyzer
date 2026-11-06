@@ -53,6 +53,10 @@ pub enum StageKind {
     /// GROUP BY aggregation: rows are bucketed by the group-by key expressions
     /// during the scan and finalized after the full scan completes.
     GroupBy,
+    /// `SELECT COUNT(*) FROM (<subquery>)` with no WHERE/HAVING/GROUP BY/ORDER BY.
+    /// The outer scan is bypassed: the count is taken directly from the inner
+    /// subquery's row count after the inner pass runs.
+    CountFromSubquery,
 }
 
 /// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
@@ -1110,20 +1114,56 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         }
     }
 
-    // An aggregate over a FROM-subquery cannot be answered correctly: aggregates
-    // fold during the outer scan, but the subquery semi-join runs post-scan, so
-    // the fold would cover every scanned object (the subquery source matches all)
-    // rather than the semi-joined subset. Reject with an actionable error instead
-    // of silently returning a wrong count / zero rows.
+    // `SELECT COUNT(*) FROM (<subquery>)` with no WHERE/HAVING/GROUP BY/ORDER BY:
+    // the outer count equals the inner row count. Return a CountFromSubquery plan
+    // so run.rs can short-circuit the outer heap scan entirely.
     if is_aggregate && from_subplan.is_some() {
-        return Err(QueryError(
-            "aggregates over a FROM-subquery are not supported: an aggregate folds \
-             during the scan, before the subquery semi-join is applied, so the result \
-             would not reflect the subquery. Aggregate the inner query instead, e.g. \
-             `SELECT COUNT(*) FROM <class> WHERE ...`, or select whole objects from the \
-             subquery and aggregate a wrapping query."
-                .into(),
-        ));
+        let is_pure_count_star = q.select.len() == 1
+            && matches!(
+                &q.select[0],
+                SelectItem::Aggregate {
+                    func: AggFunc::Count,
+                    arg,
+                    filter: None,
+                } if matches!(arg.as_ref(), SelectItem::Star)
+            )
+            && q.where_.is_none()
+            && q.having.is_none()
+            && q.group_by.is_empty()
+            && q.order_by.is_none();
+        if !is_pure_count_star {
+            return Err(QueryError(
+                "aggregates over a FROM-subquery are not supported: an aggregate folds \
+                 during the scan, before the subquery semi-join is applied, so the result \
+                 would not reflect the subquery. Use SELECT COUNT(*) FROM (<subquery>) \
+                 for a pure row count, or aggregate the inner query directly."
+                    .into(),
+            ));
+        }
+        // Pure COUNT(*) — short-circuit: no outer scan needed.
+        return Ok(QueryPlan {
+            kind: StageKind::CountFromSubquery,
+            needs: QueryNeeds::default(),
+            where_terms: Vec::new(),
+            finalize_at: Phase::P1,
+            carry: CarryLayout::IndexOnly,
+            late_ops: Vec::new(),
+            limit: scan_limit(q),
+            scan_limit: None,
+            order_sensitive: false,
+            select_arity: 1,
+            union_branches: Vec::new(),
+            union_limit: None,
+            from_subplan,
+            in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
+        });
     }
     let mut where_terms = Vec::new();
     if let Some(pred) = &q.where_ {
@@ -2816,6 +2856,7 @@ impl QueryPlan {
             StageKind::HistogramOnly => "class histogram scan (fast)",
             StageKind::SingleScan => "full heap scan",
             StageKind::GroupBy => "full heap scan + GROUP BY",
+            StageKind::CountFromSubquery => "COUNT(*) over inner subquery (no outer scan)",
         };
         let phase_label = match self.finalize_at {
             Phase::P1 => "Phase-1",
