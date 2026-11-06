@@ -7188,3 +7188,101 @@ fn instanceof_object_count_gte_non_instanceof() {
         "INSTANCEOF Object ({all}) < Thread count ({threads})"
     );
 }
+
+// ── VALUES inline table source ───────────────────────────────────────────────
+
+/// Run a query that uses only a VALUES source — no real dump needed.
+/// We pass a dummy path; the short-circuit in main.rs materialises the result
+/// without ever opening it.
+fn run_values_query(oql: &str) -> String {
+    let out = Command::new(BIN)
+        .args(["query", "/nonexistent-dummy.hprof", "--query", oql])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "VALUES query failed ({oql}): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn values_basic_two_rows() {
+    // `SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(id, name)` must return
+    // exactly two data rows with id=1,name=a and id=2,name=b.
+    let out = run_values_query(r#"SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(id, name)"#);
+    // Both column headers must appear.
+    assert!(out.contains("id"), "missing 'id' column header:\n{out}");
+    assert!(out.contains("name"), "missing 'name' column header:\n{out}");
+    // Row values must be present.
+    assert!(out.contains('1'), "missing value 1:\n{out}");
+    assert!(out.contains('2'), "missing value 2:\n{out}");
+    assert!(out.contains('a'), "missing value 'a':\n{out}");
+    assert!(out.contains('b'), "missing value 'b':\n{out}");
+    // Exactly two data rows.
+    let row_count = out
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !is_separator_line(l) && !l.contains("id"))
+        .filter(|l| l.contains('|'))
+        .count();
+    assert_eq!(
+        row_count, 2,
+        "expected 2 data rows, got {row_count}:\n{out}"
+    );
+}
+
+#[test]
+fn values_select_named_column() {
+    // `SELECT name FROM (VALUES (1, "hello")) AS t(id, name)` should project
+    // only the name column and return "hello".
+    let out = run_values_query(r#"SELECT name FROM (VALUES (1, "hello")) AS t(id, name)"#);
+    assert!(out.contains("hello"), "projected value missing:\n{out}");
+    // The 'id' column must NOT appear (we only selected 'name').
+    assert!(
+        !out.contains("| id") && !out.contains("id |"),
+        "'id' column should not appear when only 'name' selected:\n{out}"
+    );
+}
+
+#[test]
+fn values_with_limit() {
+    // LIMIT 1 on a 3-row VALUES must return exactly one data row.
+    let out = run_values_query(
+        r#"SELECT * FROM (VALUES (1, "a"), (2, "b"), (3, "c")) AS t(id, v) LIMIT 1"#,
+    );
+    let data_rows: Vec<&str> = out
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !is_separator_line(l) && !l.contains("id"))
+        .filter(|l| l.contains('|'))
+        .collect();
+    assert_eq!(
+        data_rows.len(),
+        1,
+        "LIMIT 1 should yield 1 row, got {}:\n{out}",
+        data_rows.len()
+    );
+}
+
+#[test]
+fn values_order_by() {
+    // ORDER BY id DESC should put row 3 first.
+    let out =
+        run_values_query(r#"SELECT id FROM (VALUES (1), (3), (2)) AS t(id) ORDER BY id DESC"#);
+    // The output should contain 3 rows in DESC order: 3, 2, 1.
+    // Confirm "3 rows" is reported and "3" appears before "1" in the output.
+    assert!(
+        out.contains("(3 rows)"),
+        "expected (3 rows) in output:\n{out}"
+    );
+    let pos3 = out.find('3').unwrap_or(usize::MAX);
+    let pos1 = out.rfind('1').unwrap_or(0);
+    // "3" (the value) must appear before "1" (the value) — i.e., 3 is first.
+    // We look for the first standalone '3' vs the last standalone '1' as a proxy
+    // for ordering; the (3 rows) footer contains '3' too, but pos1 anchors
+    // to the last '1' which is safely in the data section.
+    assert!(
+        pos3 < pos1,
+        "ORDER BY DESC: '3' should appear before '1' in output:\n{out}"
+    );
+}
