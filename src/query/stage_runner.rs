@@ -2469,11 +2469,13 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     }
 
     // Finalize: build output rows from group accumulators.
+    // Keep the key alongside each row so HAVING can reference unselected GROUP BY keys.
     let group_by_exprs = &entry.plan.group_by_exprs;
-    let mut rows: Vec<Vec<QueryValue>> = groups
+    let mut keyed_rows: Vec<(Vec<QueryValue>, Vec<QueryValue>)> = groups
         .into_values()
         .map(|(key, accs)| {
-            q.select
+            let row: Vec<QueryValue> = q
+                .select
                 .iter()
                 .enumerate()
                 .map(|(i, it)| match it {
@@ -2505,19 +2507,21 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                         }
                     }
                 })
-                .collect()
+                .collect();
+            (key, row)
         })
         .collect();
 
     // Apply HAVING filter post-aggregation (mirrors the scan-time GROUP BY path).
+    // Pass the actual GROUP BY key so unselected keys are accessible (OQL-46).
     if !entry.plan.having_terms.is_empty() {
         let columns = query_columns(q);
-        rows.retain(|row| {
+        keyed_rows.retain(|(key, row)| {
             entry.plan.having_terms.iter().all(|term| {
                 crate::query::execute::eval_having_term(
                     &term.pred,
                     row,
-                    &[],
+                    key,
                     q,
                     &columns,
                     &like_regexes,
@@ -2525,6 +2529,8 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             })
         });
     }
+
+    let mut rows: Vec<Vec<QueryValue>> = keyed_rows.into_iter().map(|(_, row)| row).collect();
 
     // ORDER BY: use the standard resolver (handles alias-stripped names).
     let mut order_by_note: Option<String> = None;

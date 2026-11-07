@@ -2207,7 +2207,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 }
             }
             // Apply window functions (post-GROUP-BY, pre-ORDER-BY).
-            apply_window_functions(&mut rows, &columns, self.query);
+            apply_window_functions(&mut rows, &columns, self.query, 0, &[]);
             // Apply ORDER BY.
             if let Some(ob) = &self.query.order_by {
                 let resolved = resolve_order_by_keys(self.query, &columns, ob);
@@ -2280,7 +2280,24 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             let mut row_src = self.row_src;
             let note: Option<String> = None;
             // Apply window functions (post-scan, pre-ORDER-BY).
-            apply_window_functions(&mut rows, &columns, self.query);
+            let extra_window_names: Vec<String> =
+                self.extra_window_attrs.iter().map(attr_name).collect();
+            apply_window_functions(
+                &mut rows,
+                &columns,
+                self.query,
+                self.extra_sort_attrs.len(),
+                &extra_window_names,
+            );
+            // Strip extra_window_attrs trailing values (no longer needed after
+            // window evaluation). extra_sort_attrs remain for ORDER BY below.
+            let extra_win_n = self.extra_window_attrs.len();
+            if extra_win_n > 0 {
+                let keep_len = columns.len() + self.extra_sort_attrs.len();
+                for row in &mut rows {
+                    row.truncate(keep_len);
+                }
+            }
             // Apply a general ORDER BY sort for the scan-time (non-carry) path.
             // The retained-late path carries indices forward and sorts in
             // stage_runner, so it never reaches here with rows to sort; guard on
@@ -2339,6 +2356,20 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     // because extra_sort_attrs is empty when order_by is None).
                     for row in &mut rows {
                         row.truncate(columns.len());
+                    }
+                }
+                // Apply LIMIT when no ORDER BY sort was done. (Queries with ORDER BY
+                // apply LIMIT inside the sort branch above.) This handles window
+                // queries (OQL-44) and any other no-ORDER-BY case that reaches here
+                // because early-stop was disabled (window, subquery, reachable-only).
+                if self.query.order_by.is_none() && !defer_limit {
+                    if let Some(limit) = self.plan.limit {
+                        if rows.len() > limit as usize {
+                            rows.truncate(limit as usize);
+                            if let Some(v) = &mut row_src {
+                                v.truncate(limit as usize);
+                            }
+                        }
                     }
                 }
             }
@@ -3011,10 +3042,16 @@ pub(crate) fn cast_query_value(
 
 /// Apply window functions to a materialized result set. Modifies rows in-place,
 /// filling in the window-column positions (which were initially Null).
+///
+/// `extra_sort_len` is the number of hidden trailing ORDER-BY values appended
+/// after the visible columns; `extra_window_names` are the names of PARTITION-BY
+/// attrs appended after those (OQL-40). Both are zero/empty for GROUP-BY paths.
 pub(crate) fn apply_window_functions(
     rows: &mut [Vec<QueryValue>],
     columns: &[QueryColumn],
     query: &Query,
+    extra_sort_len: usize,
+    extra_window_names: &[String],
 ) {
     use crate::query::ast::{WindowFunc, WindowSpec};
     // Collect window columns: (select_position, func, arg, over)
@@ -3029,14 +3066,23 @@ pub(crate) fn apply_window_functions(
     }
 
     for &(col_idx, func, arg, spec) in &window_cols {
-        // Resolve partition-by to column indices
+        // Resolve partition-by to column indices.
+        // First check visible columns; if not found, check the hidden trailing
+        // extra_window_names appended after extra_sort_len (OQL-40).
         let part_indices: Vec<usize> = spec
             .partition_by
             .iter()
             .filter_map(|e| {
                 if let Expr::Attr(a) = e {
                     let name = attr_name(a);
-                    columns.iter().position(|c| c.name == name)
+                    if let Some(pos) = columns.iter().position(|c| c.name == name) {
+                        return Some(pos);
+                    }
+                    // Check hidden extra_window_names.
+                    if let Some(pos) = extra_window_names.iter().position(|n| *n == name) {
+                        return Some(columns.len() + extra_sort_len + pos);
+                    }
+                    None
                 } else {
                     None
                 }
