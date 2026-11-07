@@ -6,6 +6,40 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **OQL: `VALUES (…)` inline table source** — embed literal rows directly in a
+  query: `SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)`. Column names
+  from the `AS t(…)` alias are available as `@col0`, `@col1`, … or by the
+  declared names. Supports `WHERE`, aggregates, `ORDER BY`, `LIMIT`, and
+  `JOIN`.
+
+- **OQL: `INNER JOIN` / `LEFT JOIN`** — join heap query results against
+  `VALUES` tables or one of three built-in virtual tables:
+  - `classes` — `(class_name, instance_count, shallow_total, retained_total)`
+  - `gc_roots` — `(dense_idx, root_type, root_type_name)`
+  - `threads` — `(serial, obj_idx, name, is_daemon, priority)`
+
+  Bare `JOIN` is treated as `INNER JOIN`. Example: `SELECT x.@className,
+  c.retained_total FROM java.lang.Object x JOIN classes c ON x.@className =
+  c.class_name`.
+
+- **OQL: `NOT IN (subquery)`** — `@objectAddress NOT IN (SELECT
+  @objectAddress FROM SomeClass)` excludes objects whose address appears in
+  the inner result. Desugars to `NOT (addr IN (…))` so no executor changes
+  were needed.
+
+- **OQL: `GROUP BY` over `RefPath` hops and `@valueArray`** — group-by
+  expressions may now traverse reference paths (e.g. `GROUP BY x.field.key`)
+  and use `@valueArray` as a grouping key. Previously only `SELECT` and
+  `WHERE` expressions were lowered to RefPath carry mode; the planner now
+  propagates `group_by_hops` into the carry plan and the stage runner
+  evaluates multi-hop GROUP BY keys in `join_retained_group_by`.
+
+- **OQL: `FROM ENTRIES <ClassName>` — full collection expansion** — expanded
+  to support `HashMap`, `LinkedHashMap`, and `HashSet` in addition to
+  `ArrayList`/`Vector`/`ArrayDeque`. Map entries yield `(key, value)` rows;
+  list entries yield `(index, element)` rows. Unknown collection types return
+  an informative note instead of silently producing no rows.
+
 - **OQL: `@fillRatio` virtual attribute** — returns the backing-array fill ratio
   (`non_null_slots / backing_array_length`) for known collection types (e.g.
   `HashMap`, `ArrayList`) as a float 0.0–1.0. Returns `Null` for objects that are
