@@ -1293,9 +1293,12 @@ fn resume_with_retained(
 /// in-memory, without touching the HPROF file. Applies ORDER BY and LIMIT
 /// directly to the materialized rows.
 pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
-    use crate::query::ast::{FromSource, Value};
-    use crate::query::execute::{resolve_order_by_keys, sort_rows_by_columns};
+    use crate::query::ast::{AggFunc, FromSource, SelectItem, Value};
+    use crate::query::execute::{
+        canonical_distinct_key_pub as canonical_key, resolve_order_by_keys, sort_rows_by_columns,
+    };
     use crate::query::model::QueryColumn;
+    use std::collections::HashSet;
 
     let (col_names, value_rows) = match &q.from {
         FromSource::Values { columns, rows, .. } => (columns, rows),
@@ -1326,8 +1329,31 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         }
     };
 
-    // Determine output columns.
+    // Convert VALUES rows to QueryValue rows.
+    let qv_rows: Vec<Vec<QueryValue>> = value_rows
+        .iter()
+        .map(|r| r.iter().map(&value_to_qv).collect())
+        .collect();
+
+    // Apply WHERE filtering.
+    let filtered: Vec<&Vec<QueryValue>> = if let Some(pred) = &q.where_ {
+        qv_rows
+            .iter()
+            .filter(|row| eval_pred_on_row(pred, col_names, row))
+            .collect()
+    } else {
+        qv_rows.iter().collect()
+    };
+
+    // Determine if this is an aggregate query.
+    let is_aggregate = q
+        .select
+        .iter()
+        .any(|s| matches!(s, SelectItem::Aggregate { .. }));
+
     let is_star = q.select.len() == 1 && matches!(q.select[0], crate::query::ast::SelectItem::Star);
+
+    // Determine output columns.
     let out_cols: Vec<QueryColumn> = if is_star {
         col_names
             .iter()
@@ -1339,59 +1365,177 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
             .zip(q.select.iter())
             .enumerate()
             .map(|(i, (alias, item))| {
-                let name = alias.clone().unwrap_or_else(|| {
-                    // Derive column name: for a plain field ref, use the field name.
-                    match item {
-                        crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
-                            f.clone()
-                        }
-                        _ => col_names
-                            .get(i)
-                            .cloned()
-                            .unwrap_or_else(|| format!("col{i}")),
+                let name = alias.clone().unwrap_or_else(|| match item {
+                    SelectItem::Attr(crate::query::ast::Attr::Field(f)) => f.clone(),
+                    SelectItem::Aggregate { func, arg, .. } => {
+                        let func_name = format!("{func:?}").to_lowercase();
+                        let arg_str = match arg.as_ref() {
+                            SelectItem::Star => "*".to_string(),
+                            SelectItem::Attr(a) => format!("{a:?}"),
+                            _ => "?".to_string(),
+                        };
+                        format!("{func_name}({arg_str})")
                     }
+                    SelectItem::Expr(expr) => format!("{expr:?}"),
+                    _ => col_names
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| format!("col{i}")),
                 });
                 QueryColumn { name }
             })
             .collect()
     };
 
-    // Build rows: for each value row, project columns.
-    let rows: Vec<Vec<QueryValue>> = value_rows
-        .iter()
-        .map(|row| {
-            if is_star {
-                row.iter().map(&value_to_qv).collect()
-            } else {
-                // For non-star projections, resolve column references by name.
-                q.select
-                    .iter()
-                    .map(|item| match item {
-                        crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
-                            // Find column by name.
-                            if let Some(pos) = col_names.iter().position(|c| c == f) {
-                                row.get(pos).map(&value_to_qv).unwrap_or(QueryValue::Null)
-                            } else {
-                                QueryValue::Null
-                            }
+    // Project a single row according to the SELECT list (non-aggregate path).
+    let project_row = |row: &Vec<QueryValue>| -> Vec<QueryValue> {
+        if is_star {
+            row.clone()
+        } else {
+            q.select
+                .iter()
+                .map(|item| match item {
+                    SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
+                        if let Some(pos) = col_names.iter().position(|c| c == f) {
+                            row.get(pos).cloned().unwrap_or(QueryValue::Null)
+                        } else {
+                            QueryValue::Null
                         }
-                        crate::query::ast::SelectItem::Expr(expr) => {
-                            if let crate::query::ast::Expr::Lit(v) = expr.as_ref() {
-                                value_to_qv(v)
-                            } else {
-                                QueryValue::Null
-                            }
+                    }
+                    SelectItem::Expr(expr) => eval_expr_on_row(expr, col_names, row),
+                    SelectItem::Star => row.first().cloned().unwrap_or(QueryValue::Null),
+                    _ => QueryValue::Null,
+                })
+                .collect()
+        }
+    };
+
+    // Extract the aggregate argument value from a row.
+    let agg_arg_value = |arg: &SelectItem, row: &Vec<QueryValue>| -> QueryValue {
+        match arg {
+            SelectItem::Star => QueryValue::Int(1),
+            SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
+                if let Some(pos) = col_names.iter().position(|c| c == f) {
+                    row.get(pos).cloned().unwrap_or(QueryValue::Null)
+                } else {
+                    QueryValue::Null
+                }
+            }
+            SelectItem::Expr(expr) => eval_expr_on_row(expr, col_names, row),
+            _ => QueryValue::Null,
+        }
+    };
+
+    let rows: Vec<Vec<QueryValue>> = if is_aggregate {
+        let agg_row: Vec<QueryValue> = q
+            .select
+            .iter()
+            .map(|item| match item {
+                SelectItem::Aggregate { func, arg, filter } => {
+                    // Apply per-aggregate FILTER if present.
+                    let vals: Vec<QueryValue> = filtered
+                        .iter()
+                        .filter(|row| {
+                            filter
+                                .as_ref()
+                                .map(|p| eval_pred_on_row(p, col_names, row))
+                                .unwrap_or(true)
+                        })
+                        .map(|row| agg_arg_value(arg, row))
+                        .filter(|v| !matches!(v, QueryValue::Null))
+                        .collect();
+                    match func {
+                        AggFunc::Count => QueryValue::Int(vals.len() as i64),
+                        AggFunc::CountDistinct => {
+                            let mut seen: HashSet<String> = HashSet::new();
+                            let n = vals
+                                .iter()
+                                .filter(|v| seen.insert(canonical_key(v)))
+                                .count();
+                            QueryValue::Int(n as i64)
                         }
-                        crate::query::ast::SelectItem::Star => {
-                            // Fallback: first column.
-                            row.first().map(&value_to_qv).unwrap_or(QueryValue::Null)
+                        AggFunc::Sum => {
+                            let sum = vals.iter().fold(0.0f64, |acc, v| match v {
+                                QueryValue::Int(n) => acc + *n as f64,
+                                QueryValue::Float(f) => acc + f,
+                                _ => acc,
+                            });
+                            QueryValue::Float(sum)
+                        }
+                        AggFunc::Min => vals
+                            .iter()
+                            .min_by(|a, b| {
+                                use std::cmp::Ordering;
+                                let af = match a {
+                                    QueryValue::Int(n) => *n as f64,
+                                    QueryValue::Float(f) => *f,
+                                    _ => f64::NAN,
+                                };
+                                let bf = match b {
+                                    QueryValue::Int(n) => *n as f64,
+                                    QueryValue::Float(f) => *f,
+                                    _ => f64::NAN,
+                                };
+                                af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
+                            })
+                            .cloned()
+                            .unwrap_or(QueryValue::Null),
+                        AggFunc::Max => vals
+                            .iter()
+                            .max_by(|a, b| {
+                                use std::cmp::Ordering;
+                                let af = match a {
+                                    QueryValue::Int(n) => *n as f64,
+                                    QueryValue::Float(f) => *f,
+                                    _ => f64::NAN,
+                                };
+                                let bf = match b {
+                                    QueryValue::Int(n) => *n as f64,
+                                    QueryValue::Float(f) => *f,
+                                    _ => f64::NAN,
+                                };
+                                af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
+                            })
+                            .cloned()
+                            .unwrap_or(QueryValue::Null),
+                        AggFunc::Avg => {
+                            if vals.is_empty() {
+                                QueryValue::Null
+                            } else {
+                                let sum = vals.iter().fold(0.0f64, |acc, v| match v {
+                                    QueryValue::Int(n) => acc + *n as f64,
+                                    QueryValue::Float(f) => acc + f,
+                                    _ => acc,
+                                });
+                                QueryValue::Float(sum / vals.len() as f64)
+                            }
                         }
                         _ => QueryValue::Null,
+                    }
+                }
+                // Non-aggregate item in aggregate query.
+                SelectItem::Attr(crate::query::ast::Attr::Field(f)) => filtered
+                    .first()
+                    .and_then(|row| {
+                        col_names
+                            .iter()
+                            .position(|c| c == f)
+                            .and_then(|pos| row.get(pos))
+                            .cloned()
                     })
-                    .collect()
-            }
-        })
-        .collect();
+                    .unwrap_or(QueryValue::Null),
+                _ => QueryValue::Null,
+            })
+            .collect();
+        if plan.limit == Some(0) {
+            vec![]
+        } else {
+            vec![agg_row]
+        }
+    } else {
+        // Non-aggregate: project each filtered row.
+        filtered.iter().map(|row| project_row(row)).collect()
+    };
 
     // Build an intermediate result (before JOINs, ORDER BY, and LIMIT).
     let intermediate = QueryResult {
@@ -1443,14 +1587,16 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
     }
 }
 
-/// Evaluate a simple `Expr` against a row given column names.
-/// Returns `Null` for unsupported expression types.
+/// Evaluate an `Expr` against a VALUES row. Handles literals, field refs,
+/// unary ops, binary arith, comparisons, and string methods. Returns `Null`
+/// for unsupported expression types (e.g. heap attrs, subqueries).
 fn eval_expr_on_row(
     expr: &crate::query::ast::Expr,
     col_names: &[String],
     row: &[crate::query::model::QueryValue],
 ) -> crate::query::model::QueryValue {
     use crate::query::ast::{Attr, Expr, Value};
+    use crate::query::execute::{arith, unary};
     use crate::query::model::QueryValue;
     match expr {
         Expr::Lit(v) => match v {
@@ -1467,8 +1613,97 @@ fn eval_expr_on_row(
                 QueryValue::Null
             }
         }
-        // For other expression types (complex exprs) return Null for now.
+        Expr::Unary { op, arg } => {
+            let v = eval_expr_on_row(arg, col_names, row);
+            unary(*op, &v)
+        }
+        Expr::Binary { op, lhs, rhs } => {
+            let lv = eval_expr_on_row(lhs, col_names, row);
+            let rv = eval_expr_on_row(rhs, col_names, row);
+            arith(&lv, *op, &rv)
+        }
+        Expr::Method {
+            receiver,
+            name,
+            args,
+        } => {
+            let recv_val = eval_expr_on_row(receiver, col_names, row);
+            eval_method_on_qv(&recv_val, name, args, col_names, row)
+        }
+        // Unsupported (heap attrs, subqueries, etc.) → Null.
         _ => QueryValue::Null,
+    }
+}
+
+/// Dispatch a method call on a `QueryValue` for use in VALUES query evaluation.
+fn eval_method_on_qv(
+    recv: &crate::query::model::QueryValue,
+    name: &str,
+    args: &[crate::query::ast::Expr],
+    col_names: &[String],
+    row: &[crate::query::model::QueryValue],
+) -> crate::query::model::QueryValue {
+    use crate::query::model::QueryValue;
+    match recv {
+        QueryValue::Str(s) => match name.to_ascii_lowercase().as_str() {
+            "lower" => QueryValue::Str(s.to_lowercase()),
+            "upper" => QueryValue::Str(s.to_uppercase()),
+            "trim" => QueryValue::Str(s.trim().to_string()),
+            "ltrim" => QueryValue::Str(s.trim_start().to_string()),
+            "rtrim" => QueryValue::Str(s.trim_end().to_string()),
+            "length" | "strlen" => QueryValue::Int(s.chars().count() as i64),
+            "contains" if args.len() == 1 => {
+                let arg = eval_expr_on_row(&args[0], col_names, row);
+                match arg {
+                    QueryValue::Str(pat) => QueryValue::Bool(s.contains(pat.as_str())),
+                    _ => QueryValue::Null,
+                }
+            }
+            "startswith" if args.len() == 1 => {
+                let arg = eval_expr_on_row(&args[0], col_names, row);
+                match arg {
+                    QueryValue::Str(pat) => QueryValue::Bool(s.starts_with(pat.as_str())),
+                    _ => QueryValue::Null,
+                }
+            }
+            "endswith" if args.len() == 1 => {
+                let arg = eval_expr_on_row(&args[0], col_names, row);
+                match arg {
+                    QueryValue::Str(pat) => QueryValue::Bool(s.ends_with(pat.as_str())),
+                    _ => QueryValue::Null,
+                }
+            }
+            _ => QueryValue::Null,
+        },
+        _ => QueryValue::Null,
+    }
+}
+
+/// Evaluate a predicate against a VALUES row. Returns true when the row passes.
+/// Unsupported predicate types (InstanceOf, InSubquery, Exists) always return true
+/// (conservative: include the row).
+fn eval_pred_on_row(
+    pred: &crate::query::ast::Predicate,
+    col_names: &[String],
+    row: &[crate::query::model::QueryValue],
+) -> bool {
+    use crate::query::ast::Predicate;
+    use crate::query::execute::compare_values;
+    match pred {
+        Predicate::And(a, b) => {
+            eval_pred_on_row(a, col_names, row) && eval_pred_on_row(b, col_names, row)
+        }
+        Predicate::Or(a, b) => {
+            eval_pred_on_row(a, col_names, row) || eval_pred_on_row(b, col_names, row)
+        }
+        Predicate::Not(inner) => !eval_pred_on_row(inner, col_names, row),
+        Predicate::Compare { lhs, op, rhs } => {
+            let lv = eval_expr_on_row(lhs, col_names, row);
+            let rv = eval_expr_on_row(rhs, col_names, row);
+            compare_values(&lv, *op, &rv, None)
+        }
+        // Conservative: include row for unsupported predicate types.
+        _ => true,
     }
 }
 
@@ -2207,10 +2442,13 @@ pub(crate) fn filter_result_by_src(r: &mut QueryResult, src: &[u32], dfn: &[u32]
 }
 
 /// Extract the object address a result row identifies for IN-membership:
-/// `SELECT @objectAddress` yields an `Int(addr)`. Non-address rows yield `None`.
+/// `SELECT @objectAddress` yields an `Int(addr)`.
+/// `SELECT @objectId` yields an `ObjRef { index, .. }` — extract index as u64.
+/// Non-address/non-identity rows yield `None`.
 fn row_address(row: &[QueryValue]) -> Option<u64> {
     match row.first()? {
         QueryValue::Int(i) => Some(*i as u64),
+        QueryValue::ObjRef { index, .. } => Some(*index),
         _ => None,
     }
 }
