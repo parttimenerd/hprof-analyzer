@@ -45,8 +45,11 @@ $ hprof-analyzer query heap.hprof \
 
 ```
 SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
-  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | ( subquery )> [alias]
+  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | ( subquery ) | VALUES (…) AS t(cols) | ENTRIES class> [alias]
+  [JOIN <source> [AS alias] ON <expr> = <expr>]
   [WHERE <predicate>]
+  [GROUP BY <expr> [, <expr>]]
+  [HAVING <predicate>]
   [ORDER BY <expr> [ASC|DESC]]
   [LIMIT <n>]
 [UNION <select> ...]
@@ -79,6 +82,28 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 | `FROM "java\.lang\..*"` | class-name regex (double-quoted) |
 | `FROM ( SELECT … ) s` | subquery as the row source |
 | `FROM ENTRIES java.util.ArrayList`¹ | iterate logical entries of a collection — see [FROM ENTRIES](#from-entries) |
+| `FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)` | inline literal rows — see [VALUES](#values-source) |
+
+### JOIN
+
+`INNER JOIN` and `LEFT JOIN` attach extra columns from a second source to each matched row:
+
+```
+SELECT x.@displayName, c.retained_total
+FROM java.lang.Object x
+JOIN classes c ON x.@className = c.class_name
+```
+
+Supported join sources:
+
+| Source | Columns |
+|--------|---------|
+| `VALUES (…) AS t(cols)` | user-defined inline rows |
+| `classes` | `class_name`, `instance_count`, `shallow_total`, `retained_total` |
+| `gc_roots` | `dense_idx`, `root_type`, `root_type_name` |
+| `threads` | `serial`, `obj_idx`, `name`, `is_daemon`, `priority` |
+
+Bare `JOIN` means `INNER JOIN`. `LEFT JOIN` keeps outer rows that have no match (right-side columns become `NULL`).
 
 ### Predicates (WHERE)
 
@@ -90,6 +115,8 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 - `<attr> IN ( SELECT @objectAddress FROM … )` — membership against a subquery
   that selects a single address-valued column. (`IN` takes a **subquery**, not a
   literal value list.)
+- `<attr> NOT IN ( SELECT @objectAddress FROM … )` — exclusion; equivalent to
+  `NOT (<attr> IN (…))`.
 - Combine with `AND`, `OR`, `NOT`, parentheses.
 
 ### Ordering, limiting, union
@@ -357,13 +384,12 @@ SELECT index, element FROM ENTRIES java.util.ArrayList LIMIT 20
 -- Equivalent to inspecting elementData[] manually, but cleaner
 ```
 
-**Supported in v1:** `java.util.ArrayList`, `java.util.Vector` (elementData[]
-backing array → `(index: Int, element: Int)` rows, where `element` is the dense
-object index of each non-null element).
-
-**Deferred to v2:** `HashMap`, `LinkedHashMap`, `HashSet`, `ArrayDeque`, `TreeMap`.
-For Maps in the meantime, query `FROM java.util.HashMap$Node` directly to inspect
-entries, or use `s.table.key` / `s.table.value` field paths.
+**Supported:** `java.util.ArrayList`, `java.util.Vector`, `java.util.ArrayDeque`
+(list types — yield `(index: Int, element: Int)` rows where `element` is the
+dense object index of each non-null element), and `java.util.HashMap`,
+`java.util.LinkedHashMap`, `java.util.HashSet` (map/set types — yield
+`(key: Int, value: Int)` rows). Unknown collection types return an informative
+note instead of silently producing no rows.
 
 `FROM ENTRIES` requires the **full analysis pipeline** (forward reference graph).
 Running it in query-only mode (`query` subcommand) returns zero rows with a clear
@@ -403,6 +429,28 @@ built-in descriptor with the same class name. Custom entries affect:
 
 The superclass chain is walked automatically when matching — a descriptor for
 `java.util.AbstractList` covers all subclasses that don't have their own entry.
+
+---
+
+## VALUES source
+
+`VALUES (…)` embeds literal rows directly in a query. Use it to build small
+lookup tables inline, or to cross-join heap results with known constants.
+
+```sql
+-- Map priority numbers to labels
+SELECT x.name, p.label
+FROM java.lang.Thread x
+JOIN VALUES (1, 'MIN'), (5, 'NORM'), (10, 'MAX') AS p(n, label)
+  ON x.priority = p.n
+
+-- Inline threshold comparison
+SELECT COUNT(*) FROM INSTANCEOF java.util.List s
+WHERE @usedHeapSize > (SELECT t.threshold FROM VALUES (65536) AS t(threshold))
+```
+
+Column names are declared in `AS alias(col1, col2, …)` and referenced as
+`alias.col1` in JOIN conditions or `@col0`, `@col1`, … by position.
 
 ---
 
@@ -843,8 +891,12 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `@collectionSize` — logical element count | `WHERE @collectionSize > 1000` |
 | `@dominatorClass`¹ / `@dominatorDepth`¹ — dominator metadata | `ORDER BY @dominatorDepth DESC` |
 | `pathToRoot(x)`¹ — walk idom[] upward to GC root | `SELECT pathToRoot(s) FROM … LIMIT 1` |
-| `FROM ENTRIES <ClassName>`¹ — collection entry iteration | `SELECT index, element FROM ENTRIES java.util.ArrayList` |
+| `FROM ENTRIES <ClassName>`¹ — collection entry iteration (ArrayList, Vector, ArrayDeque, HashMap, LinkedHashMap, HashSet) | `SELECT index, element FROM ENTRIES java.util.ArrayList` |
 | SQL LIKE wildcards (`%`, `_`) auto-translated to regex | `LIKE "%error%"` works alongside `LIKE ".*error.*"` |
+| `VALUES (…)` inline table source | `SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)` |
+| `INNER JOIN` / `LEFT JOIN` against `VALUES` tables or virtual tables (`classes`, `gc_roots`, `threads`) | `FROM java.lang.Object x JOIN classes c ON x.@className = c.class_name` |
+| `NOT IN (subquery)` | `WHERE @objectAddress NOT IN (SELECT @objectAddress FROM Foo)` |
+| `GROUP BY` over reference-path hops and `@valueArray` | `GROUP BY x.key` |
 
 ### Compatible with MAT
 
