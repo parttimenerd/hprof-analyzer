@@ -4193,14 +4193,23 @@ mod tests {
 
     #[test]
     fn from_subquery_aggregate_rejected() {
-        // An aggregate folds during the scan, before the FROM-subquery semi-join
-        // is applied, so the result would ignore the subquery. Reject it.
+        // Pure COUNT(*) FROM subquery is now supported via CountFromSubquery.
         let q = parse("SELECT COUNT(*) FROM (SELECT * FROM java.lang.String s) x").unwrap();
-        let err = pq(&q).unwrap_err();
+        let plan = pq(&q).unwrap();
+        assert_eq!(
+            plan.kind,
+            crate::query::plan::StageKind::CountFromSubquery,
+            "SELECT COUNT(*) FROM subquery must plan as CountFromSubquery"
+        );
+
+        // Non-pure aggregates over a FROM-subquery are still rejected.
+        let q2 =
+            parse("SELECT SUM(@usedHeapSize) FROM (SELECT * FROM java.lang.String s) x").unwrap();
+        let err = pq(&q2).unwrap_err();
         assert!(
             err.0
                 .contains("aggregates over a FROM-subquery are not supported"),
-            "got: {}",
+            "non-COUNT(*) aggregate should still be rejected, got: {}",
             err.0
         );
     }
