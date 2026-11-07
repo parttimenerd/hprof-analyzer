@@ -312,6 +312,49 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Fixed
 
+- **OQL: `LIMIT 0` incorrectly set `truncated = true`** — a query like
+  `SELECT * FROM Foo LIMIT 0` produced a result with zero rows but
+  `truncated: true`, misreporting that rows were capped. Fixed: `LIMIT 0`
+  clears `truncated` and does not enter the scan-limit early-stop path.
+
+- **OQL: dot-method syntax on string literals** — `"hello".length()` and
+  similar string-method calls on literal values now parse and evaluate
+  correctly. Previously the parser required a variable alias on the
+  left-hand side; literals were silently rejected.
+
+- **OQL: VALUES executor — WHERE predicates, aggregates, `@rowAddress`** —
+  three evaluation bugs in the `VALUES (…)` source:
+  - `WHERE` predicates were ignored (all rows passed unconditionally).
+  - Aggregate functions (`COUNT(*)`, `SUM(…)`) over a VALUES source produced
+    wrong results or panicked.
+  - `@rowAddress` projected `Null` instead of the row's virtual address.
+
+- **OQL: window `LIMIT` not applied without `ORDER BY`** — `SELECT
+  ROW_NUMBER() … LIMIT 10` with no `ORDER BY` clause skipped the LIMIT cap,
+  returning all rows. Fixed by applying LIMIT in the no-ORDER-BY window path.
+
+- **OQL: `PARTITION BY` on an unselected key crashed window evaluation** —
+  `PARTITION BY` keys not present in the `SELECT` list caused a bounds
+  panic inside `apply_window_functions`. Fixed by passing the hidden
+  trailing sort/window key count and names through the window evaluator.
+
+- **OQL: `HAVING` on an unselected `GROUP BY` key returned wrong groups** —
+  `GROUP BY a HAVING a > 5 SELECT COUNT(*)` (where `a` is not selected)
+  evaluated the HAVING predicate with an empty key slice, letting all groups
+  pass. Fixed by retaining the raw key vector alongside finalized rows in
+  `join_retained_group_by`.
+
+- **OQL: scan-path aggregate queries ignored `--reachable-only`** —
+  queries with `WHERE`/`EXISTS`/expressions that force the `SingleScan` path
+  (bypassing the fast `HistogramOnly` path) accumulated results over **all**
+  objects, including GC-unreachable ones. `COUNT(*)` and `SUM(@usedHeapSize)`
+  therefore disagreed with the histogram-backed equivalents on the same dump.
+  Fixed: the scan now captures each visited object's dense index into a
+  sidecar; after DFN computation, `recompute_agg_from_reachable` rebuilds the
+  aggregate from only the reachable subset (supports `COUNT`, `SUM`, `AVG`,
+  `MIN`, `MAX` over `@usedHeapSize` or constant expressions; unsupported
+  expressions fall back to the all-objects result unchanged).
+
 - **Gross retained churn displayed raw bytes with a doubled minus sign** —
   `gross_shrink_retained` is already negative in the data model; prepending the
   `−` sign produced `−-35583696 B` instead of `−33.9 MB`. Fixed with
