@@ -2466,6 +2466,97 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
     }
 }
 
+/// Rewrite `"<string>".<method>(` → `method("<string",(` so that method calls on
+/// string literals are accepted without requiring a separate Dot token in the lexer.
+/// Only rewrites known string methods (lower, upper, trim, etc.) to avoid false
+/// positives. Operates on the raw OQL text before tokenisation.
+fn rewrite_string_dot_method(src: &str) -> std::borrow::Cow<'_, str> {
+    // Known zero/fixed-arg string methods that also have a SQL function form.
+    const STRING_METHODS: &[&str] = &[
+        "lower",
+        "upper",
+        "trim",
+        "ltrim",
+        "rtrim",
+        "length",
+        "strlen",
+        "substr",
+        "substring",
+        "concat",
+        "replace",
+        "contains",
+        "startsWith",
+        "endsWith",
+    ];
+    // Quick scan: does the query contain any `".` sequence? If not, skip.
+    if !src.contains("\".") {
+        return src.into();
+    }
+    // Use a regex to find `"<content>".<method>(` and rewrite.
+    // We only rewrite when the method name is in STRING_METHODS.
+    // Pattern: `"([^"]*)"\.([A-Za-z][A-Za-z0-9_]*)\(`
+    let mut result = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(q_start) = rest.find('"') {
+        // Find the closing quote (no escape support — matches lexer behaviour).
+        if let Some(q_end_rel) = rest[q_start + 1..].find('"') {
+            let q_end = q_start + 1 + q_end_rel; // index of closing quote in `rest`
+            let after_q = &rest[q_end + 1..];
+            // Check for `.<method>(` immediately after the closing quote.
+            if let Some(after_dot) = after_q.strip_prefix('.') {
+                // Extract method name: `[A-Za-z][A-Za-z0-9_]*`
+                let meth_end = after_dot
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(after_dot.len());
+                let meth = &after_dot[..meth_end];
+                if !meth.is_empty() && STRING_METHODS.iter().any(|m| m.eq_ignore_ascii_case(meth)) {
+                    let after_meth = &after_dot[meth_end..];
+                    if let Some(after_lparen) = after_meth.strip_prefix('(') {
+                        // Rewrite: `"<content>".<meth>(` → `<meth>("<content",(` or `<meth>("<content")`
+                        // Push everything up to (but not including) the opening quote
+                        result.push_str(&rest[..q_start]);
+                        let string_content = &rest[q_start..=q_end]; // includes quotes
+                        // Check if there are args: zero-arg is `)` immediately
+                        if after_lparen.trim_start().starts_with(')') {
+                            // Zero-arg: `"ABC".lower()` → `lower("ABC")`
+                            result.push_str(meth);
+                            result.push('(');
+                            result.push_str(string_content);
+                            result.push(')');
+                            rest = after_lparen; // already past `(`
+                            // Skip the `)` too
+                            let close_pos = rest.find(')').unwrap_or(0);
+                            rest = &rest[close_pos + 1..];
+                            continue;
+                        } else {
+                            // Has args: `"ABC".substr(1,3)` → `substr("ABC",1,3)`
+                            result.push_str(meth);
+                            result.push('(');
+                            result.push_str(string_content);
+                            result.push(',');
+                            rest = after_lparen; // already past `(`
+                            continue;
+                        }
+                    }
+                }
+            }
+            // No method call — push up to and including the string literal, continue
+            result.push_str(&rest[..=q_end]);
+            rest = &rest[q_end + 1..];
+        } else {
+            // Unterminated string — let the tokenizer produce the error
+            break;
+        }
+    }
+    if result.is_empty() {
+        // No rewrites happened
+        src.into()
+    } else {
+        result.push_str(rest);
+        result.into()
+    }
+}
+
 /// Tokenize (logos) → chumsky parse, returning a compact single-line message
 /// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
 /// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
@@ -2473,6 +2564,8 @@ fn parse_internal(src: &str) -> Result<Query, String> {
     if let Some(msg) = blank_query_message(src) {
         return Err(msg);
     }
+    let src = rewrite_string_dot_method(src);
+    let src = src.as_ref();
     let toks = tokenize_spanned(src)?;
     let eoi: SimpleSpan = (src.len()..src.len()).into();
     let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
@@ -2499,6 +2592,8 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
     if let Some(msg) = blank_query_message(src) {
         return Err(msg);
     }
+    let rewritten = rewrite_string_dot_method(src);
+    let src = rewritten.as_ref();
     // Tokenizer errors have no chumsky span to underline; surface the message.
     let toks = match tokenize_spanned(src) {
         Ok(t) => t,
