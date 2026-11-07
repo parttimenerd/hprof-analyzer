@@ -3471,7 +3471,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             refwalk_csr,
             rpo.as_ref().map(|r| r.dfn.as_slice()),
             &addr_vec,
-            None,
+            Some(&shallow),
             &class_idx,
             &class_names,
         );

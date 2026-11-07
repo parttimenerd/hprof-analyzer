@@ -534,6 +534,97 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
     }
 }
 
+/// Evaluate one SELECT aggregate item for a SINGLE object using only its
+/// shallow size (no blob/class info). Returns `None` when the expression
+/// cannot be evaluated from the shallow size alone (e.g. it reads an instance
+/// field). Used post-DFN to recompute aggregate results over the reachable-
+/// only subset without a second heap scan.
+///
+/// Supported: COUNT(*), COUNT(expr), SUM/AVG/MIN/MAX over any expression that
+/// is ultimately a scalar multiple / constant offset of `@usedHeapSize` or a
+/// pure literal. Unsupported (returns `None`): field reads, string ops, etc.
+pub(crate) fn eval_agg_arg_shallow_only(item: &SelectItem, shallow: u32) -> Option<QueryValue> {
+    fn eval_expr_shallow(e: &Expr, shallow: u32) -> Option<QueryValue> {
+        match e {
+            Expr::Attr(crate::query::ast::Attr::UsedHeapSize) => {
+                Some(QueryValue::Int(shallow as i64))
+            }
+            Expr::Lit(v) => Some(value_to_qv(v)),
+            Expr::Binary { op, lhs, rhs } => {
+                let l = eval_expr_shallow(lhs, shallow)?;
+                let r = eval_expr_shallow(rhs, shallow)?;
+                Some(arith(&l, *op, &r))
+            }
+            Expr::Unary { op, arg } => {
+                let v = eval_expr_shallow(arg, shallow)?;
+                Some(unary(*op, &v))
+            }
+            // Any other expression (field access, string ops, etc.) is not
+            // computable without the blob — signal "unsupported".
+            _ => None,
+        }
+    }
+    match item {
+        SelectItem::Aggregate { func, arg, .. } => match func {
+            AggFunc::Count => Some(QueryValue::Int(1)), // contributes 1 per object
+            AggFunc::Sum | AggFunc::Avg | AggFunc::Min | AggFunc::Max => match arg.as_ref() {
+                SelectItem::Star => None, // COUNT(*) is handled above; SUM(*) is invalid
+                SelectItem::Attr(crate::query::ast::Attr::UsedHeapSize) => {
+                    Some(QueryValue::Int(shallow as i64))
+                }
+                SelectItem::Expr(e) => eval_expr_shallow(e, shallow),
+                _ => None, // field read or complex item — unsupported
+            },
+            AggFunc::Percentile(_) | AggFunc::Median | AggFunc::CountDistinct => None,
+        },
+        _ => None, // non-aggregate SELECT item
+    }
+}
+
+/// Recompute a P1-finished aggregate QueryResult using only the pruned
+/// (reachable-only) source indices and the shallow-size array. Returns a
+/// replacement QueryResult or `None` when the recomputation is unsupported
+/// (falls back to the original all-objects result in that case).
+pub(crate) fn recompute_agg_from_reachable(
+    original: &QueryResult,
+    query: &crate::query::ast::Query,
+    pruned_src: &[u32],
+    shallow: &[u32],
+) -> Option<QueryResult> {
+    // Only handle pure aggregate queries (no GROUP BY) with a single output row.
+    if !query.group_by.is_empty() || original.rows.len() != 1 {
+        return None;
+    }
+    // Try to recompute each aggregate column from the pruned source indices.
+    let mut new_accs: Vec<AggAcc> = query.select.iter().map(init_agg_acc).collect();
+    for &src in pruned_src {
+        let sh = shallow.get(src as usize).copied().unwrap_or(0);
+        for (acc, item) in new_accs.iter_mut().zip(query.select.iter()) {
+            if matches!(acc, AggAcc::None) {
+                continue;
+            }
+            // Check if the aggregate's arg is computable from shallow only.
+            {
+                let v = eval_agg_arg_shallow_only(item, sh)?;
+                fold_agg_acc(acc, v)
+            }
+        }
+    }
+    let row: Vec<QueryValue> = new_accs.into_iter().map(finalize_agg_acc).collect();
+    Some(QueryResult {
+        name: original.name.clone(),
+        oql: original.oql.clone(),
+        columns: original.columns.clone(),
+        rows: vec![row],
+        row_count: 1,
+        truncated: original.truncated,
+        error: original.error.clone(),
+        note: original.note.clone(),
+        viz: original.viz.clone(),
+        elapsed_ms: original.elapsed_ms,
+    })
+}
+
 /// Evaluate a HAVING predicate against a finalized GROUP BY output row.
 /// `row` is parallel to `columns` (projected SELECT output).
 /// `key` is parallel to `query.group_by` (raw GROUP BY key values, including
@@ -1026,13 +1117,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
 
     /// Arm the per-row source-index sidecar for GC-reachability pruning. Only a
     /// row-mode executor benefits: carry-mode executors flow their indices to the
-    /// late stage (never pruned here) and aggregate executors emit a single
-    /// scalar row with no source object. Calling this on a carry/aggregate
-    /// executor is a no-op, so the sidecar stays `None` and no allocation happens.
+    /// Arms the per-row source-index sidecar for reachable-only pruning. Carry
+    /// executors are skipped (their seeds, not their output rows, are pruned
+    /// separately by `prune_cross_phase_reachable`). Aggregate executors ARE
+    /// armed: the per-object indices captured during the scan let `resume` call
+    /// `recompute_agg_from_reachable` to re-aggregate over only reachable objects
+    /// post-DFN, instead of the all-objects result the scan produced.
     /// The caller (`ScanDriver`) only invokes this when `--reachable-only` is on,
     /// so every default-off / `--all` / analyze run leaves `row_src == None`.
     pub fn arm_row_capture(&mut self) {
-        if self.carry.is_none() && self.agg_acc.is_none() {
+        // Arm for both row-mode AND aggregate queries: aggregates need the sidecar
+        // so reachable-only can recompute the aggregate over only reachable objects
+        // post-DFN (the scan accumulates all objects; we prune and rebuild later).
+        if self.carry.is_none() {
             self.row_src = Some(Vec::new());
         }
     }
@@ -2273,7 +2370,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     viz: None,
                     elapsed_ms: None,
                 },
-                None,
+                // Return the captured per-object source sidecar (populated when
+                // arm_row_capture was called with reachable-only). The resume layer
+                // uses it to recompute the aggregate over only reachable objects.
+                self.row_src,
             )
         } else {
             let mut rows = self.rows;
@@ -2544,6 +2644,10 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     fold_agg_acc(acc, values[i].clone());
                 }
             }
+            // Capture source index for reachable-only aggregate recomputation.
+            if let Some(v) = &mut self.row_src {
+                v.push(src_idx as u32);
+            }
             return;
         }
         // When ORDER BY is present we must sort the FULL matched set in
@@ -2706,6 +2810,10 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     }
                     fold_agg_acc(acc, values[i].clone());
                 }
+            }
+            // Capture source index for reachable-only aggregate recomputation.
+            if let Some(v) = &mut self.row_src {
+                v.push(src_idx as u32);
             }
             return;
         }

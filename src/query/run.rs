@@ -869,27 +869,60 @@ pub(crate) fn resume_with_string_values(
     // collapse bookkeeping is needed and `@objectAddress` rows (whose projected
     // value is an address, not an index) prune correctly. A slot with no captured
     // src (aggregate/scalar/error/refwalk) keeps all its rows.
+    //
+    // For pure-aggregate slots (no GROUP BY, all SELECTs are aggregates), the
+    // scan captured every visited object's dense index into `row_src` so we can
+    // recompute the aggregate over only the reachable subset post-DFN. Aggregates
+    // produce a single summary row (not one row per object), so `filter_result_by_src`
+    // would incorrectly try to keep/drop that one row — we call
+    // `recompute_agg_from_reachable` instead.
     if let Some(dfn) = dfn {
         for (slot, r) in slotted.iter_mut() {
             if let Some(src) = row_src_by_slot.get(slot) {
-                filter_result_by_src(r, src, dfn);
-                // Re-apply LIMIT after DFN prune: the scan skipped the early-stop
-                // (because some of the N scanned rows might have been unreachable
-                // and pruned here), so the result may still exceed plan.limit.
-                // FROM-subquery queries defer their LIMIT to after the semi-join
-                // in run_single_dump (SW-6); skip re-capping them here so the
-                // semi-join sees the full reachable outer row set.
-                let is_subquery_outer = flat
-                    .get(*slot)
-                    .map(|(q, _)| q.from.as_subquery().is_some())
-                    .unwrap_or(false);
-                if !is_subquery_outer {
-                    if let Some(limit) = flat.get(*slot).and_then(|(_, p)| p.limit) {
-                        let lim = limit as usize;
-                        if r.rows.len() > lim {
-                            r.rows.truncate(lim);
-                            r.row_count = lim as u64;
-                            r.truncated = true;
+                let is_pure_agg = flat.get(*slot).is_some_and(|(q, _)| {
+                    q.group_by.is_empty()
+                        && !q.select.is_empty()
+                        && q.select
+                            .iter()
+                            .all(|it| matches!(it, crate::query::ast::SelectItem::Aggregate { .. }))
+                });
+                if is_pure_agg {
+                    if let Some(shallow) = shallow_opt {
+                        if let Some((q, _)) = flat.get(*slot) {
+                            let pruned: Vec<u32> = src
+                                .iter()
+                                .copied()
+                                .filter(|&idx| {
+                                    dfn.get(idx as usize).is_some_and(|&d| d != u32::MAX)
+                                })
+                                .collect();
+                            if let Some(new_r) = crate::query::execute::recompute_agg_from_reachable(
+                                r, q, &pruned, shallow,
+                            ) {
+                                *r = new_r;
+                            }
+                        }
+                    }
+                } else {
+                    filter_result_by_src(r, src, dfn);
+                    // Re-apply LIMIT after DFN prune: the scan skipped the early-stop
+                    // (because some of the N scanned rows might have been unreachable
+                    // and pruned here), so the result may still exceed plan.limit.
+                    // FROM-subquery queries defer their LIMIT to after the semi-join
+                    // in run_single_dump (SW-6); skip re-capping them here so the
+                    // semi-join sees the full reachable outer row set.
+                    let is_subquery_outer = flat
+                        .get(*slot)
+                        .map(|(q, _)| q.from.as_subquery().is_some())
+                        .unwrap_or(false);
+                    if !is_subquery_outer {
+                        if let Some(limit) = flat.get(*slot).and_then(|(_, p)| p.limit) {
+                            let lim = limit as usize;
+                            if r.rows.len() > lim {
+                                r.rows.truncate(lim);
+                                r.row_count = lim as u64;
+                                r.truncated = true;
+                            }
                         }
                     }
                 }
@@ -1990,7 +2023,7 @@ pub fn run_single_dump(
         };
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
-        let (g, _, _shallow_c, class_idx_c, _, state, refwalk_csr, string_values, _sv_trunc) =
+        let (g, _, shallow_c, class_idx_c, _, state, refwalk_csr, string_values, _sv_trunc) =
             crate::pass2::Pass2::build(
                 &source,
                 p1,
@@ -2002,6 +2035,7 @@ pub fn run_single_dump(
             )?;
         // Extract class name mapping needed for GROUP BY @displayName / @classOf.
         let class_idx: Vec<u32> = class_idx_c.restore().unwrap_or_default();
+        let shallow: Vec<u32> = shallow_c.restore().unwrap_or_default();
         let class_names: Vec<String> = g
             .class_names
             .iter()
@@ -2039,7 +2073,7 @@ pub fn run_single_dump(
             refwalk_csr,
             rpo.as_ref().map(|r| r.dfn.as_slice()),
             &addr_vec,
-            None,
+            Some(&shallow),
             &class_idx,
             &class_names,
         );
@@ -2205,7 +2239,7 @@ pub fn run_single_dump(
     let (
         outer_g,
         _,
-        _outer_shallow_c,
+        outer_shallow_c,
         outer_class_idx_c,
         _,
         outer_state,
@@ -2222,6 +2256,7 @@ pub fn run_single_dump(
         &mut exists_bools_by_slot,
     )?;
     let outer_class_idx: Vec<u32> = outer_class_idx_c.restore().unwrap_or_default();
+    let outer_shallow: Vec<u32> = outer_shallow_c.restore().unwrap_or_default();
     let outer_class_names: Vec<String> = outer_g
         .class_names
         .iter()
@@ -2263,7 +2298,7 @@ pub fn run_single_dump(
         outer_refwalk_csr,
         outer_rpo.as_ref().map(|r| r.dfn.as_slice()),
         &outer_addr_vec,
-        None,
+        Some(&outer_shallow),
         &outer_class_idx,
         &outer_class_names,
     );
