@@ -1906,16 +1906,18 @@ fn collect_exists_subplans(
         }
     }
 }
-/// addresses, so the inner must `SELECT @objectAddress` — a scalar/field or a
-/// bare `@objectId` (a dense index, not an address) is rejected.
+/// addresses, so the inner must `SELECT @objectAddress` or `SELECT @objectId`.
 fn enforce_in_subquery_projection(inner: &Query) -> Result<(), QueryError> {
-    let ok =
-        inner.select.len() == 1 && matches!(inner.select[0], SelectItem::Attr(Attr::ObjectAddress));
+    let ok = inner.select.len() == 1
+        && matches!(
+            inner.select[0],
+            SelectItem::Attr(Attr::ObjectAddress) | SelectItem::Attr(Attr::ObjectId)
+        );
     if ok {
         Ok(())
     } else {
         Err(QueryError(
-            "IN-subquery must select a single address-valued column (SELECT @objectAddress)".into(),
+            "IN-subquery must select a single identity column (SELECT @objectAddress or SELECT @objectId)".into(),
         ))
     }
 }
@@ -4216,19 +4218,36 @@ mod tests {
 
     #[test]
     fn in_subquery_non_address_projection_rejected() {
-        // The inner projects `@objectId` (a dense index, not an address); IN
-        // compares outer addresses, so this must be rejected.
+        // The inner projects a non-identity value; IN compares addresses or dense
+        // indices, so a non-@objectAddress/non-@objectId inner must be rejected.
         let q = parse(
             "SELECT * FROM java.lang.String s WHERE @objectAddress IN \
-             (SELECT @objectId FROM java.lang.Integer i)",
+             (SELECT @usedHeapSize FROM java.lang.Integer i)",
         )
         .unwrap();
         let err = pq(&q).unwrap_err();
         assert!(
             err.0
-                .contains("IN-subquery must select a single address-valued column"),
+                .contains("IN-subquery must select a single identity column"),
             "got: {}",
             err.0
+        );
+    }
+
+    #[test]
+    fn in_subquery_objectid_projection_accepted() {
+        // `@objectId IN (SELECT @objectId FROM ...)` must now be accepted.
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectId IN \
+             (SELECT @objectId FROM java.lang.Integer i)",
+        )
+        .unwrap();
+        let plan = pq(&q).unwrap();
+        assert_eq!(
+            plan.in_subplans.len(),
+            1,
+            "expected one IN subplan, got {}",
+            plan.in_subplans.len()
         );
     }
 

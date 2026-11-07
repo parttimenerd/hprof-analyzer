@@ -2539,7 +2539,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             && self.row_src.is_none()
         {
             if let Some(limit) = self.plan.limit {
-                if self.matched >= limit {
+                if limit > 0 && self.matched >= limit {
                     self.truncated = true;
                     return;
                 }
@@ -2694,7 +2694,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             && self.row_src.is_none()
         {
             if let Some(limit) = self.plan.limit {
-                if self.matched >= limit {
+                if limit > 0 && self.matched >= limit {
                     self.truncated = true;
                     return;
                 }
