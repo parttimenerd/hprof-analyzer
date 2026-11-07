@@ -3477,9 +3477,9 @@ fn arith_projection_with_alias() {
 }
 
 /// CORE: `SELECT SUM(@usedHeapSize * 2) FROM java.lang.String` must return
-/// 1188480 (= 2 × 594240 = all-objects SUM × 2; scan-time aggregation runs
-/// before reachability pruning). This exercises the scan-time aggregate
-/// accumulator for aggregate-over-expression.
+/// 1119888 (= 2 × 559944 = 2 × reachable-only SUM). Scan-path aggregates
+/// apply the same reachable-only filter as the histogram fast-path.
+/// This exercises the scan-time aggregate accumulator for aggregate-over-expression.
 #[test]
 fn scan_agg_sum_over_expression_equals_2x_plain_sum() {
     let Some(hprof) = philosophers() else { return };
@@ -3498,10 +3498,10 @@ fn scan_agg_sum_over_expression_equals_2x_plain_sum() {
         stdout.contains("SUM(@usedHeapSize * 2)"),
         "missing aggregate column header:\n{stdout}"
     );
-    // The aggregate must equal 2 × 594240 = 1188480, NOT null.
+    // The aggregate must equal 2 × 559944 = 1119888 (reachable-only × 2), NOT null.
     assert!(
-        stdout.lines().any(|l| l.trim() == "1188480"),
-        "expected value 1188480, got:\n{stdout}"
+        stdout.lines().any(|l| l.trim() == "1119888"),
+        "expected value 1119888, got:\n{stdout}"
     );
     assert!(
         !stdout.lines().any(|l| l.trim() == "null"),
@@ -3578,8 +3578,8 @@ fn scan_agg_avg_over_expression() {
 
 /// WHERE-filtered aggregate routes to SingleScan (WHERE present). The sum of
 /// `@usedHeapSize` for all Strings where `@usedHeapSize > 0` must equal
-/// 594240 — every String has @usedHeapSize == 24 > 0, so all 24760 objects
-/// contribute (scan-time aggregation runs before reachability pruning).
+/// 559944 — every String has @usedHeapSize == 24 > 0, so all 23331 reachable
+/// objects contribute (scan-path aggregates apply reachable-only filtering).
 #[test]
 fn scan_agg_sum_with_where_matches_histogram_total() {
     let Some(hprof) = philosophers() else { return };
@@ -3593,10 +3593,10 @@ fn scan_agg_sum_with_where_matches_histogram_total() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Must equal 594240 — every String has @usedHeapSize == 24 > 0, all 24760 contribute.
+    // Must equal 559944 — every String has @usedHeapSize == 24 > 0, 23331 reachable contribute.
     assert!(
-        stdout.lines().any(|l| l.trim() == "594240"),
-        "scan SUM with WHERE must equal histogram SUM 594240, got:\n{stdout}"
+        stdout.lines().any(|l| l.trim() == "559944"),
+        "scan SUM with WHERE must equal histogram SUM 559944, got:\n{stdout}"
     );
     assert!(
         !stdout.lines().any(|l| l.trim() == "null"),

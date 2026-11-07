@@ -762,11 +762,16 @@ where
                 Token::Float(f) => Value::Float(f),
                 Token::Str(s) => Value::Str(s),
             };
+            // Negative numeric literals: `-42` lexes as Minus + Int; `-0.0` as Minus + Float.
+            let neg_lit = just(Token::Minus).ignore_then(select! {
+                Token::Int(n) => Value::Int(-n),
+                Token::Float(f) => Value::Float(-f),
+            });
             let null_val = ident_ci("NULL").to(Value::Null);
             let bool_val = ident_ci("TRUE")
                 .to(Value::Bool(true))
                 .or(ident_ci("FALSE").to(Value::Bool(false)));
-            null_val.or(bool_val).or(lit_val)
+            null_val.or(bool_val).or(neg_lit).or(lit_val)
         };
         let values_row = just(Token::LParen)
             .ignore_then(
