@@ -125,7 +125,8 @@ impl CacheDir {
         let arrays_ok = check_magic(&self.path.join("arrays.bin"));
         let pass1_ok = self.path.join("pass1.bin.zst").exists();
         let report_ok = self.path.join("report.json.zst").exists();
-        let base_ok = report_ok && pass1_ok && arrays_ok;
+        let class_names_ok = self.path.join("class_names.json.zst").exists();
+        let base_ok = report_ok && pass1_ok && arrays_ok && class_names_ok;
         if mode == CacheMode::Graph {
             base_ok && check_magic(&self.path.join("graph.bin"))
         } else {

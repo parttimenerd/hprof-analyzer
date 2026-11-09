@@ -284,6 +284,8 @@ pub fn resolve_hop(sources: &[u32], field: &str, ctx: &LateCtx) -> Vec<u32> {
             continue;
         }
         let (start, end) = (ctx.fwd_off[si] as usize, ctx.fwd_off[si + 1] as usize);
+        // S-09: cap end against both target arrays to avoid OOB on corrupt CSR.
+        let end = end.min(ctx.fwd_tgt.len()).min(ctx.fwd_field.len());
         for k in start..end {
             if ctx.fwd_field[k] == fid {
                 out.push(ctx.fwd_tgt[k]);
@@ -379,9 +381,8 @@ pub fn bounded_path(
                         hit_target = true;
                     }
                     next.push(t);
-                    if next.len() > PATH_FRONTIER_CAP {
-                        // Truncate the next frontier at the cap; further expansion
-                        // is bounded so a pathological fan-out can't blow memory.
+                    // S-04: cap both the next frontier and the total reached set.
+                    if next.len() > PATH_FRONTIER_CAP || reached.len() > PATH_FRONTIER_CAP {
                         next.truncate(PATH_FRONTIER_CAP);
                         capped = true;
                         break;
@@ -2880,7 +2881,8 @@ fn entries_expand_rows(entry: &CrossPhaseEntry, class: &str, ctx: &LateCtx) -> Q
         columns,
         rows,
         row_count,
-        truncated: row_count >= ROW_CAP as u64,
+        // S-07: propagate carry truncation OR row cap hit.
+        truncated: entry.carry.truncated() || row_count >= ROW_CAP as u64,
         error: None,
         note,
         viz: None,
