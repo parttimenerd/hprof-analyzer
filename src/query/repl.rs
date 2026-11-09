@@ -6004,7 +6004,16 @@ fn result_to_csv(res: &QueryResult) -> String {
     s.push_str(&header.join(","));
     s.push('\n');
     for row in &res.rows {
-        let cells: Vec<String> = row.iter().map(|v| csv_escape(&fmt_value(v))).collect();
+        let cells: Vec<String> = row
+            .iter()
+            .map(|v| {
+                if matches!(v, QueryValue::Null) {
+                    String::new()
+                } else {
+                    csv_escape(&fmt_value(v))
+                }
+            })
+            .collect();
         s.push_str(&cells.join(","));
         s.push('\n');
     }
