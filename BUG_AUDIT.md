@@ -381,26 +381,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 **Line ~5691.** Footer displays `res.row_count` (the original query count) rather than `res.rows.len()` (the current visible count) after `!top N` / `!tail N` trim the result.
 **Fix:** `let shown = res.rows.len(); writeln!(…, "{shown} rows shown…")`.
 
-### REPL-02 (High) `thread_local!` SESSION_SETTINGS shared across test threads
-**Lines 1124–1126.** `thread_local!` is per-OS-thread, not per-test. When the test runner reuses threads, settings from a prior test leak into the next, producing flaky tests.
-**Fix:** Add an explicit `reset_settings()` call in each test's setup, or use `std::cell::Cell<Option<Settings>>` with per-test init.
-
-### REPL-03 (Medium) `!obj` OQL injection
-**Lines 2043, 2921.** User-supplied class name and index are interpolated raw into an OQL query string. A class name containing `'` or `--` can break the query or inject arbitrary OQL.
-**Fix:** Validate `cls` against `^[a-zA-Z0-9_.$\[\]]+$` and reject everything else.
-
-### REPL-04 (Medium) JSON export: `\r` and `\t` not escaped
-**Lines 6046–6052.** The hand-rolled JSON string escaper handles `"` and `\` but not `\r`, `\t`, `\n`, or control characters. Output is malformed JSON if any string value contains a tab or carriage return.
-**Fix:** Use `serde_json::to_string()` for the value, or add the missing escape arms.
-
-### REPL-05 (Medium) CSV export emits `(null)` for NULL values instead of empty field
-**Line ~6001.** `fmt_value` is used (which maps NULL to `"(null)"`), producing non-standard CSV. Most tools expect an empty field or no value between commas.
-**Fix:** In the CSV path, map `QueryValue::Null` → `""` directly.
-
-### REPL-06 (Low) `fmt_int(i64::MIN)` panics in debug builds
-**Lines 5976–5988.** The function negates `i64::MIN` to get the absolute value, but `-i64::MIN` overflows `i64` and panics in debug mode.
-**Fix:** `let abs = (v as i128).unsigned_abs(); …` or special-case `i64::MIN`.
-
 ---
 
 ## 12. OQL Query Server (`server.rs`)
@@ -412,26 +392,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 ### SRV-04 (Medium) `store_plan` re-parses OQL redundantly (TOCTOU)
 **Lines 513–527.** After `run_query_json` succeeds, `store_plan` re-parses and re-plans the same OQL from scratch to cache it, doubling parse time and creating a window where the cached plan could differ from the one that ran.
 **Fix:** Cache the plan that was already built by `run_query_json`, not a freshly re-parsed one.
-
----
-
-## 13. OQL Histogram / StringVals / Viz
-
-### STR-01 (Medium) Conflicting coders for shared backing arrays silently ignored
-**Lines 67–68 in `stringvals.rs`.** `or_insert` keeps the first coder; a second String sharing the same array with a different coder is decoded with the wrong encoding.
-**Fix:** Log a warning on conflict: `if *existing != coder { eprintln!(…) }`.
-
-### STR-02 (Low) Null backing array (`arr_addr == 0`) silently dropped instead of producing empty string
-**Lines 82–87.** Java `""` has `arr_addr == 0`. The output map never gets an entry, so `toString("")` returns `(null)`.
-**Fix:** `if arr_addr == 0 { out.insert(dense_idx, String::new()); }`.
-
-### VIZ-01 (Medium) `column_is_numeric` returns false for empty result sets, blocking charts
-**Lines 348–358 in `viz.rs`.** An empty query result makes every column appear non-numeric, so `@viz histogram` degrades to a table even though the schema is correct.
-**Fix:** `if rows.is_empty() { return true; }`.
-
-### VIZ-02 (Medium) `n as usize` unchecked cast from `i64` cap on 32-bit targets
-**Line ~242.** On WASM (32-bit), `cap=5000000000` wraps to ~705 million.
-**Fix:** `usize::try_from(n).unwrap_or(usize::MAX).min(100_000)`.
 
 ---
 

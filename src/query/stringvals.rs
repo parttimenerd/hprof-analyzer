@@ -79,7 +79,14 @@ impl StringCapture {
         // Build the wanted-array set and a reverse map: arr_addr → coder.
         let mut arr_coder: HashMap<u64, u8> = HashMap::new();
         for &(arr_addr, coder) in self.inner.values() {
-            arr_coder.entry(arr_addr).or_insert(coder);
+            // STR-01: warn when two Strings share a backing array with conflicting coders.
+            let existing = arr_coder.entry(arr_addr).or_insert(coder);
+            if *existing != coder {
+                eprintln!(
+                    "stringvals: conflicting coders ({} vs {}) for backing array 0x{:x}; using first",
+                    *existing, coder, arr_addr
+                );
+            }
         }
         let wanted: HashSet<u64> = arr_coder.keys().copied().collect();
 

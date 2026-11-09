@@ -1125,6 +1125,12 @@ thread_local! {
     static SESSION_SETTINGS: RefCell<ReplSettings> = RefCell::new(ReplSettings::default());
 }
 
+/// REPL-02: reset thread-local settings for test isolation.
+#[cfg(test)]
+pub fn reset_session_settings() {
+    SESSION_SETTINGS.with(|s| *s.borrow_mut() = ReplSettings::default());
+}
+
 /// The interactive OQL REPL: reedline read-line with history + Tab-completion.
 /// `!`-prefixed lines are meta-commands; everything else is run against the dump
 /// at `path`. Exits on Ctrl-D/Ctrl-C.
