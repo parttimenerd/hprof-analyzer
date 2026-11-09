@@ -68,12 +68,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Bug:** `class_tl` accumulated only over top-level dominators; `biggest_classes` uses all reachable.  
 **Fix:** Merge `class_tl` accumulation into the all-objects loop.
 
-### R-05 Triage score can overflow u32 on large heaps — Medium
-**Line:** `triage.rs` (score computation)  
-**Fix:** Widen all intermediate terms to `u64`.
-
----
-
 ## 6. Report Rendering (`render_md.rs`, `render_graphs.rs`, `anchors.rs`)
 
 ### RR-02 6 sections missing from `--md-graphs` output — High
@@ -214,10 +208,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 ---
 
 ## 15. Triage Deep Re-audit (`triage.rs`)
-
-### TRI-04 (Medium) `HashCollisionHotspot` off-by-one: `lower_ratio_bp` used instead of `upper_ratio_bp`
-**Lines 2364–2367.** The bucket's lower bound is compared against the threshold instead of the upper bound, making the rule one bucket too lenient.
-**Fix:** Replace `lower_ratio_bp` with `upper_ratio_bp` in the comparison.
 
 ### TRI-05 (Medium) `InternedStringBloat` false positive: JNI Global roots ≠ String.intern()
 **Lines 2115–2123.** The rule assumes JNI Global roots indicate `String.intern()` usage, but JNI Global roots also include framework/native references unrelated to interning.

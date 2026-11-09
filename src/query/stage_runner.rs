@@ -1358,6 +1358,23 @@ fn eval_late_expr_multi(
             // Returns Null when offsets are unavailable — consistent with the
             // SELECT projection in `array_index_rows`. This enables WHERE
             // filtering against array-valued attributes in the late phase.
+            // OQL-65: also handle @length here so expressions like `@length + 1`
+            // work in array_index_rows (which routes SelectItem::Expr through
+            // eval_late_expr_multi). Read the element count from the array header.
+            #[cfg(feature = "native")]
+            Attr::Length => {
+                if let (Some(path), Some(&offset)) = (
+                    ctx.dump_path.as_deref(),
+                    ctx.offsets.get(idx as usize).filter(|&&o| o != 0),
+                ) {
+                    match read_array_for_ctx(path, offset, ctx.id_size, 0, 0) {
+                        Some(arr) => QueryValue::Int(arr.count as i64),
+                        None => QueryValue::Null,
+                    }
+                } else {
+                    QueryValue::Null
+                }
+            }
             #[cfg(feature = "native")]
             Attr::ArrayIndex { base, index } => {
                 if ctx.dump_path.is_none() || ctx.offsets.is_empty() {

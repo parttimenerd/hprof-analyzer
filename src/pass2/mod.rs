@@ -624,7 +624,7 @@ impl Pass2 {
         // while prim array bytes are already read for fd_state. Eliminates the
         // separate file scan (~15s on warm cache on 34GB).
         let mut dup_prim_collector: Option<DupPrimCollector> = if opts.find_duplicates {
-            Some(DupPrimCollector::new())
+            Some(DupPrimCollector::new(ptr_size, ref_size))
         } else {
             None
         };
@@ -1166,6 +1166,26 @@ impl Pass2 {
                     if ci.super_id != 0 {
                         if let Some(&super_row) = class_addr_to_hist.get(&ci.super_id) {
                             super_idx[row] = super_row;
+                        }
+                    }
+                }
+            }
+            // OQL-60: primitive array classes (e.g. byte[], int[]) have no real HPROF
+            // class object, so their super_idx stays u32::MAX and @superclass returns NULL.
+            // Java specifies that all array types have java.lang.Object as their direct
+            // superclass. Find the java.lang.Object row and assign it as super for any
+            // array class row (primitive or reference array) still without a superclass.
+            let java_lang_object_row = class_names
+                .iter()
+                .position(|n| n == "java.lang.Object" || n == "java/lang/Object")
+                .map(|p| p as u32);
+            if let Some(obj_row) = java_lang_object_row {
+                for row in 0..class_count {
+                    if super_idx[row] == u32::MAX {
+                        let name = &class_names[row];
+                        // Array class names start with '[' (e.g. "[B", "[Ljava/lang/String;")
+                        if name.starts_with('[') {
+                            super_idx[row] = obj_row;
                         }
                     }
                 }

@@ -2362,7 +2362,7 @@ impl Rule for HashCollisionHotspot {
         let hot: u64 = mcr
             .buckets
             .iter()
-            .filter(|b| b.lower_ratio_bp >= COLLISION_HIGH_BP)
+            .filter(|b| b.upper_ratio_bp > COLLISION_HIGH_BP)
             .map(|b| b.objects)
             .sum();
         if hot == 0 {
@@ -3665,15 +3665,15 @@ impl Rule for ThreadLocalValueRetention {
             .max_by_key(|row| row.retained)?;
 
         // Stale-entry fraction across all entries.
-        let total_entries: u32 = r
+        let total_entries: u64 = r
             .thread_local_analysis
             .iter()
-            .map(|row| row.entry_count)
+            .map(|row| row.entry_count as u64)
             .sum();
-        let total_stale: u32 = r
+        let total_stale: u64 = r
             .thread_local_analysis
             .iter()
-            .map(|row| row.stale_count)
+            .map(|row| row.stale_count as u64)
             .sum();
         let stale_note = if total_entries > 0 && total_stale * 10 >= total_entries {
             // >= 10% stale
