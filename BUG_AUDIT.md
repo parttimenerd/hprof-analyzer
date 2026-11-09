@@ -187,25 +187,9 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Line:** `jsonify.rs:1000`  
 **Fix:** Emit `"@index": idx` only; omit fake `@ref`, add `"@notExpanded"` reason.
 
-### J-02 `stream_offsets` precondition (sorted deduped `want`) not enforced — Medium
-**Line:** `jsonify.rs:487`  
-**Fix:** Add `debug_assert!(want.windows(2).all(|w| w[0] < w[1]))` or dedup internally.
-
-### J-03 `decode_all` iterates `0..=depth` (depth+1 levels) — Medium
-**Line:** `jsonify.rs:551`  
-**Fix:** Change to `0..depth` and update render check to match.
-
-### J-04 String truncation flag computed before `take()` cap — Medium
-**Line:** `jsonify.rs:920`  
-**Fix:** Move the `take(MAX_STRING_CHARS)` before the comparison.
-
 ### J-05 `into_csr` panics if edge `src >= n` — High
 **Line:** `refwalk.rs:71`  
 **Fix:** Add `if si >= n { continue; }` in both counting and filling loops.
-
-### J-06 `clause_starters()` multi-word tokens cause blank descriptions — Medium
-**Line:** `complete.rs:794`  
-**Fix:** Split into single-word tokens (`"ORDER"`, `"GROUP"`) or add `kw_description` entries.
 
 ---
 

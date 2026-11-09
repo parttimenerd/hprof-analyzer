@@ -475,6 +475,11 @@ mod imp {
     /// Decode the `offsets` delta stream up to the largest wanted index,
     /// keeping only the requested values. `want` must be sorted and deduped.
     pub(super) fn stream_offsets(bin: &Path, want: &[usize]) -> io::Result<HashMap<usize, u64>> {
+        // J-02: precondition — want must be sorted and strictly increasing.
+        debug_assert!(
+            want.windows(2).all(|w| w[0] < w[1]),
+            "stream_offsets: want must be sorted and deduplicated"
+        );
         let mut out = HashMap::with_capacity(want.len());
         let Some((f, len)) = open_hpca_entry(bin, "offsets")? else {
             return Ok(out);
@@ -548,7 +553,8 @@ mod imp {
                     level.push(r);
                 }
             }
-            for _ in 0..=depth {
+            // J-03: iterate depth times (0..depth), not depth+1 times (0..=depth).
+            for _ in 0..depth {
                 if level.is_empty() || self.nodes.len() >= self.max_objects {
                     self.budget_hit = self.nodes.len() >= self.max_objects && !level.is_empty();
                     break;
@@ -918,8 +924,10 @@ mod imp {
                     _ => continue,
                 };
                 let full = full_char_len(ty, job.coder, arr.count, job.count);
-                let truncated = full > text.chars().count() as u64;
+                // J-04: apply the MAX_STRING_CHARS cap BEFORE computing truncated
+                // so the flag reflects the cap, not the original vs full comparison.
                 let text: String = text.chars().take(objread::MAX_STRING_CHARS).collect();
+                let truncated = full > text.chars().count() as u64;
                 if let Some(Shallow::Str { text: slot, .. }) = self.nodes.get_mut(&job.node) {
                     *slot = Some((text, full, truncated));
                 }

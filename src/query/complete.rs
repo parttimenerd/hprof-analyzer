@@ -235,8 +235,11 @@ fn kw_description(v: &str) -> Option<String> {
             "FROM" => "Specify the class to query",
             "WHERE" => "Filter rows with a predicate",
             "ORDER" => "Sort results (ORDER BY …)",
+            // J-06: multi-word tokens from clause_starters must be handled here.
+            "ORDER BY" => "Sort results by a column",
             "BY" => "Part of ORDER BY / GROUP BY",
             "GROUP" => "Group rows (GROUP BY …)",
+            "GROUP BY" => "Group rows by a column",
             "HAVING" => "Filter groups after aggregation",
             "LIMIT" => "Cap the number of rows returned",
             "OFFSET" => "Skip the first N rows",
