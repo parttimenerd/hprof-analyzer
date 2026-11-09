@@ -13,62 +13,27 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ---
 
-## Quick-reference: Critical & High severity bugs
+## Quick-reference: Remaining Critical & High severity bugs
 
 | # | Area | File | Description | Fix hint |
 |---|------|------|-------------|----------|
-| 1 | OQL executor | `execute.rs:2312` | GROUP BY fallback returns first key instead of Null | Replace `key.first()` with `QueryValue::Null` |
-| 2 | OQL optimizer | `optimize.rs:58` | `pushdown_limit` ignores OFFSET → wrong rows | Guard `plan.offset.is_none_or(\|o\| o == 0)` |
-| 3 | MCP server | `mcp/mod.rs:385` | Path traversal in `load_dump`/`redact` | Validate path extension + allow-list root dirs |
-| 4 | Cache | `cache.rs:495` | Delta-encode truncates i64→i32 silently | Use zigzag encoding or store i64 deltas |
-| 5 | Report | `build.rs:5696` | `ObjRow.pct` uses `total_shallow` not `total_retained` | Change denominator to `total_ret` |
-| 6 | Pass2 | `pass2/mod.rs:1469` | Inbound CSR overflow is `debug_assert` only | Replace with hard `return Err(…)` |
-| 7 | OQL executor | `execute.rs:1963` | Java `byte` zero-extends instead of sign-extends | Use `b as i8 as i64` |
-| 8 | OQL run | `run.rs:1992` | `SELECT DISTINCT` on VALUES never deduplicates | Apply `stable_dedup` when `q.distinct` |
-| 9 | OQL run | `run.rs:2775` | INTERSECT/EXCEPT uses `Debug` format for equality | Use `canonical_distinct_key` instead |
-| 10 | Stage runner | `stage_runner.rs:3389` | `run_retained_set` panics on bad CSR child index | Add `ci < n` bounds check |
-| 11 | Stage runner | `stage_runner.rs:36` | OFFSET never drained in any late-phase path | Add `rows.drain(0..offset)` after limit |
-| 12 | Stage runner | `stage_runner.rs:2095` | Raw heap addr stored as dense index in `ObjRef.index` | Store sentinel `u64::MAX`; defer resolution |
-| 13 | Fielddecode | `fielddecode.rs:1487` | `non_null`/`count` silently truncated u64→u32 | Change tuple to `(u64, u64, u64)` |
-| 14 | Render | `render_graphs.rs:10` | 6 sections missing from `--md-graphs` output | Add missing `render_*` calls |
-| 15 | Format | `format.rs:209` | `format_bytes` promotes units too early at boundaries | Fix boundary guard comparisons |
-| 16 | Refwalk | `refwalk.rs:71` | `into_csr` panics if edge `src >= n` | Add bounds check, skip invalid edges |
-| 17 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
-| 18 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
+| 1 | MCP server | `mcp/mod.rs:385` | Path traversal in `load_dump`/`redact` | Validate path extension + allow-list root dirs |
+| 2 | Stage runner | `stage_runner.rs:2095` | Raw heap addr stored as dense index in `ObjRef.index` | Store sentinel `u64::MAX`; defer resolution |
+| 3 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
 
 ---
 
 ## 1. OQL Parser (`src/query/parse.rs`, `ast.rs`, `optimize.rs`)
-
-### P-01 `rewrite_string_dot_method`: `unwrap_or(0)` corrupts query on missing `)` — High
-**Line:** ~2531  
-**Bug:** When `"ABC".lower(` is malformed (missing `)`), `rest.find(')').unwrap_or(0)` skips the first character of `rest` instead of erroring.  
-**Fix:** `match rest.find(')') { Some(p) => rest = &rest[p+1..], None => break }`
 
 ### P-02 `Predicate::InstanceOf` silently discards LHS — High
 **Line:** ~830  
 **Bug:** `WHERE a INSTANCEOF Foo` and `WHERE b INSTANCEOF Foo` produce identical AST; the subject expression is dropped.  
 **Fix:** Extend `Predicate::InstanceOf(String)` to `Predicate::InstanceOf { subject: Attr, class: String }`, update executor.
 
-### P-03 `IN(…)` desugaring `.next().unwrap()` may panic — Medium
-**Line:** ~897  
-**Bug:** During chumsky error recovery, the vals iterator may be empty.  
-**Fix:** Use `terms.next().unwrap_or(Predicate::Compare { … Null })`.
-
-### P-04 `method_call` unconditional `.unwrap()` on `rsplit_once` — High
-**Line:** ~522  
-**Bug:** The `select!` guard guarantees a `.` in the string, but chumsky error recovery can bypass it.  
-**Fix:** Use `let Some((recv, meth)) = dotted.rsplit_once('.') else { return Expr::Null; };`.
-
 ### P-09 `WITH`/CTE produces cryptic error — Medium
 **Line:** ~1666  
 **Bug:** `WITH t AS (…)` fails with "unexpected identifier" instead of "not supported".  
 **Fix:** Early-detect `WITH` keyword and return explicit message.
-
-### P-10 `pushdown_limit` ignores OFFSET — **Critical**
-**Line:** `optimize.rs:58`  
-**Bug:** `LIMIT 5 OFFSET 10` pushes scan_limit=5, returns 0 rows.  
-**Fix:** Add `&& plan.offset.is_none_or(|o| o == 0)` to the safety check.
 
 ### P-11 `select_item_is_deferrable` not recursive into `Expr` — Low
 **Line:** `optimize.rs:71`  
@@ -78,56 +43,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 ---
 
 ## 2. OQL Executor (`execute.rs`, `run.rs`, `plan.rs`)
-
-### E-01 GROUP BY fallback returns first key instead of Null — **Critical**
-**Line:** `execute.rs:2312`  
-**Bug:** `key.first().cloned()` silently returns wrong column value.  
-**Fix:** Replace with `QueryValue::Null`.
-
-### E-02 `NULL <= NULL` evaluates to true — High
-**Line:** `execute.rs:3430`  
-**Bug:** `(Null, Null) => Some(Equal)` makes `<=`/`>=` true for NULL pairs.  
-**Fix:** Remove the `(Null, Null) => Some(Equal)` arm from ordering comparisons.
-
-### E-03 `SUM` of zero rows returns `Int(0)` not `NULL` — High
-**Line:** `execute.rs:518`  
-**Bug:** Deviates from ANSI SQL; callers checking for NULL-as-no-data get false positives.  
-**Fix:** Return `QueryValue::Null` when `any_value` is false.
-
-### E-04 VALUES `SUM/MIN/MAX` always returns Float — High
-**Line:** `run.rs:1496`  
-**Bug:** Integer columns lose their type; inconsistent with main executor path.  
-**Fix:** Use `AggAcc` helpers from `execute.rs` for consistent type promotion.
-
-### E-05 `SELECT DISTINCT` on VALUES never deduplicates — High
-**Line:** `run.rs:1992`  
-**Bug:** VALUES-only batch short-circuits before `collapse_union_results` dedup.  
-**Fix:** Apply `stable_dedup` inside `execute_values_query` when `q.distinct`.
-
-### E-06 INTERSECT/EXCEPT uses `Debug` format for row equality — High
-**Line:** `run.rs:2775`  
-**Bug:** NaN treated as equal, Int/Float cross-type inconsistent, ObjRef class-label variance.  
-**Fix:** Use `canonical_distinct_key` (already exists for COUNT DISTINCT).
-
-### E-07 Java `byte` zero-extends instead of sign-extends — High
-**Line:** `execute.rs:1963`  
-**Bug:** `-1` (0xFF) projected as `255`; `WHERE byteField < 0` never matches.  
-**Fix:** `QueryValue::Int(b as i8 as i64)`.
-
-### E-08 Carry truncation sentinel `0` may corrupt with real index — High
-**Line:** `execute.rs:147`  
-**Bug:** Sentinel value `0` is a valid object index.  
-**Fix:** Use `u32::MAX` as out-of-range sentinel, or a flag field on `Carry`.
-
-### E-09 HAVING matches wrong FILTER aggregate — Medium
-**Line:** `execute.rs:713`  
-**Bug:** Two aggregates sharing `func+arg` but different `filter` can be confused.  
-**Fix:** Include structural `filter` comparison in the primary match.
-
-### E-10 Int→f64 precision loss in sort comparator — Medium
-**Line:** `execute.rs:3780`  
-**Bug:** Large i64 values (>2^53) compare as equal after `as f64`.  
-**Fix:** Use `i64::cmp` for Int-vs-Int; only promote when one operand is Float.
 
 ### E-11 Wrong late op pushed for `@inbounds`/`@outbounds` in WHERE — Medium
 **Line:** `plan.rs:1579`  
@@ -164,19 +79,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ## 5. Report Generation (`build.rs`, `triage.rs`, `model.rs`, `format.rs`)
 
-### R-01 `ObjRow.pct` divided by `total_shallow` instead of `total_retained` — **High**
-**Line:** `build.rs:5696`  
-**Bug:** Retained-heap percentages for "Biggest Objects" are inflated (numerator=retained, denominator=shallow).  
-**Fix:** Replace `total_shallow` with `total_ret` in both `pct` and `pct_bp` computations.
-
-### R-02 Level-2 GC-root-held instances silently dropped — Medium
-**Line:** `build.rs:5257`  
-**Fix:** Mirror the level-1 `gc_root_accum` fix for level-2 breakdown.
-
-### R-03 `biggest_classes` emits `top_n*3` rows instead of `top_n` — Low
-**Line:** `build.rs:5476`  
-**Fix:** Separate holder-computation window from emission window.
-
 ### R-04 Package tree uses top-level-only accumulator — Medium
 **Line:** `build.rs:5029`  
 **Bug:** `class_tl` accumulated only over top-level dominators; `biggest_classes` uses all reachable.  
@@ -185,11 +87,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 ### R-05 Triage score can overflow u32 on large heaps — Medium
 **Line:** `triage.rs` (score computation)  
 **Fix:** Widen all intermediate terms to `u64`.
-
-### R-06 `format_bytes` promotes units too early at boundaries — High
-**Line:** `format.rs:209`  
-**Bug:** `format_bytes(MB - 1)` returns `"1.0 MB"` instead of staying in KB.  
-**Fix:** Adjust boundary guard from `<` to exclude the exact rounding point.
 
 ---
 
@@ -342,18 +239,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 ---
 
 ## 15. Triage Deep Re-audit (`triage.rs`)
-
-### TRI-01 (High) `ObjectSwarm` division by zero
-**Line ~1381.** Per-instance size calculation divides `shallow / instance_count` without checking `instance_count == 0`.
-**Fix:** `if instance_count == 0 { continue; }`.
-
-### TRI-02 (High) `NativeHeapFragmentation` division by zero
-**Line ~4323.** `cap_sum / dbb_count` is unguarded. When `dbb_count == 0`, this panics.
-**Fix:** `if dbb_count == 0 { return None; }` before the division.
-
-### TRI-03 (High) `root_path_owner_hint` — `.unwrap()` on `path.last()`
-**Line ~492.** `path.last().unwrap()` assumes the path is non-empty. A root with an empty ownership chain panics.
-**Fix:** `let Some(last) = path.last() else { return None; };`.
 
 ### TRI-04 (Medium) `HashCollisionHotspot` off-by-one: `lower_ratio_bp` used instead of `upper_ratio_bp`
 **Lines 2364–2367.** The bucket's lower bound is compared against the threshold instead of the upper bound, making the rule one bucket too lenient.
