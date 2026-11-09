@@ -1721,8 +1721,7 @@ impl FieldDecodeState {
             }
         }
         // Always push compact (addr, non_null, count) for finish()-time joins.
-        self.obj_array_raw_compact
-            .push((addr, non_null, count));
+        self.obj_array_raw_compact.push((addr, non_null, count));
         // Stash slot targets if captured.
         if let Some(tgts) = slot_targets {
             if in_wanted {

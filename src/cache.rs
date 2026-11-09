@@ -658,9 +658,7 @@ fn dump_hash(path: &Path) -> io::Result<String> {
                 .map(|d| d.as_nanos().try_into().unwrap_or(u64::MAX))
         })
         .ok_or_else(|| {
-            io::Error::other(
-                "mtime unavailable — cannot compute reliable cache hash",
-            )
+            io::Error::other("mtime unavailable — cannot compute reliable cache hash")
         })?;
 
     let mut f = File::open(path)?;
