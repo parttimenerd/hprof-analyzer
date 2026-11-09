@@ -237,6 +237,9 @@ impl IdMap {
         if addr - base >= BLOCK_SPAN {
             base = addr;
             self.block_base.push(base);
+            if self.offsets.len() > u32::MAX as usize {
+                panic!("IdMap: more than 2^32 addresses; block_start u32 would overflow");
+            }
             self.block_start.push(self.offsets.len() as u32);
         }
         self.offsets.push((addr - base) as u32);
@@ -253,6 +256,9 @@ impl IdMap {
         if self.block_start.is_empty() {
             self.block_start.push(0);
         } else {
+            if self.offsets.len() > u32::MAX as usize {
+                panic!("IdMap: more than 2^32 addresses; block_start u32 would overflow");
+            }
             self.block_start.push(self.offsets.len() as u32);
         }
     }
@@ -276,9 +282,15 @@ impl IdMap {
             if a - base >= BLOCK_SPAN {
                 base = a;
                 self.block_base.push(base);
+                if i > u32::MAX as usize {
+                    panic!("IdMap: more than 2^32 addresses; block_start u32 would overflow");
+                }
                 self.block_start.push(i as u32);
             }
             self.offsets.push((a - base) as u32);
+        }
+        if len > u32::MAX as usize {
+            panic!("IdMap: more than 2^32 addresses; block_start sentinel u32 would overflow");
         }
         self.block_start.push(len as u32); // sentinel
         self.staging = Vec::new();

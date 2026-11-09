@@ -1465,13 +1465,13 @@ impl Pass2 {
             total_inb += cnt;
         }
         // Inbound and forward edges are the same set counted from opposite ends,
-        // so the forward-CSR guard above already bounds this. Assert the
-        // invariant so a future divergence surfaces instead of silently
-        // truncating a cursor.
-        debug_assert!(
-            total_inb <= u32::MAX as u64,
-            "inbound edge total {total_inb} exceeds u32::MAX"
-        );
+        // so the forward-CSR guard above already bounds this. Hard-error so a
+        // future divergence surfaces instead of silently truncating a cursor.
+        if total_inb > u32::MAX as u64 {
+            return Err(format!(
+                "inbound edge total {total_inb} exceeds u32::MAX; heap has too many references"
+            ));
+        }
         let in_cursors = in_degree; // renamed for clarity: prefix-summed START cursors
 
         // Precompute source_name before moving p1.id_map into InboundBuilder.

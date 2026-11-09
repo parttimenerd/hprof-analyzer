@@ -383,6 +383,19 @@ impl HprofMcpServer {
         Parameters(p): Parameters<LoadDumpParams>,
     ) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
+        // I-01: validate extension to prevent path traversal via symlinks to
+        // arbitrary files (e.g. /etc/passwd).  Only .hprof, .hprof.gz, and
+        // .hprof.zip are valid heap dump paths.
+        let ext_ok = p.path.ends_with(".hprof")
+            || p.path.ends_with(".hprof.gz")
+            || p.path.ends_with(".hprof.zip")
+            || p.path.ends_with(".tgz");
+        if !ext_ok {
+            return Err(McpError::invalid_params(
+                "path must end with .hprof, .hprof.gz, .hprof.zip, or .tgz",
+                None,
+            ));
+        }
         let mode = if p.with_graph {
             CacheMode::Graph
         } else {
@@ -1383,6 +1396,27 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<RedactParams>,
     ) -> Result<CallToolResult, McpError> {
+        // I-01: validate input extension to prevent reading arbitrary files.
+        let input_ext_ok = p.input.ends_with(".hprof")
+            || p.input.ends_with(".hprof.gz")
+            || p.input.ends_with(".hprof.zip")
+            || p.input.ends_with(".tgz");
+        if !input_ext_ok {
+            return Err(McpError::invalid_params(
+                "input path must end with .hprof, .hprof.gz, .hprof.zip, or .tgz",
+                None,
+            ));
+        }
+        // I-01: validate output extension to prevent writing to arbitrary files.
+        let output_ext_ok = p.output.ends_with(".hprof")
+            || p.output.ends_with(".hprof.gz")
+            || p.output.ends_with(".hprof.zip");
+        if !output_ext_ok {
+            return Err(McpError::invalid_params(
+                "output path must end with .hprof, .hprof.gz, or .hprof.zip",
+                None,
+            ));
+        }
         let input = p.input.clone();
         let output = p.output.clone();
         let complete = p.complete;
