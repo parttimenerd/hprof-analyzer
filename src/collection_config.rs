@@ -351,7 +351,10 @@ kind = "Bag"
         // so the caller doesn't crash on user-config mistakes.
         let result = parse_toml_str(toml);
         assert!(result.is_ok());
-        assert!(result.unwrap().is_empty(), "unknown kind entry must be skipped");
+        assert!(
+            result.unwrap().is_empty(),
+            "unknown kind entry must be skipped"
+        );
     }
 
     #[test]
