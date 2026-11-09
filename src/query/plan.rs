@@ -1189,10 +1189,17 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             if item_is_aggregate(item) {
                 continue;
             }
+            // OQL-51: SELECT * is not meaningful in a grouped query.
+            if matches!(item, SelectItem::Star) {
+                return Err(QueryError(
+                    "SELECT * is not supported in a grouped query; list columns explicitly \
+                     (only GROUP BY keys and aggregates are valid in a grouped SELECT)"
+                        .into(),
+                ));
+            }
             let item_as_expr: Option<Expr> = match item {
                 SelectItem::Attr(a) => Some(Expr::Attr(a.clone())),
                 SelectItem::Expr(e) => Some((**e).clone()),
-                SelectItem::Star => None,
                 _ => None,
             };
             if let Some(item_expr) = item_as_expr {

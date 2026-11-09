@@ -1537,13 +1537,42 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                             } else {
                                 let sum = vals.iter().fold(0.0f64, |acc, v| match v {
                                     QueryValue::Int(n) => acc + *n as f64,
-                                    QueryValue::Float(f) => acc + f,
+                                    QueryValue::Float(f) => acc + *f,
                                     _ => acc,
                                 });
                                 QueryValue::Float(sum / vals.len() as f64)
                             }
                         }
-                        _ => QueryValue::Null,
+                        AggFunc::Percentile(_) | AggFunc::Median => {
+                            // OQL-50: MEDIAN with even n averages the two middle values.
+                            let p_val: u8 = match func {
+                                AggFunc::Percentile(p) => *p,
+                                _ => 50,
+                            };
+                            let mut fvals: Vec<f64> = vals
+                                .iter()
+                                .filter_map(|v| match v {
+                                    QueryValue::Int(n) => Some(*n as f64),
+                                    QueryValue::Float(f) => Some(*f),
+                                    _ => None,
+                                })
+                                .collect();
+                            if fvals.is_empty() {
+                                QueryValue::Null
+                            } else {
+                                fvals.sort_by(|a, b| a.total_cmp(b));
+                                let n = fvals.len();
+                                if p_val == 50 && n % 2 == 0 {
+                                    let mid = n / 2;
+                                    QueryValue::Float((fvals[mid - 1] + fvals[mid]) / 2.0)
+                                } else {
+                                    let rank =
+                                        ((p_val as f64 / 100.0) * n as f64).ceil() as usize;
+                                    let idx = rank.saturating_sub(1).min(n - 1);
+                                    QueryValue::Float(fvals[idx])
+                                }
+                            }
+                        }
                     }
                 }
                 // Non-aggregate item in aggregate query.
@@ -1593,8 +1622,15 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         sort_rows_by_columns(&mut joined.rows, &keys);
     }
 
-    // Apply LIMIT.
-    let truncated = if let Some(lim) = plan.limit {
+    // Apply OFFSET first, then LIMIT (OQL-55: pre-OFFSET rows were returned).
+    if let Some(off) = q.offset {
+        let n = off as usize;
+        if n > 0 {
+            let drop = n.min(joined.rows.len());
+            joined.rows.drain(..drop);
+        }
+    }
+    let truncated = if let Some(lim) = q.limit {
         if joined.rows.len() > lim as usize {
             joined.rows.truncate(lim as usize);
             true

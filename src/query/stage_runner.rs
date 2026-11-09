@@ -2282,6 +2282,17 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             }
         )
     });
+    // Parallel value lists for MEDIAN/PERCENTILE per group per select item (OQL-54).
+    let mut percentile_vals: HashMap<String, Vec<Vec<f64>>> = HashMap::new();
+    let has_percentile = q.select.iter().any(|it| {
+        matches!(
+            it,
+            SelectItem::Aggregate {
+                func: AggFunc::Percentile(_) | AggFunc::Median,
+                ..
+            }
+        )
+    });
 
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
@@ -2342,6 +2353,12 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                         }
                     })
                     .collect()
+            });
+        }
+        // Initialize percentile value lists for this group when first seen (OQL-54).
+        if has_percentile {
+            percentile_vals.entry(key_str.clone()).or_insert_with(|| {
+                vec![Vec::new(); q.select.len()]
             });
         }
         // Accumulate each SELECT item's aggregate.
@@ -2463,7 +2480,21 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                         }
                     }
                 }
-                AggFunc::Percentile(_) | AggFunc::Median => {} // not supported in late phase
+                AggFunc::Percentile(_) | AggFunc::Median => {
+                    // Collect numeric values for late-phase percentile computation (OQL-54).
+                    let numeric = match &val {
+                        QueryValue::Int(v) => Some(*v as f64),
+                        QueryValue::Float(v) => Some(*v),
+                        _ => None,
+                    };
+                    if let Some(v) = numeric {
+                        if let Some(slot) = percentile_vals.get_mut(&key_str) {
+                            if let Some(col_vals) = slot.get_mut(i) {
+                                col_vals.push(v);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -2471,9 +2502,11 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     // Finalize: build output rows from group accumulators.
     // Keep the key alongside each row so HAVING can reference unselected GROUP BY keys.
     let group_by_exprs = &entry.plan.group_by_exprs;
+    let empty_pct_cols: Vec<Vec<f64>> = vec![Vec::new(); q.select.len()];
     let mut keyed_rows: Vec<(Vec<QueryValue>, Vec<QueryValue>)> = groups
-        .into_values()
-        .map(|(key, accs)| {
+        .into_iter()
+        .map(|(key_str, (key, accs))| {
+            let pct_cols = percentile_vals.get(&key_str).unwrap_or(&empty_pct_cols);
             let row: Vec<QueryValue> = q
                 .select
                 .iter()
@@ -2487,6 +2520,30 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                                 QueryValue::Float(s) => QueryValue::Float(*s / *count as f64),
                                 _ => QueryValue::Null,
                             },
+                            AggFunc::Percentile(_) | AggFunc::Median => {
+                                // OQL-54: compute percentile from accumulated values.
+                                let p_val: u8 = match func {
+                                    AggFunc::Percentile(p) => *p,
+                                    _ => 50,
+                                };
+                                let mut vals: Vec<f64> =
+                                    pct_cols.get(i).cloned().unwrap_or_default();
+                                if vals.is_empty() {
+                                    QueryValue::Null
+                                } else {
+                                    vals.sort_by(|a, b| a.total_cmp(b));
+                                    let n = vals.len();
+                                    if p_val == 50 && n % 2 == 0 {
+                                        let mid = n / 2;
+                                        QueryValue::Float((vals[mid - 1] + vals[mid]) / 2.0)
+                                    } else {
+                                        let rank = ((p_val as f64 / 100.0) * n as f64).ceil()
+                                            as usize;
+                                        let idx = rank.saturating_sub(1).min(n - 1);
+                                        QueryValue::Float(vals[idx])
+                                    }
+                                }
+                            }
                             _ => acc.clone(),
                         }
                     }

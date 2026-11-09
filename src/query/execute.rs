@@ -437,6 +437,7 @@ pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
         }
         AggAcc::Min { best } => {
             // MIN: track the smallest numeric value; skip Null/non-numeric.
+            // Use total_cmp to handle NaN consistently (OQL-53): NaN sorts last.
             let candidate = match &value {
                 QueryValue::Int(_) | QueryValue::Float(_) => Some(value),
                 _ => None,
@@ -445,21 +446,25 @@ pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
                 *best = match best.take() {
                     None => Some(c),
                     Some(prev) => {
-                        // Use numeric compare: smaller wins.
-                        let prev_lt = match (&prev, &c) {
+                        let prev_wins = match (&prev, &c) {
                             (QueryValue::Int(a), QueryValue::Int(b)) => *a <= *b,
-                            (QueryValue::Int(a), QueryValue::Float(b)) => (*a as f64) <= *b,
-                            (QueryValue::Float(a), QueryValue::Int(b)) => *a <= (*b as f64),
-                            (QueryValue::Float(a), QueryValue::Float(b)) => *a <= *b,
+                            (QueryValue::Int(a), QueryValue::Float(b)) => {
+                                (*a as f64).total_cmp(b).is_le()
+                            }
+                            (QueryValue::Float(a), QueryValue::Int(b)) => {
+                                a.total_cmp(&(*b as f64)).is_le()
+                            }
+                            (QueryValue::Float(a), QueryValue::Float(b)) => a.total_cmp(b).is_le(),
                             _ => true,
                         };
-                        Some(if prev_lt { prev } else { c })
+                        Some(if prev_wins { prev } else { c })
                     }
                 };
             }
         }
         AggAcc::Max { best } => {
             // MAX: track the largest numeric value; skip Null/non-numeric.
+            // Use total_cmp to handle NaN consistently (OQL-53): NaN sorts last.
             let candidate = match &value {
                 QueryValue::Int(_) | QueryValue::Float(_) => Some(value),
                 _ => None,
@@ -468,15 +473,18 @@ pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
                 *best = match best.take() {
                     None => Some(c),
                     Some(prev) => {
-                        // Use numeric compare: larger wins.
-                        let prev_gt = match (&prev, &c) {
+                        let prev_wins = match (&prev, &c) {
                             (QueryValue::Int(a), QueryValue::Int(b)) => *a >= *b,
-                            (QueryValue::Int(a), QueryValue::Float(b)) => (*a as f64) >= *b,
-                            (QueryValue::Float(a), QueryValue::Int(b)) => *a >= (*b as f64),
-                            (QueryValue::Float(a), QueryValue::Float(b)) => *a >= *b,
+                            (QueryValue::Int(a), QueryValue::Float(b)) => {
+                                (*a as f64).total_cmp(b).is_ge()
+                            }
+                            (QueryValue::Float(a), QueryValue::Int(b)) => {
+                                a.total_cmp(&(*b as f64)).is_ge()
+                            }
+                            (QueryValue::Float(a), QueryValue::Float(b)) => a.total_cmp(b).is_ge(),
                             _ => true,
                         };
-                        Some(if prev_gt { prev } else { c })
+                        Some(if prev_wins { prev } else { c })
                     }
                 };
             }
@@ -524,9 +532,14 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
             if values.is_empty() {
                 return QueryValue::Null;
             }
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            // Nearest-rank: rank = ceil(p/100 * n), 1-based; index = rank-1.
+            values.sort_by(|a, b| a.total_cmp(b));
             let n = values.len();
+            // For MEDIAN (p==50) with even n: average the two middle values (OQL-50).
+            if p == 50 && n % 2 == 0 {
+                let mid = n / 2;
+                return QueryValue::Float((values[mid - 1] + values[mid]) / 2.0);
+            }
+            // Nearest-rank: rank = ceil(p/100 * n), 1-based; index = rank-1.
             let rank = ((p as f64 / 100.0) * n as f64).ceil() as usize;
             let idx = rank.saturating_sub(1).min(n - 1);
             QueryValue::Float(values[idx])
@@ -1615,6 +1628,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             } => match name.as_str() {
                 // Arrays expose `length`/`size` natively.
                 "length" | "size" => QueryValue::Int(length as i64),
+                // Object-identity methods on array objects (OQL-58).
+                "getObjectAddress" | "getobjectaddress" => {
+                    self.project_array_attr(&Attr::ObjectAddress, src_idx, class_name, length)
+                }
+                "getObjectId" | "getobjectid" => {
+                    self.project_array_attr(&Attr::ObjectId, src_idx, class_name, length)
+                }
+                "getUsedHeapSize" | "getusedheapsize" => {
+                    self.project_array_attr(&Attr::UsedHeapSize, src_idx, class_name, length)
+                }
+                "getRetainedHeapSize" | "getretainedheapsize" => {
+                    self.project_array_attr(&Attr::RetainedHeapSize, src_idx, class_name, length)
+                }
                 // String functions work on any string-valued receiver (including
                 // Lit expressions) regardless of whether the source row is an array.
                 method => {
