@@ -4953,7 +4953,7 @@ fn build_top_consumers(
     top_n: usize,
     stack_held_via: &std::collections::HashMap<u32, String>,
     mut top_level: Vec<u32>,
-    total_shallow: u64,
+    _total_shallow: u64,
     classifier: &crate::classify::Classifier,
     three_hop: bool,
 ) -> TopConsumers {

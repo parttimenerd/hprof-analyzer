@@ -3702,7 +3702,7 @@ impl Rule for ThreadLocalValueRetention {
                  request-scoped injection (CDI/Spring `@RequestScope`) instead of \
                  raw ThreadLocals.",
                 format_bytes(total_retained),
-                fmt_count(total_entries as u64),
+                fmt_count(total_entries),
             ),
             Some(("thread-local-analysis", "ThreadLocal Analysis")),
         ))

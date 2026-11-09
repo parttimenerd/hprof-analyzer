@@ -55,39 +55,6 @@ fn drain_offset(rows: &mut Vec<Vec<crate::query::model::QueryValue>>, q: &Query)
     }
 }
 
-/// Apply ORDER BY, OFFSET drain, and LIMIT to a row vec, updating `truncated`.
-fn apply_order_offset_limit(
-    rows: &mut Vec<Vec<crate::query::model::QueryValue>>,
-    truncated: &mut bool,
-    q: &Query,
-) {
-    if let Some(ob) = &q.order_by {
-        use crate::query::execute::{resolve_order_by_keys, sort_rows_by_columns};
-        let cols: Vec<crate::query::model::QueryColumn> = q
-            .select_aliases
-            .iter()
-            .zip(q.select.iter())
-            .map(|(alias, item)| crate::query::model::QueryColumn {
-                name: alias
-                    .as_deref()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| crate::query::execute::column_name(item)),
-            })
-            .collect();
-        let resolved = resolve_order_by_keys(q, &cols, ob);
-        if !resolved.is_empty() {
-            sort_rows_by_columns(rows, &resolved);
-        }
-    }
-    drain_offset(rows, q);
-    if let Some(limit) = q.limit {
-        if rows.len() > limit as usize {
-            rows.truncate(limit as usize);
-            *truncated = true;
-        }
-    }
-}
-
 /// Human-readable label for an HPROF GC-root sub-tag (`types::heap::ROOT_*`), for
 /// `@GCRoots`/`@GCRootInfo`/`@info` in analyze mode. Labels follow MAT's GC-root
 /// naming (matching `report::format::gc_root_type_label`); an unrecognised code
@@ -1655,7 +1622,6 @@ fn eval_late_pred_multi(
         // subquery re-execution). Separate from `_ => true` for clarity — these
         // are intentional pass-throughs, not missing cases.
         Predicate::InSubquery { .. } | Predicate::Exists { .. } => true,
-        _ => true,
     }
 }
 

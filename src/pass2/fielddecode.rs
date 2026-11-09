@@ -943,7 +943,6 @@ impl FieldDecodeState {
                     strings,
                     obj_ref_width,
                 )
-                .map(|(off, ty)| (off, ty))
             });
         }
         if let (Some(dbb_addr), Some((cap_off, cap_ty))) =
@@ -1723,7 +1722,7 @@ impl FieldDecodeState {
         }
         // Always push compact (addr, non_null, count) for finish()-time joins.
         self.obj_array_raw_compact
-            .push((addr, non_null as u64, count as u64));
+            .push((addr, non_null, count));
         // Stash slot targets if captured.
         if let Some(tgts) = slot_targets {
             if in_wanted {

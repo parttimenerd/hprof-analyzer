@@ -402,7 +402,6 @@ fn http_basic_has_colon(value: &str) -> bool {
     let mut decoded = Vec::new();
     let result = (|| -> Option<()> {
         let bytes = clean.as_bytes();
-        let mut buf = [0u8; 3];
         let mut out = Vec::new();
         let chunks = bytes.chunks(4);
         for chunk in chunks {

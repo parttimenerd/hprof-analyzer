@@ -560,7 +560,7 @@ pub struct Graph {
     /// Each entry is `(dense_idx, slot, field1, field2)`:
     /// - slot 0 (ThreadPoolExecutor): field1 = corePoolSize, field2 = maximumPoolSize
     /// - slot 1 (HikariPool): field1 = maximumPoolSize, field2 = minimumIdle
-    /// `i32::MIN` means the field could not be read. Used by `build_pool_snapshots`.
+    ///   `i32::MIN` means the field could not be read. Used by `build_pool_snapshots`.
     pub pool_raw_records: Vec<(u32, u8, i32, i32)>,
     /// Class-object addresses for each POOL_SENTINELS slot, indexed identically.
     /// 0 = class not found in this dump.
