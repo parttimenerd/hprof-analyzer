@@ -398,7 +398,9 @@ pub fn parse_leak_suspects(html: &str, out: &mut MatReport) {
 /// Parse a `<strong>` text like "2,791,424 (22.90%)" into (bytes, pct).
 fn parse_bytes_pct(t: &str) -> Option<(u64, f64)> {
     let open = t.find('(')?;
-    let close = t.find('%')?;
+    // DIFF-01: use rfind so class names containing '%' (obfuscated code) don't
+    // consume the position meant for the trailing percentage value.
+    let close = t.rfind('%')?;
     if close < open {
         return None;
     }

@@ -33,6 +33,15 @@ pub fn compute_dominators(
     inb_block_off: &[u64], // blocked byte offsets: one per INB_BLOCK nodes + sentinel
     inb_data: &[u8],
 ) -> std::io::Result<Vec<u32>> {
+    if n > u32::MAX as usize - 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "heap too large for dominator tree: {n} objects exceeds u32 limit ({})",
+                u32::MAX as usize - 1
+            ),
+        ));
+    }
     let vroot = n as u32;
 
     // Number of reachable vertices (including virtual root at pre-order 0).
