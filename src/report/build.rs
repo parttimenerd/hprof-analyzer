@@ -5773,15 +5773,18 @@ fn build_top_consumers(
                 String::from("?")
             };
 
-            let pct = if total_shallow > 0 {
-                g.retained[idx] as f64 / total_shallow as f64 * 100.0
+            // R-01: pct/pct_bp are "retained share" so the denominator must be
+            // total retained, not total shallow. Using total_shallow inflated the
+            // displayed percentage when shallow << retained (typical for arrays).
+            let pct = if total_ret > 0 {
+                g.retained[idx] as f64 / total_ret as f64 * 100.0
             } else {
                 0.0
             };
             // Integer basis points of the retained share, for deterministic
             // JSON output (round-half-to-even via f64::round on *10000).
-            let pct_bp = if total_shallow > 0 {
-                (g.retained[idx] as f64 / total_shallow as f64 * 10000.0).round() as u64
+            let pct_bp = if total_ret > 0 {
+                (g.retained[idx] as f64 / total_ret as f64 * 10000.0).round() as u64
             } else {
                 0
             };
