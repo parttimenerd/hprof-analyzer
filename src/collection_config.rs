@@ -444,4 +444,77 @@ oql = "SELECT * FROM C"
             ))
         );
     }
+
+    #[test]
+    fn new_jdk_collections_in_builtins() {
+        let descs = builtin_coll_descs();
+        let names: Vec<&str> = descs.iter().map(|d| d.class_name.as_str()).collect();
+
+        // JDK collections added beyond the original set.
+        for class in &[
+            "java/util/LinkedHashSet",
+            "java/util/WeakHashMap",
+            "java/util/EnumMap",
+            "java/util/PriorityQueue",
+            "java/util/IdentityHashMap",
+            "java/util/concurrent/CopyOnWriteArrayList",
+            "java/util/concurrent/ArrayBlockingQueue",
+            "java/util/concurrent/LinkedBlockingQueue",
+            "java/util/concurrent/ConcurrentLinkedQueue",
+            "java/util/concurrent/ConcurrentSkipListMap",
+            "java/util/concurrent/ConcurrentSkipListSet",
+        ] {
+            assert!(names.contains(class), "{class} missing from builtins");
+        }
+
+        // Java 9+ immutable collections.
+        for class in &[
+            "java/util/ImmutableCollections$List12",
+            "java/util/ImmutableCollections$ListN",
+            "java/util/ImmutableCollections$Set12",
+            "java/util/ImmutableCollections$SetN",
+            "java/util/ImmutableCollections$Map1",
+            "java/util/ImmutableCollections$MapN",
+        ] {
+            assert!(names.contains(class), "{class} missing from builtins");
+        }
+
+        // Collections wrapper classes.
+        for class in &[
+            "java/util/Collections$UnmodifiableList",
+            "java/util/Collections$SynchronizedMap",
+            "java/util/Collections$SingletonList",
+            "java/util/Collections$EmptySet",
+        ] {
+            assert!(names.contains(class), "{class} missing from builtins");
+        }
+
+        // Verify field layouts for a few entries.
+        let pq = descs
+            .iter()
+            .find(|d| d.class_name == "java/util/PriorityQueue")
+            .unwrap();
+        assert_eq!(pq.kind, CollKind::Queue);
+        assert_eq!(
+            pq.size_field,
+            Some(("size".into(), "java/util/PriorityQueue".into()))
+        );
+        assert_eq!(
+            pq.array_field,
+            Some(("queue".into(), "java/util/PriorityQueue".into()))
+        );
+
+        let listn = descs
+            .iter()
+            .find(|d| d.class_name == "java/util/ImmutableCollections$ListN")
+            .unwrap();
+        assert_eq!(listn.kind, CollKind::List);
+        assert_eq!(
+            listn.array_field,
+            Some((
+                "elements".into(),
+                "java/util/ImmutableCollections$ListN".into()
+            ))
+        );
+    }
 }
