@@ -511,11 +511,10 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
             if any_value {
                 total
             } else {
-                // SUM of zero numeric values: MAT returns 0 for SUM when the
-                // class exists but all values are Null; however for an empty
-                // result set (no matched objects) Int(0) is the best sentinel.
-                // We return Int(0) to match the histogram path's behavior.
-                QueryValue::Int(0)
+                // E-03: ANSI SQL SUM over an empty set (no matched objects or all
+                // NULL values) returns NULL, not 0. Zero would falsely indicate a
+                // meaningful sum was accumulated.
+                QueryValue::Null
             }
         }
         AggAcc::Avg { sum, count } => {
@@ -3444,7 +3443,8 @@ pub(crate) fn compare_values(
         (QueryValue::Float(a), QueryValue::Float(b)) => a.partial_cmp(b),
         (QueryValue::Str(a), QueryValue::Str(b)) => Some(a.as_str().cmp(b.as_str())),
         (QueryValue::Bool(a), QueryValue::Bool(b)) => Some(a.cmp(b)),
-        (QueryValue::Null, QueryValue::Null) => Some(std::cmp::Ordering::Equal),
+        // E-02: NULL ordering comparisons return None (false), matching SQL semantics
+        // where NULL is not comparable. (Eq/Ne are handled above via qv_value_eq.)
         _ => None,
     };
     match ord {

@@ -41,6 +41,50 @@ fn stage_limit(q: &Query) -> Option<u64> {
     }
 }
 
+/// S-02: apply OFFSET drain to a row vec. `stage_limit` over-collects by
+/// `offset` rows; this removes them before the result is returned.
+fn drain_offset(rows: &mut Vec<Vec<crate::query::model::QueryValue>>, q: &Query) {
+    if let Some(off) = q.offset {
+        let n = (off as usize).min(rows.len());
+        if n > 0 {
+            rows.drain(..n);
+        }
+    }
+}
+
+/// Apply ORDER BY, OFFSET drain, and LIMIT to a row vec, updating `truncated`.
+fn apply_order_offset_limit(
+    rows: &mut Vec<Vec<crate::query::model::QueryValue>>,
+    truncated: &mut bool,
+    q: &Query,
+) {
+    if let Some(ob) = &q.order_by {
+        use crate::query::execute::{resolve_order_by_keys, sort_rows_by_columns};
+        let cols: Vec<crate::query::model::QueryColumn> = q
+            .select_aliases
+            .iter()
+            .zip(q.select.iter())
+            .map(|(alias, item)| crate::query::model::QueryColumn {
+                name: alias
+                    .as_deref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| crate::query::execute::column_name(item)),
+            })
+            .collect();
+        let resolved = resolve_order_by_keys(q, &cols, ob);
+        if !resolved.is_empty() {
+            sort_rows_by_columns(rows, &resolved);
+        }
+    }
+    drain_offset(rows, q);
+    if let Some(limit) = q.limit {
+        if rows.len() > limit as usize {
+            rows.truncate(limit as usize);
+            *truncated = true;
+        }
+    }
+}
+
 /// Human-readable label for an HPROF GC-root sub-tag (`types::heap::ROOT_*`), for
 /// `@GCRoots`/`@GCRootInfo`/`@info` in analyze mode. Labels follow MAT's GC-root
 /// naming (matching `report::format::gc_root_type_label`); an unrecognised code
@@ -628,7 +672,7 @@ fn dominator_rows(
         .map(|s| s.to_string())
         .or_else(|| q.select.first().map(crate::query::execute::column_name))
         .unwrap_or_else(|| "*".to_string());
-    let rows: Vec<Vec<QueryValue>> = indices
+    let mut rows: Vec<Vec<QueryValue>> = indices
         .iter()
         .map(|&i| {
             vec![QueryValue::ObjRef {
@@ -638,6 +682,8 @@ fn dominator_rows(
             }]
         })
         .collect();
+    // S-02: drain OFFSET rows (stage_limit over-collects by offset rows).
+    drain_offset(&mut rows, q);
     QueryResult {
         name: entry.name.clone(),
         oql: String::new(),
@@ -848,6 +894,8 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
             truncated = true;
         }
     }
+    // S-02: drain OFFSET rows (stage_limit over-collects by offset rows).
+    drain_offset(&mut rows, q);
 
     QueryResult {
         name: entry.name.clone(),
@@ -1061,6 +1109,8 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             truncated = true;
         }
     }
+    // S-02: drain OFFSET rows.
+    drain_offset(&mut out_rows, q);
 
     QueryResult {
         name: entry.name.clone(),
@@ -1500,7 +1550,9 @@ fn eval_late_string_method(
                     .get(1)
                     .map(|a| eval_late_expr_multi(a, idx, ret, ctx, like_regexes));
                 let start_char = match start_val {
-                    Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
+                    // S-10: negative or zero start is invalid per MAT spec → NULL.
+                    Some(QueryValue::Int(n)) if n >= 1 => (n - 1) as usize,
+                    Some(QueryValue::Int(_)) => return QueryValue::Null,
                     _ => return QueryValue::Null,
                 };
                 let chars: Vec<char> = s.chars().collect();
@@ -2033,6 +2085,8 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
             truncated = true;
         }
     }
+    // S-02: drain OFFSET rows.
+    drain_offset(&mut rows, q);
     let note = if !have_offsets {
         Some(
             "array element data requires offset index; run `load_dump` or `heap load` \
@@ -3139,6 +3193,8 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
             truncated = true;
         }
     }
+    // S-02: drain OFFSET rows.
+    drain_offset(&mut out_rows, q);
     QueryResult {
         name: entry.name.clone(),
         oql: String::new(),
@@ -3388,7 +3444,9 @@ pub(crate) fn run_retained_set(seeds: &[u32], cap: usize, ctx: &LateCtx) -> (Vec
                 out.push(node);
                 let (start, end) = (ctx.dc_off[ni] as usize, ctx.dc_off[ni + 1] as usize);
                 for &child in &ctx.dc_tgt[start..end] {
-                    if !visited[child as usize] {
+                    let ci = child as usize;
+                    // S-01: skip corrupt CSR entries that exceed the object count.
+                    if ci < n && !visited[ci] {
                         stack.push(child);
                     }
                 }
