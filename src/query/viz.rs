@@ -239,7 +239,9 @@ fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
             "title" => title = Some(arg_word(&key, val)?),
             "name" => name = Some(arg_word(&key, val)?),
             "cap" => match val {
-                VizArgVal::Number(n) if n > 0 => cap = Some(n as usize),
+                VizArgVal::Number(n) if n > 0 => {
+                    cap = Some(usize::try_from(n).unwrap_or(usize::MAX).min(100_000))
+                }
                 _ => {
                     return Err("ignored @viz cap: cap must be a positive integer".to_string());
                 }
@@ -346,6 +348,9 @@ fn first_numeric_column(columns: &[QueryColumn], rows: &[Vec<QueryValue>]) -> Op
 /// A column is numeric if every non-Null cell in it is `Int` or `Float`, and at
 /// least one such cell exists (an all-Null column is not chartable as a value).
 fn column_is_numeric(idx: usize, rows: &[Vec<QueryValue>]) -> bool {
+    if rows.is_empty() {
+        return true;
+    }
     let mut saw_number = false;
     for row in rows {
         match row.get(idx) {
