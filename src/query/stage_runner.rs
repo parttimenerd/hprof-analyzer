@@ -1506,8 +1506,11 @@ fn eval_late_string_method(
         // toString() on a String object: return the decoded string value.
         // Attr::ToString dispatches through string_value; Expr::Method routes here.
         "toString" => match recv {
-            QueryValue::Str(s) if !s.contains('@') => recv.clone(),
-            // ObjRef or display-form string: look up in the late string table.
+            // S-06: any Str value is already a decoded string — return it directly.
+            // The old heuristic `!s.contains('@')` incorrectly re-looked-up strings
+            // containing '@' (e.g. Object.toString() output like "Foo@7ef88735").
+            QueryValue::Str(_) => recv.clone(),
+            // ObjRef or other: look up in the late string table.
             _ => ctx
                 .string_value(idx)
                 .map(|s| QueryValue::Str(s.to_string()))
@@ -1628,6 +1631,10 @@ fn eval_late_pred_multi(
         Predicate::InstanceOf(cname) => ctx
             .class_name_of(idx)
             .is_some_and(|name| crate::query::execute::class_name_matches(name, cname)),
+        // S-08: InSubquery/Exists cannot be evaluated in the late phase (no
+        // subquery re-execution). Separate from `_ => true` for clarity — these
+        // are intentional pass-throughs, not missing cases.
+        Predicate::InSubquery { .. } | Predicate::Exists { .. } => true,
         _ => true,
     }
 }
@@ -2916,9 +2923,10 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                         AggFunc::Count | AggFunc::CountDistinct => QueryValue::Int(0),
                         AggFunc::Sum => QueryValue::Int(0),
                         AggFunc::Min | AggFunc::Max => QueryValue::Null,
-                        AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => {
-                            QueryValue::Int(0)
-                        }
+                        AggFunc::Avg => QueryValue::Int(0),
+                        // S-05: MEDIAN/PERCENTILE are unsupported in this path;
+                        // start Null so the finalize `_ => acc.clone()` returns Null.
+                        AggFunc::Percentile(_) | AggFunc::Median => QueryValue::Null,
                     };
                     (start, 0u64)
                 }

@@ -163,23 +163,9 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Bug:** `reached.push(t)` happens before the cap check; fan-out can accumulate unbounded entries.  
 **Fix:** Cap `reached.len()` inside the inner loop alongside `next.len()`.
 
-### S-05 MEDIAN/PERCENTILE returns `Int(0)` in non-GROUP-BY path — Medium
-**Line:** ~3010  
-**Bug:** Silently returns 0 instead of Null or error.  
-**Fix:** Return `QueryValue::Null` for unsupported aggregates.
-
-### S-06 `toString` dispatch uses fragile `@`-contains heuristic — Medium
-**Line:** ~1457  
-**Bug:** Strings containing `@` (like `Object.toString()` output) are re-looked-up.  
-**Fix:** Match on `QueryValue::Str(_) => recv.clone()` directly.
-
 ### S-07 `entries_expand_rows`: `truncated` ignores `carry.truncated()` — Medium
 **Line:** ~2829  
 **Fix:** `truncated: entry.carry.truncated() || row_count >= ROW_CAP as u64`.
-
-### S-08 `eval_late_pred_multi`: `InSubquery`/`Exists` silently pass all rows — Medium
-**Line:** ~1575  
-**Fix:** Add explicit arms for `InSubquery`/`Exists` returning `true` with a comment, and separate from `_ => true` catch-all.
 
 ### S-09 `resolve_hop`/`edge_lookup` no bounds check on CSR slices — Medium
 **Line:** ~243  
