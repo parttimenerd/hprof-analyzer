@@ -604,7 +604,7 @@ fn le_bytes_to_i32(data: &[u8]) -> Vec<i32> {
 
 // ── Hash / filesystem helpers ──────────────────────────────────────────────────
 
-/// Hash a dump file for cache-busting: hex(first-64-bytes ++ file-size-le8 ++ mtime-ns-le8).
+/// Hash a dump file for cache-busting: hex(first-512-bytes ++ file-size-le8 ++ mtime-ns-le8).
 fn dump_hash(path: &Path) -> io::Result<String> {
     let meta = fs::metadata(path)?;
     let file_size = meta.len();
@@ -619,7 +619,7 @@ fn dump_hash(path: &Path) -> io::Result<String> {
         .unwrap_or(0);
 
     let mut f = File::open(path)?;
-    let mut header = [0u8; 64];
+    let mut header = [0u8; 512];
     let n = f.read(&mut header)?;
     let header = &header[..n];
 

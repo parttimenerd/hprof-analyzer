@@ -31,14 +31,12 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 | 12 | Stage runner | `stage_runner.rs:2095` | Raw heap addr stored as dense index in `ObjRef.index` | Store sentinel `u64::MAX`; defer resolution |
 | 13 | Fielddecode | `fielddecode.rs:1487` | `non_null`/`count` silently truncated u64→u32 | Change tuple to `(u64, u64, u64)` |
 | 14 | Strings | `strings.rs:62` | Char-array waste compares UTF-8 vs raw bytes | Use char count in backing units |
-| 15 | Dominator | `dominator.rs:405` | `decode_checked` off-by-one: `>` should be `>=` | Change to `pos >= buf.len()` |
-| 16 | Pass1 | `pass1.rs:271` | STACK_TRACE frame cap doesn't skip excess bytes | Skip `(actual-capped)*id_size` bytes |
-| 18 | Render | `render_graphs.rs:10` | 6 sections missing from `--md-graphs` output | Add missing `render_*` calls |
-| 19 | Format | `format.rs:209` | `format_bytes` promotes units too early at boundaries | Fix boundary guard comparisons |
-| 20 | Refwalk | `refwalk.rs:71` | `into_csr` panics if edge `src >= n` | Add bounds check, skip invalid edges |
-| 21 | Sizing | `sizing.rs:60` | Double-alignment inflates shallow size under compressed OOPs | Remove intermediate `align_up(..., ref_size)` |
-| 22 | Id_map | `id_map.rs:220` | `push_sorted_addr` duplicate detection bypassed on first call | Unify first-block and general path |
-| 23 | Vbyte | `vbyte.rs:30` | Malformed vbyte bail-out reports wrong consumed count | Scan forward to re-sync |
+| 15 | Render | `render_graphs.rs:10` | 6 sections missing from `--md-graphs` output | Add missing `render_*` calls |
+| 16 | Format | `format.rs:209` | `format_bytes` promotes units too early at boundaries | Fix boundary guard comparisons |
+| 17 | Refwalk | `refwalk.rs:71` | `into_csr` panics if edge `src >= n` | Add bounds check, skip invalid edges |
+| 18 | Sizing | `sizing.rs:60` | Double-alignment inflates shallow size under compressed OOPs | Remove intermediate `align_up(..., ref_size)` |
+| 19 | Id_map | `id_map.rs:220` | `push_sorted_addr` duplicate detection bypassed on first call | Unify first-block and general path |
+| 20 | Vbyte | `vbyte.rs:30` | Malformed vbyte bail-out reports wrong consumed count | Scan forward to re-sync |
 | 24 | Cvec | `cvec.rs:473` | Decompression capacity hint is arbitrary `blob.len()*4` | Track `len` field in `CompressedBytes` |
 | 25 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
 | 26 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
@@ -308,32 +306,10 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ## 7. Core Analysis
 
-### C-01 `decode_checked` off-by-one — High
-**Line:** `dominator.rs:405`  
-**Bug:** `pos > buf.len()` allows zero-length slice at buffer end.  
-**Fix:** Change to `pos >= buf.len()`.
-
 ### C-02 Cache delta-encode truncates i64→i32 — **High**
 **Line:** `cache.rs:495`  
 **Bug:** `delta as i32` wraps for large deltas (e.g., `u32::MAX` idom sentinel).  
 **Fix:** Use zigzag encoding (`(d << 1) ^ (d >> 63)` as u32) or store as i64.
-
-### C-03 `class_names.json.zst` not in `is_valid()` check — Medium
-**Line:** `cache.rs:123`  
-**Fix:** Add `&& self.path.join("class_names.json.zst").exists()` to `base_ok`.
-
-### C-04 `total_inb` overflow is `debug_assert` only — **High**
-**Line:** `pass2/mod.rs:1469`  
-**Bug:** In release builds, >4B inbound edges silently corrupt CSR.  
-**Fix:** Replace with `if total_inb > u32::MAX as u64 { return Err(…); }`.
-
-### C-05 STACK_TRACE frame cap doesn't skip excess bytes — Medium
-**Line:** `pass1.rs:271`  
-**Fix:** After reading capped frames, `r.skip((actual - capped) * id_size)`.
-
-### C-06 Cache hash only reads 64 header bytes — Medium
-**Line:** `cache.rs:590`  
-**Fix:** Read first 512+ bytes, or hash full file on write.
 
 ---
 
