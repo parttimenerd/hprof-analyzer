@@ -615,7 +615,9 @@ fn compress(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32], chain
     // Collect chain v → ancestor[v] → ... while ancestor != UNDEFINED
     chain.clear();
     let mut x = v;
-    while ancestor[ancestor[x as usize] as usize] != UNDEFINED {
+    while ancestor[x as usize] != UNDEFINED
+        && ancestor[ancestor[x as usize] as usize] != UNDEFINED
+    {
         chain.push(x);
         x = ancestor[x as usize];
     }
