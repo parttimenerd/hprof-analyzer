@@ -434,9 +434,15 @@ fn write_redaction_marker<W: Write>(w: &mut W) -> io::Result<()> {
 }
 
 fn write_record_header<W: Write>(w: &mut W, tag: u8, length: u64) -> io::Result<()> {
+    let len32 = u32::try_from(length).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("HPROF record length {length} exceeds 4 GiB"),
+        )
+    })?;
     w.write_all(&[tag])?;
     w.write_all(&0u32.to_be_bytes())?; // timestamp (zeroed)
-    w.write_all(&(length as u32).to_be_bytes())
+    w.write_all(&len32.to_be_bytes())
 }
 
 fn copy_bytes<W: Write>(r: &mut HprofReader, w: &mut W, n: u64) -> io::Result<()> {
