@@ -2557,8 +2557,10 @@ fn rewrite_string_dot_method(src: &str) -> std::borrow::Cow<'_, str> {
                             result.push(')');
                             rest = after_lparen; // already past `(`
                             // Skip the `)` too
-                            let close_pos = rest.find(')').unwrap_or(0);
-                            rest = &rest[close_pos + 1..];
+                            match rest.find(')') {
+                                Some(close_pos) => rest = &rest[close_pos + 1..],
+                                None => break, // P-01: malformed call — let the tokenizer error
+                            }
                             continue;
                         } else {
                             // Has args: `"ABC".substr(1,3)` → `substr("ABC",1,3)`

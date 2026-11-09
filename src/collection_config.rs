@@ -239,7 +239,7 @@ pub(crate) fn merge_descs(user: Vec<CollDesc>, builtins: Vec<CollDesc>) -> Vec<C
 /// Config file search order (first found wins):
 ///   1. explicit_path if Some
 ///   2. .hprof-analyzer.toml in CWD
-///   3. $HOME/.config/hprof-analyzer/collections.toml
+///   3. $HOME/.config/hprof-analyzer/.hprof-analyzer.toml  (unified name)
 pub(crate) fn load_collection_descs(explicit_path: Option<&Path>) -> Vec<CollDesc> {
     let user = find_config(explicit_path)
         .and_then(|p| {
@@ -270,7 +270,8 @@ fn find_config(explicit: Option<&Path>) -> Option<PathBuf> {
         return Some(cwd_candidate);
     }
     if let Some(home) = std::env::var_os("HOME") {
-        let home_candidate = PathBuf::from(home).join(".config/hprof-analyzer/collections.toml");
+        // CFG-01: use the same filename as in CWD so users can copy their config.
+        let home_candidate = PathBuf::from(home).join(".config/hprof-analyzer/.hprof-analyzer.toml");
         if home_candidate.exists() {
             return Some(home_candidate);
         }

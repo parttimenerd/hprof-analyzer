@@ -128,8 +128,12 @@ impl ServeState {
                 let stem = std::path::Path::new(&self.path)
                     .file_stem()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("report")
-                    .to_string();
+                    .unwrap_or("report");
+                // SRV-05: sanitize stem to prevent header injection via " or CRLF
+                let stem: String = stem
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+                    .collect();
                 Ok((html.into_bytes(), stem))
             }
             None => {
@@ -465,9 +469,16 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                 let resp = Response::from_string(resp_body)
                     .with_status_code(status)
                     .with_header(
-                        format!("Content-Type: {ctype}")
-                            .parse::<tiny_http::Header>()
-                            .unwrap(),
+                        // SRV-06: use from_bytes fallback so a malformed ctype
+                        // never panics the worker thread.
+                        tiny_http::Header::from_bytes("Content-Type", ctype.as_bytes())
+                            .unwrap_or_else(|_| {
+                                tiny_http::Header::from_bytes(
+                                    "Content-Type",
+                                    b"application/octet-stream",
+                                )
+                                .unwrap()
+                            }),
                     );
                 let _ = request.respond(resp);
             }

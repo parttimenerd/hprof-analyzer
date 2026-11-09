@@ -778,7 +778,7 @@ pub(crate) struct FieldDecodeState {
     const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>>,
     array_fill: FillAcc,
     /// Compact per-obj-array record (addr, non_null, count) for ALL obj arrays.
-    obj_array_raw_compact: Vec<(u64, u32, u32)>,
+    obj_array_raw_compact: Vec<(u64, u64, u64)>,
     /// Slot-target lists for obj arrays whose address is in `wanted_arrays` at
     /// scan time, capped at COLL_VALUES_GROUP_CAP. Arrays seen before their
     /// owning instance (rare; HPROF usually orders instances first) are added to
@@ -1716,7 +1716,7 @@ impl FieldDecodeState {
         }
         // Always push compact (addr, non_null, count) for finish()-time joins.
         self.obj_array_raw_compact
-            .push((addr, non_null as u32, count as u32));
+            .push((addr, non_null as u64, count as u64));
         // Stash slot targets if captured.
         if let Some(tgts) = slot_targets {
             if in_wanted {
@@ -1748,9 +1748,7 @@ impl FieldDecodeState {
             // else: not a wanted array; discard slot targets (never used)
         }
 
-        for (addr, non_null_u32, count_u32) in self.obj_array_raw_compact.drain(..) {
-            let non_null = non_null_u32 as u64;
-            let count = count_u32 as u64;
+        for (addr, non_null, count) in self.obj_array_raw_compact.drain(..) {
             if let Some(want) = self.wanted_arrays.get(&addr) {
                 let used = if want.size > 0 { want.size } else { non_null };
                 let wasted = count
