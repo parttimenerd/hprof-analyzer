@@ -270,10 +270,15 @@ impl Pass1 {
                     let num_frames = r.u4()?;
                     // Sane cap: STACK_TRACE records in real dumps have at most
                     // a few thousand frames; a corrupt u32::MAX would OOM.
-                    let num_frames = num_frames.min(65_536) as usize;
-                    let mut frames = Vec::with_capacity(num_frames);
-                    for _ in 0..num_frames {
+                    let actual = num_frames as usize;
+                    let capped = actual.min(65_536);
+                    let mut frames = Vec::with_capacity(capped);
+                    for _ in 0..capped {
                         frames.push(r.id()?);
+                    }
+                    // Skip frames beyond the cap to keep stream in sync.
+                    if actual > capped {
+                        r.skip(((actual - capped) as u64) * (id_size as u64))?;
                     }
                     stack_traces.insert(stack_serial, frames);
                     stack_trace_thread.insert(stack_serial, thread_serial);
