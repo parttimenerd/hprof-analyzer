@@ -285,10 +285,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Line:** `mcp/mod.rs:385, 1383`  
 **Fix:** Canonicalize path, validate extension (.hprof), optionally allow-list root dirs.
 
-### I-07 Credit card regex has no Luhn check — Medium
-**Line:** `secrets.rs:88`  
-**Fix:** Add Luhn checksum validation post-filter.
-
 ### I-08 Password/secret/token patterns too broad — Medium
 **Line:** `secrets.rs:90`  
 **Fix:** Require minimum entropy or exclude sentinel values (null, false, true, N/A).

@@ -213,6 +213,10 @@ impl SecretPatterns {
                     {
                         continue;
                     }
+                    // I-07: Credit card numbers must pass Luhn checksum validation.
+                    if pattern.category == "Credit card number" && !luhn_check(value) {
+                        continue;
+                    }
                     let key = (pattern.category.to_owned(), value.clone());
                     if seen.insert(key, ()).is_none() {
                         findings.push(SecretFinding {
@@ -269,6 +273,10 @@ impl SecretPatterns {
                     {
                         continue;
                     }
+                    // I-07: Credit card numbers must pass Luhn checksum validation.
+                    if pattern.category == "Credit card number" && !luhn_check(value) {
+                        continue;
+                    }
                     let key = (pattern.category.to_owned(), value.clone());
                     if seen.insert(key, ()).is_none() {
                         findings.push(SecretFinding {
@@ -310,6 +318,33 @@ fn hex_shannon_entropy(s: &str) -> f64 {
             -p * p.log2()
         })
         .sum()
+}
+
+/// I-07: Luhn algorithm check for credit card numbers.
+/// Strips spaces/dashes, then validates using the Luhn checksum.
+fn luhn_check(s: &str) -> bool {
+    let digits: Vec<u8> = s
+        .bytes()
+        .filter(|b| b.is_ascii_digit())
+        .map(|b| b - b'0')
+        .collect();
+    if digits.len() < 13 {
+        return false;
+    }
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, &d)| {
+            if i % 2 == 1 {
+                let v = d * 2;
+                if v > 9 { v - 9 } else { v }
+            } else {
+                d
+            } as u32
+        })
+        .sum();
+    sum % 10 == 0
 }
 
 /// The PATTERN_SPECS slice (generated from betterleaks.toml) plus EXTRA_PATTERN_SPECS
@@ -432,6 +467,13 @@ mod tests {
     fn credit_card_no_separator() {
         let r = scan(&["4111111111111111"]);
         assert!(r.is_empty(), "unseparated digits should not match");
+    }
+
+    #[test]
+    fn credit_card_luhn_reject() {
+        // I-07: regex-matching number that fails Luhn checksum must be rejected.
+        let r = scan(&["4111 1111 1111 1112"]);
+        assert!(r.is_empty(), "invalid Luhn should be filtered out");
     }
 
     // ── PEM headers ──────────────────────────────────────────────────────────
