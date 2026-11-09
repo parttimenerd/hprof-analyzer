@@ -2410,8 +2410,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // in resume_with_string_values may remove unreachable rows, so LIMIT
                 // must be re-applied AFTER that prune (not here, where it would
                 // truncate row_src to exactly `limit` and break the truncated flag).
-                let defer_limit =
-                    self.query.from.as_subquery().is_some() || row_src.is_some();
+                let defer_limit = self.query.from.as_subquery().is_some() || row_src.is_some();
                 let extra_n = self.extra_sort_attrs.len();
                 if let Some(ob) = &self.query.order_by {
                     // Build column indices for this ORDER BY. Keys present in the
