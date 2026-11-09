@@ -286,6 +286,12 @@ impl HprofReader {
                 break;
             }
             s.push(b);
+            if s.len() >= 256 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HPROF format string exceeds 256 bytes — not a valid HPROF file",
+                ));
+            }
         }
         self.format = String::from_utf8_lossy(&s).into_owned();
         let id_size = self.u4()?;
