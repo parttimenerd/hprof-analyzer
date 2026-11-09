@@ -221,8 +221,8 @@ fn format_release_summary(r: &Result<ReleaseInfo, String>) -> String {
             let preview_str = if preview.is_empty() {
                 String::new()
             } else {
-                let truncated = if preview.len() > 72 {
-                    format!("{}…", &preview[..72])
+                let truncated = if preview.chars().count() > 72 {
+                    format!("{}…", preview.chars().take(72).collect::<String>())
                 } else {
                     preview.to_string()
                 };
@@ -372,6 +372,7 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     resp.body_mut()
         .as_reader()
+        .take(200_000_000)
         .read_to_end(&mut buf)
         .map_err(|e| format!("failed to read response body: {e}"))?;
     Ok(buf)
@@ -388,7 +389,8 @@ fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    serde_json::from_reader(resp.body_mut().as_reader()).map_err(|e| format!("{e}"))
+    serde_json::from_reader(resp.body_mut().as_reader().take(4_000_000))
+        .map_err(|e| format!("{e}"))
 }
 
 /// Extract the `hprof-analyzer[.exe]` binary from a `.tar.gz` archive.

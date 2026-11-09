@@ -5974,9 +5974,15 @@ fn fmt_bytes(n: u64) -> String {
 /// Format an integer with thousands separators (e.g. 1234567 → "1,234,567").
 fn fmt_int(i: i64) -> String {
     if i < 0 {
-        return format!("-{}", fmt_int(-i));
+        // REPL-06: avoid -i64::MIN overflow; use i128 for the absolute value.
+        let abs = (i as i128).unsigned_abs();
+        return format!("-{}", fmt_uint(abs));
     }
-    let s = i.to_string();
+    fmt_uint(i as u128)
+}
+
+fn fmt_uint(n: u128) -> String {
+    let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (pos, ch) in s.chars().enumerate() {
         let remaining = s.len() - pos;
