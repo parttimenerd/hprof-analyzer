@@ -761,7 +761,7 @@ pub(crate) struct FieldDecodeState {
     // DirectByteBuffer capacity (lazily resolved on first on_instance call)
     dbb_resolved: bool,
     dbb_class_addr_opt: Option<u64>,
-    dbb_cap_off_opt: Option<u32>,
+    dbb_cap_off_opt: Option<(u32, crate::types::HprofType)>,
     dbb_capacity_sum: u64,
     /// Instance count of DirectByteBuffers seen so far.
     dbb_count: u64,
@@ -943,42 +943,50 @@ impl FieldDecodeState {
                     strings,
                     obj_ref_width,
                 )
-                .map(|(off, _ty)| off)
+                .map(|(off, ty)| (off, ty))
             });
         }
-        if let (Some(dbb_addr), Some(cap_off)) = (self.dbb_class_addr_opt, self.dbb_cap_off_opt) {
+        if let (Some(dbb_addr), Some((cap_off, cap_ty))) = (self.dbb_class_addr_opt, self.dbb_cap_off_opt) {
             if class_id == dbb_addr {
                 self.dbb_count += 1;
                 let o = cap_off as usize;
-                if o + 4 <= blob.len() {
-                    let v = i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
-                    let cap = v.max(0) as u64;
-                    self.dbb_capacity_sum += cap;
-                    let bucket = match cap {
-                        0..=1023 => 0,
-                        1024..=4095 => 1,
-                        4096..=16383 => 2,
-                        16384..=65535 => 3,
-                        65536..=262143 => 4,
-                        262144..=1_048_575 => 5,
-                        1_048_576..=16_777_215 => 6,
-                        _ => 7,
-                    };
-                    self.dbb_cap_buckets[bucket] += 1;
-                    if let Some(dense_idx) = self.ic.index_of(&p1.id_map, addr) {
-                        let rec = (dense_idx as u32, cap);
-                        if self.dbb_top_records.len() < DBB_TOP_CAP {
-                            self.dbb_top_records.push(rec);
-                        } else if let Some(min_pos) = self
-                            .dbb_top_records
-                            .iter()
-                            .enumerate()
-                            .min_by_key(|(_, r)| r.1)
-                            .map(|(i, _)| i)
-                        {
-                            if cap > self.dbb_top_records[min_pos].1 {
-                                self.dbb_top_records[min_pos] = rec;
-                            }
+                // F-03: dispatch by field type — capacity may be int or long.
+                let cap: u64 = match cap_ty {
+                    crate::types::HprofType::Long if o + 8 <= blob.len() => {
+                        let v = i64::from_be_bytes(blob[o..o+8].try_into().unwrap_or([0;8]));
+                        v.max(0) as u64
+                    }
+                    _ if o + 4 <= blob.len() => {
+                        let v = i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
+                        v.max(0) as u64
+                    }
+                    _ => 0,
+                };
+                self.dbb_capacity_sum += cap;
+                let bucket = match cap {
+                    0..=1023 => 0,
+                    1024..=4095 => 1,
+                    4096..=16383 => 2,
+                    16384..=65535 => 3,
+                    65536..=262143 => 4,
+                    262144..=1_048_575 => 5,
+                    1_048_576..=16_777_215 => 6,
+                    _ => 7,
+                };
+                self.dbb_cap_buckets[bucket] += 1;
+                if let Some(dense_idx) = self.ic.index_of(&p1.id_map, addr) {
+                    let rec = (dense_idx as u32, cap);
+                    if self.dbb_top_records.len() < DBB_TOP_CAP {
+                        self.dbb_top_records.push(rec);
+                    } else if let Some(min_pos) = self
+                        .dbb_top_records
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, r)| r.1)
+                        .map(|(i, _)| i)
+                    {
+                        if cap > self.dbb_top_records[min_pos].1 {
+                            self.dbb_top_records[min_pos] = rec;
                         }
                     }
                 }
@@ -1429,10 +1437,10 @@ impl FieldDecodeState {
                 self.holder_class_map.insert(class_id, key);
                 key
             };
-            // SAFETY: obj_field_layout is not mutated in the loop below (only
-            // self.edges is pushed to), so the raw pointer remains valid.
-            let layout: *const Vec<(u32, u32)> = &self.obj_field_layout[&class_id];
-            for &(field_key, offset) in unsafe { &*layout } {
+            // F-08: clone the layout to avoid aliasing `self` through a raw pointer
+            // while also pushing to `self.edges` below.
+            let layout = self.obj_field_layout[&class_id].clone();
+            for &(field_key, offset) in &layout {
                 if self.edges.len() >= self.caps.field_ref_cap {
                     self.edges_truncated = true;
                     break;
@@ -1455,27 +1463,23 @@ impl FieldDecodeState {
             self.light_field_layout
                 .entry(class_id)
                 .or_insert_with(|| enumerate_object_fields(class_id, class_map, obj_ref_width));
-            // SAFETY: light_field_layout is not mutated in the loop below (only
-            // self.array_owner_by_addr is inserted to), so the raw pointer remains valid.
-            let layout: *const Vec<(u64, u32)> = &self.light_field_layout[&class_id];
-            // SAFETY: pretty_name_cache is not mutated in the loop below (only
-            // self.array_owner_by_addr is inserted to), so the raw pointer remains valid.
-            let holder_name: *const String = if let Some(n) = self.pretty_name_cache.get(&class_id)
-            {
-                n as *const String
+            // F-08: clone layout and holder_name to avoid aliasing `self` through raw pointers.
+            let layout = self.light_field_layout[&class_id].clone();
+            let holder_name: String = if let Some(n) = self.pretty_name_cache.get(&class_id) {
+                n.clone()
             } else {
                 let n = pretty_name(class_id, p1);
-                self.pretty_name_cache.insert(class_id, n);
-                self.pretty_name_cache.get(&class_id).unwrap() as *const String
+                self.pretty_name_cache.insert(class_id, n.clone());
+                n
             };
-            for &(fname_id, offset) in unsafe { &*layout } {
+            for &(fname_id, offset) in &layout {
                 let o = offset as usize;
                 if o + obj_ref_width <= blob.len() {
                     let pointee = read_ref(&blob[o..], obj_ref_width);
                     if pointee != 0 && !self.array_owner_by_addr.contains_key(&pointee) {
                         let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
                         self.array_owner_by_addr
-                            .insert(pointee, format!("{}#{}", unsafe { &*holder_name }, fname));
+                            .insert(pointee, format!("{}#{}", holder_name, fname));
                     }
                 }
                 if self.array_owner_by_addr.len() >= ARRAY_OWNER_CAP {

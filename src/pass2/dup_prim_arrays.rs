@@ -81,27 +81,41 @@ fn elem_type_name(code: u8) -> &'static str {
 pub(crate) struct DupPrimCollector {
     hash_map: HashMap<u64, (u32, u64, u8)>, // hash → (count, shallow_bytes, elem_type)
     addr_to_hash: HashMap<u64, u64>,
+    ptr_size: usize,
+    ref_size: usize,
 }
 
 impl DupPrimCollector {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(ptr_size: usize, ref_size: usize) -> Self {
         Self {
             hash_map: HashMap::new(),
             addr_to_hash: HashMap::new(),
+            ptr_size,
+            ref_size,
         }
     }
 
     /// Ingest one PRIM_ARRAY_DUMP record. `bytes` is the raw element data.
-    pub(crate) fn on_prim_array(&mut self, addr: u64, elem_type: u8, _count: u64, bytes: &[u8]) {
+    pub(crate) fn on_prim_array(&mut self, addr: u64, elem_type: u8, count: u64, bytes: &[u8]) {
         use std::hash::Hasher;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         elem_type.hash(&mut h);
         bytes.hash(&mut h);
         let hv = h.finish();
+        // F-06: use true shallow size (header + payload) not just payload bytes.
+        let elem_size = crate::types::HprofType::from_code(elem_type)
+            .map(|t| t.byte_size())
+            .unwrap_or(1);
+        let shallow = crate::pass2::sizing::prim_array_shallow(
+            count,
+            elem_size,
+            self.ptr_size,
+            self.ref_size,
+        ) as u64;
         let e = self
             .hash_map
             .entry(hv)
-            .or_insert((0, bytes.len() as u64, elem_type));
+            .or_insert((0, shallow, elem_type));
         e.0 = e.0.saturating_add(1);
         self.addr_to_hash.insert(addr, hv);
     }

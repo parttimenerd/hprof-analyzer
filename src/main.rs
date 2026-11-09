@@ -268,13 +268,13 @@ struct Cli {
     ///   --size max     → original uncapped limits (10M edges, 200k collections)
     ///
     /// Only affects --collections / --full-analysis; ignored for basic analysis.
-    #[arg(long, default_value = "default", value_name = "SIZE", value_parser = [
+    #[arg(long, value_name = "SIZE", value_parser = [
         PossibleValue::new("small").help("1M edges, 10k collections tracked; lowest RSS"),
         PossibleValue::new("default").help("2.5M edges, 50k collections; balanced (default)"),
         PossibleValue::new("large").help("5M edges, 100k collections; richer output"),
         PossibleValue::new("max").help("10M edges, 200k collections; uncapped"),
     ])]
-    size: String,
+    size: Option<String>,
 
     /// Embed the React app bundle as plain readable JS in the HTML report
     /// (no deflate/base64). The report is ~750 KB larger but the JS is visible
@@ -2336,8 +2336,10 @@ fn run_default(cli: Cli) {
                 std::process::exit(2);
             }
         };
-        // --size overrides the collection-detail caps (independent of --obj-graph tier).
-        opts.report_size = match cli.size.to_ascii_lowercase().as_str() {
+        // D-05: only apply --size when explicitly specified; don't let the default
+        // silently override the --obj-graph tier that was already set above.
+        if let Some(ref size_str) = cli.size {
+            opts.report_size = match size_str.to_ascii_lowercase().as_str() {
             "small" => crate::opts::ReportSize::Small,
             "default" => crate::opts::ReportSize::Default,
             "large" => crate::opts::ReportSize::Large,
@@ -2349,6 +2351,7 @@ fn run_default(cli: Cli) {
                 std::process::exit(2);
             }
         };
+        }
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
         // input basename with a trailing `.hprof[.gz/.tar.gz]` stripped, matching how
         // MAT names its cache files (`dump_.hprof` -> `dump_.<kind>.index`).

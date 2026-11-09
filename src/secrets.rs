@@ -167,7 +167,7 @@ impl SecretPatterns {
         string_values: &HashMap<u32, String>,
         attribution: &HashMap<u32, Vec<(String, String)>>,
     ) -> Vec<SecretFinding> {
-        let mut seen: HashMap<(String, String), ()> = HashMap::new();
+        let mut seen: HashMap<(String, String), usize> = HashMap::new();
         let mut findings: Vec<SecretFinding> = Vec::new();
         self.scan_heap_strings_into(string_values, attribution, &mut seen, &mut findings);
         findings
@@ -186,7 +186,7 @@ impl SecretPatterns {
         attribution: &HashMap<u32, Vec<(String, String)>>,
         symbol_strings: &HashMap<u64, String>,
     ) -> Vec<SecretFinding> {
-        let mut seen: HashMap<(String, String), ()> = HashMap::new();
+        let mut seen: HashMap<(String, String), usize> = HashMap::new();
         let mut findings: Vec<SecretFinding> = Vec::new();
         self.scan_heap_strings_into(string_values, attribution, &mut seen, &mut findings);
         self.scan_symbol_strings_into(symbol_strings, &mut seen, &mut findings);
@@ -197,11 +197,16 @@ impl SecretPatterns {
         &self,
         string_values: &HashMap<u32, String>,
         attribution: &HashMap<u32, Vec<(String, String)>>,
-        seen: &mut HashMap<(String, String), ()>,
+        seen: &mut HashMap<(String, String), usize>,
         findings: &mut Vec<SecretFinding>,
     ) {
         for (dense_idx, value) in string_values {
             let locations = attribution.get(dense_idx).cloned().unwrap_or_default();
+
+            // I-08: skip common sentinel / non-secret values before pattern matching.
+            if is_sentinel_value(value) {
+                continue;
+            }
 
             // Standalone patterns: match value alone.
             for pattern in &self.standalone {
@@ -218,12 +223,24 @@ impl SecretPatterns {
                         continue;
                     }
                     let key = (pattern.category.to_owned(), value.clone());
-                    if seen.insert(key, ()).is_none() {
-                        findings.push(SecretFinding {
-                            category: pattern.category.to_owned(),
-                            value: value.clone(),
-                            locations: locations.clone(),
-                        });
+                    // I-09: merge locations into the existing finding rather than dropping.
+                    match seen.entry(key) {
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(findings.len());
+                            findings.push(SecretFinding {
+                                category: pattern.category.to_owned(),
+                                value: value.clone(),
+                                locations: locations.clone(),
+                            });
+                        }
+                        std::collections::hash_map::Entry::Occupied(e) => {
+                            let idx = *e.get();
+                            for loc in &locations {
+                                if !findings[idx].locations.contains(loc) {
+                                    findings[idx].locations.push(loc.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -244,12 +261,24 @@ impl SecretPatterns {
                         continue;
                     }
                     let key = (pattern.category.to_owned(), value.clone());
-                    if seen.insert(key, ()).is_none() {
-                        findings.push(SecretFinding {
-                            category: pattern.category.to_owned(),
-                            value: value.clone(),
-                            locations: matched_locs,
-                        });
+                    // I-09: merge locations into the existing finding rather than dropping.
+                    match seen.entry(key) {
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(findings.len());
+                            findings.push(SecretFinding {
+                                category: pattern.category.to_owned(),
+                                value: value.clone(),
+                                locations: matched_locs,
+                            });
+                        }
+                        std::collections::hash_map::Entry::Occupied(e) => {
+                            let idx = *e.get();
+                            for loc in &matched_locs {
+                                if !findings[idx].locations.contains(loc) {
+                                    findings[idx].locations.push(loc.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -261,7 +290,7 @@ impl SecretPatterns {
     fn scan_symbol_strings_into(
         &self,
         symbol_strings: &HashMap<u64, String>,
-        seen: &mut HashMap<(String, String), ()>,
+        seen: &mut HashMap<(String, String), usize>,
         findings: &mut Vec<SecretFinding>,
     ) {
         let symbol_location = vec![("JVM symbol table".to_owned(), "STRING_IN_UTF8".to_owned())];
@@ -278,17 +307,47 @@ impl SecretPatterns {
                         continue;
                     }
                     let key = (pattern.category.to_owned(), value.clone());
-                    if seen.insert(key, ()).is_none() {
-                        findings.push(SecretFinding {
-                            category: pattern.category.to_owned(),
-                            value: value.clone(),
-                            locations: symbol_location.clone(),
-                        });
+                    // I-09: merge locations into the existing finding rather than dropping.
+                    match seen.entry(key) {
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(findings.len());
+                            findings.push(SecretFinding {
+                                category: pattern.category.to_owned(),
+                                value: value.clone(),
+                                locations: symbol_location.clone(),
+                            });
+                        }
+                        std::collections::hash_map::Entry::Occupied(e) => {
+                            let idx = *e.get();
+                            for loc in &symbol_location {
+                                if !findings[idx].locations.contains(loc) {
+                                    findings[idx].locations.push(loc.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/// I-08: true if `value` is a well-known non-secret sentinel that would otherwise
+/// trigger broad pattern matches (e.g. `secret=false`, `token=null`).
+fn is_sentinel_value(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "null"
+            | "none"
+            | "false"
+            | "true"
+            | "n/a"
+            | "na"
+            | "undefined"
+            | "unknown"
+            | "(null)"
+            | "empty"
+    ) || value.is_empty()
 }
 
 /// Shannon entropy of a hex string in bits per character (max 4.0 for 16 symbols).
