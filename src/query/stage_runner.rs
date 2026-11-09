@@ -2357,9 +2357,9 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         }
         // Initialize percentile value lists for this group when first seen (OQL-54).
         if has_percentile {
-            percentile_vals.entry(key_str.clone()).or_insert_with(|| {
-                vec![Vec::new(); q.select.len()]
-            });
+            percentile_vals
+                .entry(key_str.clone())
+                .or_insert_with(|| vec![Vec::new(); q.select.len()]);
         }
         // Accumulate each SELECT item's aggregate.
         for (i, it) in q.select.iter().enumerate() {
@@ -2537,8 +2537,8 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                                         let mid = n / 2;
                                         QueryValue::Float((vals[mid - 1] + vals[mid]) / 2.0)
                                     } else {
-                                        let rank = ((p_val as f64 / 100.0) * n as f64).ceil()
-                                            as usize;
+                                        let rank =
+                                            ((p_val as f64 / 100.0) * n as f64).ceil() as usize;
                                         let idx = rank.saturating_sub(1).min(n - 1);
                                         QueryValue::Float(vals[idx])
                                     }

@@ -1353,11 +1353,9 @@ pub fn build_finalizer_classes(b: &mut HeapBuilder) {
         &[("referent", T_OBJECT)],
     );
     // FinalReference extends Reference (no own fields).
-    let final_ref_class =
-        b.class_with_super("java/lang/ref/FinalReference", reference_class, &[]);
+    let final_ref_class = b.class_with_super("java/lang/ref/FinalReference", reference_class, &[]);
     // Finalizer extends FinalReference (no own fields).
-    let finalizer_class =
-        b.class_with_super("java/lang/ref/Finalizer", final_ref_class, &[]);
+    let finalizer_class = b.class_with_super("java/lang/ref/Finalizer", final_ref_class, &[]);
 
     // Two target classes with a small payload so their retained size > 0.
     let cls_a = b.class("scenarios/FinalizableA", &[("x", T_INT)]);

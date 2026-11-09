@@ -65,7 +65,10 @@ const POOL_CAP: usize = 1000;
 /// Pool sentinels: (slash_class_name, human_label, slot).
 /// Slot 0 = ThreadPoolExecutor, slot 1 = HikariPool.
 const POOL_SENTINELS: &[(&str, &str)] = &[
-    ("java/util/concurrent/ThreadPoolExecutor", "ThreadPoolExecutor"),
+    (
+        "java/util/concurrent/ThreadPoolExecutor",
+        "ThreadPoolExecutor",
+    ),
     ("com/zaxxer/hikari/pool/HikariPool", "HikariCP"),
 ];
 
@@ -1011,9 +1014,10 @@ impl FieldDecodeState {
                     .map(|(off, _ty)| off as usize)
                 });
         }
-        if let (Some(fin_addr), Some(ref_off)) =
-            (self.finalizer_class_addr_opt, self.finalizer_referent_off_opt)
-        {
+        if let (Some(fin_addr), Some(ref_off)) = (
+            self.finalizer_class_addr_opt,
+            self.finalizer_referent_off_opt,
+        ) {
             if class_id == fin_addr {
                 if ref_off + obj_ref_width <= blob.len() {
                     let referent_addr = read_ref(&blob[ref_off..], obj_ref_width);
@@ -1023,9 +1027,7 @@ impl FieldDecodeState {
                             let cname = p1
                                 .class_ids
                                 .get(ridx)
-                                .and_then(|&cidx| {
-                                    p1.class_addr_table.get(cidx as usize)
-                                })
+                                .and_then(|&cidx| p1.class_addr_table.get(cidx as usize))
                                 .and_then(|&caddr| p1.class_map.get(&caddr))
                                 .and_then(|ci| p1.strings.get(&ci.name_id))
                                 .map(|n| crate::report::pretty_class_name(n))
@@ -1983,17 +1985,17 @@ type FieldDecodeViews = (
     Option<Vec<CollValuesRaw>>,
     Option<HashMap<u32, (u32, u32)>>, // node_kv: wrapper dense idx → (key, val)
     bool,
-    u64,              // direct_byte_buffer_capacity_sum
-    u64,              // direct_byte_buffer_count
+    u64,                      // direct_byte_buffer_capacity_sum
+    u64,                      // direct_byte_buffer_count
     [u64; 8], // dbb_cap_buckets: [<1KB, 1–4KB, 4–16KB, 16–64KB, 64–256KB, 256KB–1MB, 1–16MB, ≥16MB]
     Vec<(u32, u64)>, // dbb_top_records: (dense_idx, capacity) top-50 by capacity desc
     u64,      // thread_local_null_key_count
     Vec<(bool, u32)>, // tl_entry_records: (is_stale, value_dense_idx)
     Vec<u32>, // coll_size_per_dense: element count per object (u32::MAX = not a collection)
     Vec<(String, u64, u64)>, // finalizer_referent_class_tally: (class_name, count, shallow_sum), sorted by count desc
-    Vec<(u32, u32)>, // finalizer_instances: (finalizer_dense_idx, referent_dense_idx)
+    Vec<(u32, u32)>,         // finalizer_instances: (finalizer_dense_idx, referent_dense_idx)
     Vec<(u32, u8, i32, i32)>, // pool_raw_records: (dense_idx, slot, field1, field2)
-    Vec<u64>,        // pool_class_addrs: class-object address per POOL_SENTINELS slot
+    Vec<u64>,                // pool_class_addrs: class-object address per POOL_SENTINELS slot
 );
 
 /// Compute the collection/array/reference views in exactly THREE full-file

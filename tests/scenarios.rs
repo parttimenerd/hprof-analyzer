@@ -768,11 +768,7 @@ fn check_finalizer_classes_breakdown(report: &Report) {
         "FinalizableB must appear in finalizer_classes; got: {:?}",
         report.finalizer_classes,
     );
-    assert_eq!(
-        b_row.unwrap().count,
-        2,
-        "FinalizableB should have count=2"
-    );
+    assert_eq!(b_row.unwrap().count, 2, "FinalizableB should have count=2");
 }
 
 fn default_opts() -> AnalyzeOptions {

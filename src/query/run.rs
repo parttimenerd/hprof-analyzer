@@ -1566,8 +1566,7 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                                     let mid = n / 2;
                                     QueryValue::Float((fvals[mid - 1] + fvals[mid]) / 2.0)
                                 } else {
-                                    let rank =
-                                        ((p_val as f64 / 100.0) * n as f64).ceil() as usize;
+                                    let rank = ((p_val as f64 / 100.0) * n as f64).ceil() as usize;
                                     let idx = rank.saturating_sub(1).min(n - 1);
                                     QueryValue::Float(fvals[idx])
                                 }

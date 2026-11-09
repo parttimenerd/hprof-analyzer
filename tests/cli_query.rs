@@ -8125,9 +8125,7 @@ fn oql47_replace_in_having_evaluates() {
 #[test]
 fn oql50_median_even_n_averages_midpoints() {
     // 4 values: 1, 2, 3, 4 → median = (2+3)/2 = 2.5.
-    let out = run_values_query(
-        r#"SELECT MEDIAN(v) FROM (VALUES (1), (2), (3), (4)) AS t(v)"#,
-    );
+    let out = run_values_query(r#"SELECT MEDIAN(v) FROM (VALUES (1), (2), (3), (4)) AS t(v)"#);
     // The result should contain "2.5" (not "2" which is the lower-middle value).
     assert!(
         out.contains("2.5"),
@@ -8140,11 +8138,8 @@ fn oql50_median_even_n_averages_midpoints() {
 #[test]
 fn oql50_median_equals_percentile_50_real_dump() {
     let Some(hprof) = philosophers() else { return };
-    let median = query_single_i64(
-        &hprof,
-        "SELECT MEDIAN(@objectId) FROM java.lang.String",
-    )
-    .expect("median must return a value");
+    let median = query_single_i64(&hprof, "SELECT MEDIAN(@objectId) FROM java.lang.String")
+        .expect("median must return a value");
     let p50 = query_single_i64(
         &hprof,
         "SELECT PERCENTILE(@objectId, 50) FROM java.lang.String",
@@ -8189,24 +8184,18 @@ fn oql51_grouped_select_star_is_rejected() {
 /// MIN of (10, 20, 5) is 5, MAX is 20, regardless of insertion order.
 #[test]
 fn oql53_min_max_values_order_independent() {
-    let min_out = run_values_query(
-        r#"SELECT MIN(v) FROM (VALUES (10), (20), (5)) AS t(v)"#,
-    );
+    let min_out = run_values_query(r#"SELECT MIN(v) FROM (VALUES (10), (20), (5)) AS t(v)"#);
     assert!(
         min_out.contains('5'),
         "MIN of (10,20,5) must be 5:\n{min_out}"
     );
-    let max_out = run_values_query(
-        r#"SELECT MAX(v) FROM (VALUES (10), (20), (5)) AS t(v)"#,
-    );
+    let max_out = run_values_query(r#"SELECT MAX(v) FROM (VALUES (10), (20), (5)) AS t(v)"#);
     assert!(
         max_out.contains("20"),
         "MAX of (10,20,5) must be 20:\n{max_out}"
     );
     // Also verify reverse order yields the same result.
-    let min_rev = run_values_query(
-        r#"SELECT MIN(v) FROM (VALUES (5), (20), (10)) AS t(v)"#,
-    );
+    let min_rev = run_values_query(r#"SELECT MIN(v) FROM (VALUES (5), (20), (10)) AS t(v)"#);
     assert!(
         min_rev.contains('5'),
         "MIN of (5,20,10) must still be 5:\n{min_rev}"

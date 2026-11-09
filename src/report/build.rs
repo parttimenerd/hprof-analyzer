@@ -1188,16 +1188,19 @@ fn build_finalizer_classes(g: &Graph) -> Vec<crate::report::model::FinalizerClas
         return g
             .finalizer_referent_tally
             .iter()
-            .map(|(name, count, sh)| crate::report::model::FinalizerClassRow {
-                referent_class: name.clone(),
-                count: *count,
-                retained: *sh,
-            })
+            .map(
+                |(name, count, sh)| crate::report::model::FinalizerClassRow {
+                    referent_class: name.clone(),
+                    count: *count,
+                    retained: *sh,
+                },
+            )
             .collect();
     }
 
     // Build per-class retained sums from the per-instance data.
-    let mut by_class: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    let mut by_class: std::collections::HashMap<String, (u64, u64)> =
+        std::collections::HashMap::new();
     const CAP: usize = 50;
 
     for &(fin_idx, ref_idx) in &g.finalizer_instances {
@@ -1221,15 +1224,19 @@ fn build_finalizer_classes(g: &Graph) -> Vec<crate::report::model::FinalizerClas
 
     let mut rows: Vec<crate::report::model::FinalizerClassRow> = by_class
         .into_iter()
-        .map(|(referent_class, (count, retained))| {
-            crate::report::model::FinalizerClassRow {
+        .map(
+            |(referent_class, (count, retained))| crate::report::model::FinalizerClassRow {
                 referent_class,
                 count,
                 retained,
-            }
-        })
+            },
+        )
         .collect();
-    rows.sort_unstable_by(|a, b| b.count.cmp(&a.count).then_with(|| a.referent_class.cmp(&b.referent_class)));
+    rows.sort_unstable_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.referent_class.cmp(&b.referent_class))
+    });
     rows.truncate(CAP);
     rows
 }
@@ -1237,7 +1244,10 @@ fn build_finalizer_classes(g: &Graph) -> Vec<crate::report::model::FinalizerClas
 /// Pool sentinel metadata aligned with the slot index in `g.pool_raw_records`.
 /// slot 0 = ThreadPoolExecutor, slot 1 = HikariPool.
 const POOL_SENTINEL_META: &[(&str, &str)] = &[
-    ("java/util/concurrent/ThreadPoolExecutor", "ThreadPoolExecutor"),
+    (
+        "java/util/concurrent/ThreadPoolExecutor",
+        "ThreadPoolExecutor",
+    ),
     ("com/zaxxer/hikari/pool/HikariPool", "HikariCP"),
 ];
 
