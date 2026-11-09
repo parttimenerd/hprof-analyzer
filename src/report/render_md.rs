@@ -3887,7 +3887,7 @@ fn render_garbage_root_node(
             )
         };
         out.push_str(&line);
-        let child_prefix = format!("{}{}  ", prefix, if is_last { "   " } else { "│  " });
+        let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
         render_garbage_root_node(&node.children, &child_prefix, graphs, retained_max, out);
     }
 }
