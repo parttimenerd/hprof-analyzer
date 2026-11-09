@@ -5553,7 +5553,7 @@ fn build_top_consumers(
 
     let biggest_classes: Vec<ClassRow> = class_order
         .iter()
-        .take(holder_window)
+        .take(top_n)
         .enumerate()
         .map(|(rank, &ci)| {
             let pretty = pretty_class_name(&g.class_names[ci]);
