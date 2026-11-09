@@ -58,6 +58,17 @@ const TL_ENTRY_CAP: usize = 500_000;
 /// Top-50 by capacity; trimmed/sorted in finish().
 const DBB_TOP_CAP: usize = 50;
 
+/// Max pool instance records captured (one entry per live pool instance).
+/// Capped to bound memory on pathological dumps with thousands of pool objects.
+const POOL_CAP: usize = 1000;
+
+/// Pool sentinels: (slash_class_name, human_label, slot).
+/// Slot 0 = ThreadPoolExecutor, slot 1 = HikariPool.
+const POOL_SENTINELS: &[(&str, &str)] = &[
+    ("java/util/concurrent/ThreadPoolExecutor", "ThreadPoolExecutor"),
+    ("com/zaxxer/hikari/pool/HikariPool", "HikariCP"),
+];
+
 /// Max holder→pointee edges collected under --collections (16 B each → 160 MB).
 const FIELD_REF_CAP: usize = 10_000_000;
 /// Max container records collected under --collections (~32 B each → ~48 MB).
@@ -777,6 +788,44 @@ pub(crate) struct FieldDecodeState {
     /// `coll_size_per_dense[i]` = element count if object `i` was seen as a
     /// collection with a resolvable `size` field; `u32::MAX` otherwise.
     coll_size_per_dense: Vec<u32>,
+
+    // Finalizer referent class tally (populated during scan, consumed in finish())
+    /// True after the first on_instance call that attempted to resolve Finalizer.
+    finalizer_resolved: bool,
+    /// Class-object address of `java/lang/ref/Finalizer`, or None if not found.
+    finalizer_class_addr_opt: Option<u64>,
+    /// Byte offset of the `referent` Object field within a Finalizer instance blob.
+    finalizer_referent_off_opt: Option<usize>,
+    /// Per-referent-class tally: class_name → (count, shallow_size_sum).
+    finalizer_tally: HashMap<String, (u64, u64)>,
+    /// Per-Finalizer instance: (finalizer_dense_idx, referent_dense_idx).
+    /// `referent_dense_idx` is `u32::MAX` when referent is null or unresolvable.
+    /// Capped at `FIN_INSTANCES_CAP` to bound memory on pathological dumps.
+    finalizer_instances: Vec<(u32, u32)>,
+
+    // Pool state snapshot capture (P1): ThreadPoolExecutor + HikariPool
+    /// True after the first on_instance call that attempted to resolve pool classes.
+    pool_resolved: bool,
+    /// Captured pool instance records: (dense_idx, slot, core_pool_size, max_pool_size).
+    /// `slot` = index into POOL_SENTINELS. `core_pool_size`/`max_pool_size` = i32::MIN when
+    /// unreadable. Capped at POOL_CAP to bound memory.
+    pool_raw_records: Vec<(u32, u8, i32, i32)>,
+    /// Class addresses for each POOL_SENTINELS slot (0 = not found).
+    pool_class_addrs: Vec<u64>,
+    /// corePoolSize field offset for ThreadPoolExecutor (slot 0).
+    pool_core_off: Option<u32>,
+    /// maximumPoolSize field offset for ThreadPoolExecutor (slot 0).
+    pool_max_off: Option<u32>,
+    /// maximumPoolSize field offset for HikariPool (slot 1).
+    hikari_max_off: Option<u32>,
+    /// minimumIdle field offset for HikariPool (slot 1).
+    hikari_min_idle_off: Option<u32>,
+    /// totalConnections field offset for HikariPool (slot 1).
+    hikari_total_off: Option<u32>,
+    /// activeConnections field offset for HikariPool (slot 1).
+    hikari_active_off: Option<u32>,
+    /// idleConnections field offset for HikariPool (slot 1).
+    hikari_idle_off: Option<u32>,
 }
 
 impl FieldDecodeState {
@@ -835,6 +884,21 @@ impl FieldDecodeState {
             obj_array_wanted_slots: HashMap::new(),
             obj_array_deferred_slots: HashMap::new(),
             coll_size_per_dense: Vec::new(),
+            finalizer_resolved: false,
+            finalizer_class_addr_opt: None,
+            finalizer_referent_off_opt: None,
+            finalizer_tally: HashMap::new(),
+            finalizer_instances: Vec::new(),
+            pool_resolved: false,
+            pool_raw_records: Vec::new(),
+            pool_class_addrs: vec![0u64; POOL_SENTINELS.len()],
+            pool_core_off: None,
+            pool_max_off: None,
+            hikari_max_off: None,
+            hikari_min_idle_off: None,
+            hikari_total_off: None,
+            hikari_active_off: None,
+            hikari_idle_off: None,
         }
     }
 
@@ -917,6 +981,265 @@ impl FieldDecodeState {
                 }
             }
         }
+
+        // Finalizer referent tally: detect java/lang/ref/Finalizer instances and
+        // record the class of their `referent` field target. Done at scan time because
+        // fwd_offsets/fwd_targets are consumed before build_model runs.
+        if !self.finalizer_resolved {
+            self.finalizer_resolved = true;
+            self.finalizer_class_addr_opt = p1
+                .class_map
+                .iter()
+                .find(|(_, ci)| {
+                    p1.strings
+                        .get(&ci.name_id)
+                        .map(|s| s.as_str())
+                        .unwrap_or("")
+                        == "java/lang/ref/Finalizer"
+                })
+                .map(|(addr, _)| *addr);
+            self.finalizer_referent_off_opt =
+                self.finalizer_class_addr_opt.and_then(|class_addr| {
+                    field_offset(
+                        class_addr,
+                        "referent",
+                        "java/lang/ref/Reference",
+                        class_map,
+                        strings,
+                        obj_ref_width,
+                    )
+                    .map(|(off, _ty)| off as usize)
+                });
+        }
+        if let (Some(fin_addr), Some(ref_off)) =
+            (self.finalizer_class_addr_opt, self.finalizer_referent_off_opt)
+        {
+            if class_id == fin_addr {
+                if ref_off + obj_ref_width <= blob.len() {
+                    let referent_addr = read_ref(&blob[ref_off..], obj_ref_width);
+                    let fin_dense = self.ic.index_of(&p1.id_map, addr).map(|i| i as u32);
+                    let (class_name, sh, referent_dense) = if referent_addr != 0 {
+                        if let Some(ridx) = self.ic.index_of(&p1.id_map, referent_addr) {
+                            let cname = p1
+                                .class_ids
+                                .get(ridx)
+                                .and_then(|&cidx| {
+                                    p1.class_addr_table.get(cidx as usize)
+                                })
+                                .and_then(|&caddr| p1.class_map.get(&caddr))
+                                .and_then(|ci| p1.strings.get(&ci.name_id))
+                                .map(|n| crate::report::pretty_class_name(n))
+                                .unwrap_or_else(|| "<unknown>".to_string());
+                            let sh = shallow.get(ridx).copied().unwrap_or(0) as u64;
+                            (cname, sh, ridx as u32)
+                        } else {
+                            ("<unknown>".to_string(), 0u64, u32::MAX)
+                        }
+                    } else {
+                        ("<null>".to_string(), 0u64, u32::MAX)
+                    };
+                    const FIN_TALLY_CAP: usize = 200;
+                    if self.finalizer_tally.contains_key(&class_name)
+                        || self.finalizer_tally.len() < FIN_TALLY_CAP
+                    {
+                        let e = self.finalizer_tally.entry(class_name).or_insert((0, 0));
+                        e.0 += 1;
+                        e.1 += sh;
+                    }
+                    const FIN_INSTANCES_CAP: usize = 500_000;
+                    if self.finalizer_instances.len() < FIN_INSTANCES_CAP {
+                        if let Some(fidx) = fin_dense {
+                            self.finalizer_instances.push((fidx, referent_dense));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pool state snapshot (P1): detect ThreadPoolExecutor and HikariPool instances,
+        // read their integer configuration fields at scan time (before fwd CSR is consumed).
+        if !self.pool_resolved {
+            self.pool_resolved = true;
+            for (slot, &(sentinel, _)) in POOL_SENTINELS.iter().enumerate() {
+                let addr = p1
+                    .class_map
+                    .iter()
+                    .find(|(_, ci)| {
+                        p1.strings
+                            .get(&ci.name_id)
+                            .map(|s| s.as_str())
+                            .unwrap_or("")
+                            == sentinel
+                    })
+                    .map(|(a, _)| *a)
+                    .unwrap_or(0);
+                self.pool_class_addrs[slot] = addr;
+            }
+            // ThreadPoolExecutor (slot 0): corePoolSize + maximumPoolSize both in TPE
+            let tpe_addr = self.pool_class_addrs[0];
+            if tpe_addr != 0 {
+                self.pool_core_off = field_offset(
+                    tpe_addr,
+                    "corePoolSize",
+                    "java/util/concurrent/ThreadPoolExecutor",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+                self.pool_max_off = field_offset(
+                    tpe_addr,
+                    "maximumPoolSize",
+                    "java/util/concurrent/ThreadPoolExecutor",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+            }
+            // HikariPool (slot 1): maximumPoolSize + minimumIdle in HikariConfigMXBean /
+            // HikariConfig (superclass); totalConnections / activeConnections /
+            // idleConnections directly on HikariPool.
+            let hikari_addr = self.pool_class_addrs[1];
+            if hikari_addr != 0 {
+                self.hikari_max_off = field_offset(
+                    hikari_addr,
+                    "maximumPoolSize",
+                    "com/zaxxer/hikari/HikariConfig",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+                self.hikari_min_idle_off = field_offset(
+                    hikari_addr,
+                    "minimumIdle",
+                    "com/zaxxer/hikari/HikariConfig",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+                self.hikari_total_off = field_offset(
+                    hikari_addr,
+                    "totalConnections",
+                    "com/zaxxer/hikari/pool/HikariPool",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+                self.hikari_active_off = field_offset(
+                    hikari_addr,
+                    "activeConnections",
+                    "com/zaxxer/hikari/pool/HikariPool",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+                self.hikari_idle_off = field_offset(
+                    hikari_addr,
+                    "idleConnections",
+                    "com/zaxxer/hikari/pool/HikariPool",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                )
+                .map(|(off, _)| off);
+            }
+        }
+
+        // Check if this instance is a pool and capture fields.
+        for (slot, &pool_addr) in self.pool_class_addrs.iter().enumerate() {
+            if pool_addr != 0 && class_id == pool_addr {
+                if self.pool_raw_records.len() < POOL_CAP {
+                    let dense_idx = self
+                        .ic
+                        .index_of(&p1.id_map, addr)
+                        .map(|i| i as u32)
+                        .unwrap_or(u32::MAX);
+                    let (f1, f2) = match slot {
+                        0 => {
+                            // ThreadPoolExecutor
+                            let core = self
+                                .pool_core_off
+                                .and_then(|off| {
+                                    let o = off as usize;
+                                    if o + 4 <= blob.len() {
+                                        Some(i32::from_be_bytes([
+                                            blob[o],
+                                            blob[o + 1],
+                                            blob[o + 2],
+                                            blob[o + 3],
+                                        ]))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(i32::MIN);
+                            let max_ps = self
+                                .pool_max_off
+                                .and_then(|off| {
+                                    let o = off as usize;
+                                    if o + 4 <= blob.len() {
+                                        Some(i32::from_be_bytes([
+                                            blob[o],
+                                            blob[o + 1],
+                                            blob[o + 2],
+                                            blob[o + 3],
+                                        ]))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(i32::MIN);
+                            (core, max_ps)
+                        }
+                        1 => {
+                            // HikariPool: f1 = maximumPoolSize, f2 = minimumIdle
+                            let max_ps = self
+                                .hikari_max_off
+                                .and_then(|off| {
+                                    let o = off as usize;
+                                    if o + 4 <= blob.len() {
+                                        Some(i32::from_be_bytes([
+                                            blob[o],
+                                            blob[o + 1],
+                                            blob[o + 2],
+                                            blob[o + 3],
+                                        ]))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(i32::MIN);
+                            let min_idle = self
+                                .hikari_min_idle_off
+                                .and_then(|off| {
+                                    let o = off as usize;
+                                    if o + 4 <= blob.len() {
+                                        Some(i32::from_be_bytes([
+                                            blob[o],
+                                            blob[o + 1],
+                                            blob[o + 2],
+                                            blob[o + 3],
+                                        ]))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(i32::MIN);
+                            (max_ps, min_idle)
+                        }
+                        _ => (i32::MIN, i32::MIN),
+                    };
+                    self.pool_raw_records.push((dense_idx, slot as u8, f1, f2));
+                }
+                break;
+            }
+        }
+
         let role = *self
             .role_cache
             .entry(class_id)
@@ -1626,6 +1949,19 @@ impl FieldDecodeState {
             self.tl_null_key_count,
             self.tl_entry_records,
             self.coll_size_per_dense,
+            {
+                // Sort by count desc, convert to Vec<(String, u64, u64)>.
+                let mut v: Vec<(String, u64, u64)> = self
+                    .finalizer_tally
+                    .into_iter()
+                    .map(|(name, (count, sh))| (name, count, sh))
+                    .collect();
+                v.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                v
+            },
+            self.finalizer_instances,
+            self.pool_raw_records,
+            self.pool_class_addrs,
         ))
     }
 }
@@ -1654,6 +1990,10 @@ type FieldDecodeViews = (
     u64,      // thread_local_null_key_count
     Vec<(bool, u32)>, // tl_entry_records: (is_stale, value_dense_idx)
     Vec<u32>, // coll_size_per_dense: element count per object (u32::MAX = not a collection)
+    Vec<(String, u64, u64)>, // finalizer_referent_class_tally: (class_name, count, shallow_sum), sorted by count desc
+    Vec<(u32, u32)>, // finalizer_instances: (finalizer_dense_idx, referent_dense_idx)
+    Vec<(u32, u8, i32, i32)>, // pool_raw_records: (dense_idx, slot, field1, field2)
+    Vec<u64>,        // pool_class_addrs: class-object address per POOL_SENTINELS slot
 );
 
 /// Compute the collection/array/reference views in exactly THREE full-file

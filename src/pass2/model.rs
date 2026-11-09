@@ -548,6 +548,23 @@ pub struct Graph {
     /// collection with a resolvable `size` field; `u32::MAX` otherwise.
     /// Length == `n` (total object count). Populated during pass2 field-decode.
     pub coll_size_per_dense: Vec<u32>,
+    /// Per `java/lang/ref/Finalizer` instance: `(finalizer_dense_idx, referent_dense_idx)`.
+    /// `referent_dense_idx` is `u32::MAX` when the referent is null or could not be resolved.
+    /// Populated during pass2 field-decode. Used by `build_finalizer_classes` to compute
+    /// retained-size sums per referent class after dominators are computed.
+    pub finalizer_referent_tally: Vec<(String, u64, u64)>,
+    /// Per `java/lang/ref/Finalizer` instance: `(finalizer_dense_idx, referent_dense_idx)`.
+    /// Used to compute retained sums per referent class at build time.
+    pub finalizer_instances: Vec<(u32, u32)>,
+    /// Raw pool instance records captured during pass2 field-decode.
+    /// Each entry is `(dense_idx, slot, field1, field2)`:
+    /// - slot 0 (ThreadPoolExecutor): field1 = corePoolSize, field2 = maximumPoolSize
+    /// - slot 1 (HikariPool): field1 = maximumPoolSize, field2 = minimumIdle
+    /// `i32::MIN` means the field could not be read. Used by `build_pool_snapshots`.
+    pub pool_raw_records: Vec<(u32, u8, i32, i32)>,
+    /// Class-object addresses for each POOL_SENTINELS slot, indexed identically.
+    /// 0 = class not found in this dump.
+    pub pool_class_addrs: Vec<u64>,
 }
 
 // ── Object-graph click-through capture ──────────────────────────────────────
@@ -2288,6 +2305,10 @@ mod obj_graph_tests {
             class_ref_field_names: vec![],
             class_super_idx: vec![],
             coll_size_per_dense: vec![],
+            finalizer_referent_tally: vec![],
+            finalizer_instances: vec![],
+            pool_raw_records: vec![],
+            pool_class_addrs: vec![],
         }
     }
 

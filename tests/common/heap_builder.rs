@@ -1322,3 +1322,83 @@ pub fn build_arraylist_with_string_elements() -> Vec<u8> {
 
     b.build()
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 33: Finalizer referent class breakdown (P2)
+// ---------------------------------------------------------------------------
+
+/// Build a heap with `java.lang.ref.Finalizer` instances wrapping two different
+/// target classes, so `report.finalizer_classes` is non-empty and correctly
+/// groups them.
+///
+/// Inheritance chain:
+///   `java/lang/Object`
+///     → `java/lang/ref/Reference`  (referent: Object)
+///       → `java/lang/ref/FinalReference`  (no own fields)
+///         → `java/lang/ref/Finalizer`  (no own fields)
+///
+/// Instance data layout (subclass fields first):
+///   Finalizer's own fields (none) → FinalReference's fields (none) →
+///   Reference's field `referent` at offset 0 (8 bytes).
+///
+/// Builds: 3 FinalizableA targets + 2 FinalizableB targets, each wrapped in
+/// one Finalizer instance, plus a holder to keep them all reachable.
+pub fn build_finalizer_classes(b: &mut HeapBuilder) {
+    let object_class = b.class("java/lang/Object", &[]);
+
+    // Reference declares `referent` as the first (and only) Object field.
+    let reference_class = b.class_with_super(
+        "java/lang/ref/Reference",
+        object_class,
+        &[("referent", T_OBJECT)],
+    );
+    // FinalReference extends Reference (no own fields).
+    let final_ref_class =
+        b.class_with_super("java/lang/ref/FinalReference", reference_class, &[]);
+    // Finalizer extends FinalReference (no own fields).
+    let finalizer_class =
+        b.class_with_super("java/lang/ref/Finalizer", final_ref_class, &[]);
+
+    // Two target classes with a small payload so their retained size > 0.
+    let cls_a = b.class("scenarios/FinalizableA", &[("x", T_INT)]);
+    let cls_b = b.class("scenarios/FinalizableB", &[("x", T_INT)]);
+
+    // Create target objects.
+    let mut make_int_instance = |b: &mut HeapBuilder, class_id: u64, val: i32| -> u64 {
+        let mut data = Vec::new();
+        int_field(&mut data, val);
+        b.instance(class_id, &data)
+    };
+
+    let a1 = make_int_instance(b, cls_a, 1);
+    let a2 = make_int_instance(b, cls_a, 2);
+    let a3 = make_int_instance(b, cls_a, 3);
+    let b1 = make_int_instance(b, cls_b, 10);
+    let b2 = make_int_instance(b, cls_b, 20);
+
+    // Wrap each target in a Finalizer instance.
+    // Layout: referent at offset 0 (8 bytes, from Reference).
+    let mut fin_data = Vec::new();
+    obj_field(&mut fin_data, a1);
+    let f1 = b.instance(finalizer_class, &fin_data);
+    let mut fin_data = Vec::new();
+    obj_field(&mut fin_data, a2);
+    let f2 = b.instance(finalizer_class, &fin_data);
+    let mut fin_data = Vec::new();
+    obj_field(&mut fin_data, a3);
+    let f3 = b.instance(finalizer_class, &fin_data);
+    let mut fin_data = Vec::new();
+    obj_field(&mut fin_data, b1);
+    let f4 = b.instance(finalizer_class, &fin_data);
+    let mut fin_data = Vec::new();
+    obj_field(&mut fin_data, b2);
+    let f5 = b.instance(finalizer_class, &fin_data);
+
+    // Anchor via a static root so all finalizers are reachable.
+    b.class_with_static_root("FinalizerHolder", "f1", f1, &[]);
+    // Also anchor the other finalizers transitively — since FinalizerHolder only
+    // holds f1 via a single static field, we need additional anchors or an
+    // object array. Use an obj_array holding all five.
+    let arr = b.obj_array(object_class, &[f1, f2, f3, f4, f5]);
+    b.class_with_static_root("FinalizerHolderAll", "all", arr, &[]);
+}

@@ -1820,7 +1820,57 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 17;
+
+/// One entry in the Finalizer referents breakdown: the class name of the
+/// referent (the object that `finalize()` will be called on) and how many
+/// live `java.lang.ref.Finalizer` instances wrap it.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct FinalizerClassRow {
+    /// Pretty class name of the finalizer referent.
+    pub referent_class: String,
+    /// Number of live `java.lang.ref.Finalizer` instances with this referent class.
+    pub count: u64,
+    /// Total retained heap of the referent objects.
+    pub retained: u64,
+}
+
+/// Decoded field values for one pool instance (P1).
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct PoolInstanceRow {
+    /// 1-based object index of the pool object.
+    pub obj_index_1based: usize,
+    /// Core / configured pool size. `None` when the field could not be read.
+    pub pool_size: Option<i32>,
+    /// Maximum pool size. `None` when the field could not be read.
+    pub max_pool_size: Option<i32>,
+    /// Task or connection queue depth (from `workQueue.size` or equivalent).
+    /// `None` when not available.
+    pub queue_depth: Option<i64>,
+    /// Active/busy workers at snapshot time. `None` when not available.
+    pub active_count: Option<i32>,
+}
+
+/// Pool state snapshot for one pool class — one row per instance.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct PoolSnapshot {
+    /// Human-readable pool type label, e.g. `"ThreadPoolExecutor"`.
+    pub pool_type: String,
+    /// Fully-qualified class name of the pool sentinel class.
+    pub class_name: String,
+    /// Number of pool instances found.
+    pub instance_count: u32,
+    /// Total retained heap across all instances, in bytes.
+    pub total_retained: u64,
+    /// Per-instance decoded fields, capped at 20 rows.
+    pub instances: Vec<PoolInstanceRow>,
+}
 
 /// One detected framework's aggregate statistics.
 #[derive(
@@ -2042,6 +2092,17 @@ pub struct Report {
     /// JSON loadable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub category_rollup: Vec<CategoryRollup>,
+    /// Per-class breakdown of live `java.lang.ref.Finalizer` instances by
+    /// referent class (P2). Empty when no Finalizers are present. Sorted by
+    /// count descending, capped at 50. Additive; `#[serde(default)]` keeps
+    /// older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finalizer_classes: Vec<FinalizerClassRow>,
+    /// Pool state snapshots for ThreadPoolExecutor and HikariCP instances (P1).
+    /// One entry per detected pool class; instances are capped at 20 per class.
+    /// Additive; `#[serde(default)]` keeps older JSON loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pool_snapshots: Vec<PoolSnapshot>,
 }
 
 /// Which opt-in analysis passes were enabled when the report was generated.

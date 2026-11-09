@@ -729,6 +729,52 @@ fn check_from_entries_no_panic(report: &Report) {
     let _ = &report.triage;
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 33: finalizer_classes_breakdown (P2 — Finalizer referents by class)
+// ---------------------------------------------------------------------------
+
+fn build_finalizer_classes_breakdown() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_finalizer_classes(&mut b);
+    b.build()
+}
+
+fn check_finalizer_classes_breakdown(report: &Report) {
+    // The finalizer_classes breakdown must be non-empty (5 finalizers present).
+    assert!(
+        !report.finalizer_classes.is_empty(),
+        "expected finalizer_classes to be non-empty; got: {:?}",
+        report.finalizer_classes,
+    );
+    // FinalizableA had 3 instances, FinalizableB had 2 — FinalizableA must be first.
+    let top = &report.finalizer_classes[0];
+    assert!(
+        top.referent_class.contains("FinalizableA"),
+        "top finalizer_classes entry should be FinalizableA (count=3), got: {:?}",
+        top,
+    );
+    assert_eq!(
+        top.count, 3,
+        "FinalizableA should have count=3, got: {}",
+        top.count,
+    );
+    // FinalizableB must appear too.
+    let b_row = report
+        .finalizer_classes
+        .iter()
+        .find(|r| r.referent_class.contains("FinalizableB"));
+    assert!(
+        b_row.is_some(),
+        "FinalizableB must appear in finalizer_classes; got: {:?}",
+        report.finalizer_classes,
+    );
+    assert_eq!(
+        b_row.unwrap().count,
+        2,
+        "FinalizableB should have count=2"
+    );
+}
+
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
 }
@@ -992,6 +1038,15 @@ const SCENARIOS: &[Scenario] = &[
             let _ = &r.triage; // UNION is OQL-only; verify no panic
         },
     },
+    // Scenario 33: finalizer_classes_breakdown (P2) — Finalizer referent class
+    // breakdown must be non-empty and correctly grouped when Finalizer instances
+    // with two distinct referent classes are present.
+    Scenario {
+        name: "finalizer_classes_breakdown",
+        opts: default_opts,
+        build: build_finalizer_classes_breakdown,
+        check: check_finalizer_classes_breakdown,
+    },
 ];
 
 #[test]
@@ -1192,6 +1247,11 @@ fn scenario_union_query_merges_results() {
     run_scenario(&SCENARIOS[32]);
 }
 
+#[test]
+fn scenario_finalizer_classes_breakdown() {
+    run_scenario(&SCENARIOS[33]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1200,7 +1260,7 @@ fn scenario_union_query_merges_results() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        33,
+        34,
         "update this test when adding scenarios"
     );
 }

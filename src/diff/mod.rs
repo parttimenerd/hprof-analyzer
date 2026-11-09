@@ -142,6 +142,8 @@ mod tests {
             primary_culprits: Vec::new(),
             self_referential_classes: Vec::new(),
             category_rollup: Vec::new(),
+            finalizer_classes: Vec::new(),
+            pool_snapshots: Vec::new(),
         }
     }
 

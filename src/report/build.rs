@@ -734,6 +734,12 @@ pub fn build_model(
     let framework_analysis = crate::pass2::scan_frameworks(g);
     t_bm!("framework_analysis");
     crate::trace::probe("build_model: after framework_analysis");
+    // P2: Finalizer referent class breakdown — always-on; empty when no
+    // Finalizer instances are present or fwd CSR was not built.
+    let finalizer_classes = build_finalizer_classes(g);
+    t_bm!("finalizer_classes");
+    let pool_snapshots = build_pool_snapshots(g);
+    t_bm!("pool_snapshots");
     let field_stats = if precomputed_field_stats.is_some() {
         // Precomputed before build_model to free the fwd CSR copy early (saves ~2 GB peak RSS).
         precomputed_field_stats
@@ -786,6 +792,8 @@ pub fn build_model(
         primary_culprits: Vec::new(),
         self_referential_classes,
         category_rollup,
+        finalizer_classes,
+        pool_snapshots,
     };
     // Resolve the ranked "who's actually responsible" answer from the
     // already-built leak suspects, before evaluating triage so the headline
@@ -1152,6 +1160,146 @@ fn element_type_display(g: &Graph, vi: u32) -> String {
         }
     }
     class_display(g, vi as usize)
+}
+
+/// Build the per-class breakdown of live `java.lang.ref.Finalizer` instances.
+///
+/// Finalizer is NOT matched by the Soft/Weak/Phantom reference classifier, so
+/// it is treated as a Plain class and its instances are NOT captured in
+/// `reference_referent_idx`. Instead, this function scans `class_idx` for
+/// instances of `java/lang/ref/Finalizer` (and checks super-chain membership
+/// via `class_names`), then follows the fwd-CSR edge at slot 1 (the `referent`
+/// field, always the first Object field on `java.lang.ref.Reference`) to find
+/// the referent object's class.
+///
+/// Falls back gracefully: if the fwd CSR is empty (e.g. consumed by field-stats
+/// pass), returns empty — the triage rule that counts Finalizers still fires,
+/// but the per-class table is absent.
+fn build_finalizer_classes(g: &Graph) -> Vec<crate::report::model::FinalizerClassRow> {
+    // The scan-time tally already has (class_name, count, shallow_sum) sorted by count.
+    // We need to add retained sums, which are only available after dominators are computed.
+    // Use g.finalizer_instances (finalizer_dense_idx, referent_dense_idx) to:
+    //   1. Look up g.class_idx[referent_dense_idx] → class hist idx → class name.
+    //   2. Sum g.retained[finalizer_dense_idx] per class name.
+
+    if g.finalizer_instances.is_empty() {
+        // Fall back to tally-only (no retained info): use count+shallow.
+        // This happens when the dump has no Finalizer instances.
+        return g
+            .finalizer_referent_tally
+            .iter()
+            .map(|(name, count, sh)| crate::report::model::FinalizerClassRow {
+                referent_class: name.clone(),
+                count: *count,
+                retained: *sh,
+            })
+            .collect();
+    }
+
+    // Build per-class retained sums from the per-instance data.
+    let mut by_class: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    const CAP: usize = 50;
+
+    for &(fin_idx, ref_idx) in &g.finalizer_instances {
+        let class_name = if ref_idx != u32::MAX {
+            class_display(g, ref_idx as usize)
+        } else {
+            String::new()
+        };
+        let key = if class_name.is_empty() {
+            "<unknown>".to_string()
+        } else {
+            class_name
+        };
+        let retained = g.retained.get(fin_idx as usize).copied().unwrap_or(0);
+        if by_class.contains_key(&key) || by_class.len() < CAP * 4 {
+            let e = by_class.entry(key).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += retained;
+        }
+    }
+
+    let mut rows: Vec<crate::report::model::FinalizerClassRow> = by_class
+        .into_iter()
+        .map(|(referent_class, (count, retained))| {
+            crate::report::model::FinalizerClassRow {
+                referent_class,
+                count,
+                retained,
+            }
+        })
+        .collect();
+    rows.sort_unstable_by(|a, b| b.count.cmp(&a.count).then_with(|| a.referent_class.cmp(&b.referent_class)));
+    rows.truncate(CAP);
+    rows
+}
+
+/// Pool sentinel metadata aligned with the slot index in `g.pool_raw_records`.
+/// slot 0 = ThreadPoolExecutor, slot 1 = HikariPool.
+const POOL_SENTINEL_META: &[(&str, &str)] = &[
+    ("java/util/concurrent/ThreadPoolExecutor", "ThreadPoolExecutor"),
+    ("com/zaxxer/hikari/pool/HikariPool", "HikariCP"),
+];
+
+fn build_pool_snapshots(g: &Graph) -> Vec<crate::report::model::PoolSnapshot> {
+    use crate::report::model::{PoolInstanceRow, PoolSnapshot};
+    if g.pool_raw_records.is_empty() {
+        return Vec::new();
+    }
+    // Group records by slot.
+    let n_slots = POOL_SENTINEL_META.len();
+    let mut by_slot: Vec<Vec<(u32, i32, i32)>> = vec![Vec::new(); n_slots];
+    for &(dense_idx, slot, f1, f2) in &g.pool_raw_records {
+        if (slot as usize) < n_slots {
+            by_slot[slot as usize].push((dense_idx, f1, f2));
+        }
+    }
+
+    let mut out = Vec::new();
+    for (slot, records) in by_slot.iter().enumerate() {
+        if records.is_empty() {
+            continue;
+        }
+        let (class_name, pool_type) = POOL_SENTINEL_META[slot];
+        let total_retained: u64 = records
+            .iter()
+            .map(|&(idx, _, _)| g.retained.get(idx as usize).copied().unwrap_or(0))
+            .sum();
+        let instances: Vec<PoolInstanceRow> = records
+            .iter()
+            .take(20)
+            .map(|&(dense_idx, f1, f2)| {
+                let obj_index_1based = dense_idx as usize + 1;
+                match slot {
+                    0 => PoolInstanceRow {
+                        // ThreadPoolExecutor: f1=corePoolSize, f2=maximumPoolSize
+                        obj_index_1based,
+                        pool_size: if f1 == i32::MIN { None } else { Some(f1) },
+                        max_pool_size: if f2 == i32::MIN { None } else { Some(f2) },
+                        queue_depth: None,
+                        active_count: None,
+                    },
+                    1 => PoolInstanceRow {
+                        // HikariPool: f1=maximumPoolSize, f2=minimumIdle
+                        obj_index_1based,
+                        pool_size: if f2 == i32::MIN { None } else { Some(f2) },
+                        max_pool_size: if f1 == i32::MIN { None } else { Some(f1) },
+                        queue_depth: None,
+                        active_count: None,
+                    },
+                    _ => PoolInstanceRow::default(),
+                }
+            })
+            .collect();
+        out.push(PoolSnapshot {
+            pool_type: pool_type.to_string(),
+            class_name: class_name.replace('/', "."),
+            instance_count: records.len() as u32,
+            total_retained,
+            instances,
+        });
+    }
+    out
 }
 
 /// Build the reference-kind statistics for the report from the graph's

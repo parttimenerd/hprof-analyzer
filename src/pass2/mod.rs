@@ -717,6 +717,10 @@ impl Pass2 {
             fd_tl_null_key_count,
             fd_tl_entry_records,
             fd_coll_size_per_dense,
+            fd_finalizer_referent_tally,
+            fd_finalizer_instances,
+            fd_pool_raw_records,
+            fd_pool_class_addrs,
         ) = fd_state.finish(&p1)?;
         crate::trace::probe("pass2: after field_decode_views (fused into 2a, no extra scan)");
         crate::trace::trim();
@@ -1622,6 +1626,10 @@ impl Pass2 {
             class_ref_field_names: vec![],
             class_super_idx,
             coll_size_per_dense: fd_coll_size_per_dense,
+            finalizer_referent_tally: fd_finalizer_referent_tally,
+            finalizer_instances: fd_finalizer_instances,
+            pool_raw_records: fd_pool_raw_records,
+            pool_class_addrs: fd_pool_class_addrs,
         };
 
         // Populate class_ref_field_names when --field-stats is set (named plans were

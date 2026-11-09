@@ -280,6 +280,10 @@ mod tests {
             class_ref_field_names: vec![],
             class_super_idx: vec![],
             coll_size_per_dense: vec![],
+            finalizer_referent_tally: vec![],
+            finalizer_instances: vec![],
+            pool_raw_records: vec![],
+            pool_class_addrs: vec![],
         };
         (g, dc_off, dc_tgt)
     }

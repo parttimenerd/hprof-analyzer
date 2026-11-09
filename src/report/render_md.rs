@@ -212,9 +212,31 @@ const CONCENTRATION_PCT: f64 = 50.0;
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
+/// Condense a root-path chain into a one-line display: first class → … → last class.
+fn render_root_path_brief(steps: &[crate::report::model::RootPathStep]) -> String {
+    if steps.is_empty() {
+        return "—".into();
+    }
+    if steps.len() == 1 {
+        return format!("`{}`", steps[0].display_class);
+    }
+    let first = &steps[0].display_class;
+    let last = &steps[steps.len() - 1].display_class;
+    if steps.len() <= 3 {
+        steps
+            .iter()
+            .map(|s| format!("`{}`", s.display_class))
+            .collect::<Vec<_>>()
+            .join(" → ")
+    } else {
+        format!("`{}` → … → `{}`", first, last)
+    }
+}
+
 /// Render the "Leak Indicators" section (plain Markdown): scalar counters for
-/// anonymous classes, ThreadLocal null-key entries, and DirectByteBuffer total
-/// capacity. Only emitted when at least one indicator is non-zero.
+/// anonymous classes, ThreadLocal null-key entries, DirectByteBuffer total
+/// capacity, and (when present) a per-buffer owner table. Only emitted when at
+/// least one indicator is non-zero.
 pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &mut String) {
     if li.anonymous_class_count == 0
         && li.thread_local_null_key_count == 0
@@ -255,6 +277,24 @@ always bugs — see the **What to Check** column for how to triage each one._\n\
     }
     t.render(out);
     out.push('\n');
+
+    // Per-buffer owner table (B4): show the top individual buffers when available.
+    if !li.nio_buffer_owners.is_empty() {
+        out.push_str("**Top DirectByteBuffer owners:**\n\n");
+        let mut bt = Table::new(
+            &["Capacity", "Buffer object", "Owner (root → … → buffer)"],
+            &[Align::Right, Align::Left, Align::Left],
+        );
+        for owner in li.nio_buffer_owners.iter().take(20) {
+            bt.row([
+                format_bytes(owner.capacity),
+                format!("`{}` @{}", owner.display_class, owner.obj_index_1based),
+                render_root_path_brief(&owner.root_path),
+            ]);
+        }
+        bt.render(out);
+        out.push('\n');
+    }
 }
 
 /// Render a `Report` into Markdown. Byte-identical to the previous
@@ -294,6 +334,8 @@ pub fn render_markdown(r: &Report) -> String {
     render_threads(&r.threads, false, &mut out);
     render_thread_local_analysis(&r.thread_local_analysis, &mut out);
     render_framework_analysis(&r.framework_analysis, &mut out);
+    render_pool_snapshots(&r.pool_snapshots, &mut out);
+    render_finalizer_classes(&r.finalizer_classes, &mut out);
     render_top_components(&r.top_components, false, &mut out);
     render_arrays_by_size(&r.arrays_by_size, r.overview.total_shallow, false, &mut out);
     render_collections(&r.collections, &r.collection_attribution, false, &mut out);
@@ -4507,6 +4549,67 @@ retains its entire tail — treat as relative, not additive._\n\n",
     out.push('\n');
 }
 
+/// Render the pool state snapshot table (P1): decoded fields for detected
+/// ThreadPoolExecutor and HikariCP pool instances. No-op when empty.
+pub(crate) fn render_pool_snapshots(
+    snapshots: &[crate::report::model::PoolSnapshot],
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    if snapshots.is_empty() {
+        return;
+    }
+    out.push_str("## Pool State\n\n");
+    out.push_str(
+        "_Decoded field values for detected pool instances. \
+        A single snapshot cannot prove exhaustion — check trends across dumps if queue depth \
+        is concerning._\n\n",
+    );
+    for snap in snapshots {
+        out.push_str(&format!(
+            "### {} (`{}`)\n\n",
+            snap.pool_type, snap.class_name
+        ));
+        out.push_str(&format!(
+            "{} instance(s), {} total retained.\n\n",
+            fmt_count(snap.instance_count as u64),
+            format_bytes(snap.total_retained)
+        ));
+        if snap.instances.is_empty() {
+            continue;
+        }
+        let label0;
+        let label1;
+        match snap.pool_type.as_str() {
+            "HikariCP" => {
+                label0 = "Max pool";
+                label1 = "Min idle";
+            }
+            _ => {
+                label0 = "Core size";
+                label1 = "Max size";
+            }
+        }
+        let mut t = Table::new(
+            &["Obj", label0, label1],
+            &[Align::Right, Align::Right, Align::Right],
+        );
+        for row in &snap.instances {
+            t.row([
+                format!("@{}", row.obj_index_1based),
+                row.pool_size
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                row.max_pool_size
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+}
+
 pub(crate) fn render_framework_analysis(
     items: &[crate::report::model::FrameworkAnalysis],
     out: &mut String,
@@ -4534,6 +4637,38 @@ useful for spotting oversized caches or leaked request contexts._\n\n",
             item.framework.clone(),
             fmt_count(item.instance_count as u64),
             format_bytes(item.total_retained),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+/// Render the Finalizer referents breakdown (P2): per-class table of live
+/// `java.lang.ref.Finalizer` instances. No-op when empty.
+pub(crate) fn render_finalizer_classes(
+    rows: &[crate::report::model::FinalizerClassRow],
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    if rows.is_empty() {
+        return;
+    }
+    let total: u64 = rows.iter().map(|r| r.count).sum();
+    out.push_str("## Finalizer Referents\n\n");
+    out.push_str(&format!(
+        "_{total} live `java.lang.ref.Finalizer` instance(s) registered. \
+        This shows which classes have `finalize()` methods active — not that the queue is \
+        backed up. Prefer explicit `close()` or `java.lang.ref.Cleaner` over `finalize()`._\n\n"
+    ));
+    let mut t = Table::new(
+        &["Referent class", "Count", "Retained"],
+        &[Align::Left, Align::Right, Align::Right],
+    );
+    for row in rows {
+        t.row([
+            format!("`{}`", row.referent_class),
+            fmt_count(row.count),
+            format_bytes(row.retained),
         ]);
     }
     t.render(out);
