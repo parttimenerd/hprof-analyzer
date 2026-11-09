@@ -71,8 +71,29 @@ pub enum Token {
     #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
     At(String),
 
-    // double-quoted string — capture inner text (no escapes).
-    #[regex(r#""[^"]*""#, |lex| { let s = lex.slice(); s[1..s.len()-1].to_string() })]
+    // double-quoted string — supports backslash escapes: \\ → \, \" → ".
+    // P-06: old pattern "[^"]*" rejected strings containing escaped quotes.
+    #[regex(r#""([^"\\]|\\.)*""#, |lex| {
+        let s = lex.slice();
+        let inner = &s[1..s.len()-1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('"') => out.push('"'),
+                    Some('\\') => out.push('\\'),
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(other) => { out.push('\\'); out.push(other); }
+                    None => {}
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    })]
     Str(String),
 
     // Numeric + char literals. All int forms collapse to Int(i64); all float
@@ -864,11 +885,16 @@ where
                     Token::Float(f) => Value::Float(f),
                     Token::Str(s) => Value::Str(s),
                 };
+                // P-07: allow negative literals like -1, -3.14 in IN(…) lists.
+                let neg_lit = just(Token::Minus).ignore_then(select! {
+                    Token::Int(n) => Value::Int(-n),
+                    Token::Float(f) => Value::Float(-f),
+                });
                 let null_val = ident_ci("NULL").to(Value::Null);
                 let bool_val = ident_ci("TRUE")
                     .to(Value::Bool(true))
                     .or(ident_ci("FALSE").to(Value::Bool(false)));
-                let val = null_val.or(bool_val).or(lit_val);
+                let val = null_val.or(bool_val).or(neg_lit).or(lit_val);
                 let not_in = ident_ci("NOT").then_ignore(ident_ci("IN")).to(true);
                 let just_in = ident_ci("IN").to(false);
                 let in_kw = not_in.or(just_in);
@@ -1946,7 +1972,9 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
                 normalize_expr(a, alias);
             }
         }
-        Expr::Aggregate { .. } => {} // no Attr leaves to normalize in aggregate args
+        // P-08: normalize the aggregate argument so alias-prefixed attrs like
+        // COUNT(s.hash) strip the alias to COUNT(hash) correctly in HAVING.
+        Expr::Aggregate { arg, .. } => normalize_select_item(arg, alias),
         Expr::Case { branches, else_ } => {
             for (pred, then_expr) in branches {
                 normalize_predicate(pred, alias);
@@ -2016,11 +2044,12 @@ fn normalize_attr(a: &mut Attr, alias: Option<&str>) {
         return;
     }
     // Strip a leading `<alias>.` — the alias is the FROM object, not a hop.
+    // P-05: strip only at a dot boundary to avoid matching "a" as prefix of "ab.c".
     let stripped: &str = match alias {
-        Some(al) => name
-            .strip_prefix(al)
-            .and_then(|rest| rest.strip_prefix('.'))
-            .unwrap_or(name),
+        Some(al) => {
+            let prefix = format!("{al}.");
+            name.strip_prefix(prefix.as_str()).unwrap_or(name)
+        }
         None => name.as_str(),
     };
     let segs: Vec<&str> = stripped.split('.').collect();

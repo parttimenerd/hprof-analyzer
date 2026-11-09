@@ -60,26 +60,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Bug:** The `select!` guard guarantees a `.` in the string, but chumsky error recovery can bypass it.  
 **Fix:** Use `let Some((recv, meth)) = dotted.rsplit_once('.') else { return Expr::Null; };`.
 
-### P-05 `normalize_attr` alias-stripping matches field name prefixes — Medium
-**Line:** ~2009  
-**Bug:** Alias `a` strips prefix from field `ab.c` → `b.c` instead of leaving it alone.  
-**Fix:** Strip `format!("{}.", alias)` as the prefix, not just the alias string.
-
-### P-06 No string escape support in lexer — High
-**Line:** ~75  
-**Bug:** Regex `"[^"]*"` cannot represent strings containing `"`.  
-**Fix:** Use `"([^"\\]|\\.)*"` and unescape in the callback.
-
-### P-07 `IN(…)` value list rejects negative literals — Medium
-**Line:** ~857  
-**Bug:** `WHERE x IN (-1, 0, 1)` fails to parse.  
-**Fix:** Add `neg_lit` to the `in_list` value parser.
-
-### P-08 `normalize_expr` skips `Expr::Aggregate` args — Medium
-**Line:** ~1937  
-**Bug:** `HAVING COUNT(s.hash) > 0` leaves alias `s` un-stripped.  
-**Fix:** Add `Expr::Aggregate { arg, .. } => normalize_select_item(arg, alias)`.
-
 ### P-09 `WITH`/CTE produces cryptic error — Medium
 **Line:** ~1666  
 **Bug:** `WITH t AS (…)` fails with "unexpected identifier" instead of "not supported".  
