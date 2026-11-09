@@ -9,7 +9,7 @@ use crate::id_map::IdMap;
 use crate::pass1::ClassInfo;
 use crate::query::ObjectVisitor;
 use crate::query::ast::Query;
-use crate::query::execute::{ClassResolver, SingleScanExecutor};
+use crate::query::execute::{ClassResolver, SingleScanExecutor, canonical_distinct_key_pub};
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
 use crate::types::HprofType;
@@ -1654,6 +1654,17 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         sort_rows_by_columns(&mut joined.rows, &keys);
     }
 
+    // E-05: SELECT DISTINCT on VALUES — deduplicate before OFFSET/LIMIT so that
+    // the caller gets unique rows even on a VALUES-only short-circuit path.
+    if q.distinct {
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(joined.rows.len());
+        joined.rows.retain(|row| {
+            let key: String = row.iter().map(canonical_key).collect::<Vec<_>>().join("\x00");
+            seen.insert(key)
+        });
+    }
+
     // Apply OFFSET first, then LIMIT (OQL-55: pre-OFFSET rows were returned).
     if let Some(off) = q.offset {
         let n = off as usize;
@@ -2880,17 +2891,18 @@ pub fn collapse_union_results(
         }
 
         // INTERSECT: drain each INTERSECT branch result and intersect row-sets.
-        // Uses the same Debug-key dedup strategy as stable_dedup for row equality.
+        // E-06: use canonical_distinct_key so Int(1) == Float(1.0) and NaN is
+        // handled consistently, matching COUNT DISTINCT semantics.
         for _ in 0..g.intersect_count {
             let right = it
                 .next()
                 .expect("flat results shorter than groups describe (intersect)");
             // Build a set of right-side row keys.
-            let right_set: HashSet<String> =
-                right.rows.iter().map(|row| format!("{row:?}")).collect();
+            let right_set: std::collections::HashSet<String> =
+                right.rows.iter().map(|row| row_canonical_key(row)).collect();
             result
                 .rows
-                .retain(|row| right_set.contains(&format!("{row:?}")));
+                .retain(|row| right_set.contains(&row_canonical_key(row)));
             result.truncated |= right.truncated;
         }
         // Dedup the intersect result (INTERSECT has DISTINCT semantics).
@@ -2903,11 +2915,11 @@ pub fn collapse_union_results(
             let right = it
                 .next()
                 .expect("flat results shorter than groups describe (except)");
-            let right_set: HashSet<String> =
-                right.rows.iter().map(|row| format!("{row:?}")).collect();
+            let right_set: std::collections::HashSet<String> =
+                right.rows.iter().map(|row| row_canonical_key(row)).collect();
             result
                 .rows
-                .retain(|row| !right_set.contains(&format!("{row:?}")));
+                .retain(|row| !right_set.contains(&row_canonical_key(row)));
             result.truncated |= right.truncated;
         }
         // Dedup the except result (EXCEPT has DISTINCT semantics).
@@ -2952,10 +2964,19 @@ pub fn collapse_union_results(
 /// preserving original order. Uses `Debug` formatting as a total canonical key
 /// (handles `Float(NaN)` without panic; allocation is acceptable since dedup is
 /// query-result post-processing, not per-object hot path).
+/// Canonical key for a result row: joins each value's canonical_distinct_key
+/// with a separator. Ensures Int(1) == Float(1.0) and 0.0 == -0.0.
+fn row_canonical_key(row: &[QueryValue]) -> String {
+    row.iter()
+        .map(canonical_distinct_key_pub)
+        .collect::<Vec<_>>()
+        .join("\x00")
+}
+
 fn stable_dedup(mut r: QueryResult) -> QueryResult {
     use std::collections::HashSet;
     let mut seen: HashSet<String> = HashSet::with_capacity(r.rows.len());
-    r.rows.retain(|row| seen.insert(format!("{row:?}")));
+    r.rows.retain(|row| seen.insert(row_canonical_key(row)));
     r.row_count = r.rows.len() as u64;
     r
 }
@@ -3121,6 +3142,11 @@ impl ReplCache {
                 arr_addr = (arr_addr << 8) | b as u64;
             }
             if arr_addr == 0 {
+                // Java "" has a null/zero backing array; record it as empty string
+                // so toString("") returns "" instead of null.
+                if let Some(dense_idx) = id_map.index_of(obj_addr) {
+                    capture.insert_empty(dense_idx as u32);
+                }
                 return;
             }
             let coder = match coder_off {

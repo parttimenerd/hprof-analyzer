@@ -19,6 +19,8 @@ pub const STRING_VALUES_CAP: usize = 500_000;
 pub struct StringCapture {
     /// dense_idx → (backing_array_addr, coder)
     inner: HashMap<u32, (u64, u8)>,
+    /// dense_idx values that are empty strings (arr_addr == 0 in the heap)
+    empty: HashSet<u32>,
     cap: usize,
     pub truncated: bool,
 }
@@ -27,6 +29,7 @@ impl StringCapture {
     pub fn new(cap: usize) -> Self {
         Self {
             inner: HashMap::new(),
+            empty: HashSet::new(),
             cap,
             truncated: false,
         }
@@ -42,14 +45,19 @@ impl StringCapture {
         self.inner.insert(dense_idx, (arr_addr, coder));
     }
 
+    /// Record a String with a null backing array (Java `""`) as an empty string.
+    pub fn insert_empty(&mut self, dense_idx: u32) {
+        self.empty.insert(dense_idx);
+    }
+
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.inner.is_empty() && self.empty.is_empty()
     }
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.inner.len() + self.empty.len()
     }
 
     /// Decode all captured String instances using one `scan_prim_arrays` pass.
@@ -58,8 +66,14 @@ impl StringCapture {
     where
         O: Fn() -> std::io::Result<crate::reader::HprofReader>,
     {
+        // Pre-populate empty strings (Java "" — null backing array).
+        let mut out = HashMap::with_capacity(self.inner.len() + self.empty.len());
+        for dense_idx in self.empty {
+            out.insert(dense_idx, String::new());
+        }
+
         if self.inner.is_empty() {
-            return Ok(HashMap::new());
+            return Ok(out);
         }
 
         // Build the wanted-array set and a reverse map: arr_addr → coder.
@@ -79,7 +93,6 @@ impl StringCapture {
         })?;
 
         // Join dense_idx → arr_addr → String.
-        let mut out = HashMap::with_capacity(self.inner.len());
         for (dense_idx, (arr_addr, _coder)) in self.inner {
             if let Some(s) = arr_text.get(&arr_addr) {
                 out.insert(dense_idx, s.clone());
