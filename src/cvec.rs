@@ -343,7 +343,15 @@ fn stream_u32s<R: Read, F: FnMut(u32)>(mut r: R, f: &mut F) -> io::Result<()> {
             i += 1;
         }
     }
-    debug_assert_eq!(carry_len, 0);
+    if carry_len != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "stream_u32s: decompressed data length is not a multiple of 4 ({} trailing bytes)",
+                carry_len
+            ),
+        ));
+    }
     Ok(())
 }
 
