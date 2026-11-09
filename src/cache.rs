@@ -47,7 +47,7 @@ const MAGIC: &[u8; 4] = b"HPCA";
 // stayed true and the stale report.json.zst was served as-is. Bump this on
 // any change that could alter the CONTENT of a freshly-built Report, not
 // just on raw array-format changes.
-pub(crate) const VERSION: u16 = 16;
+pub(crate) const VERSION: u16 = 17;
 const ENTRY_SIZE: usize = 16 + 8 + 8; // name[16] + offset:u64 + len:u64
 
 // ── CacheMode ────────────────────────────────────────────────────────────────
@@ -344,6 +344,12 @@ impl CacheDir {
 fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Result<()> {
     assert_eq!(names.len(), frames.len());
     let n = names.len();
+    if n > 255 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("indexed file: array count {n} exceeds 255"),
+        ));
+    }
     let index_bytes = n * ENTRY_SIZE;
     let header_bytes = 4 + 2 + 1 + index_bytes; // magic + version + n_arrays + index
     let mut offset = header_bytes as u64;
@@ -354,7 +360,8 @@ fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Re
         offset += len;
     }
 
-    let mut f = File::create(path)?;
+    let tmp = path.with_extension("tmp");
+    let mut f = File::create(&tmp)?;
     f.write_all(MAGIC)?;
     f.write_all(&VERSION.to_le_bytes())?;
     f.write_all(&[n as u8])?;
@@ -369,7 +376,9 @@ fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Re
     for frame in frames {
         f.write_all(frame)?;
     }
-    f.flush()
+    f.flush()?;
+    drop(f);
+    fs::rename(&tmp, path)
 }
 
 /// Check that a file starts with the HPCA magic bytes AND the expected VERSION.
@@ -464,15 +473,17 @@ fn read_delta_u32_array(path: &Path, name: &str) -> io::Result<Option<Vec<u32>>>
         return Ok(None);
     };
     let raw = decompress_zstd_frame(f, len)?;
-    let deltas = le_bytes_to_i32(&raw);
-    Ok(Some(undelta_zigzag_i32(&deltas)))
+    let zigzag = le_bytes_to_u32(&raw);
+    Ok(Some(undelta_zigzag_u32(&zigzag)))
 }
 
 // ── Compression helpers ───────────────────────────────────────────────────────
 
 fn write_zstd(path: &Path, data: &[u8]) -> io::Result<()> {
     let enc = zstd::encode_all(data, 3)?;
-    fs::write(path, enc)
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, enc)?;
+    fs::rename(&tmp, path)
 }
 
 fn read_zstd(path: &Path) -> io::Result<Vec<u8>> {
@@ -490,17 +501,20 @@ fn zstd_compress_u64(data: &[u64]) -> io::Result<Vec<u8>> {
     zstd::encode_all(raw.as_slice(), 3)
 }
 
-/// Delta-encode a u32 array (zigzag i32 deltas), then zstd-3.
+/// Delta-encode a u32 array (zigzag u32 deltas), then zstd-3.
 /// Nearly-sorted arrays (like edge targets after dominator ordering) compress 20–50×.
+/// Uses zigzag encoding so u32::MAX sentinels (idom vroot) round-trip without truncation.
 fn zstd_compress_delta_u32(data: &[u32]) -> io::Result<Vec<u8>> {
-    let mut deltas: Vec<i32> = Vec::with_capacity(data.len());
+    let mut zigzag: Vec<u32> = Vec::with_capacity(data.len());
     let mut prev = 0i64;
     for &v in data {
-        let delta = v as i64 - prev;
-        deltas.push(delta as i32);
+        let d = v as i64 - prev;
+        // zigzag: even = non-negative, odd = negative
+        let z = ((d << 1) ^ (d >> 63)) as u32;
+        zigzag.push(z);
         prev = v as i64;
     }
-    let raw = i32_to_le_bytes(&deltas);
+    let raw = u32_to_le_bytes(&zigzag);
     zstd::encode_all(raw.as_slice(), 3)
 }
 
@@ -517,11 +531,13 @@ fn zstd_compress_delta_u16(data: &[u16]) -> io::Result<Vec<u8>> {
     zstd::encode_all(raw.as_slice(), 3)
 }
 
-fn undelta_zigzag_i32(deltas: &[i32]) -> Vec<u32> {
-    let mut out = Vec::with_capacity(deltas.len());
+fn undelta_zigzag_u32(zigzag: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(zigzag.len());
     let mut acc = 0i64;
-    for &d in deltas {
-        acc += d as i64;
+    for &z in zigzag {
+        // decode zigzag: even → non-negative, odd → negative
+        let d = if z & 1 == 0 { (z >> 1) as i64 } else { !((z >> 1) as i64) };
+        acc += d;
         out.push(acc as u32);
     }
     out
