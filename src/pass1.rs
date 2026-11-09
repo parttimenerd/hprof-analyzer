@@ -580,9 +580,13 @@ fn scan_heap_segment(
                 tmp_addrs.push(class_addr);
                 {
                     let idx = *class_addr_to_idx.entry(class_addr).or_insert_with(|| {
-                        let n = class_addr_table.len() as u32;
+                        let n = class_addr_table.len();
+                        // P1-04: only 30 bits available; upper 2 bits are kind flags.
+                        if n >= (1usize << 30) {
+                            panic!("pass1: class_addr_table exceeds 2^30 distinct classes; class index overflows kind bits");
+                        }
                         class_addr_table.push(class_addr);
-                        n
+                        n as u32
                     });
                     tmp_class_ids.push(idx | (3u32 << 30)); // class-of-class resolved later in pass2
                 }
@@ -611,9 +615,13 @@ fn scan_heap_segment(
                 tmp_addrs.push(addr);
                 {
                     let idx = *class_addr_to_idx.entry(class_id).or_insert_with(|| {
-                        let n = class_addr_table.len() as u32;
+                        let n = class_addr_table.len();
+                        // P1-04: only 30 bits available; upper 2 bits are kind flags.
+                        if n >= (1usize << 30) {
+                            panic!("pass1: class_addr_table exceeds 2^30 distinct classes; class index overflows kind bits");
+                        }
                         class_addr_table.push(class_id);
-                        n
+                        n as u32
                     });
                     tmp_class_ids.push(idx); // kind=0, bits 30-31 = 0
                 }
@@ -642,9 +650,13 @@ fn scan_heap_segment(
                 tmp_addrs.push(addr);
                 {
                     let idx = *class_addr_to_idx.entry(elem_class_id).or_insert_with(|| {
-                        let n = class_addr_table.len() as u32;
+                        let n = class_addr_table.len();
+                        // P1-04: only 30 bits available; upper 2 bits are kind flags.
+                        if n >= (1usize << 30) {
+                            panic!("pass1: class_addr_table exceeds 2^30 distinct classes; class index overflows kind bits");
+                        }
                         class_addr_table.push(elem_class_id);
-                        n
+                        n as u32
                     });
                     tmp_class_ids.push(idx | (1u32 << 30)); // kind=1 object array
                 }

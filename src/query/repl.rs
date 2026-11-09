@@ -5688,16 +5688,16 @@ fn print_result(
         writeln!(
             out,
             "{time_color}{} row{}, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m",
-            fmt_int(res.row_count as i64),
-            if res.row_count == 1 { "" } else { "s" },
+            fmt_int(res.rows.len() as i64),
+            if res.rows.len() == 1 { "" } else { "s" },
             fmt_elapsed(elapsed)
         )?;
     } else {
         writeln!(
             out,
             "({} row{}, {})",
-            fmt_int(res.row_count as i64),
-            if res.row_count == 1 { "" } else { "s" },
+            fmt_int(res.rows.len() as i64),
+            if res.rows.len() == 1 { "" } else { "s" },
             fmt_elapsed(elapsed)
         )?;
     }

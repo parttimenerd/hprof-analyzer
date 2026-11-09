@@ -977,7 +977,11 @@ mod imp {
         why: Option<String>,
     ) -> Value {
         let mut o = Map::new();
-        o.insert("@ref".into(), json!(format!("0x{addr:x}")));
+        // J-01: only emit @ref when we have a real non-zero address; a fake
+        // "0x0" misleads callers into thinking the object is at address 0.
+        if addr != 0 {
+            o.insert("@ref".into(), json!(format!("0x{addr:x}")));
+        }
         if let Some(i) = idx {
             o.insert("@index".into(), json!(i));
         }

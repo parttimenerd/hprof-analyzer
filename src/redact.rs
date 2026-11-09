@@ -209,7 +209,7 @@ fn scan_heap_segment_for_classes(
                 r.skip(ids + 4)?;
                 let count = r.u4()? as u64;
                 let type_code = r.u1()?;
-                let elem_size = elem_byte_size(type_code, id_size);
+                let elem_size = elem_byte_size(type_code, id_size)?;
                 r.skip(count * elem_size)?;
                 ids + 4 + 4 + 1 + count * elem_size
             }
@@ -306,7 +306,7 @@ fn scan_class_dump(
         consumed += 2; // cp index
         let cp_type = r.u1()?;
         consumed += 1;
-        let vs = value_size(cp_type, id_size);
+        let vs = value_size(cp_type, id_size)?;
         r.skip(vs)?;
         consumed += vs;
     }
@@ -320,7 +320,7 @@ fn scan_class_dump(
         structural_ids.insert(name_id);
         let field_type = r.u1()?;
         consumed += 1;
-        let vs = value_size(field_type, id_size);
+        let vs = value_size(field_type, id_size)?;
         r.skip(vs)?;
         consumed += vs;
     }
@@ -617,7 +617,7 @@ fn redact_prim_array_dump<W: Write>(
     w.write_all(&count.to_be_bytes())?;
     let type_code = r.u1()?;
     w.write_all(&[type_code])?;
-    let elem_size = elem_byte_size(type_code, id_size);
+    let elem_size = elem_byte_size(type_code, id_size)?;
     let data_len = count as u64 * elem_size;
     r.skip(data_len)?;
     // Write zeroed element data.
@@ -643,7 +643,7 @@ fn copy_class_dump<W: Write>(r: &mut HprofReader, w: &mut W, id_size: u8) -> io:
         let cp_type = r.u1()?;
         w.write_all(&[cp_type])?;
         consumed += 1;
-        let vs = value_size(cp_type, id_size);
+        let vs = value_size(cp_type, id_size)?;
         copy_exact(r, w, vs)?;
         consumed += vs;
     }
@@ -657,7 +657,7 @@ fn copy_class_dump<W: Write>(r: &mut HprofReader, w: &mut W, id_size: u8) -> io:
         let field_type = r.u1()?;
         w.write_all(&[field_type])?;
         consumed += 1;
-        let vs = value_size(field_type, id_size);
+        let vs = value_size(field_type, id_size)?;
         copy_exact(r, w, vs)?;
         consumed += vs;
     }
@@ -693,7 +693,7 @@ fn redact_class_dump<W: Write>(r: &mut HprofReader, w: &mut W, id_size: u8) -> i
         let cp_type = r.u1()?;
         w.write_all(&[cp_type])?;
         consumed += 1;
-        let vs = value_size(cp_type, id_size);
+        let vs = value_size(cp_type, id_size)?;
         if cp_type == 2 {
             // Object ref — preserve.
             copy_exact(r, w, vs)?;
@@ -714,7 +714,7 @@ fn redact_class_dump<W: Write>(r: &mut HprofReader, w: &mut W, id_size: u8) -> i
         let field_type = r.u1()?;
         w.write_all(&[field_type])?;
         consumed += 1;
-        let vs = value_size(field_type, id_size);
+        let vs = value_size(field_type, id_size)?;
         if field_type == 2 {
             copy_exact(r, w, vs)?;
         } else {
@@ -771,19 +771,29 @@ fn write_zeroes<W: Write>(w: &mut W, n: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn value_size(type_code: u8, id_size: u8) -> u64 {
+fn value_size(type_code: u8, id_size: u8) -> io::Result<u64> {
     match HprofType::from_code(type_code) {
-        Some(HprofType::Object) => id_size as u64,
-        Some(t) => t.byte_size() as u64,
-        None => 1,
+        Some(HprofType::Object) => Ok(id_size as u64),
+        Some(t) => Ok(t.byte_size() as u64),
+        // RED-04: unknown type code → return error rather than silently using 1
+        // byte and desyncing the stream.
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("redact: unknown HPROF type code 0x{type_code:02x}"),
+        )),
     }
 }
 
-fn elem_byte_size(type_code: u8, id_size: u8) -> u64 {
+fn elem_byte_size(type_code: u8, id_size: u8) -> io::Result<u64> {
     match HprofType::from_code(type_code) {
-        Some(HprofType::Object) => id_size as u64,
-        Some(t) => t.byte_size() as u64,
-        None => 1,
+        Some(HprofType::Object) => Ok(id_size as u64),
+        Some(t) => Ok(t.byte_size() as u64),
+        // RED-04: unknown type code → return error rather than silently using 1
+        // byte and desyncing the stream.
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("redact: unknown HPROF type code 0x{type_code:02x}"),
+        )),
     }
 }
 
