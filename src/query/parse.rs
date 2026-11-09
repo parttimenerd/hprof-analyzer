@@ -519,7 +519,9 @@ where
                 .then_ignore(just(Token::RParen)),
         )
         .map(|(dotted, args): (String, Vec<Expr>)| {
-            let (recv, meth) = dotted.rsplit_once('.').unwrap();
+            let Some((recv, meth)) = dotted.rsplit_once('.') else {
+                return Expr::Null;
+            };
             Expr::Method {
                 receiver: Box::new(Expr::Attr(Attr::Field(recv.to_string()))),
                 name: meth.to_string(),
@@ -896,7 +898,11 @@ where
                                 op: CompareOp::Ne,
                                 rhs: Expr::Lit(v),
                             });
-                            let first = terms.next().unwrap();
+                            let first = terms.next().unwrap_or(Predicate::Compare {
+                                lhs: lhs.clone(),
+                                op: CompareOp::Ne,
+                                rhs: Expr::Lit(Value::Null),
+                            });
                             terms.fold(first, |acc, t| Predicate::And(Box::new(acc), Box::new(t)))
                         } else {
                             // IN: desugar to OR chain of = compares
@@ -905,7 +911,11 @@ where
                                 op: CompareOp::Eq,
                                 rhs: Expr::Lit(v),
                             });
-                            let first = terms.next().unwrap();
+                            let first = terms.next().unwrap_or(Predicate::Compare {
+                                lhs: lhs.clone(),
+                                op: CompareOp::Eq,
+                                rhs: Expr::Lit(Value::Null),
+                            });
                             terms.fold(first, |acc, t| Predicate::Or(Box::new(acc), Box::new(t)))
                         }
                     })
@@ -2337,10 +2347,25 @@ fn unknown_call_hint(src: &str, lparen: usize) -> Option<String> {
 /// Returns `None` for any non-blank input so the normal parse path runs.
 fn blank_query_message(src: &str) -> Option<String> {
     if src.trim().is_empty() {
-        Some("empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string())
-    } else {
-        None
+        return Some(
+            "empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string(),
+        );
     }
+    // WITH/CTE is not yet supported; give a clear message instead of a cryptic
+    // "unexpected identifier" error from the chumsky parser.
+    let trimmed = src.trim();
+    if trimmed.len() >= 4
+        && trimmed[..4].eq_ignore_ascii_case("with")
+        && trimmed[4..].starts_with(|c: char| c.is_whitespace() || c == '(')
+    {
+        return Some(
+            "WITH/CTE syntax is not yet supported — \
+             rewrite as a subquery in the FROM clause: \
+             `SELECT … FROM (SELECT …) t`"
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// A hint to append to an end-of-input parse error: if the source looks like a
