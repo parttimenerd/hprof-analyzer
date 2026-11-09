@@ -206,19 +206,19 @@ pub fn format_bytes(n: u64) -> String {
         return format!("{} B", n);
     }
     let kb = n as f64 / KB as f64;
-    if n < MB && (kb * 10.0).round() <= 1024.0 * 10.0 {
+    if n < MB && (kb * 10.0).round() < 1024.0 * 10.0 {
         return format!("{:.1} KB", kb);
     }
     let mb = n as f64 / MB as f64;
-    if n < GB && (mb * 10.0).round() <= 1024.0 * 10.0 {
+    if n < GB && (mb * 10.0).round() < 1024.0 * 10.0 {
         return format!("{:.1} MB", mb);
     }
     let gb = n as f64 / GB as f64;
-    if n < TB && (gb * 100.0).round() <= 1024.0 * 100.0 {
+    if n < TB && (gb * 100.0).round() < 1024.0 * 100.0 {
         return format!("{:.2} GB", gb);
     }
     let tb = n as f64 / TB as f64;
-    if n < PB && (tb * 100.0).round() <= 1024.0 * 100.0 {
+    if n < PB && (tb * 100.0).round() < 1024.0 * 100.0 {
         return format!("{:.2} TB", tb);
     }
     format!("{:.2} PB", n as f64 / PB as f64)
