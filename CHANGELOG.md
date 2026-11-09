@@ -437,6 +437,33 @@ All notable changes to hprof-analyzer are documented here.
   `Math.abs()` before formatting, in both the verdict sentence and the bullet
   list.
 
+- **`compare_dumps` MCP tool ran both analyses sequentially** — both heap
+  analyses now run concurrently via `tokio::try_join!`, cutting wall-clock time
+  roughly in half when both dumps need a fresh analysis.
+
+- **HTTP query server returned 400 for internal errors** — serialization
+  failures and other server-side errors now return HTTP 500; only
+  bad-request errors (invalid OQL, missing parameters) return 400.
+
+- **HTTP query server re-parsed the plan on every cache hit** — `store_plan`
+  was called even when the plan was already cached (returned as `prebuilt`),
+  causing a redundant parse+plan pass. Fixed: `store_plan` is skipped when
+  `prebuilt.is_some()`.
+
+- **`ShutdownHookAccumulation` triage rule fired on every web-server JVM** —
+  path 2 (detect `ApplicationShutdownHooks` class present) had no retained-heap
+  guard, so any web server process that registers even one shutdown hook
+  triggered the rule. Now requires at least 1 MB retained by the thread set
+  before firing.
+
+- **OQL: `FROM ENTRIES` failed in the full analysis pipeline** —
+  `eliminate_dead_needs` was clearing `plan.needs.ref_walk` for
+  `FROM ENTRIES` queries because `EntriesExpand` was not listed as a
+  ref-walk consumer. Additionally, `arm_refwalk` did not collect backing-array
+  field names from built-in collection descriptors for `FROM ENTRIES` sources.
+  Both gaps fixed; `FROM ENTRIES` now works in `heap report` / `load_dump`
+  as well as `heap query`.
+
 - **Holder-computation window too narrow** — the `top_n * 2` window used when
   building holder breakdowns in `biggest_classes` was insufficient for classes
   where many instances are held by a single owner; widened to `top_n * 3`.

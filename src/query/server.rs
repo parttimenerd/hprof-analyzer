@@ -716,21 +716,6 @@ impl ServerState {
         guard.get(oql_text).cloned()
     }
 
-    /// Insert an already-built (query, plan) pair into the plan cache, skipping
-    /// the redundant re-parse that `store_plan` would do.
-    fn store_plan_direct(
-        &self,
-        oql_text: &str,
-        q: crate::query::ast::Query,
-        plan: crate::query::plan::QueryPlan,
-    ) {
-        let mut guard = self.plan_cache.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.len() >= PLAN_CACHE_CAP {
-            guard.clear();
-        }
-        guard.insert(oql_text.to_string(), (q, plan));
-    }
-
     /// Build the plan for `oql_text` and insert it into the plan cache.
     /// If the cache is at PLAN_CACHE_CAP, it is cleared first (simple global
     /// eviction — OQL servers serve a bounded set of repeated queries). Errors
