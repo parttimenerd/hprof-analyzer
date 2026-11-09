@@ -69,21 +69,21 @@ static EXTRA_PATTERN_SPECS: &[(&str, &str)] = &[
     ("JDBC URL with credentials",       r"jdbc:.*[;?&][Pp]assword=[^;?& ]+"),
     ("JDBC URL with credentials",       r"jdbc:.*[;?&][Pp]asswd=[^;?& ]+"),
     // Database connection URLs with userinfo (postgres://, mysql://, mongodb://, redis://, amqp://)
-    ("PostgreSQL connection URL",       r"postgres(?:ql)?://[^:/@]+:[^/@]{6,}@[^ ]+"),
-    ("MySQL connection URL",            r"mysql://[^:/@]+:[^/@]{6,}@[^ ]+"),
-    ("MongoDB connection URL",          r"mongodb(?:\+srv)?://[^:/@]+:[^/@]{6,}@[^ ]+"),
+    ("PostgreSQL connection URL",       r"postgres(?:ql)?://(?:[^:/@]*:)?[^/@]{6,}@[^ ]+"),
+    ("MySQL connection URL",            r"mysql://(?:[^:/@]*:)?[^/@]{6,}@[^ ]+"),
+    ("MongoDB connection URL",          r"mongodb(?:\+srv)?://(?:[^:/@]*:)?[^/@]{6,}@[^ ]+"),
     ("Redis connection URL",            r"redis://:[A-Za-z0-9._\-~!$&'()*+,;=:]{6,}@[^ ]+"),
     ("AMQP/RabbitMQ connection URL",    r"amqps?://[^:/@]+:[^/@]{6,}@[^ ]+"),
     ("HTTP URL with embedded credentials", r"https?://[^:/@]+:[^/@]{6,}@[^ ]+"),
     // JWT tokens (header.payload.signature — all base64url segments)
-    ("JWT token",                       r"eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
+    ("JWT token",                       r"eyJ[A-Za-z0-9_\-]+=*\.eyJ[A-Za-z0-9_\-]+=*\.[A-Za-z0-9_\-]+=*"),
     // JWT / OAuth bearer tokens as bare strings
     ("Bearer token",                    r"Bearer [A-Za-z0-9._~+/=\-]{20,}"),
     // HTTP Basic auth header value (base64-encoded user:pass)
     ("HTTP Basic auth header",          r"Basic [A-Za-z0-9+/]{16,}={0,2}"),
     // URL query parameters carrying credentials
-    ("URL with API key param",          r".*[?&](?:api[_-]?key|apikey|api_secret)=[^ &]{8,}"),
-    ("URL with credential param",       r".*[?&](?:password|passwd|secret|token|access_token)=[^ &]{6,}"),
+    ("URL with API key param",          r"[^?]*[?&](?:api[_-]?key|apikey|api_secret)=[^ &]{8,}"),
+    ("URL with credential param",       r"[^?]*[?&](?:password|passwd|secret|token|access_token)=[^ &]{6,}"),
     // Credit card numbers (space or dash separated)
     ("Credit card number",              r"[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}"),
     // Spring-style property values: password=, Password:, etc.
@@ -93,7 +93,7 @@ static EXTRA_PATTERN_SPECS: &[(&str, &str)] = &[
     // Generic token= / token: / api_token= etc.
     ("Token property value",            r"(?:[Aa]pi[_-]?)?[Tt]oken[= :]+[A-Za-z0-9._\-]{8,}"),
     // Generic api_key= / apiKey= etc.
-    ("API key property value",          r"(?:[Aa]pi[_.-]?)?[Kk]ey[= :]+[A-Za-z0-9._\-]{8,}"),
+    ("API key property value",          r"(?:[Aa]pi[_.-]?)?\b[Kk]ey[= :]+[A-Za-z0-9._\-]{8,}"),
     // High-entropy hex secrets (32–64 hex chars, post-filtered by Shannon entropy).
     // Longer strings are usually bitsets/bitmaps, not secrets.
     ("High-entropy hex secret",         r"[0-9a-f]{32,64}"),

@@ -365,7 +365,10 @@ fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Re
     let mut f = File::create(&tmp)?;
     f.write_all(MAGIC)?;
     f.write_all(&VERSION.to_le_bytes())?;
-    f.write_all(&[n as u8])?;
+    let n_u8 = u8::try_from(n).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("write_indexed_file: array count {n} > 255"))
+    })?;
+    f.write_all(&[n_u8])?;
     for (i, &name) in names.iter().enumerate() {
         let mut name_bytes = [0u8; 16];
         let nb = name.as_bytes();
@@ -445,7 +448,10 @@ fn seek_to_entry(path: &Path, entry_name: &str) -> io::Result<Option<(File, usiz
             && (name_bytes.len() >= 16 || name[name_bytes.len()] == 0)
         {
             f.seek(SeekFrom::Start(offset))?;
-            return Ok(Some((f, len as usize)));
+            let len_usize = usize::try_from(len).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("read_indexed_file: frame length {len} > usize::MAX"))
+            })?;
+            return Ok(Some((f, len_usize)));
         }
     }
     Ok(None)
@@ -614,9 +620,9 @@ fn dump_hash(path: &Path) -> io::Result<String> {
         .and_then(|t| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .ok()
-                .map(|d| d.as_nanos() as u64)
+                .map(|d| d.as_nanos().try_into().unwrap_or(u64::MAX))
         })
-        .unwrap_or(0);
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "mtime unavailable — cannot compute reliable cache hash"))?;
 
     let mut f = File::open(path)?;
     let mut header = [0u8; 512];

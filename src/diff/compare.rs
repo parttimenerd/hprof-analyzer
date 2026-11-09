@@ -406,17 +406,24 @@ pub(crate) fn compare_suspects(mat: &MatReport, ours: &Report, r: &mut DiffResul
     if mat.suspects.is_empty() {
         return;
     }
-    let our_by_name: HashMap<&str, &report::Suspect> = ours
-        .leaks
-        .suspects
-        .iter()
-        .map(|s| (s.pretty_class.as_str(), s))
-        .collect();
-    let denom = ours.leaks.total_shallow;
+    // DIFF-08: use Vec to avoid silently dropping suspects with duplicate class names.
+    let mut our_by_name: HashMap<&str, Vec<&report::Suspect>> = HashMap::new();
+    for s in &ours.leaks.suspects {
+        our_by_name.entry(s.pretty_class.as_str()).or_default().push(s);
+    }
+    // DIFF-12: use overview.total_shallow (not leaks.total_shallow) as the denominator.
+    let denom = ours.overview.total_shallow;
 
     for ms in &mat.suspects {
         let field = format!("suspect[{}].retained", ms.class_name);
-        match our_by_name.get(ms.class_name.as_str()) {
+        // Pick the suspect with the closest retained size to the MAT entry.
+        let our_suspect = our_by_name.get(ms.class_name.as_str()).and_then(|v| {
+            v.iter().min_by_key(|s| {
+                let d = s.retained as i64 - ms.retained as i64;
+                d.unsigned_abs()
+            })
+        });
+        match our_suspect {
             None => {
                 r.fields.push(FieldDiff::failed(
                     field,

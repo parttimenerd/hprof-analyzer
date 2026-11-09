@@ -137,7 +137,8 @@ impl SweepReport {
                 name,
                 n_match: dj.summary.n_match,
                 n_explainable: dj.summary.explainable,
-                n_fail: dj.summary.fail,
+                // SWP-01: derive n_fail from the fields walk to stay in sync with the render list.
+                n_fail: fails.len(),
                 n_skip: dj.summary.skip,
                 explainable,
                 fails,

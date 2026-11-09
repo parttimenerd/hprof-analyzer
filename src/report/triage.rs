@@ -2335,16 +2335,10 @@ impl Rule for FixedPerObjectOverhead {
         Some(WasteCategory::PerObjectOverhead)
     }
 
-    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
-        let header_bytes: u64 = if r.overview.identifier_size_bits == 32
-            || r.overview.compressed_oops.unwrap_or(true)
-        {
-            12
-        } else {
-            16
-        };
-        let overhead = r.overview.total_objects.saturating_mul(header_bytes);
-        (overhead > 0).then_some(overhead)
+    // TRI-10: object headers are mandatory JVM overhead, not recoverable bytes.
+    // Returning None excludes them from the "total recoverable" sum.
+    fn recoverable_bytes(&self, _r: &Report) -> Option<u64> {
+        None
     }
 }
 

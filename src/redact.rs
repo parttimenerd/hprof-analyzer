@@ -335,7 +335,12 @@ fn scan_class_dump(
         structural_ids.insert(name_id);
         let type_code = r.u1()?;
         consumed += 1;
-        let htype = HprofType::from_code(type_code).unwrap_or(HprofType::Int);
+        let htype = HprofType::from_code(type_code).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("redact: unknown instance-field type code 0x{type_code:02x} in class 0x{class_id:x}"),
+            )
+        })?;
         fields.push(htype);
     }
 
@@ -742,7 +747,8 @@ fn copy_id<W: Write>(r: &mut HprofReader, w: &mut W, ids: u64) -> io::Result<()>
 }
 
 fn copy_exact<W: Write>(r: &mut HprofReader, w: &mut W, n: u64) -> io::Result<()> {
-    let mut remaining = n as usize;
+    let mut remaining = usize::try_from(n)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "copy_exact: n > usize::MAX"))? ;
     let mut buf = [0u8; 4096];
     while remaining > 0 {
         let chunk = remaining.min(buf.len());
@@ -762,7 +768,8 @@ fn write_id<W: Write>(w: &mut W, id: u64, id_size: u8) -> io::Result<()> {
 
 fn write_zeroes<W: Write>(w: &mut W, n: u64) -> io::Result<()> {
     const ZEROS: [u8; 4096] = [0u8; 4096];
-    let mut remaining = n as usize;
+    let mut remaining = usize::try_from(n)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "write_zeroes: n > usize::MAX"))?;
     while remaining > 0 {
         let chunk = remaining.min(ZEROS.len());
         w.write_all(&ZEROS[..chunk])?;

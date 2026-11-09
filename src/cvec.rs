@@ -183,17 +183,20 @@ impl CompressedU32 {
                 // zstd_compress_u32_le encoded. On LE platforms (x86_64) the
                 // resulting u32 values are correct without any byte-swap.
                 let mut out = vec![0u32; self.len];
+                let byte_len = self.len.checked_mul(4).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "cvec: len * 4 overflows usize")
+                })?;
                 let out_bytes: &mut [u8] = unsafe {
-                    std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, self.len * 4)
+                    std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, byte_len)
                 };
                 let written = zstd::bulk::decompress_to_buffer(&self.blob, out_bytes)
                     .map_err(io::Error::other)?;
-                if written != self.len * 4 {
+                if written != byte_len {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
                             "zstd restore: expected {} bytes, got {}",
-                            self.len * 4,
+                            byte_len,
                             written
                         ),
                     ));
@@ -423,13 +426,16 @@ impl CompressedU64 {
         match self.codec {
             Codec::None => Ok(self.raw.clone()),
             Codec::Deflate9 | Codec::Deflate1 => {
-                let bytes = deflate_decompress(&self.blob, self.len * 8)?;
-                if bytes.len() != self.len * 8 {
+                let expected = self.len.checked_mul(8).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CompressedU64: len * 8 overflows usize")
+                })?;
+                let bytes = deflate_decompress(&self.blob, expected)?;
+                if bytes.len() != expected {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
                             "CompressedU64::restore: expected {} bytes, got {}",
-                            self.len * 8,
+                            expected,
                             bytes.len()
                         ),
                     ));
