@@ -1848,7 +1848,7 @@ fn collect_in_subplans(
         }
         Predicate::Not(a) => collect_in_subplans(a, out, depth_cap),
         Predicate::InSubquery { lhs, inner } => {
-            enforce_in_subquery_projection(inner)?;
+            enforce_in_subquery_projection(lhs, inner)?;
             let inner_plan = plan_query(inner, depth_cap)?;
             if plan_has_subqueries(&inner_plan) {
                 return Err(QueryError(
@@ -1913,20 +1913,44 @@ fn collect_exists_subplans(
         }
     }
 }
-/// addresses, so the inner must `SELECT @objectAddress` or `SELECT @objectId`.
-fn enforce_in_subquery_projection(inner: &Query) -> Result<(), QueryError> {
-    let ok = inner.select.len() == 1
-        && matches!(
-            inner.select[0],
-            SelectItem::Attr(Attr::ObjectAddress) | SelectItem::Attr(Attr::ObjectId)
-        );
-    if ok {
-        Ok(())
+/// addresses, so the inner must `SELECT @objectAddress` or `SELECT @objectId`,
+/// and the inner projection must match the outer `lhs` attribute.
+fn enforce_in_subquery_projection(lhs: &Attr, inner: &Query) -> Result<(), QueryError> {
+    let inner_attr = if inner.select.len() == 1 {
+        match &inner.select[0] {
+            SelectItem::Attr(a @ (Attr::ObjectAddress | Attr::ObjectId)) => Some(a),
+            _ => None,
+        }
     } else {
-        Err(QueryError(
+        None
+    };
+    let Some(inner_attr) = inner_attr else {
+        return Err(QueryError(
             "IN-subquery must select a single identity column (SELECT @objectAddress or SELECT @objectId)".into(),
-        ))
+        ));
+    };
+    // E-12: outer LHS and inner projection must use the same identity type.
+    if inner_attr != lhs {
+        let lhs_name = match lhs {
+            Attr::ObjectAddress => "@objectAddress",
+            Attr::ObjectId => "@objectId",
+            _ => {
+                return Err(QueryError(
+                    "IN-subquery outer LHS must be @objectAddress or @objectId".into(),
+                ));
+            }
+        };
+        let inner_name = match inner_attr {
+            Attr::ObjectAddress => "@objectAddress",
+            Attr::ObjectId => "@objectId",
+            _ => unreachable!(),
+        };
+        return Err(QueryError(format!(
+            "IN-subquery type mismatch: outer compares {lhs_name} but inner selects {inner_name} — \
+             use the same identity attribute on both sides",
+        )));
     }
+    Ok(())
 }
 
 fn uses_retained(q: &Query) -> bool {
@@ -4273,6 +4297,39 @@ mod tests {
         );
         assert!(plan.from_subplan.is_none(), "no FROM-subquery here");
         assert_eq!(plan.in_subplans[0].lhs, Attr::ObjectAddress);
+    }
+
+    #[test]
+    fn in_subquery_objectid_outer_objectaddress_inner_rejected() {
+        // E-12: mixing @objectId outer with @objectAddress inner silently produced
+        // zero matches because dense index ≠ heap address. Must be rejected at plan time.
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectId IN \
+             (SELECT @objectAddress FROM java.lang.Integer i)",
+        )
+        .unwrap();
+        let err = pq(&q).unwrap_err();
+        assert!(
+            err.0.contains("type mismatch"),
+            "expected type-mismatch error, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn in_subquery_objectaddress_outer_objectid_inner_rejected() {
+        // E-12: mixing @objectAddress outer with @objectId inner must also be rejected.
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectAddress IN \
+             (SELECT @objectId FROM java.lang.Integer i)",
+        )
+        .unwrap();
+        let err = pq(&q).unwrap_err();
+        assert!(
+            err.0.contains("type mismatch"),
+            "expected type-mismatch error, got: {}",
+            err.0
+        );
     }
 
     #[test]

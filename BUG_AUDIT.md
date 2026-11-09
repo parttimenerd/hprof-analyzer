@@ -34,15 +34,7 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ## 2. OQL Executor (`execute.rs`, `run.rs`, `plan.rs`)
 
-### E-11 Wrong late op pushed for `@inbounds`/`@outbounds` in WHERE — Medium
-**Line:** `plan.rs:1579`  
-**Bug:** `ResolveClassMetadata` pushed instead of edge-related op.  
-**Fix:** Add a dedicated `StageOp::ResolveEdgeCounts`.
-
-### E-12 `row_address` for IN-subquery: ObjRef index vs address mismatch — Medium
-**Line:** `run.rs:2491`  
-**Bug:** `@objectId` inner + `@objectAddress` outer always fails to match.  
-**Fix:** Reject `@objectId` in IN-subqueries, or resolve to address via lookup.
+*(No open bugs — all findings resolved.)*
 
 ---
 
