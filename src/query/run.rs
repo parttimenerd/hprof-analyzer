@@ -2836,7 +2836,6 @@ pub fn collapse_union_results(
     mut results: Vec<QueryResult>,
     groups: &[UnionGroup],
 ) -> Vec<QueryResult> {
-    use std::collections::HashSet;
     // Drain by group so slot indices stay valid regardless of per-group counts.
     let mut it = results.drain(..);
     let mut out: Vec<QueryResult> = Vec::with_capacity(groups.len());
