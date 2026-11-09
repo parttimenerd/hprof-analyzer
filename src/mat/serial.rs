@@ -28,6 +28,7 @@ pub const TC_STRING: u8 = 0x74;
 pub const TC_ARRAY: u8 = 0x75;
 pub const TC_ENDBLOCKDATA: u8 = 0x78;
 pub const TC_BLOCKDATA: u8 = 0x77;
+pub const TC_BLOCKDATALONG: u8 = 0x7a;
 
 pub const SC_WRITE_METHOD: u8 = 0x01; // has writeObject that calls defaultWriteObject
 pub const SC_SERIALIZABLE: u8 = 0x02;
@@ -380,12 +381,19 @@ impl Ser {
         write_elems(self);
     }
 
-    /// Emit a block-data record (TC_BLOCKDATA + 1-byte len) for custom writeObject payload.
+    /// Emit a block-data record for custom writeObject payload.
+    /// Uses TC_BLOCKDATA (1-byte len) for payloads < 256 bytes, or
+    /// TC_BLOCKDATALONG (4-byte len) for larger payloads.
     pub fn block_data(&mut self, bytes: &[u8]) {
-        assert!(bytes.len() < 256);
-        self.u8(TC_BLOCKDATA);
-        self.u8(bytes.len() as u8);
-        self.buf.extend_from_slice(bytes);
+        if bytes.len() < 256 {
+            self.u8(TC_BLOCKDATA);
+            self.u8(bytes.len() as u8);
+            self.buf.extend_from_slice(bytes);
+        } else {
+            self.u8(TC_BLOCKDATALONG);
+            self.buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            self.buf.extend_from_slice(bytes);
+        }
     }
 
     /// Write a HashMapIntObject: default fields (capacity,limit,size,step alpha) + custom
