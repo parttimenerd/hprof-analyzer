@@ -182,21 +182,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 **Lines 911–919.** The GC roots `HashMap` is created empty and never populated before serialization. MAT sees zero GC roots → all objects appear unreachable.
 **Fix:** Populate the map from the report's `gc_roots` data before writing.
 
-### MAT-04 (Medium) `block_data` panics for payloads ≥ 256 bytes
-**Lines 385–388 in `mat/serial.rs`.** `block_data` writes `data.len() as u8`, which panics (in debug) or wraps (in release) for payloads ≥ 256 bytes.
-**Fix:** Split into 255-byte chunks with continuation: `for chunk in data.chunks(255) { w.write_all(&[chunk.len() as u8])?; w.write_all(chunk)?; } w.write_all(&[0])?;`.
-
-### MAT-05 (Medium) `utf_bytes` silently truncates strings > 65535 bytes
-**Lines 191–195 in `mat/serial.rs`.** Java serialization's modified UTF-8 length is a `u16`. Strings longer than 65535 bytes are truncated without warning.
-**Fix:** Use the long-form UTF-8 encoding (`TC_LONGSTRING` + `u64` length) for oversized strings, or truncate with a trailing `…` and log a warning.
-
-### MAT-06 (Medium) `int_index_1n` delta encoding: `as i32` cast unchecked
-**Lines 286–290.** Same pattern as the `cache.rs` delta-encode bug: large u32 deltas silently overflow i32.
-**Fix:** Use zigzag encoding or saturate with an error.
-
-### DIFF-01 (Medium) `find('%')` parses class names with `%` incorrectly
-**Line ~401 in `diff/parse.rs`.** Class names containing `%` (rare but legal in obfuscated code) are split at the wrong position. Use `rfind('%')`.
-
 ---
 
 ## 15. Triage Deep Re-audit (`triage.rs`)

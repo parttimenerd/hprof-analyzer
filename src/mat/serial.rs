@@ -190,9 +190,26 @@ impl Ser {
         self.buf.push(if v { 1 } else { 0 });
     }
     fn utf_bytes(&mut self, s: &str) {
-        // modified UTF-8; ASCII subset identical to UTF-8
-        self.u16(s.len() as u16);
-        self.buf.extend_from_slice(s.as_bytes());
+        // modified UTF-8; ASCII subset identical to UTF-8.
+        // MAT-05: Java serialization uses a u16 length; strings > 65535 bytes
+        // are truncated at a valid UTF-8 boundary to avoid corrupt data.
+        let bytes = s.as_bytes();
+        let (len, bytes) = if bytes.len() > 65535 {
+            let mut end = 65535;
+            while end > 0 && bytes[end] & 0xC0 == 0x80 {
+                end -= 1;
+            }
+            eprintln!(
+                "mat/serial: string truncated from {} to {} bytes (max u16 length)",
+                bytes.len(),
+                end
+            );
+            (end as u16, &bytes[..end])
+        } else {
+            (bytes.len() as u16, bytes)
+        };
+        self.u16(len);
+        self.buf.extend_from_slice(bytes);
     }
 
     /// Write a TC_STRING (interned via handle table).

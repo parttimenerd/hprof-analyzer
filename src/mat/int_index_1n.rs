@@ -286,7 +286,19 @@ where
         let encoded: i32 = if had_values {
             let delta = pos - prev_pos; // ≥ 1
             prev_pos = pos;
-            (delta + 1) as i32 // stored as delta+1 so 0 is unambiguously a hole
+            // MAT-06: delta+1 must fit in i32; large gaps overflow silently otherwise.
+            let enc = delta + 1;
+            if enc > i32::MAX as i64 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "int_index_1n: delta {delta} at entry {total_entries} overflows i32 (max {});  \
+                         object addresses are too sparse for this index format",
+                        i32::MAX,
+                    ),
+                ));
+            }
+            enc as i32 // stored as delta+1 so 0 is unambiguously a hole
         } else {
             0
         };
