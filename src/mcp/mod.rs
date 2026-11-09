@@ -466,6 +466,24 @@ impl HprofMcpServer {
             ""
         };
 
+        // I-02: warn when requested options don't match what the cached report contains.
+        let mut cache_mismatch_notes: Vec<&str> = Vec::new();
+        if collections && result.report.collections.collection_fill_ratio.buckets.is_empty() {
+            cache_mismatch_notes.push("collections=true requested but cache has no collection data");
+        }
+        if (p.with_graph || p.full_analysis) && result.mode != CacheMode::Graph {
+            cache_mismatch_notes.push("with_graph=true requested but cache was built without the reference graph");
+        }
+        let cache_mismatch_note: String = if cache_mismatch_notes.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n⚠ CACHE OPTIONS MISMATCH — {} — run `hprof-analyzer heap cache-clear {}` then reload.\n",
+                cache_mismatch_notes.join("; "),
+                p.path,
+            )
+        };
+
         let oql_hints: String = if result.report.leaks.suspects.is_empty() {
             String::new()
         } else {
@@ -483,7 +501,8 @@ impl HprofMcpServer {
         let summary = format!(
             "Loaded: {path}\n\
              Total heap: {heap} MB  |  Objects: {objs}\
-             {redacted_note}\n\
+             {redacted_note}\
+             {cache_mismatch_note}\n\
              ## Top Leak Suspects ({n_suspects} detected)\n\
              {suspects}\n\
              ## Top Classes by Retained Size\n\
@@ -495,6 +514,7 @@ impl HprofMcpServer {
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = result.report.overview.total_objects,
             redacted_note = redacted_note,
+            cache_mismatch_note = cache_mismatch_note,
             n_suspects = result.report.leaks.suspects.len(),
             suspects = suspects_text,
             classes = top_classes_text,
@@ -1153,9 +1173,9 @@ impl HprofMcpServer {
         let idx = p.object_index as u32;
         let limit = p.limit.unwrap_or(50).min(200);
 
-        let refs: Vec<serde_json::Value> = graph
-            .inbound_edges
-            .get(&idx)
+        let all_edges = graph.inbound_edges.get(&idx);
+        let total_incoming = all_edges.map_or(0, |e| e.len());
+        let refs: Vec<serde_json::Value> = all_edges
             .map(|edges| {
                 edges
                     .iter()
@@ -1175,7 +1195,8 @@ impl HprofMcpServer {
 
         let result = serde_json::json!({
             "object_index": p.object_index,
-            "incoming_reference_count": refs.len(),
+            "total_incoming_references": total_incoming,
+            "shown": refs.len(),
             "refs": refs,
             "_hint": format!(
                 "Each 'src_idx' is a dense object index. Use browse_dominators({{\"object_index\": <src_idx>}}) \
@@ -1331,7 +1352,7 @@ impl HprofMcpServer {
                 // compare the current hash against the path we loaded from.
                 let stale = crate::cache::CacheDir::for_dump(&sess.dump_path)
                     .map(|current| current.path != sess.cache.path)
-                    .unwrap_or(false);
+                    .unwrap_or(true);
                 let top_suspect = r
                     .leaks
                     .suspects

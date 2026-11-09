@@ -40,10 +40,8 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 | 22 | Id_map | `id_map.rs:220` | `push_sorted_addr` duplicate detection bypassed on first call | Unify first-block and general path |
 | 23 | Vbyte | `vbyte.rs:30` | Malformed vbyte bail-out reports wrong consumed count | Scan forward to re-sync |
 | 24 | Cvec | `cvec.rs:473` | Decompression capacity hint is arbitrary `blob.len()*4` | Track `len` field in `CompressedBytes` |
-| 25 | MCP | `mcp/mod.rs:891` | `browse_dominators` out-of-bounds/resource exhaustion via object_index | Validate `[0, n]` range |
-| 26 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
-| 27 | MCP | `mcp/mod.rs:30` | Stale cache silently served with wrong options | Add `⚠ CACHE OPTIONS MISMATCH` warning |
-| 28 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
+| 25 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
+| 26 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
 
 ---
 
@@ -385,22 +383,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Line:** `mcp/mod.rs:385, 1383`  
 **Fix:** Canonicalize path, validate extension (.hprof), optionally allow-list root dirs.
 
-### I-02 Stale cache silently served with wrong options — High
-**Line:** `mcp/mod.rs:30`  
-**Fix:** Include `⚠ CACHE OPTIONS MISMATCH` warning when cached options differ from requested.
-
-### I-03 `browse_dominators` out-of-bounds / resource exhaustion — High
-**Line:** `mcp/mod.rs:891`  
-**Fix:** Validate `p.object_index` is in `[0, n]` before calling `build_node`.
-
-### I-04 `get_histogram` missing limit cap — Medium
-**Line:** `mcp/mod.rs:759`  
-**Fix:** `let limit = p.limit.unwrap_or(50).min(500) as usize;`.
-
-### I-05 `incoming_reference_count` reports truncated count — Medium
-**Line:** `mcp/mod.rs:1153`  
-**Fix:** Compute total before truncation; return `total_incoming_references` and `shown`.
-
 ### I-06 `redact.rs` record length silent u64→u32 truncation — Medium
 **Line:** `redact.rs:439`  
 **Fix:** `if length > u32::MAX as u64 { return Err(…); }`.
@@ -434,14 +416,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Fix:** Add session-epoch counter; detect change and return retry error.
 
 ### I-14 `serve.rs` body read I/O error silently swallowed — Medium
-**Line:** `serve.rs:420`  
-**Fix:** Check `read_to_string` result and return 400 on error.
-
-### I-15 `stale` check returns false on cache-dir errors — Low
-**Line:** `mcp/mod.rs:1309`  
-**Fix:** Change `.unwrap_or(false)` to `.unwrap_or(true)` (conservative).
-
----
 
 ## 10. Data Structures (cvec, id_map, vbyte, chunkvec)
 
