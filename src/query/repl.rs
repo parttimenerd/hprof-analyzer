@@ -1127,6 +1127,7 @@ thread_local! {
 
 /// REPL-02: reset thread-local settings for test isolation.
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn reset_session_settings() {
     SESSION_SETTINGS.with(|s| *s.borrow_mut() = ReplSettings::default());
 }

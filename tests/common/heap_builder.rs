@@ -1362,7 +1362,7 @@ pub fn build_finalizer_classes(b: &mut HeapBuilder) {
     let cls_b = b.class("scenarios/FinalizableB", &[("x", T_INT)]);
 
     // Create target objects.
-    let mut make_int_instance = |b: &mut HeapBuilder, class_id: u64, val: i32| -> u64 {
+    let make_int_instance = |b: &mut HeapBuilder, class_id: u64, val: i32| -> u64 {
         let mut data = Vec::new();
         int_field(&mut data, val);
         b.instance(class_id, &data)
