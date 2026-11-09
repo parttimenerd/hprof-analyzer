@@ -6,12 +6,15 @@ Rust CLI + MCP server for Java heap dump analysis. Investigates OutOfMemoryError
 
 ## What this tool does
 
-- Parses `.hprof`, `.hprof.gz`, `.hprof.zip` heap dumps from HotSpot, OpenJ9, and Android ART
+- Parses `.hprof`, `.hprof.gz`, `.hprof.zip`, `.hprof.tar.gz` heap dumps from HotSpot, OpenJ9, and Android ART
 - Builds a dominator tree, computes retained sizes, identifies leak suspects and top consumers
-- Runs SQL-flavoured OQL queries (Eclipse MAT-compatible dialect with extensions)
+- Runs SQL-flavoured OQL queries (Eclipse MAT-compatible dialect with extensions: JOINs, GROUP BY, HAVING, VALUES, aggregates, visualization directives)
 - Exposes all of the above via an MCP server for AI assistant integration
 - Generates Eclipse MAT-compatible cache files (lower RSS than MAT itself)
 - Redacts sensitive values from heap dumps before sharing
+- Detects secrets (passwords, API keys, tokens) in heap strings using betterleaks patterns
+- Compares two reports to track memory growth across snapshots
+- Runs in-browser via WebAssembly for dumps up to 3 GiB (no install required)
 
 ## How to use as an AI assistant
 
@@ -125,4 +128,5 @@ cargo install hprof-analyzer
 | `skills/hprof-analyzer-cli.md` | Ready-made skill for AI assistants using the CLI (no MCP) |
 | `docs/schema.json` | JSON Schema for the report format |
 | `DESIGN.md` | Architecture: two-pass parser, dominator tree, compressed indices |
+| `CONTRIBUTING.md` | Project structure, build instructions, contribution guidelines |
 | `CHANGELOG.md` | Release history |

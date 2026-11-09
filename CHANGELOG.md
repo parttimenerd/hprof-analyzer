@@ -6,7 +6,37 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
-- **OQL: `VALUES (…)` inline table source** — embed literal rows directly in a
+- **P1 — Pool state snapshot in Leak Indicators** — scan-time detection of common
+  Java thread/connection pool instances (HikariCP, Tomcat JDBC, DBCP2, C3P0,
+  Spring `ThreadPoolTaskExecutor`, `ForkJoinPool`, `ExecutorService`). Each pool
+  type renders a table showing class name, instance count, total retained, and
+  per-instance pool-size / max-pool-size / queue-depth / active-count columns.
+  Only emitted when at least one recognized pool class is present.
+
+- **P2 — Finalizer referents by class** — `java.lang.ref.Finalizer.referent`
+  is scanned at pass2 field-decode time and per-instance `(finalizer, referent)`
+  pairs are stored in `Graph.finalizer_instances`. `build_finalizer_classes()`
+  groups them by referent class name and sums retained bytes via `g.retained[]`.
+  The result renders as a "Finalizer referents" table in Leak Indicators:
+  referent class / count / retained. Cache VERSION → 15, SCHEMA_VERSION → 16.
+
+- **B4 — DirectByteBuffer per-buffer owner table** — when `dbb_top_records` is
+  populated (requires `--full-analysis`), a "Top DirectByteBuffer owners" table
+  now appears in the Leak Indicators section showing each buffer's capacity, its
+  retained size, and its dominator root-path chain.
+
+- **OQL: `MEDIAN` / `PERCENTILE(n)` in `VALUES` queries and retained `GROUP BY`**
+  — `SELECT MEDIAN(x.@retainedHeapSize) FROM java.lang.String x` and
+  `SELECT PERCENTILE(90, x.@retainedHeapSize) FROM … GROUP BY …` now work
+  correctly. Even-*n* `MEDIAN` averages the two middle values; `PERCENTILE`
+  uses the nearest-rank formula. Previously fell through to `Null`.
+
+- **OQL: array identity method dispatch** — `getObjectAddress()`,
+  `getObjectId()`, `getUsedHeapSize()`, and `getRetainedHeapSize()` now work
+  on array instances in the method-dispatch path (`execute.rs`), returning the
+  same values as the equivalent `@` virtual attributes.
+
+- **OQL: `VALUES (…)` inline table source**  — embed literal rows directly in a
   query: `SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)`. Column names
   from the `AS t(…)` alias are available as `@col0`, `@col1`, … or by the
   declared names. Supports `WHERE`, aggregates, `ORDER BY`, `LIMIT`, and
@@ -171,6 +201,18 @@ All notable changes to hprof-analyzer are documented here.
   peak RSS, wall time 14:08.
 
 ### Fixed
+
+- **OQL: `SELECT *` in grouped queries is now an error** — previously accepted
+  silently and produced undefined column output. Now returns a clear message:
+  _"SELECT * is not supported in a grouped query; list columns explicitly"_.
+
+- **OQL: `MIN` / `MAX` use `total_cmp` for NaN consistency** — NaN now
+  consistently sorts last regardless of row order, matching the SQL expectation
+  that `MIN`/`MAX` over an all-NaN group returns NaN as the sole survivor.
+
+- **OQL: `VALUES` queries apply `OFFSET` before `LIMIT`** — previously `LIMIT`
+  was applied to the pre-offset rows (effectively ignoring `OFFSET`). Now rows
+  are drained by `OFFSET` first, then truncated by `LIMIT`.
 
 - **Dead `⬡` and `⬡≡` buttons in diff/compare tables** — the pivot-to-dominator
   (`⬡`) and list-instances (`⬡≡`) buttons appeared in diff table class-name

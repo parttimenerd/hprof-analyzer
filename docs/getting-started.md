@@ -187,3 +187,14 @@ hprof-analyzer completions bash >> ~/.bash_completion
 # fish
 hprof-analyzer completions fish > ~/.config/fish/completions/hprof-analyzer.fish
 ```
+
+## Next steps
+
+Now that you're up and running, explore the deeper capabilities:
+
+- **[OQL Reference](OQL.md)** — the full query language: grammar, aggregates, joins, GROUP BY, visualization directives, and 20+ worked examples.
+- **[Object Graph Explorer](obj-graph.md)** — interactive MAT-style navigation of the heap directly inside the HTML report.
+- **[Speeding up Eclipse MAT](mat-cache.md)** — generate MAT cache files at a fraction of MAT's memory cost.
+- **[AI-assisted analysis](../README.md#mcp-server)** — register the MCP server and let Claude, Cline, or another AI assistant help investigate.
+- **[Troubleshooting](troubleshooting.md)** — solutions for common issues (macOS Gatekeeper, OQL gotchas, performance tips).
+- **[Sample reports](https://parttimenerd.github.io/hprof-analyzer/reports/)** — see what each output format looks like on a real dump.

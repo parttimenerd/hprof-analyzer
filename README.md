@@ -23,6 +23,32 @@ Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak susp
 | **Secret detection** (scan heap strings for credentials and tokens using [betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
 | **Re-render saved reports** (JSON to HTML/Markdown without the original dump) | `hprof-analyzer report.json report.html` |
 
+## Table of contents
+
+- [Capabilities at a glance](#capabilities-at-a-glance)
+- [AI assistant integration](#ai-assistant-integration)
+- [Quick start](#quick-start)
+- [Try it in the browser](#try-it-in-the-browser)
+- [Analysis reports](#analysis-reports)
+  - [Common tasks](#common-tasks)
+  - [Flag reference](#flag-reference)
+  - [Class categories](#class-categories)
+  - [Tune the report size with `--detail`](#tune-the-report-size-with---detail)
+- [OQL queries](#oql-queries)
+- [Cached interactive analysis](#cached-interactive-analysis)
+- [MCP server](#mcp-server)
+- [HTTP API (`server` subcommand)](#http-api-server-subcommand)
+- [Heap redaction](#heap-redaction)
+- [Secret detection](#secret-detection)
+- [Speeding up Eclipse MAT](#speeding-up-eclipse-mat)
+- [Install](#install)
+- [Command reference](#command-reference)
+- [Performance](#performance)
+- [How it works](#how-it-works)
+- [Contributing](#contributing)
+- [Documentation](#documentation)
+- [License](#license)
+
 ## AI assistant integration
 
 > **AI agents:** a compact machine-readable summary of this project and all integration options is in [`llms.txt`](llms.txt).
@@ -789,31 +815,31 @@ The two-pass parser, the dominator-tree construction, the shallow/retained size 
 
 ## Contributing
 
-Contributions are welcome. See [DESIGN.md](DESIGN.md) for architecture context.
+Contributions are welcome — bug fixes, features, documentation, and test coverage. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide: project structure, build instructions, testing strategy, cache invalidation gotchas, and the web frontend development cycle.
 
-Requires a stable Rust toolchain (1.85+); see [Install](#install). All commands from the repository root:
-
-```sh
-cargo build --release        # binary at target/release/hprof-analyzer
-cargo test --release         # unit tests + JSON-schema + report parity fixtures
-cargo fmt --all -- --check   # formatting gate (matches CI)
-cargo clippy --release --all-targets -- -D warnings   # lint gate (matches CI)
-```
-
-CI runs the same `fmt`, `clippy`, and `test` steps on stable. Parity fixtures live under `tests/fixtures/`.
-
-The HTML report embeds a pre-committed React bundle (`web/dist/bundle.js`), so Node.js is not needed for normal builds. To rebuild it after changing `web/src/`: `cd web && npm install && npm run build`.
-
-The self-contained browser bundle is assembled from the WASM module and the React bundle by `web-browser/assemble.py`:
+Quick start for contributors:
 
 ```sh
-# Build WASM module first
-wasm-pack build crates/hprof-wasm --target web --release
-
-# Assemble the browser bundle
-python3 web-browser/assemble.py           # → dist/hprof-analyzer-browser.html
-python3 web-browser/assemble.py -o /tmp/bundle.html   # custom output path
+git clone https://github.com/parttimenerd/hprof-analyzer
+cd hprof-analyzer
+cargo build --release
+cargo test --release
+cargo fmt --all -- --check
+cargo clippy --release --all-targets -- -D warnings
 ```
+
+CI runs the same `fmt`, `clippy`, and `test` steps on stable Rust (1.85+). Node.js is only needed if you modify the web frontend (`web/src/`).
+
+## Documentation
+
+Full guides and reference documentation are in the [`docs/`](docs/) directory:
+
+- **[Getting Started](docs/getting-started.md)** — installation, first report, common workflows
+- **[OQL Reference](docs/OQL.md)** — full query language specification with worked examples
+- **[Object Graph Explorer](docs/obj-graph.md)** — interactive object navigation in HTML reports
+- **[Troubleshooting](docs/troubleshooting.md)** — common issues and solutions
+- **[MAT Cache Generation](docs/mat-cache.md)** — speeding up Eclipse MAT's first open
+- **[Documentation Index](docs/README.md)** — complete list of all docs
 
 ## Support & Feedback
 
