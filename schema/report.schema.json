@@ -1644,6 +1644,33 @@
       ],
       "type": "object"
     },
+    "FinalizerClassRow": {
+      "description": "One entry in the Finalizer referents breakdown: the class name of the\nreferent (the object that `finalize()` will be called on) and how many\nlive `java.lang.ref.Finalizer` instances wrap it.",
+      "properties": {
+        "count": {
+          "description": "Number of live `java.lang.ref.Finalizer` instances with this referent class.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "referent_class": {
+          "description": "Pretty class name of the finalizer referent.",
+          "type": "string"
+        },
+        "retained": {
+          "description": "Total retained heap of the referent objects.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "referent_class",
+        "count",
+        "retained"
+      ],
+      "type": "object"
+    },
     "FrameworkAnalysis": {
       "description": "One detected framework's aggregate statistics.",
       "properties": {
@@ -2700,6 +2727,93 @@
         "obj_index_1based",
         "display_class",
         "retained"
+      ],
+      "type": "object"
+    },
+    "PoolInstanceRow": {
+      "description": "Decoded field values for one pool instance (P1).",
+      "properties": {
+        "active_count": {
+          "description": "Active/busy workers at snapshot time. `None` when not available.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_pool_size": {
+          "description": "Maximum pool size. `None` when the field could not be read.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "obj_index_1based": {
+          "description": "1-based object index of the pool object.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pool_size": {
+          "description": "Core / configured pool size. `None` when the field could not be read.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "queue_depth": {
+          "description": "Task or connection queue depth (from `workQueue.size` or equivalent).\n`None` when not available.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "obj_index_1based"
+      ],
+      "type": "object"
+    },
+    "PoolSnapshot": {
+      "description": "Pool state snapshot for one pool class — one row per instance.",
+      "properties": {
+        "class_name": {
+          "description": "Fully-qualified class name of the pool sentinel class.",
+          "type": "string"
+        },
+        "instance_count": {
+          "description": "Number of pool instances found.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "instances": {
+          "description": "Per-instance decoded fields, capped at 20 rows.",
+          "items": {
+            "$ref": "#/$defs/PoolInstanceRow"
+          },
+          "type": "array"
+        },
+        "pool_type": {
+          "description": "Human-readable pool type label, e.g. `\"ThreadPoolExecutor\"`.",
+          "type": "string"
+        },
+        "total_retained": {
+          "description": "Total retained heap across all instances, in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pool_type",
+        "class_name",
+        "instance_count",
+        "total_retained",
+        "instances"
       ],
       "type": "object"
     },
@@ -4818,6 +4932,13 @@
       ],
       "description": "Holder `Class#field` ranked by total retained size of their pointees,\npresent only when `--collections` was passed; `None` otherwise. Additive."
     },
+    "finalizer_classes": {
+      "description": "Per-class breakdown of live `java.lang.ref.Finalizer` instances by\nreferent class (P2). Empty when no Finalizers are present. Sorted by\ncount descending, capped at 50. Additive; `#[serde(default)]` keeps\nolder JSON loadable.",
+      "items": {
+        "$ref": "#/$defs/FinalizerClassRow"
+      },
+      "type": "array"
+    },
     "framework_analysis": {
       "description": "Detected framework aggregate analyses. Empty when no framework classes present.\nAlways-on; each entry is only emitted when its sentinel class is in the heap.\n`#[serde(default)]` keeps older JSON loadable.",
       "items": {
@@ -4865,6 +4986,13 @@
     },
     "overview": {
       "$ref": "#/$defs/SystemOverview"
+    },
+    "pool_snapshots": {
+      "description": "Pool state snapshots for ThreadPoolExecutor and HikariCP instances (P1).\nOne entry per detected pool class; instances are capped at 20 per class.\nAdditive; `#[serde(default)]` keeps older JSON loadable.",
+      "items": {
+        "$ref": "#/$defs/PoolSnapshot"
+      },
+      "type": "array"
     },
     "primary_culprits": {
       "description": "Ranked, resolved \"who's actually responsible\" answer(s) — computed once\nfrom `leaks.suspects` (see `CulpritRef` docs) and consumed by the\nheadline triage rules instead of each re-deriving their own notion of\n\"the culprit\" from scratch. Capped at a small handful of entries;\nempty when no suspect's retained share crosses the dominance floor\n(a genuinely diffuse/healthy heap — the correct answer is \"no single\nculprit\", not a forced guess). Additive; `#[serde(default)]` keeps\nolder JSON loadable.",
