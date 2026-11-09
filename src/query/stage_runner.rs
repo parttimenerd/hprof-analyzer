@@ -11,6 +11,9 @@ use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
 use crate::query::runflags::EdgeDir;
 
+/// S-11: single definition for the dominator-tree depth cap used in all traversals.
+const DOMINATOR_DEPTH_CAP: u32 = 100_000;
+
 /// A shared empty tail-scalar table, used as the default `refwalk_tails` borrow
 /// when no RefWalk query ran (the common case). `LazyLock` derefs to a `'static`
 /// `&HashMap`, so it can back any `LateCtx` lifetime.
@@ -825,7 +828,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         }
                         depth += 1;
                         cur = dom;
-                        if depth > 100_000 {
+                        if depth > DOMINATOR_DEPTH_CAP {
                             break;
                         }
                     }
@@ -1290,7 +1293,7 @@ fn eval_late_expr_multi(
                     }
                     depth += 1;
                     cur = dom;
-                    if depth > 100_000 {
+                    if depth > DOMINATOR_DEPTH_CAP {
                         break; // safety cap for degenerate cycles
                     }
                 }
@@ -1725,7 +1728,7 @@ fn project_string_row_item(
                 }
                 depth += 1;
                 cur = dom;
-                if depth > 100_000 {
+                if depth > DOMINATOR_DEPTH_CAP {
                     break;
                 }
             }
@@ -1920,7 +1923,7 @@ fn project_array_index_item(
                 }
                 depth += 1;
                 cur = dom;
-                if depth > 100_000 {
+                if depth > DOMINATOR_DEPTH_CAP {
                     break;
                 }
             }
@@ -3287,7 +3290,7 @@ fn project_late_row(
                     }
                     depth += 1;
                     cur = dom;
-                    if depth > 100_000 {
+                    if depth > DOMINATOR_DEPTH_CAP {
                         break;
                     }
                 }

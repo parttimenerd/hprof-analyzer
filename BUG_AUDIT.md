@@ -143,41 +143,10 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ## 3. OQL Stage Runner (`stage_runner.rs`)
 
-### S-01 `run_retained_set` panics on out-of-bounds child index — **Critical**
-**Line:** ~3389  
-**Bug:** No bounds check on `visited[child as usize]`; panics on corrupt CSR.  
-**Fix:** Add `if ci < n &&` before accessing `visited[ci]`.
-
-### S-02 OFFSET never drained in any late-phase path — **Critical**
-**Line:** ~36–42 (all limit sites)  
-**Bug:** `stage_limit` computes `limit+offset` but offset rows are never skipped.  
-**Fix:** Add `rows.drain(0..offset)` after ORDER BY + limit in every affected fn: `dominator_rows`, `refpath_rows`, `string_values_rows`, `array_index_rows`, `join_retained`.
-
 ### S-03 Raw heap address stored as dense index in `ObjRef.index` — High
 **Line:** ~2095  
 **Bug:** `FieldValue::Ref(addr)` stores address in `index` field; downstream lookups into `retained[]`/`shallow[]` use wrong indices.  
 **Fix:** Store `u64::MAX` sentinel; consumers must perform addr→dense lookup.
-
-### S-04 `bounded_path`: `reached` grows beyond `PATH_FRONTIER_CAP` — High
-**Line:** ~332  
-**Bug:** `reached.push(t)` happens before the cap check; fan-out can accumulate unbounded entries.  
-**Fix:** Cap `reached.len()` inside the inner loop alongside `next.len()`.
-
-### S-07 `entries_expand_rows`: `truncated` ignores `carry.truncated()` — Medium
-**Line:** ~2829  
-**Fix:** `truncated: entry.carry.truncated() || row_count >= ROW_CAP as u64`.
-
-### S-09 `resolve_hop`/`edge_lookup` no bounds check on CSR slices — Medium
-**Line:** ~243  
-**Fix:** `let end = end.min(ctx.fwd_tgt.len()).min(ctx.fwd_field.len())`.
-
-### S-10 `substr`: negative start silently clamped to 1 — Medium
-**Line:** ~1502  
-**Fix:** Return `QueryValue::Null` for `n < 1` instead of clamping.
-
-### S-11 Dominator depth cap `100_000` duplicated in 5 places — Low
-**Line:** ~781, 1242, 1668, 1862, 3224  
-**Fix:** Define `const DOMINATOR_DEPTH_CAP: u32 = 100_000;`.
 
 ---
 
