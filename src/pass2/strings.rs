@@ -58,17 +58,21 @@ impl DupStringPassB {
         self.arr_hash.insert(addr, (hv, len));
 
         // #15 waste bookkeeping (bounded top-K).
+        // F-02: compare in backing-element units (not UTF-8 bytes) so Latin1
+        // non-ASCII chars (1 byte in array, 2 bytes in UTF-8) don't skew waste.
         self.arrays_examined += 1;
+        let elem_size: u64 = if coder == 0 { 1 } else { 2 };
         let capacity_bytes = bytes.len() as u64;
-        let used_bytes = decoded.len() as u64;
-        let wasted = capacity_bytes.saturating_sub(used_bytes);
+        let capacity_elems = capacity_bytes / elem_size;
+        let used_elems = decoded.chars().count() as u64;
+        let wasted = capacity_elems.saturating_sub(used_elems) * elem_size;
         if wasted > 0 {
             self.wasteful_arrays += 1;
             self.total_wasted_bytes += wasted;
             self.waste_heap.push(std::cmp::Reverse((
                 wasted,
                 capacity_bytes,
-                used_bytes,
+                used_elems * elem_size,
                 addr,
             )));
             if self.waste_heap.len() > CHAR_ARRAY_WASTE_TOP {

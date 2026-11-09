@@ -30,13 +30,11 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 | 11 | Stage runner | `stage_runner.rs:36` | OFFSET never drained in any late-phase path | Add `rows.drain(0..offset)` after limit |
 | 12 | Stage runner | `stage_runner.rs:2095` | Raw heap addr stored as dense index in `ObjRef.index` | Store sentinel `u64::MAX`; defer resolution |
 | 13 | Fielddecode | `fielddecode.rs:1487` | `non_null`/`count` silently truncated u64→u32 | Change tuple to `(u64, u64, u64)` |
-| 14 | Strings | `strings.rs:62` | Char-array waste compares UTF-8 vs raw bytes | Use char count in backing units |
-| 15 | Render | `render_graphs.rs:10` | 6 sections missing from `--md-graphs` output | Add missing `render_*` calls |
-| 16 | Format | `format.rs:209` | `format_bytes` promotes units too early at boundaries | Fix boundary guard comparisons |
-| 17 | Refwalk | `refwalk.rs:71` | `into_csr` panics if edge `src >= n` | Add bounds check, skip invalid edges |
-| 18 | Sizing | `sizing.rs:60` | Double-alignment inflates shallow size under compressed OOPs | Remove intermediate `align_up(..., ref_size)` |
-| 19 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
-| 20 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
+| 14 | Render | `render_graphs.rs:10` | 6 sections missing from `--md-graphs` output | Add missing `render_*` calls |
+| 15 | Format | `format.rs:209` | `format_bytes` promotes units too early at boundaries | Fix boundary guard comparisons |
+| 16 | Refwalk | `refwalk.rs:71` | `into_csr` panics if edge `src >= n` | Add bounds check, skip invalid edges |
+| 17 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
+| 18 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
 
 ---
 
@@ -316,33 +314,14 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Line:** `fielddecode.rs:1487`  
 **Fix:** Change `obj_array_raw_compact` tuple type from `(u64, u32, u32)` to `(u64, u64, u64)`.
 
-### F-02 Char-array waste compares UTF-8 length vs raw bytes — High
-**Line:** `strings.rs:62`  
-**Bug:** `decoded.len()` (UTF-8 bytes) vs `bytes.len()` (raw backing) is meaningless for Latin1 non-ASCII.  
-**Fix:** Compare char count in backing-array element units.
-
 ### F-03 `DirectByteBuffer.capacity` read as i32, field may be long — Medium
 **Line:** `fielddecode.rs:905`  
 **Fix:** Retain the type from `field_offset` and dispatch by `HprofType`.
-
-### F-04 `calculate_size_recursive` double-aligns under compressed OOPs — Medium
-**Line:** `sizing.rs:60`  
-**Bug:** Intermediate `align_up(…, ref_size)` at each inheritance level adds phantom padding.  
-**Fix:** Remove intermediate alignment; only outer `instance_shallow_size` aligns to 8.
-
-### F-05 `prim_array_shallow` inconsistent header formula — Medium
-**Line:** `sizing.rs:100`  
-**Bug:** Aligns header with `ref_size` while `obj_array_shallow` doesn't.  
-**Fix:** Remove intermediate header alignment: `let header = ptr_size + ref_size + 4;`.
 
 ### F-06 `DupPrimCollector` stores `bytes.len()` as shallow size — Medium
 **Line:** `dup_prim_arrays.rs:104`  
 **Bug:** Missing object header → wasted bytes systematically under-counted.  
 **Fix:** Pass true `shallow` size from caller, or compute with `prim_array_shallow`.
-
-### F-07 `name_idx_for` u16 overflow wraps silently at 65535 names — Medium
-**Line:** `model.rs:621`  
-**Fix:** Add `if next > u16::MAX as usize { return 0u16; }`.
 
 ### F-08 Unsafe raw-pointer aliasing in field decode loop — Low
 **Line:** `fielddecode.rs:1201`  

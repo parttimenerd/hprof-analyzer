@@ -63,7 +63,9 @@ pub(crate) fn calculate_size_recursive(
                 let own = own_obj_count(ci) * ref_size + own_prim_bytes(ci, ref_size);
                 let super_size =
                     calculate_size_recursive(ci.super_id, class_map, ptr_size, ref_size, cache);
-                align_up(own + super_size, ref_size)
+                // F-04: no intermediate alignment per inheritance level — only
+                // instance_shallow_size() aligns the final result to 8 bytes.
+                own + super_size
             }
         }
     };
@@ -102,7 +104,8 @@ pub(crate) fn prim_array_shallow(
     ptr_size: usize,
     ref_size: usize,
 ) -> u32 {
-    let header = align_up(ptr_size + ref_size + 4, ref_size);
+    // F-05: no intermediate header alignment; only the final result is aligned.
+    let header = ptr_size + ref_size + 4;
     let body = (num_elem as usize).saturating_mul(elem_size);
     shallow_u32(align_up(header.saturating_add(body), 8))
 }
