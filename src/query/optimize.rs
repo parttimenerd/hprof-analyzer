@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::query::ast::{Attr, Query, SelectItem};
+use crate::query::ast::{Attr, Expr, Query, SelectItem};
 use crate::query::carry::CarryLayout;
 use crate::query::plan::DeferredProj;
 use crate::query::plan::{PredCost, QueryPlan, StageOp};
@@ -67,13 +67,29 @@ pub fn pushdown_limit(plan: &mut QueryPlan) {
     plan.scan_limit = if safe { plan.limit } else { None };
 }
 
+/// True if an `Attr` is expensive (N-hop RefPath or @retainedHeapSize).
+fn attr_is_deferrable(a: &Attr) -> bool {
+    matches!(a, Attr::RefPath { .. } | Attr::RetainedHeapSize)
+}
+
+/// True if an expression tree contains any deferrable attribute.
+fn expr_is_deferrable(e: &Expr) -> bool {
+    match e {
+        Expr::Attr(a) => attr_is_deferrable(a),
+        Expr::Binary { lhs, rhs, .. } => expr_is_deferrable(lhs) || expr_is_deferrable(rhs),
+        Expr::Unary { arg, .. } => expr_is_deferrable(arg),
+        _ => false,
+    }
+}
+
 /// True if a SELECT item (or the attribute it contains) is deferrable:
 /// N-hop `RefPath` and `@retainedHeapSize` are expensive projection-only
 /// attributes. Recurses into `Aggregate` to inspect the wrapped argument.
 fn select_item_is_deferrable(item: &SelectItem) -> bool {
     match item {
-        SelectItem::Attr(Attr::RefPath { .. }) | SelectItem::Attr(Attr::RetainedHeapSize) => true,
+        SelectItem::Attr(a) => attr_is_deferrable(a),
         SelectItem::Aggregate { arg, .. } => select_item_is_deferrable(arg),
+        SelectItem::Expr(e) => expr_is_deferrable(e),
         _ => false,
     }
 }

@@ -30,16 +30,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Bug:** `WHERE a INSTANCEOF Foo` and `WHERE b INSTANCEOF Foo` produce identical AST; the subject expression is dropped.  
 **Fix:** Extend `Predicate::InstanceOf(String)` to `Predicate::InstanceOf { subject: Attr, class: String }`, update executor.
 
-### P-09 `WITH`/CTE produces cryptic error — Medium
-**Line:** ~1666  
-**Bug:** `WITH t AS (…)` fails with "unexpected identifier" instead of "not supported".  
-**Fix:** Early-detect `WITH` keyword and return explicit message.
-
-### P-11 `select_item_is_deferrable` not recursive into `Expr` — Low
-**Line:** `optimize.rs:71`  
-**Bug:** `x.parent.size * 2` not recognized as deferrable.  
-**Fix:** Add `SelectItem::Expr(e) => expr_is_deferrable(e)` arm with recursion.
-
 ---
 
 ## 2. OQL Executor (`execute.rs`, `run.rs`, `plan.rs`)
