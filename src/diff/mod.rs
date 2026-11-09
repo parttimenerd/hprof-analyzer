@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn suspect_pct_rounding_end_to_end() {
         let mut ours = base_report(vec![]);
-        ours.leaks.total_shallow = 12_187_000;
+        ours.overview.total_shallow = 12_187_000;
         ours.leaks.suspects = vec![Suspect {
             is_single: false,
             pretty_class: "scala.concurrent.stm.ccstm.InTxnImpl".to_string(),
@@ -996,7 +996,7 @@ mod tests {
     #[test]
     fn suspect_java_lang_class_retained_and_pct_exempt() {
         let mut ours = base_report(vec![]);
-        ours.leaks.total_shallow = 12_187_000;
+        ours.overview.total_shallow = 12_187_000;
         let mk = |name: &str, ret: u64| Suspect {
             is_single: false,
             pretty_class: name.to_string(),
