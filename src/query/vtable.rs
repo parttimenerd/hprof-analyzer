@@ -48,7 +48,7 @@ pub fn materialise(name: &str, class_histogram: &[(String, u64)]) -> Option<Quer
                 .map(|(class, count)| {
                     vec![
                         QueryValue::Str(class.clone()),
-                        QueryValue::Int(*count as i64),
+                        QueryValue::Int(count.min(i64::MAX as u64) as i64),
                     ]
                 })
                 .collect();
