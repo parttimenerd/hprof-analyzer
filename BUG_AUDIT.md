@@ -67,13 +67,7 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ## 4. OQL Jsonify, Refwalk, Complete
 
-### J-01 Budget-hit node emits fabricated `"@ref":"0x0"` — High
-**Line:** `jsonify.rs:1000`  
-**Fix:** Emit `"@index": idx` only; omit fake `@ref`, add `"@notExpanded"` reason.
-
-### J-05 `into_csr` panics if edge `src >= n` — High
-**Line:** `refwalk.rs:71`  
-**Fix:** Add `if si >= n { continue; }` in both counting and filling loops.
+*(No open bugs — all findings resolved.)*
 
 ---
 
@@ -117,18 +111,11 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 
 ## 7. Core Analysis
 
-### C-02 Cache delta-encode truncates i64→i32 — **High**
-**Line:** `cache.rs:495`  
-**Bug:** `delta as i32` wraps for large deltas (e.g., `u32::MAX` idom sentinel).  
-**Fix:** Use zigzag encoding (`(d << 1) ^ (d >> 63)` as u32) or store as i64.
+*(No open bugs — all findings resolved.)*
 
 ---
 
 ## 8. Pass2 / Field Decoding / Sizing
-
-### F-01 `non_null`/`count` silently truncated u64→u32 — High
-**Line:** `fielddecode.rs:1487`  
-**Fix:** Change `obj_array_raw_compact` tuple type from `(u64, u32, u32)` to `(u64, u64, u64)`.
 
 ### F-03 `DirectByteBuffer.capacity` read as i32, field may be long — Medium
 **Line:** `fielddecode.rs:905`  
@@ -189,9 +176,7 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 
 ## 11. OQL REPL (`repl.rs`)
 
-### REPL-01 (High) `print_result` footer row count is stale after `!top`/`!tail`
-**Line ~5691.** Footer displays `res.row_count` (the original query count) rather than `res.rows.len()` (the current visible count) after `!top N` / `!tail N` trim the result.
-**Fix:** `let shown = res.rows.len(); writeln!(…, "{shown} rows shown…")`.
+*(No open bugs — all findings resolved.)*
 
 ---
 
