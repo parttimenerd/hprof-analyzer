@@ -416,6 +416,16 @@ impl CompressedU64 {
             Codec::None => Ok(self.raw.clone()),
             Codec::Deflate9 | Codec::Deflate1 => {
                 let bytes = deflate_decompress(&self.blob, self.len * 8)?;
+                if bytes.len() != self.len * 8 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "CompressedU64::restore: expected {} bytes, got {}",
+                            self.len * 8,
+                            bytes.len()
+                        ),
+                    ));
+                }
                 Ok(bytes
                     .chunks_exact(8)
                     .map(|c| u64::from_le_bytes(c.try_into().unwrap()))

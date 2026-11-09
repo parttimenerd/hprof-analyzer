@@ -313,6 +313,9 @@ impl IdMap {
 
     /// Reconstruct the address stored at dense index `i` (inverse of `index_of`).
     pub fn addr_at(&self, i: usize) -> u64 {
+        if self.offsets.is_empty() {
+            return 0;
+        }
         // Block whose start index is the greatest <= i.
         let b = self.block_start.partition_point(|&s| (s as usize) <= i) - 1;
         self.block_base[b] + self.offsets[i] as u64
@@ -443,7 +446,17 @@ impl IdMap {
         m.reserve_offsets(len);
         match codec {
             Codec::None => {
-                debug_assert_eq!(blob.len(), len * 8);
+                if blob.len() != len * 8 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "IdMap: blob length {} does not match expected {} bytes for {} entries",
+                            blob.len(),
+                            len * 8,
+                            len
+                        ),
+                    ));
+                }
                 for c in blob.chunks_exact(8) {
                     let addr = u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
                     m.push_sorted_addr(addr);
