@@ -2039,6 +2039,18 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     )?;
                                 }
                                 Some((cls, idx)) => {
+                                    // REPL-03: validate cls to prevent OQL injection
+                                    let cls_valid = cls.chars().all(|c| {
+                                        c.is_ascii_alphanumeric()
+                                            || matches!(c, '_' | '.' | '$' | '[' | ']')
+                                    });
+                                    if !cls_valid {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}error: invalid class name — only alphanumeric, _, ., $, [ ] allowed{cr}"
+                                        )?;
+                                        continue;
+                                    }
                                     let q =
                                         format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
                                     let mut dev_null: Vec<u8> = Vec::new();
@@ -2918,6 +2930,18 @@ fn run_repl_line(
                         )?;
                     }
                     Some((cls, idx)) => {
+                        // REPL-03: validate cls to prevent OQL injection
+                        let cls_valid = cls.chars().all(|c| {
+                            c.is_ascii_alphanumeric()
+                                || matches!(c, '_' | '.' | '$' | '[' | ']')
+                        });
+                        if !cls_valid {
+                            writeln!(
+                                out,
+                                "{cd}error: invalid class name — only alphanumeric, _, ., $, [ ] allowed{cr}"
+                            )?;
+                            return Ok(());
+                        }
                         let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
                         let mut dev_null: Vec<u8> = Vec::new();
                         match run_one(path, &q, path_depth, *reachable_only, cache, &mut dev_null) {
