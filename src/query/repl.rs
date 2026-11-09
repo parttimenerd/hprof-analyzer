@@ -2946,7 +2946,7 @@ fn run_repl_line(
                                 out,
                                 "{cd}error: invalid class name — only alphanumeric, _, ., $, [ ] allowed{cr}"
                             )?;
-                            return Ok(());
+                            return Ok(false);
                         }
                         let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
                         let mut dev_null: Vec<u8> = Vec::new();

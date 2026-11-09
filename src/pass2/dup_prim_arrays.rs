@@ -125,6 +125,7 @@ impl DupPrimCollector {
         let Self {
             hash_map,
             addr_to_hash,
+            ..
         } = self;
         let mut by_type: HashMap<u8, (u64, u64)> = HashMap::new();
         let mut total_wasted: u64 = 0;

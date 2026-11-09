@@ -357,6 +357,13 @@ impl Pass1 {
         // Note: tmp_kind is eliminated — kind bits are packed into tmp_class_ids
         // upper 2 bits, saving ~512 MB during the sort window.
         let n = tmp_addrs.len();
+        // P1-05: sort-index range is u32; more than u32::MAX records wraps silently.
+        if n > u32::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("pass1: {n} records exceed u32::MAX; sort index would wrap"),
+            ));
+        }
         let mut order: Vec<u32> = (0..n as u32).collect();
         crate::trace::probe("pass1: before order.sort_unstable_by_key");
         order.sort_unstable_by_key(|&i| tmp_addrs[i as usize]);

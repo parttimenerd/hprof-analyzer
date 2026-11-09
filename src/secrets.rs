@@ -222,6 +222,12 @@ impl SecretPatterns {
                     if pattern.category == "Credit card number" && !luhn_check(value) {
                         continue;
                     }
+                    // SEC-03: HTTP Basic auth must decode as valid base64 containing ':'.
+                    if pattern.category == "HTTP Basic auth header"
+                        && !http_basic_has_colon(value)
+                    {
+                        continue;
+                    }
                     let key = (pattern.category.to_owned(), value.clone());
                     // I-09: merge locations into the existing finding rather than dropping.
                     match seen.entry(key) {
@@ -306,6 +312,12 @@ impl SecretPatterns {
                     if pattern.category == "Credit card number" && !luhn_check(value) {
                         continue;
                     }
+                    // SEC-03: HTTP Basic auth must decode as valid base64 containing ':'.
+                    if pattern.category == "HTTP Basic auth header"
+                        && !http_basic_has_colon(value)
+                    {
+                        continue;
+                    }
                     let key = (pattern.category.to_owned(), value.clone());
                     // I-09: merge locations into the existing finding rather than dropping.
                     match seen.entry(key) {
@@ -379,6 +391,45 @@ fn hex_shannon_entropy(s: &str) -> f64 {
         .sum()
 }
 
+/// SEC-03: Validate that "Basic <b64>" decodes to something with a ':' separator.
+/// Rejects non-credential base64 strings like enum names or log messages.
+fn http_basic_has_colon(value: &str) -> bool {
+    let b64 = value.trim_start_matches("Basic ");
+    // base64 alphabet: A-Z a-z 0-9 + / with = padding
+    let clean: String = b64.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/' || *c == '=').collect();
+    // Attempt standard (padded) base64 decode
+    let mut decoded = Vec::new();
+    let result = (|| -> Option<()> {
+        let bytes = clean.as_bytes();
+        let mut buf = [0u8; 3];
+        let mut out = Vec::new();
+        let chunks = bytes.chunks(4);
+        for chunk in chunks {
+            if chunk.len() < 4 { break; }
+            let decode = [base64_char(chunk[0])?, base64_char(chunk[1])?, base64_char(chunk[2])?, base64_char(chunk[3])?];
+            out.push((decode[0] << 2) | (decode[1] >> 4));
+            if chunk[2] != b'=' { out.push((decode[1] << 4) | (decode[2] >> 2)); }
+            if chunk[3] != b'=' { out.push((decode[2] << 6) | decode[3]); }
+        }
+        decoded = out;
+        Some(())
+    })();
+    if result.is_none() { return false; }
+    decoded.contains(&b':')
+}
+
+fn base64_char(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        b'=' => Some(0),
+        _ => None,
+    }
+}
+
 /// I-07: Luhn algorithm check for credit card numbers.
 /// Strips spaces/dashes, then validates using the Luhn checksum.
 fn luhn_check(s: &str) -> bool {
@@ -395,12 +446,13 @@ fn luhn_check(s: &str) -> bool {
         .rev()
         .enumerate()
         .map(|(i, &d)| {
-            if i % 2 == 1 {
+            let v = if i % 2 == 1 {
                 let v = d * 2;
                 if v > 9 { v - 9 } else { v }
             } else {
                 d
-            } as u32
+            };
+            v as u32
         })
         .sum();
     sum % 10 == 0

@@ -207,8 +207,10 @@ fn adapt_regex(pat: &str) -> String {
         s.truncate(idx);
     }
 
-    // Strip word boundaries — full-match anchoring makes them redundant
-    s = s.replace(r"\b", "");
+    // SEC-09: Strip \b word boundaries outside character classes only.
+    // A blanket s.replace(r"\b", "") also removes \b inside [...] where it
+    // means backspace (ASCII 0x08), changing regex semantics.
+    s = strip_word_boundaries_outside_char_class(&s);
 
     // Unwrap a single top-level capture group: ^(content)$ → content
     if s.starts_with('(') && !s.starts_with("(?") && s.ends_with(')') {
@@ -220,6 +222,50 @@ fn adapt_regex(pat: &str) -> String {
     }
 
     s.trim().to_owned()
+}
+
+/// Strip `\b` word-boundary tokens outside character classes.
+/// Inside `[...]`, `\b` means backspace (0x08) and must be kept.
+fn strip_word_boundaries_outside_char_class(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_class = false;
+    while i < bytes.len() {
+        if in_class {
+            // Inside [...]: copy verbatim, watch for unescaped ']'
+            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                // escaped char — copy both bytes, never ']'
+                out.push(bytes[i] as char);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+            } else if bytes[i] == b']' {
+                in_class = false;
+                out.push(']');
+                i += 1;
+            } else {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        } else if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'b' {
+                // \b outside a class → word boundary → strip
+                i += 2;
+            } else {
+                out.push('\\');
+                out.push(bytes[i + 1] as char);
+                i += 2;
+            }
+        } else if bytes[i] == b'[' {
+            in_class = true;
+            out.push('[');
+            i += 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Find the start index of a trailing token-boundary group like

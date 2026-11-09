@@ -806,8 +806,8 @@ impl MatEmitter {
                 };
                 let (super_addr, _loader_addr_ci, inst_size) =
                     meta.class_info.get(&addr).copied().unwrap_or((0, 0, 0));
-                // Find super's mat-id by looking it up via its address.
-                let super_mat_id = 0i32; // placeholder: requires addr→mat-id reverse lookup
+                // MAT-14 requires addr→mat-id lookup which needs IdMap; deferred (architectural).
+                let super_mat_id = 0i32;
                 let is_array = name.starts_with('[');
                 let inst_count_val = instance_count[row];
                 let used_heap_val = used_heap[row];

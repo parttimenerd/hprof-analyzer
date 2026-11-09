@@ -85,37 +85,41 @@ pub(crate) struct ConfigQuery {
 }
 
 /// Parse a TOML string into a Vec of user-defined CollDesc entries.
+/// CFG-03: validates per-entry; invalid entries are warned and skipped,
+/// so one bad `[[collection]]` doesn't drop all valid entries.
 pub(crate) fn parse_toml_str(src: &str) -> Result<Vec<CollDesc>, String> {
     let cfg: ConfigFile = toml::from_str(src).map_err(|e| e.to_string())?;
-    cfg.collection
-        .into_iter()
-        .map(|e| {
-            let kind = parse_kind(&e.kind)?;
-            // Normalise class names: user may write "com.example.Foo" (dotted)
-            // but the HPROF name table uses "com/example/Foo" (slash). Accept
-            // both and convert to slash form so matches don't silently fail.
-            let class_slash = e.class.replace('.', "/");
-            let size_field = e.size_field.map(|s| {
-                let (f, o) = parse_class_field(&s, &class_slash);
-                (f, o.replace('.', "/"))
-            });
-            let array_field = e.array_field.map(|s| {
-                let (f, o) = parse_class_field(&s, &class_slash);
-                (f, o.replace('.', "/"))
-            });
-            let nested_map_field = e.nested_map_field.map(|s| {
-                let (f, o) = parse_class_field(&s, &class_slash);
-                (f, o.replace('.', "/"))
-            });
-            Ok(CollDesc {
-                class_name: class_slash,
-                size_field,
-                array_field,
-                nested_map_field,
-                kind,
-            })
-        })
-        .collect()
+    let mut out = Vec::new();
+    for e in cfg.collection {
+        let class_name = e.class.replace('.', "/");
+        let kind = match parse_kind(&e.kind) {
+            Ok(k) => k,
+            Err(msg) => {
+                eprintln!("warning: skipping [[collection]] {:?}: {msg}", class_name);
+                continue;
+            }
+        };
+        let size_field = e.size_field.map(|s| {
+            let (f, o) = parse_class_field(&s, &class_name);
+            (f, o.replace('.', "/"))
+        });
+        let array_field = e.array_field.map(|s| {
+            let (f, o) = parse_class_field(&s, &class_name);
+            (f, o.replace('.', "/"))
+        });
+        let nested_map_field = e.nested_map_field.map(|s| {
+            let (f, o) = parse_class_field(&s, &class_name);
+            (f, o.replace('.', "/"))
+        });
+        out.push(CollDesc {
+            class_name,
+            size_field,
+            array_field,
+            nested_map_field,
+            kind,
+        });
+    }
+    Ok(out)
 }
 
 /// Parse the `[[query]]` entries from a TOML config string. Empty when the

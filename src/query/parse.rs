@@ -541,7 +541,7 @@ where
         )
         .map(|(dotted, args): (String, Vec<Expr>)| {
             let Some((recv, meth)) = dotted.rsplit_once('.') else {
-                return Expr::Null;
+                return Expr::Lit(Value::Null);
             };
             Expr::Method {
                 receiver: Box::new(Expr::Attr(Attr::Field(recv.to_string()))),

@@ -123,9 +123,11 @@ impl CacheDir {
     /// True if the cache is valid for `mode` (checks magic of required files).
     pub fn is_valid(&self, mode: CacheMode) -> bool {
         let arrays_ok = check_magic(&self.path.join("arrays.bin"));
-        let pass1_ok = self.path.join("pass1.bin.zst").exists();
-        let report_ok = self.path.join("report.json.zst").exists();
-        let class_names_ok = self.path.join("class_names.json.zst").exists();
+        // CACHE-01/02: validate zstd magic (0xFD2FB528) instead of just .exists().
+        // A zero-byte file from a crash, or a truncated write, fails the magic check.
+        let pass1_ok = check_zstd_magic(&self.path.join("pass1.bin.zst"));
+        let report_ok = check_zstd_magic(&self.path.join("report.json.zst"));
+        let class_names_ok = check_zstd_magic(&self.path.join("class_names.json.zst"));
         let base_ok = report_ok && pass1_ok && arrays_ok && class_names_ok;
         if mode == CacheMode::Graph {
             base_ok && check_magic(&self.path.join("graph.bin"))
@@ -143,10 +145,11 @@ impl CacheDir {
 
     pub fn read_report(&self) -> io::Result<Option<Report>> {
         let path = self.path.join("report.json.zst");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let bytes = read_zstd(&path)?;
+        let bytes = match read_zstd(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
         serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(io::Error::other)
@@ -161,10 +164,11 @@ impl CacheDir {
     /// Read the class name table written by `write_class_names`.
     pub fn read_class_names(&self) -> io::Result<Option<Vec<String>>> {
         let path = self.path.join("class_names.json.zst");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let bytes = read_zstd(&path)?;
+        let bytes = match read_zstd(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
         serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(io::Error::other)
@@ -180,10 +184,11 @@ impl CacheDir {
 
     pub fn read_pass1(&self) -> io::Result<Option<Pass1Snapshot>> {
         let path = self.path.join("pass1.bin.zst");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let bytes = read_zstd(&path)?;
+        let bytes = match read_zstd(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
         let (snap, _) = bincode::serde::decode_from_slice::<Pass1Snapshot, _>(
             &bytes,
             bincode::config::standard(),
@@ -279,7 +284,12 @@ impl CacheDir {
         })
     }
 
-    // ── Cache management ──────────────────────────────────────────────────────
+    /// Returns the forward edge field-name indices, or `None` if not cached.
+    pub fn read_fwd_field_idx(&self) -> io::Result<Option<Vec<u16>>> {
+        read_delta_u16_array(&self.path.join("graph.bin"), "fwd_field_idx")
+    }
+
+
 
     /// Delete all files in the cache directory.
     pub fn clear(&self) -> io::Result<()> {
@@ -391,9 +401,6 @@ fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Re
 /// change) would silently serve stale data from the old cache instead of
 /// invalidating it and triggering a fresh analysis run.
 fn check_magic(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
-    }
     let Ok(mut f) = File::open(path) else {
         return false;
     };
@@ -404,13 +411,25 @@ fn check_magic(path: &Path) -> bool {
         && u16::from_le_bytes([buf[4], buf[5]]) == VERSION
 }
 
+/// CACHE-01/02: Check that a file starts with the zstd frame magic (0xFD2FB528 LE).
+/// A zero-byte file from a crash, or stale data from another format, fails this check.
+fn check_zstd_magic(path: &Path) -> bool {
+    const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+    let Ok(mut f) = File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 4];
+    f.read_exact(&mut buf).is_ok() && buf == ZSTD_MAGIC
+}
+
 /// Read the array index header from an indexed file.
 #[allow(clippy::type_complexity)]
 fn read_index(path: &Path) -> io::Result<Option<(File, Vec<([u8; 16], u64, u64)>)>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let mut f = File::open(path)?;
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -525,17 +544,33 @@ fn zstd_compress_delta_u32(data: &[u32]) -> io::Result<Vec<u8>> {
     zstd::encode_all(raw.as_slice(), 3)
 }
 
-/// Delta-encode a u16 array, then zstd-3.
+/// Delta-encode a u16 array using i32 deltas (not i16 — field-index jumps can exceed 32767),
+/// then zstd-3.
 fn zstd_compress_delta_u16(data: &[u16]) -> io::Result<Vec<u8>> {
-    let mut deltas: Vec<i16> = Vec::with_capacity(data.len());
+    let mut deltas: Vec<i32> = Vec::with_capacity(data.len());
     let mut prev = 0i32;
     for &v in data {
         let delta = v as i32 - prev;
-        deltas.push(delta as i16);
+        deltas.push(delta);
         prev = v as i32;
     }
-    let raw = i16_to_le_bytes(&deltas);
+    let raw = i32_to_le_bytes(&deltas);
     zstd::encode_all(raw.as_slice(), 3)
+}
+
+fn read_delta_u16_array(path: &Path, name: &str) -> io::Result<Option<Vec<u16>>> {
+    let Some((f, len)) = seek_to_entry(path, name)? else {
+        return Ok(None);
+    };
+    let raw = decompress_zstd_frame(f, len)?;
+    let deltas = le_bytes_to_i32(&raw);
+    let mut out = Vec::with_capacity(deltas.len());
+    let mut acc = 0i32;
+    for d in deltas {
+        acc += d;
+        out.push(acc as u16);
+    }
+    Ok(Some(out))
 }
 
 fn undelta_zigzag_u32(zigzag: &[u32]) -> Vec<u32> {
@@ -576,14 +611,6 @@ fn u64_to_le_bytes(data: &[u64]) -> Vec<u8> {
 
 fn i32_to_le_bytes(data: &[i32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() * 4);
-    for &v in data {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    out
-}
-
-fn i16_to_le_bytes(data: &[i16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() * 2);
     for &v in data {
         out.extend_from_slice(&v.to_le_bytes());
     }
