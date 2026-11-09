@@ -206,19 +206,19 @@ pub fn format_bytes(n: u64) -> String {
         return format!("{} B", n);
     }
     let kb = n as f64 / KB as f64;
-    if n < MB && (kb * 10.0).round() < 1024.0 * 10.0 {
+    if n < MB && (kb * 10.0).round() <= 1024.0 * 10.0 {
         return format!("{:.1} KB", kb);
     }
     let mb = n as f64 / MB as f64;
-    if n < GB && (mb * 10.0).round() < 1024.0 * 10.0 {
+    if n < GB && (mb * 10.0).round() <= 1024.0 * 10.0 {
         return format!("{:.1} MB", mb);
     }
     let gb = n as f64 / GB as f64;
-    if n < TB && (gb * 100.0).round() < 1024.0 * 100.0 {
+    if n < TB && (gb * 100.0).round() <= 1024.0 * 100.0 {
         return format!("{:.2} GB", gb);
     }
     let tb = n as f64 / TB as f64;
-    if n < PB && (tb * 100.0).round() < 1024.0 * 100.0 {
+    if n < PB && (tb * 100.0).round() <= 1024.0 * 100.0 {
         return format!("{:.2} TB", tb);
     }
     format!("{:.2} PB", n as f64 / PB as f64)
@@ -498,8 +498,8 @@ mod tests {
         assert_eq!(format_bytes(1024), "1.0 KB");
         assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
         assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
-        // Boundary: just under 1 MiB must not round up to "1024.0 KB".
-        assert_eq!(format_bytes(1024 * 1024 - 1), "1.0 MB");
+        // R-06: just under 1 MiB stays in KB (rounds to 1024.0 KB, not promoted to MB).
+        assert_eq!(format_bytes(1024 * 1024 - 1), "1024.0 KB");
     }
 
     #[test]
@@ -510,8 +510,8 @@ mod tests {
         assert_eq!(format_bytes(5 * TB + TB / 2), "5.50 TB");
         assert_eq!(format_bytes(PB), "1.00 PB");
         assert_eq!(format_bytes(3 * PB), "3.00 PB");
-        // Just under 1 TiB stays in GB, not a premature "1024.00 GB".
-        assert_eq!(format_bytes(TB - 1), "1.00 TB");
+        // R-06: just under 1 TiB stays in GB (rounds to 1024.00 GB, not promoted to TB).
+        assert_eq!(format_bytes(TB - 1), "1024.00 GB");
     }
 
     #[test]
