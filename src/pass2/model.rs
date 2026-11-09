@@ -641,8 +641,11 @@ fn name_idx_for(
             if name.is_empty() {
                 0u16
             } else {
-                let next = name_map.len() as u16;
-                let idx = *name_map.entry(name.to_owned()).or_insert(next);
+                let next = name_map.len();
+                if next > u16::MAX as usize {
+                    return 0u16;
+                }
+                let idx = *name_map.entry(name.to_owned()).or_insert(next as u16);
                 if idx as usize >= field_name_pool.len() {
                     field_name_pool.push(name.to_owned());
                 }
