@@ -1526,10 +1526,12 @@ mod tests {
             1,
             "rows capped to 1: {v}"
         );
+        // SRV-02: row_count preserves the original count (before the HTTP cap);
+        // the caller uses it to know the true result size.
         assert_eq!(
             v["result"]["row_count"].as_u64().unwrap(),
-            1,
-            "row_count reflects cap: {v}"
+            total,
+            "row_count is original total, not the HTTP cap: {v}"
         );
         assert_eq!(
             v["result"]["truncated"],
@@ -1561,10 +1563,9 @@ mod tests {
         serde_json::from_str(&body).unwrap()
     }
 
-    /// OQL-15: each IN clause must evaluate the declared LHS, not always @objectAddress.
+    /// OQL-15 / E-12: each IN clause must evaluate the declared LHS, not always @objectAddress.
     /// With --all, @objectAddress IN (thread addresses) should match Thread count.
-    /// @objectId IN (those same addresses) must NOT match Thread count because
-    /// a dense index is not a heap address — expect zero matches.
+    /// @objectId IN (those same addresses) is rejected at plan time (E-12 type mismatch).
     #[test]
     fn in_lhs_attribute_is_respected() {
         let state = state_all();
@@ -1576,16 +1577,23 @@ mod tests {
         ));
         assert!(addr_count > 0, "@objectAddress IN threads must match >0");
 
-        let id_count = count_value(&query_all(
-            &state,
+        // E-12: mismatching @objectId (dense index) with @objectAddress (heap pointer)
+        // in an IN-subquery is rejected at plan time with a clear error.
+        let (status, body, _) = state.route(
+            "POST",
+            "/",
             r#"SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
                WHERE @objectId IN (SELECT @objectAddress FROM java.lang.Thread)"#,
-        ));
-        // Dense indices are small integers; Thread heap addresses are large raw
-        // pointers — the two sets are disjoint in any realistic heap dump.
-        assert_eq!(
-            id_count, 0,
-            "@objectId IN (heap addresses) must produce 0 matches, got {id_count}"
+        );
+        assert_eq!(status, 400, "E-12 mismatch must return 400: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(false));
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("mismatch"),
+            "error must mention mismatch: {v}"
         );
     }
 

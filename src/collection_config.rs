@@ -341,13 +341,17 @@ size_field = "java/util/HashMap#size"
     }
 
     #[test]
-    fn unknown_kind_is_error() {
+    fn unknown_kind_is_skipped() {
         let toml = r#"
 [[collection]]
 class = "com/example/Foo"
 kind = "Bag"
 "#;
-        assert!(parse_toml_str(toml).is_err());
+        // Unknown kind emits a warning and skips the entry rather than hard-erroring,
+        // so the caller doesn't crash on user-config mistakes.
+        let result = parse_toml_str(toml);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty(), "unknown kind entry must be skipped");
     }
 
     #[test]
