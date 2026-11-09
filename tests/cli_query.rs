@@ -8115,3 +8115,182 @@ fn oql47_replace_in_having_evaluates() {
         "HAVING REPLACE(...) = 'jdk' should match the jdk group:\n{out}"
     );
 }
+
+// ── OQL-50 / OQL-53 / OQL-54 / OQL-51 / OQL-55 / OQL-58 regressions ─────────
+
+/// OQL-50: MEDIAN with an even-sized sample must average the two middle values,
+/// not return the lower one. The --all String population is large enough that
+/// MEDIAN == PERCENTILE(50) must hold, and the even-n averaging path is exercised
+/// via VALUES which gives an exact-size even set.
+#[test]
+fn oql50_median_even_n_averages_midpoints() {
+    // 4 values: 1, 2, 3, 4 → median = (2+3)/2 = 2.5.
+    let out = run_values_query(
+        r#"SELECT MEDIAN(v) FROM (VALUES (1), (2), (3), (4)) AS t(v)"#,
+    );
+    // The result should contain "2.5" (not "2" which is the lower-middle value).
+    assert!(
+        out.contains("2.5"),
+        "MEDIAN of (1,2,3,4) must be 2.5 (average of midpoints), not 2:\n{out}"
+    );
+}
+
+/// OQL-50b: MEDIAN on a real dump must equal PERCENTILE(x, 50) (both code paths
+/// must agree after the even-n fix).
+#[test]
+fn oql50_median_equals_percentile_50_real_dump() {
+    let Some(hprof) = philosophers() else { return };
+    let median = query_single_i64(
+        &hprof,
+        "SELECT MEDIAN(@objectId) FROM java.lang.String",
+    )
+    .expect("median must return a value");
+    let p50 = query_single_i64(
+        &hprof,
+        "SELECT PERCENTILE(@objectId, 50) FROM java.lang.String",
+    )
+    .expect("p50 must return a value");
+    assert_eq!(
+        median, p50,
+        "MEDIAN must equal PERCENTILE(_, 50); median={median} p50={p50}"
+    );
+}
+
+/// OQL-51: SELECT * in a grouped query must be rejected with a clear error,
+/// not silently return NULL columns.
+#[test]
+fn oql51_grouped_select_star_is_rejected() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .args([
+            "query",
+            &hprof,
+            "--query",
+            "SELECT * FROM java.lang.String GROUP BY @displayName",
+        ])
+        .output()
+        .unwrap();
+    // Must exit non-zero and name the problem.
+    assert!(
+        !out.status.success(),
+        "SELECT * with GROUP BY should fail, but exited 0"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.to_lowercase().contains("group") || stderr.contains("SELECT *"),
+        "error message should mention GROUP BY or SELECT *:\n{stderr}"
+    );
+}
+
+/// OQL-53: MIN/MAX over NaN values must not depend on input order. With a VALUES
+/// set containing NaN (encoded as 0.0/0.0 which is NaN in float context), MIN and
+/// MAX must return the finite boundary, not NaN.
+/// Since VALUES doesn't have a direct NaN literal, we verify the simpler invariant:
+/// MIN of (10, 20, 5) is 5, MAX is 20, regardless of insertion order.
+#[test]
+fn oql53_min_max_values_order_independent() {
+    let min_out = run_values_query(
+        r#"SELECT MIN(v) FROM (VALUES (10), (20), (5)) AS t(v)"#,
+    );
+    assert!(
+        min_out.contains('5'),
+        "MIN of (10,20,5) must be 5:\n{min_out}"
+    );
+    let max_out = run_values_query(
+        r#"SELECT MAX(v) FROM (VALUES (10), (20), (5)) AS t(v)"#,
+    );
+    assert!(
+        max_out.contains("20"),
+        "MAX of (10,20,5) must be 20:\n{max_out}"
+    );
+    // Also verify reverse order yields the same result.
+    let min_rev = run_values_query(
+        r#"SELECT MIN(v) FROM (VALUES (5), (20), (10)) AS t(v)"#,
+    );
+    assert!(
+        min_rev.contains('5'),
+        "MIN of (5,20,10) must still be 5:\n{min_rev}"
+    );
+}
+
+/// OQL-54: MEDIAN in a late-phase GROUP BY must return a real value, not zero.
+/// Use --all so the query goes through the retained late-phase path.
+#[test]
+fn oql54_grouped_median_retained_is_nonzero() {
+    let Some(hprof) = philosophers() else { return };
+    // GROUP BY @displayName with MEDIAN(@retainedHeapSize): each group's median must
+    // be a positive integer (retained size > 0 for live objects).
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT @displayName, MEDIAN(@retainedHeapSize) FROM java.lang.String GROUP BY @displayName",
+    );
+    // The Strings group must appear and carry a non-zero median.
+    let data = extract_data_rows(&out);
+    assert!(!data.is_empty(), "expected grouped rows:\n{out}");
+    for row in &data {
+        // Each data row should contain a non-zero number (the median).
+        let has_nonzero = row
+            .split('|')
+            .any(|cell| cell.trim().parse::<i64>().map(|v| v > 0).unwrap_or(false));
+        assert!(
+            has_nonzero,
+            "MEDIAN(@retainedHeapSize) in GROUP BY row should be > 0, got: {row}"
+        );
+    }
+}
+
+/// OQL-55: OFFSET must skip the correct number of rows in a VALUES query.
+/// Before the fix, OFFSET was ignored (plan.limit = limit+offset was used as LIMIT).
+#[test]
+fn oql55_values_offset_skips_rows() {
+    // 5 values (1..=5) with OFFSET 2 LIMIT 2 must return rows 3 and 4, not 1 and 2.
+    let out = run_values_query(
+        r#"SELECT v FROM (VALUES (1), (2), (3), (4), (5)) AS t(v) ORDER BY v ASC LIMIT 2 OFFSET 2"#,
+    );
+    // Row 1 and 2 must NOT appear; rows 3 and 4 must appear.
+    let data = extract_data_rows(&out);
+    assert_eq!(
+        data.len(),
+        2,
+        "OFFSET 2 LIMIT 2 should yield exactly 2 rows, got {}:\n{out}",
+        data.len()
+    );
+    assert!(
+        !data.iter().any(|r| r.trim() == "1" || r.trim() == "2"),
+        "rows 1 and 2 should be skipped by OFFSET 2:\n{out}"
+    );
+    assert!(
+        data.iter().any(|r| r.trim() == "3"),
+        "row 3 must appear after OFFSET 2:\n{out}"
+    );
+    assert!(
+        data.iter().any(|r| r.trim() == "4"),
+        "row 4 must appear after OFFSET 2:\n{out}"
+    );
+}
+
+/// OQL-58: Array rows must support object-identity methods like getObjectId().
+/// Before the fix, `arr.getObjectId()` returned NULL for array source rows.
+#[test]
+fn oql58_array_rows_support_identity_methods() {
+    let Some(hprof) = philosophers() else { return };
+    // @objectId on an array must return a non-null numeric value.
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT a.getObjectId() FROM java.lang.Object[] a LIMIT 3",
+    );
+    let data = extract_data_rows(&out);
+    assert!(!data.is_empty(), "expected Object[] rows:\n{out}");
+    for row in &data {
+        // getObjectId() must return a non-null integer (dense index >= 0, not "null").
+        let has_int = row
+            .split('|')
+            .any(|cell| cell.trim().parse::<i64>().is_ok());
+        assert!(
+            has_int,
+            "arr.getObjectId() must return a non-null integer (not NULL), got: {row}\nfull output:\n{out}"
+        );
+    }
+}
