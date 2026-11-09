@@ -30,7 +30,13 @@ pub fn decode_one(buf: &[u8]) -> (u32, usize) {
         // A well-formed u32 vbyte is at most 5 bytes; bail before `shift` can
         // reach 32 (which would be UB / a wrapping shift on malformed input).
         if shift >= 32 {
-            return (val, i + 1);
+            // D-03: scan forward to the next terminal byte so subsequent decodes
+            // start at a byte-aligned position, not mid-sequence.
+            let consumed = buf[i + 1..]
+                .iter()
+                .position(|&b| b & 0x80 == 0)
+                .map_or(buf.len(), |p| i + 1 + p + 1);
+            return (val, consumed);
         }
     }
     (val, buf.len())

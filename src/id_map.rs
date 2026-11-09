@@ -229,11 +229,15 @@ impl IdMap {
             self.offsets.push(0);
             return;
         }
+        let prev = self.addr_at(self.offsets.len() - 1);
+        // D-02: enforce ascending in release builds too, not just debug_assert.
+        if addr <= prev {
+            if addr == prev {
+                return; // silently skip exact duplicates
+            }
+            panic!("push_sorted_addr: address 0x{addr:x} is not greater than previous 0x{prev:x}");
+        }
         let mut base = *self.block_base.last().unwrap();
-        debug_assert!(
-            addr > self.addr_at(self.offsets.len() - 1),
-            "push_sorted_addr not ascending"
-        );
         if addr - base >= BLOCK_SPAN {
             base = addr;
             self.block_base.push(base);

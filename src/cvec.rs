@@ -461,15 +461,19 @@ pub struct CompressedBytes {
     codec: Codec,
     blob: Vec<u8>,
     raw: Vec<u8>,
+    /// Uncompressed byte count; used as capacity hint for decompression.
+    uncompressed_len: usize,
 }
 
 impl CompressedBytes {
     pub fn compress(v: Vec<u8>, codec: Codec) -> io::Result<Self> {
+        let uncompressed_len = v.len();
         match codec {
             Codec::None => Ok(Self {
                 codec,
                 blob: Vec::new(),
                 raw: v,
+                uncompressed_len,
             }),
             Codec::Deflate9 | Codec::Deflate1 => {
                 let blob = deflate_compress(&v, deflate_level(codec))?;
@@ -477,6 +481,7 @@ impl CompressedBytes {
                     codec,
                     blob,
                     raw: Vec::new(),
+                    uncompressed_len,
                 })
             }
             #[cfg(feature = "native")]
@@ -488,7 +493,7 @@ impl CompressedBytes {
         match self.codec {
             Codec::None => Ok(self.raw),
             Codec::Deflate9 | Codec::Deflate1 => {
-                deflate_decompress(&self.blob, self.blob.len() * 4)
+                deflate_decompress(&self.blob, self.uncompressed_len)
             }
             #[cfg(feature = "native")]
             Codec::Zstd1 => unreachable!("Zstd1 is only for IdMap, not CompressedBytes"),

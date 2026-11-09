@@ -35,11 +35,8 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 | 16 | Format | `format.rs:209` | `format_bytes` promotes units too early at boundaries | Fix boundary guard comparisons |
 | 17 | Refwalk | `refwalk.rs:71` | `into_csr` panics if edge `src >= n` | Add bounds check, skip invalid edges |
 | 18 | Sizing | `sizing.rs:60` | Double-alignment inflates shallow size under compressed OOPs | Remove intermediate `align_up(..., ref_size)` |
-| 19 | Id_map | `id_map.rs:220` | `push_sorted_addr` duplicate detection bypassed on first call | Unify first-block and general path |
-| 20 | Vbyte | `vbyte.rs:30` | Malformed vbyte bail-out reports wrong consumed count | Scan forward to re-sync |
-| 24 | Cvec | `cvec.rs:473` | Decompression capacity hint is arbitrary `blob.len()*4` | Track `len` field in `CompressedBytes` |
-| 25 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
-| 26 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
+| 19 | OQL parser | `parse.rs:830` | `INSTANCEOF` silently discards LHS attribute | Extend `Predicate::InstanceOf` to carry subject |
+| 20 | Jsonify | `jsonify.rs:1000` | Budget-hit node emits fabricated `"@ref":"0x0"` | Use `"@index"` only, omit fake address |
 
 ---
 
@@ -380,20 +377,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Fix:** Add session-epoch counter; detect change and return retry error.
 
 ## 10. Data Structures (cvec, id_map, vbyte, chunkvec)
-
-### D-01 `CompressedBytes::restore` capacity hint is arbitrary `blob.len()*4` — High
-**Line:** `cvec.rs:473`  
-**Fix:** Add `len: usize` field tracking uncompressed size; pass it as capacity.
-
-### D-02 `push_sorted_addr` first-block path bypasses ascending assertion — High
-**Line:** `id_map.rs:220`  
-**Bug:** Duplicate addresses on the very first call are not detected.  
-**Fix:** Unify first-block and general code path (compute `base` in an if/else, then always push offset).
-
-### D-03 Malformed vbyte bail-out reports wrong consumed count — Medium
-**Line:** `vbyte.rs:30`  
-**Bug:** Returns `i+1` consumed at a non-terminal byte; subsequent decodes read misaligned.  
-**Fix:** Scan forward to the next terminal byte before returning consumed count.
 
 ### D-04 `CompressedU32::get_at` cannot short-circuit — Medium
 **Line:** `cvec.rs:228`  
