@@ -138,7 +138,9 @@ fn eval_agg(item: &SelectItem, count: u64, shallow: u64) -> (String, QueryValue)
             let arg_is_shallow = matches!(arg.as_ref(), SelectItem::Attr(Attr::UsedHeapSize));
             let v = match func {
                 AggFunc::Count => QueryValue::Int(count.min(i64::MAX as u64) as i64),
-                AggFunc::Sum if arg_is_shallow => QueryValue::Int(shallow.min(i64::MAX as u64) as i64),
+                AggFunc::Sum if arg_is_shallow => {
+                    QueryValue::Int(shallow.min(i64::MAX as u64) as i64)
+                }
                 AggFunc::Avg if arg_is_shallow && count > 0 => {
                     QueryValue::Float(shallow as f64 / count as f64)
                 }

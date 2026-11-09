@@ -408,7 +408,8 @@ impl Ser {
             self.buf.extend_from_slice(bytes);
         } else {
             self.u8(TC_BLOCKDATALONG);
-            self.buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            self.buf
+                .extend_from_slice(&(bytes.len() as u32).to_be_bytes());
             self.buf.extend_from_slice(bytes);
         }
     }

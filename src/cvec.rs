@@ -194,11 +194,7 @@ impl CompressedU32 {
                 if written != byte_len {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "zstd restore: expected {} bytes, got {}",
-                            byte_len,
-                            written
-                        ),
+                        format!("zstd restore: expected {} bytes, got {}", byte_len, written),
                     ));
                 }
                 Ok(out)
@@ -427,7 +423,10 @@ impl CompressedU64 {
             Codec::None => Ok(self.raw.clone()),
             Codec::Deflate9 | Codec::Deflate1 => {
                 let expected = self.len.checked_mul(8).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "CompressedU64: len * 8 overflows usize")
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "CompressedU64: len * 8 overflows usize",
+                    )
                 })?;
                 let bytes = deflate_decompress(&self.blob, expected)?;
                 if bytes.len() != expected {

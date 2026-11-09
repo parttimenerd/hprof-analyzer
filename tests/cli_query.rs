@@ -8306,9 +8306,7 @@ fn oql64_order_by_large_integers_exact() {
 /// OQL-67: Parsing -9223372036854775808 (i64::MIN) must not panic.
 #[test]
 fn oql67_i64_min_literal_does_not_panic() {
-    let out = run_values_query(
-        r#"SELECT -9223372036854775808 AS x FROM (VALUES (1)) AS t(v)"#,
-    );
+    let out = run_values_query(r#"SELECT -9223372036854775808 AS x FROM (VALUES (1)) AS t(v)"#);
     assert!(
         out.contains("-9223372036854775808"),
         "i64::MIN literal must parse and evaluate without panic:\n{out}"
@@ -8342,7 +8340,11 @@ fn oql68_join_select_subset_does_not_append_rhs() {
     let data_rows = extract_data_rows(&out);
     assert_eq!(data_rows.len(), 1, "expected exactly one row:\n{out}");
     // The row must contain only one column (x = 1), not three.
-    let cells: Vec<&str> = data_rows[0].split('|').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
+    let cells: Vec<&str> = data_rows[0]
+        .split('|')
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .collect();
     assert_eq!(
         cells.len(),
         1,
@@ -8350,7 +8352,11 @@ fn oql68_join_select_subset_does_not_append_rhs() {
         cells.len(),
         data_rows[0]
     );
-    assert!(cells[0].contains('1'), "expected x=1, got: {}\nfull output:\n{out}", cells[0]);
+    assert!(
+        cells[0].contains('1'),
+        "expected x=1, got: {}\nfull output:\n{out}",
+        cells[0]
+    );
 }
 
 /// OQL-61: Qualified table.column aliases in JOIN ON must resolve correctly.

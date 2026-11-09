@@ -1492,9 +1492,16 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                             // E-04: preserve Int type when all operands are Int.
                             let all_int = vals.iter().all(|v| matches!(v, QueryValue::Int(_)));
                             if all_int {
-                                let sum: i64 = vals.iter().filter_map(|v| {
-                                    if let QueryValue::Int(n) = v { Some(*n) } else { None }
-                                }).fold(0i64, i64::saturating_add);
+                                let sum: i64 = vals
+                                    .iter()
+                                    .filter_map(|v| {
+                                        if let QueryValue::Int(n) = v {
+                                            Some(*n)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .fold(0i64, i64::saturating_add);
                                 QueryValue::Int(sum)
                             } else {
                                 let sum = vals.iter().fold(0.0f64, |acc, v| match v {
@@ -1669,7 +1676,11 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         let mut seen: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(joined.rows.len());
         joined.rows.retain(|row| {
-            let key: String = row.iter().map(canonical_key).collect::<Vec<_>>().join("\x00");
+            let key: String = row
+                .iter()
+                .map(canonical_key)
+                .collect::<Vec<_>>()
+                .join("\x00");
             seen.insert(key)
         });
     }
@@ -2907,8 +2918,11 @@ pub fn collapse_union_results(
                 .next()
                 .expect("flat results shorter than groups describe (intersect)");
             // Build a set of right-side row keys.
-            let right_set: std::collections::HashSet<String> =
-                right.rows.iter().map(|row| row_canonical_key(row)).collect();
+            let right_set: std::collections::HashSet<String> = right
+                .rows
+                .iter()
+                .map(|row| row_canonical_key(row))
+                .collect();
             result
                 .rows
                 .retain(|row| right_set.contains(&row_canonical_key(row)));
@@ -2924,8 +2938,11 @@ pub fn collapse_union_results(
             let right = it
                 .next()
                 .expect("flat results shorter than groups describe (except)");
-            let right_set: std::collections::HashSet<String> =
-                right.rows.iter().map(|row| row_canonical_key(row)).collect();
+            let right_set: std::collections::HashSet<String> = right
+                .rows
+                .iter()
+                .map(|row| row_canonical_key(row))
+                .collect();
             result
                 .rows
                 .retain(|row| !right_set.contains(&row_canonical_key(row)));

@@ -1075,7 +1075,12 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool, forma
                 };
                 // SEC-07: escape control chars so tabs/newlines don't break TSV structure.
                 let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
-                println!("{}\t{}\t{}", clean(&f.category), clean(&locs), clean(&display_value));
+                println!(
+                    "{}\t{}\t{}",
+                    clean(&f.category),
+                    clean(&locs),
+                    clean(&display_value)
+                );
             }
         }
         SecretsFormat::Human => {
@@ -2342,17 +2347,17 @@ fn run_default(cli: Cli) {
         // silently override the --obj-graph tier that was already set above.
         if let Some(ref size_str) = cli.size {
             opts.report_size = match size_str.to_ascii_lowercase().as_str() {
-            "small" => crate::opts::ReportSize::Small,
-            "default" => crate::opts::ReportSize::Default,
-            "large" => crate::opts::ReportSize::Large,
-            "max" => crate::opts::ReportSize::Max,
-            other => {
-                eprintln!(
-                    "error: unknown --size tier '{other}' (expected: small, default, large, max)"
-                );
-                std::process::exit(2);
-            }
-        };
+                "small" => crate::opts::ReportSize::Small,
+                "default" => crate::opts::ReportSize::Default,
+                "large" => crate::opts::ReportSize::Large,
+                "max" => crate::opts::ReportSize::Max,
+                other => {
+                    eprintln!(
+                        "error: unknown --size tier '{other}' (expected: small, default, large, max)"
+                    );
+                    std::process::exit(2);
+                }
+            };
         }
         // Build the MAT index emitter when --mat DIR is set. The prefix is the
         // input basename with a trailing `.hprof[.gz/.tar.gz]` stripped, matching how

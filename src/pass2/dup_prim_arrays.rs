@@ -112,10 +112,7 @@ impl DupPrimCollector {
             self.ptr_size,
             self.ref_size,
         ) as u64;
-        let e = self
-            .hash_map
-            .entry(hv)
-            .or_insert((0, shallow, elem_type));
+        let e = self.hash_map.entry(hv).or_insert((0, shallow, elem_type));
         e.0 = e.0.saturating_add(1);
         self.addr_to_hash.insert(addr, hv);
     }

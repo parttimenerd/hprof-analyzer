@@ -1786,7 +1786,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
                     _ => {
                         // The receiver is a String object reference — decode it first.
-                        match self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob) {
+                        match self.project_attr(
+                            &Attr::ToString(String::new()),
+                            src_idx,
+                            class_id,
+                            blob,
+                        ) {
                             QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
                             _ => self.project_attr(&Attr::Length, src_idx, class_id, blob),
                         }

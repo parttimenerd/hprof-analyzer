@@ -718,7 +718,12 @@ impl ServerState {
 
     /// Insert an already-built (query, plan) pair into the plan cache, skipping
     /// the redundant re-parse that `store_plan` would do.
-    fn store_plan_direct(&self, oql_text: &str, q: crate::query::ast::Query, plan: crate::query::plan::QueryPlan) {
+    fn store_plan_direct(
+        &self,
+        oql_text: &str,
+        q: crate::query::ast::Query,
+        plan: crate::query::plan::QueryPlan,
+    ) {
         let mut guard = self.plan_cache.lock().unwrap_or_else(|e| e.into_inner());
         if guard.len() >= PLAN_CACHE_CAP {
             guard.clear();

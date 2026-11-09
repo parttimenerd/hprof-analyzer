@@ -2376,9 +2376,7 @@ fn unknown_call_hint(src: &str, lparen: usize) -> Option<String> {
 /// Returns `None` for any non-blank input so the normal parse path runs.
 fn blank_query_message(src: &str) -> Option<String> {
     if src.trim().is_empty() {
-        return Some(
-            "empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string(),
-        );
+        return Some("empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string());
     }
     // WITH/CTE is not yet supported; give a clear message instead of a cryptic
     // "unexpected identifier" error from the chumsky parser.

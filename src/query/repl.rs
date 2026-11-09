@@ -2938,8 +2938,7 @@ fn run_repl_line(
                     Some((cls, idx)) => {
                         // REPL-03: validate cls to prevent OQL injection
                         let cls_valid = cls.chars().all(|c| {
-                            c.is_ascii_alphanumeric()
-                                || matches!(c, '_' | '.' | '$' | '[' | ']')
+                            c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$' | '[' | ']')
                         });
                         if !cls_valid {
                             writeln!(

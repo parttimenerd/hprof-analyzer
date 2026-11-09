@@ -275,7 +275,8 @@ fn find_config(explicit: Option<&Path>) -> Option<PathBuf> {
     }
     if let Some(home) = std::env::var_os("HOME") {
         // CFG-01: use the same filename as in CWD so users can copy their config.
-        let home_candidate = PathBuf::from(home).join(".config/hprof-analyzer/.hprof-analyzer.toml");
+        let home_candidate =
+            PathBuf::from(home).join(".config/hprof-analyzer/.hprof-analyzer.toml");
         if home_candidate.exists() {
             return Some(home_candidate);
         }

@@ -409,7 +409,10 @@ pub(crate) fn compare_suspects(mat: &MatReport, ours: &Report, r: &mut DiffResul
     // DIFF-08: use Vec to avoid silently dropping suspects with duplicate class names.
     let mut our_by_name: HashMap<&str, Vec<&report::Suspect>> = HashMap::new();
     for s in &ours.leaks.suspects {
-        our_by_name.entry(s.pretty_class.as_str()).or_default().push(s);
+        our_by_name
+            .entry(s.pretty_class.as_str())
+            .or_default()
+            .push(s);
     }
     // DIFF-12: use overview.total_shallow (not leaks.total_shallow) as the denominator.
     let denom = ours.overview.total_shallow;

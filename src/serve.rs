@@ -132,7 +132,13 @@ impl ServeState {
                 // SRV-05: sanitize stem to prevent header injection via " or CRLF
                 let stem: String = stem
                     .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect();
                 Ok((html.into_bytes(), stem))
             }

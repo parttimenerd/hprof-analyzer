@@ -468,11 +468,20 @@ impl HprofMcpServer {
 
         // I-02: warn when requested options don't match what the cached report contains.
         let mut cache_mismatch_notes: Vec<&str> = Vec::new();
-        if collections && result.report.collections.collection_fill_ratio.buckets.is_empty() {
-            cache_mismatch_notes.push("collections=true requested but cache has no collection data");
+        if collections
+            && result
+                .report
+                .collections
+                .collection_fill_ratio
+                .buckets
+                .is_empty()
+        {
+            cache_mismatch_notes
+                .push("collections=true requested but cache has no collection data");
         }
         if (p.with_graph || p.full_analysis) && result.mode != CacheMode::Graph {
-            cache_mismatch_notes.push("with_graph=true requested but cache was built without the reference graph");
+            cache_mismatch_notes
+                .push("with_graph=true requested but cache was built without the reference graph");
         }
         let cache_mismatch_note: String = if cache_mismatch_notes.is_empty() {
             String::new()
@@ -1554,10 +1563,10 @@ impl HprofMcpServer {
         });
         let (baseline_result, current_result) = tokio::try_join!(baseline_task, current_task)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let baseline_result = baseline_result
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let current_result = current_result
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let baseline_result =
+            baseline_result.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let current_result =
+            current_result.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let base_r = &baseline_result.report;
         let curr_r = &current_result.report;

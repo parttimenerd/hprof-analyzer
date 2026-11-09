@@ -289,8 +289,6 @@ impl CacheDir {
         read_delta_u16_array(&self.path.join("graph.bin"), "fwd_field_idx")
     }
 
-
-
     /// Delete all files in the cache directory.
     pub fn clear(&self) -> io::Result<()> {
         if self.path.exists() {
@@ -376,7 +374,10 @@ fn write_indexed_file(path: &Path, names: &[&str], frames: &[Vec<u8>]) -> io::Re
     f.write_all(MAGIC)?;
     f.write_all(&VERSION.to_le_bytes())?;
     let n_u8 = u8::try_from(n).map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("write_indexed_file: array count {n} > 255"))
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("write_indexed_file: array count {n} > 255"),
+        )
     })?;
     f.write_all(&[n_u8])?;
     for (i, &name) in names.iter().enumerate() {
@@ -468,7 +469,10 @@ fn seek_to_entry(path: &Path, entry_name: &str) -> io::Result<Option<(File, usiz
         {
             f.seek(SeekFrom::Start(offset))?;
             let len_usize = usize::try_from(len).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("read_indexed_file: frame length {len} > usize::MAX"))
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("read_indexed_file: frame length {len} > usize::MAX"),
+                )
             })?;
             return Ok(Some((f, len_usize)));
         }
@@ -578,7 +582,11 @@ fn undelta_zigzag_u32(zigzag: &[u32]) -> Vec<u32> {
     let mut acc = 0i64;
     for &z in zigzag {
         // decode zigzag: even → non-negative, odd → negative
-        let d = if z & 1 == 0 { (z >> 1) as i64 } else { !((z >> 1) as i64) };
+        let d = if z & 1 == 0 {
+            (z >> 1) as i64
+        } else {
+            !((z >> 1) as i64)
+        };
         acc += d;
         out.push(acc as u32);
     }
@@ -649,7 +657,12 @@ fn dump_hash(path: &Path) -> io::Result<String> {
                 .ok()
                 .map(|d| d.as_nanos().try_into().unwrap_or(u64::MAX))
         })
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "mtime unavailable — cannot compute reliable cache hash"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "mtime unavailable — cannot compute reliable cache hash",
+            )
+        })?;
 
     let mut f = File::open(path)?;
     let mut header = [0u8; 512];

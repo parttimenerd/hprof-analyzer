@@ -748,7 +748,7 @@ fn copy_id<W: Write>(r: &mut HprofReader, w: &mut W, ids: u64) -> io::Result<()>
 
 fn copy_exact<W: Write>(r: &mut HprofReader, w: &mut W, n: u64) -> io::Result<()> {
     let mut remaining = usize::try_from(n)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "copy_exact: n > usize::MAX"))? ;
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "copy_exact: n > usize::MAX"))?;
     let mut buf = [0u8; 4096];
     while remaining > 0 {
         let chunk = remaining.min(buf.len());

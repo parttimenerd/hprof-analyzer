@@ -946,18 +946,21 @@ impl FieldDecodeState {
                 .map(|(off, ty)| (off, ty))
             });
         }
-        if let (Some(dbb_addr), Some((cap_off, cap_ty))) = (self.dbb_class_addr_opt, self.dbb_cap_off_opt) {
+        if let (Some(dbb_addr), Some((cap_off, cap_ty))) =
+            (self.dbb_class_addr_opt, self.dbb_cap_off_opt)
+        {
             if class_id == dbb_addr {
                 self.dbb_count += 1;
                 let o = cap_off as usize;
                 // F-03: dispatch by field type — capacity may be int or long.
                 let cap: u64 = match cap_ty {
                     crate::types::HprofType::Long if o + 8 <= blob.len() => {
-                        let v = i64::from_be_bytes(blob[o..o+8].try_into().unwrap_or([0;8]));
+                        let v = i64::from_be_bytes(blob[o..o + 8].try_into().unwrap_or([0; 8]));
                         v.max(0) as u64
                     }
                     _ if o + 4 <= blob.len() => {
-                        let v = i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
+                        let v =
+                            i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
                         v.max(0) as u64
                     }
                     _ => 0,

@@ -389,8 +389,7 @@ fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    serde_json::from_reader(resp.body_mut().as_reader().take(4_000_000))
-        .map_err(|e| format!("{e}"))
+    serde_json::from_reader(resp.body_mut().as_reader().take(4_000_000)).map_err(|e| format!("{e}"))
 }
 
 /// Extract the `hprof-analyzer[.exe]` binary from a `.tar.gz` archive.

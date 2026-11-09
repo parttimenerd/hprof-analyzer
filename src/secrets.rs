@@ -223,8 +223,7 @@ impl SecretPatterns {
                         continue;
                     }
                     // SEC-03: HTTP Basic auth must decode as valid base64 containing ':'.
-                    if pattern.category == "HTTP Basic auth header"
-                        && !http_basic_has_colon(value)
+                    if pattern.category == "HTTP Basic auth header" && !http_basic_has_colon(value)
                     {
                         continue;
                     }
@@ -313,8 +312,7 @@ impl SecretPatterns {
                         continue;
                     }
                     // SEC-03: HTTP Basic auth must decode as valid base64 containing ':'.
-                    if pattern.category == "HTTP Basic auth header"
-                        && !http_basic_has_colon(value)
+                    if pattern.category == "HTTP Basic auth header" && !http_basic_has_colon(value)
                     {
                         continue;
                     }
@@ -396,7 +394,10 @@ fn hex_shannon_entropy(s: &str) -> f64 {
 fn http_basic_has_colon(value: &str) -> bool {
     let b64 = value.trim_start_matches("Basic ");
     // base64 alphabet: A-Z a-z 0-9 + / with = padding
-    let clean: String = b64.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/' || *c == '=').collect();
+    let clean: String = b64
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/' || *c == '=')
+        .collect();
     // Attempt standard (padded) base64 decode
     let mut decoded = Vec::new();
     let result = (|| -> Option<()> {
@@ -405,16 +406,29 @@ fn http_basic_has_colon(value: &str) -> bool {
         let mut out = Vec::new();
         let chunks = bytes.chunks(4);
         for chunk in chunks {
-            if chunk.len() < 4 { break; }
-            let decode = [base64_char(chunk[0])?, base64_char(chunk[1])?, base64_char(chunk[2])?, base64_char(chunk[3])?];
+            if chunk.len() < 4 {
+                break;
+            }
+            let decode = [
+                base64_char(chunk[0])?,
+                base64_char(chunk[1])?,
+                base64_char(chunk[2])?,
+                base64_char(chunk[3])?,
+            ];
             out.push((decode[0] << 2) | (decode[1] >> 4));
-            if chunk[2] != b'=' { out.push((decode[1] << 4) | (decode[2] >> 2)); }
-            if chunk[3] != b'=' { out.push((decode[2] << 6) | decode[3]); }
+            if chunk[2] != b'=' {
+                out.push((decode[1] << 4) | (decode[2] >> 2));
+            }
+            if chunk[3] != b'=' {
+                out.push((decode[2] << 6) | decode[3]);
+            }
         }
         decoded = out;
         Some(())
     })();
-    if result.is_none() { return false; }
+    if result.is_none() {
+        return false;
+    }
     decoded.contains(&b':')
 }
 
