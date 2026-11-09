@@ -4217,26 +4217,34 @@ impl Rule for ShutdownHookAccumulation {
             ));
         }
         // Also fire on high Thread count when ApplicationShutdownHooks is present in histogram.
+        // TRI-09: require that the Threads also retain a meaningful amount of heap to
+        // avoid a false positive on every web-server JVM (ApplicationShutdownHooks is
+        // always present on servers; the signal is only interesting when Threads are also
+        // the dominant retainer).
         let has_shutdown_hooks_class = r
             .overview
             .histogram
             .iter()
             .any(|h| h.pretty_class.contains("ApplicationShutdownHooks"));
-        let thread_count = r
+        let thread_entry = r
             .overview
             .histogram
             .iter()
-            .find(|h| h.pretty_class == "java.lang.Thread")
-            .map(|h| h.instances)
-            .unwrap_or(0);
-        if has_shutdown_hooks_class && thread_count >= SHUTDOWN_HOOK_FLOOR {
+            .find(|h| h.pretty_class == "java.lang.Thread");
+        let thread_count = thread_entry.map(|h| h.instances).unwrap_or(0);
+        let thread_retained = thread_entry.map(|h| h.retained).unwrap_or(0);
+        if has_shutdown_hooks_class
+            && thread_count >= SHUTDOWN_HOOK_FLOOR
+            && thread_retained >= 1_048_576
+        {
             return Some(signal(
                 "shutdown-hook-accumulation",
                 TriageSeverity::Warning,
                 "Shutdown Hook Accumulation",
                 format!(
-                    "{} `java.lang.Thread` instances with `ApplicationShutdownHooks` present — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead).",
+                    "{} `java.lang.Thread` instances (retaining {}) with `ApplicationShutdownHooks` present — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead).",
                     fmt_count(thread_count),
+                    format_bytes(thread_retained),
                 ),
                 Some(("threads", "Threads")),
             ));

@@ -1529,8 +1529,8 @@ impl HprofMcpServer {
         let current_path = PathBuf::from(&p.current);
         let limit = p.limit.unwrap_or(20).min(100);
 
-        // Load both reports (potentially from cache).
-        let baseline_result = tokio::task::spawn_blocking({
+        // I-11: run both analyses concurrently instead of sequentially.
+        let baseline_task = tokio::task::spawn_blocking({
             let path = baseline_path.clone();
             move || {
                 crate::analyze_with_cache(
@@ -1540,12 +1540,8 @@ impl HprofMcpServer {
                     |_| {},
                 )
             }
-        })
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let current_result = tokio::task::spawn_blocking({
+        });
+        let current_task = tokio::task::spawn_blocking({
             let path = current_path.clone();
             move || {
                 crate::analyze_with_cache(
@@ -1555,10 +1551,13 @@ impl HprofMcpServer {
                     |_| {},
                 )
             }
-        })
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        });
+        let (baseline_result, current_result) = tokio::try_join!(baseline_task, current_task)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let baseline_result = baseline_result
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let current_result = current_result
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let base_r = &baseline_result.report;
         let curr_r = &current_result.report;

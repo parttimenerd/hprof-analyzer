@@ -511,6 +511,9 @@ impl ServerState {
                 // would kill every worker that later touches the cache.
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let prebuilt = self.lookup_plan(&oql);
+                // SRV-04: track whether the plan was already cached to avoid a redundant
+                // re-parse in store_plan when prebuilt.is_some().
+                let was_prebuilt = prebuilt.is_some();
                 let v = run_query_json(
                     &self.path,
                     &oql,
@@ -521,12 +524,15 @@ impl ServerState {
                     self.retained_data.get(),
                     rows_limit,
                 );
-                if v["ok"] == serde_json::json!(true) {
+                if v["ok"] == serde_json::json!(true) && !was_prebuilt {
                     // Cache the plan on success so subsequent identical queries skip parse+plan.
                     self.store_plan(&oql);
                 }
+                // SRV-03: return 500 for internal errors, 400 for bad-request errors.
                 let status = if v["ok"] == serde_json::json!(true) {
                     200
+                } else if v["error"]["kind"] == serde_json::json!("internal") {
+                    500
                 } else {
                     400
                 };
@@ -708,6 +714,16 @@ impl ServerState {
     ) -> Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)> {
         let guard = self.plan_cache.lock().unwrap_or_else(|e| e.into_inner());
         guard.get(oql_text).cloned()
+    }
+
+    /// Insert an already-built (query, plan) pair into the plan cache, skipping
+    /// the redundant re-parse that `store_plan` would do.
+    fn store_plan_direct(&self, oql_text: &str, q: crate::query::ast::Query, plan: crate::query::plan::QueryPlan) {
+        let mut guard = self.plan_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() >= PLAN_CACHE_CAP {
+            guard.clear();
+        }
+        guard.insert(oql_text.to_string(), (q, plan));
     }
 
     /// Build the plan for `oql_text` and insert it into the plan cache.

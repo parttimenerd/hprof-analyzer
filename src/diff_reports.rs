@@ -580,10 +580,11 @@ fn verdict(d: &SeriesDiffResult) -> String {
     // §37.2: append gross churn summary when there is measurable churn (before
     // the new-suspect count so the churn info is next to the growth figure).
     if d.gross_growth_retained != 0 || d.gross_shrink_retained != 0 {
+        // DIFF-05: show reclaimed bytes as magnitude (no sign) — "reclaimed" already implies reduction.
         line.push_str(&format!(
             " Gross retained churn: {} grown / {} reclaimed across steps.",
             fmt_delta_bytes(d.gross_growth_retained),
-            fmt_delta_bytes(d.gross_shrink_retained),
+            report::format_bytes(d.gross_shrink_retained.unsigned_abs()),
         ));
     }
     if new_suspects > 0 {
