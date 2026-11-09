@@ -12,15 +12,15 @@ Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak susp
 
 | Capability | How to use |
 |-----------|------------|
-| **Analysis reports** (System Overview, Leak Suspects, Top Consumers, Threads) | `hprof-analyzer heap.hprof report.html` |
-| **OQL queries** (SQL-flavoured, MAT-compatible, with extensions) | `hprof-analyzer query heap.hprof --query "..."` |
-| **Cached interactive analysis** (histogram, dominator tree, inspect objects) | `hprof-analyzer heap summary heap.hprof` |
-| **MCP server** (AI-assisted triage in Claude, Cline, and other agents) | `hprof-analyzer mcp` |
-| **HTTP API** (browser UI backend for large dumps and LLM agents) | `hprof-analyzer server heap.hprof` |
-| **Heap redaction** (zero primitive values before sharing, object graph preserved) | `hprof-analyzer redact heap.hprof safe.hprof` |
-| **MAT cache generation** (low-RSS alternative to MAT's first-open parse) | `hprof-analyzer mat caches heap.hprof` |
+| **[Analysis reports](#analysis-reports)** (System Overview, Leak Suspects, Top Consumers, Threads) | `hprof-analyzer heap.hprof report.html` |
+| **[OQL queries](#oql-queries)** (SQL-flavoured, MAT-compatible, with extensions) | `hprof-analyzer query heap.hprof --query "..."` |
+| **[Cached interactive analysis](#cached-interactive-analysis)** (histogram, dominator tree, inspect objects) | `hprof-analyzer heap summary heap.hprof` |
+| **[MCP server](#mcp-server)** (AI-assisted triage in Claude, Cline, and other agents) | `hprof-analyzer mcp` |
+| **[HTTP API](#http-api-server-subcommand)** (browser UI backend for large dumps and LLM agents) | `hprof-analyzer server heap.hprof` |
+| **[Heap redaction](#heap-redaction)** (zero primitive values before sharing, object graph preserved) | `hprof-analyzer redact heap.hprof safe.hprof` |
+| **[MAT cache generation](#speeding-up-eclipse-mat)** (low-RSS alternative to MAT's first-open parse) | `hprof-analyzer mat caches heap.hprof` |
 | **Browser UI** (WebAssembly, works offline, up to 3 GB) | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
-| **Secret detection** (scan heap strings for credentials and tokens using [betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
+| **[Secret detection](#secret-detection)** (scan heap strings for credentials and tokens using [betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
 | **Re-render saved reports** (JSON to HTML/Markdown without the original dump) | `hprof-analyzer report.json report.html` |
 
 ## Table of contents
