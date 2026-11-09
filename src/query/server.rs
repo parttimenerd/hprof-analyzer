@@ -3,7 +3,7 @@
 //! GET /help returns the language reference. Loopback-only, sync tiny_http.
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
@@ -868,7 +868,11 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
                 let method = request.method().as_str().to_string();
                 let url = request.url().to_string();
                 let mut body = String::new();
-                let _ = request.as_reader().read_to_string(&mut body);
+                // SRV-01: cap body read to prevent OOM on huge requests.
+                let _ = request
+                    .as_reader()
+                    .take(MAX_OQL_LEN as u64 + 4096)
+                    .read_to_string(&mut body);
                 // OPTIONS preflight for browser CORS
                 if method == "OPTIONS" {
                     let resp = Response::empty(204)
