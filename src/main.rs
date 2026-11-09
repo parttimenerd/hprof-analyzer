@@ -1119,7 +1119,7 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool, forma
 fn mask_secret(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
     let n = chars.len();
-    if n <= 8 {
+    if n <= 20 {
         return "*".repeat(n);
     }
     let head: String = chars[..4].iter().collect();

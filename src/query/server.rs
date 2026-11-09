@@ -218,7 +218,7 @@ pub fn run_query_json(
     if let Some(cap) = rows_limit {
         if result.rows.len() > cap {
             result.rows.truncate(cap);
-            result.row_count = cap as u64;
+            // SRV-02: preserve original row_count; add displayed_count for the cap
             result.truncated = true;
         }
     }

@@ -424,7 +424,15 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                 const MAX_BODY: usize = 64 * 1024; // 64 KB
                 let mut body = String::new();
                 let mut limited = request.as_reader().take(MAX_BODY as u64 + 1);
-                let _ = limited.read_to_string(&mut body);
+                if limited.read_to_string(&mut body).is_err() {
+                    let resp = Response::from_string(
+                        serde_json::json!({"ok":false,"error":{"kind":"read_error","message":"failed to read request body"}}).to_string()
+                    )
+                    .with_status_code(400)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+                    let _ = request.respond(resp);
+                    continue;
+                }
                 if body.len() > MAX_BODY {
                     let resp = Response::from_string(
                         serde_json::json!({"ok":false,"error":{"kind":"body_too_large","message":"request body exceeds 64 KB limit"}}).to_string()

@@ -383,10 +383,6 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Line:** `mcp/mod.rs:385, 1383`  
 **Fix:** Canonicalize path, validate extension (.hprof), optionally allow-list root dirs.
 
-### I-06 `redact.rs` record length silent u64→u32 truncation — Medium
-**Line:** `redact.rs:439`  
-**Fix:** `if length > u32::MAX as u64 { return Err(…); }`.
-
 ### I-07 Credit card regex has no Luhn check — Medium
 **Line:** `secrets.rs:88`  
 **Fix:** Add Luhn checksum validation post-filter.
@@ -399,23 +395,13 @@ security, HPROF reader robustness, compressed vectors, retained-size computation
 **Line:** `secrets.rs:216`  
 **Fix:** Merge new locations into existing finding instead of dropping.
 
-### I-10 `html_escape` missing `"` → `&quot;` — Medium
-**Line:** `html.rs:226`  
-**Fix:** Add `.replace('"', "&quot;")`.
-
 ### I-11 `compare_dumps` runs analyses sequentially — Low
 **Line:** `mcp/mod.rs:1468`  
 **Fix:** Use `tokio::join!` on the two `spawn_blocking` calls.
 
-### I-12 `mask_secret` reveals too much for short secrets — Medium
-**Line:** `main.rs:1119`  
-**Fix:** Only show head/tail when `n > 20`.
-
 ### I-13 MCP `query` tool TOCTOU: session may change between path extraction and query — Medium
 **Line:** `mcp/mod.rs:797`  
 **Fix:** Add session-epoch counter; detect change and return retry error.
-
-### I-14 `serve.rs` body read I/O error silently swallowed — Medium
 
 ## 10. Data Structures (cvec, id_map, vbyte, chunkvec)
 
@@ -481,14 +467,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 
 ## 12. OQL Query Server (`server.rs`)
 
-### SRV-01 (High) Unbounded body read before size check
-**Line ~871.** `read_to_string` reads the entire HTTP body into memory with no limit. `MAX_OQL_LEN` is checked only after the full allocation.
-**Fix:** Use `.take(MAX_OQL_LEN as u64 + 4096)` on the reader before calling `read_to_string`.
-
-### SRV-02 (Medium) `row_count` overwritten with cap after truncation
-**Lines 219–222.** After capping rows to the HTTP limit, `row_count` is set to `cap` instead of the original query count. Clients cannot know the true result size.
-**Fix:** Leave `row_count` at its original value; add a separate `displayed_count` if needed.
-
 ### SRV-03 (Medium) All errors return HTTP 400, including internal/serialization failures
 **Lines 528–532.** `{"ok": false, "error": {"kind": "internal"}}` returns status 400 (Bad Request) instead of 500 (Internal Server Error).
 **Fix:** Map `error.kind == "internal"` → HTTP 500.
@@ -500,10 +478,6 @@ Files newly audited: `repl.rs` (342K), `server.rs` (73K), `runflags.rs`, `histog
 ---
 
 ## 13. OQL Histogram / StringVals / Viz
-
-### HIST-01 (High) `count as i64` overflow in histogram aggregation
-**Line ~140.** `count: u64` is cast to `i64` without saturation. For classes with >2³¹ instances, the cast produces a negative count.
-**Fix:** `count.min(i64::MAX as u64) as i64`.
 
 ### STR-01 (Medium) Conflicting coders for shared backing arrays silently ignored
 **Lines 67–68 in `stringvals.rs`.** `or_insert` keeps the first coder; a second String sharing the same array with a different coder is decoded with the wrong encoding.
