@@ -70,7 +70,11 @@ impl RefWalkEdges {
     pub fn into_csr(mut self, n: usize) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
         let mut off = vec![0u32; n + 1];
         for &(s, _, _) in &self.edges {
-            off[s as usize + 1] += 1;
+            let si = s as usize;
+            if si >= n {
+                continue; // J-05: skip corrupt edges with src >= n
+            }
+            off[si + 1] += 1;
         }
         for i in 0..n {
             off[i + 1] += off[i];
@@ -81,10 +85,14 @@ impl RefWalkEdges {
         let mut cursor: Vec<u32> = off[..n].to_vec();
         // Stable within src: iterate edges in push order, place at cursor[src]++.
         for (s, f, d) in self.edges.drain(..) {
-            let p = cursor[s as usize] as usize;
+            let si = s as usize;
+            if si >= n {
+                continue; // J-05: skip corrupt edges with src >= n
+            }
+            let p = cursor[si] as usize;
             tgt[p] = d;
             fid[p] = f;
-            cursor[s as usize] += 1;
+            cursor[si] += 1;
         }
         (off, tgt, fid)
     }
