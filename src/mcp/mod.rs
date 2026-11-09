@@ -756,7 +756,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-        let limit = p.limit.unwrap_or(50) as usize;
+        let limit = p.limit.unwrap_or(50).min(500) as usize;
         let rows: Vec<serde_json::Value> = sess
             .report
             .top
@@ -890,6 +890,16 @@ impl HprofMcpServer {
         let width = p.width.unwrap_or(10).min(50) as usize;
         let n = shallow.len();
         let start = p.object_index.unwrap_or(n as u64);
+
+        // I-03: validate object_index is in [0, n] (n = virtual root).
+        if start > n as u64 {
+            return Err(McpError::invalid_params(
+                format!(
+                    "object_index {start} is out of range; heap has {n} objects (valid range: 0..={n})"
+                ),
+                None,
+            ));
+        }
 
         // Build class name lookup from the session's class_names table (index → name).
         let class_by_idx: std::collections::HashMap<u32, String> = sess
