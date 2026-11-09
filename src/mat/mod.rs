@@ -818,28 +818,7 @@ impl MatEmitter {
                 s.write_object_keyed(
                     &class_impl_chain,
                     vec![
-                        // AbstractObjectImpl layer (superclass, written first in stream)
-                        LayerData {
-                            fields: vec![
-                                f_long("address"),
-                                f_int("objectId"),
-                                f_obj("classInstance", "Lorg.eclipse.mat.parser.model.ClassImpl;"),
-                            ],
-                            values: vec![
-                                ("address".into(), FieldVal::Long(addr as i64)),
-                                ("objectId".into(), FieldVal::Int(mat_id)),
-                                (
-                                    "classInstance".into(),
-                                    FieldVal::ObjRef({
-                                        let k = key_str.clone();
-                                        Box::new(move |s: &mut Ser| {
-                                            s.ref_object(&k);
-                                        })
-                                    }),
-                                ),
-                            ],
-                        },
-                        // ClassImpl layer (subclass, written second in stream)
+                        // ClassImpl layer (subclass, first in vec = last after rev() = written second in stream)
                         LayerData {
                             fields: vec![
                                 f_long("classLoaderAddress"),
@@ -897,6 +876,27 @@ impl MatEmitter {
                                 (
                                     "subClasses".into(),
                                     FieldVal::ObjRef(Box::new(|s: &mut Ser| s.null())),
+                                ),
+                            ],
+                        },
+                        // AbstractObjectImpl layer (superclass, last in vec = first after rev() = written first in stream)
+                        LayerData {
+                            fields: vec![
+                                f_long("address"),
+                                f_int("objectId"),
+                                f_obj("classInstance", "Lorg.eclipse.mat.parser.model.ClassImpl;"),
+                            ],
+                            values: vec![
+                                ("address".into(), FieldVal::Long(addr as i64)),
+                                ("objectId".into(), FieldVal::Int(mat_id)),
+                                (
+                                    "classInstance".into(),
+                                    FieldVal::ObjRef({
+                                        let k = key_str.clone();
+                                        Box::new(move |s: &mut Ser| {
+                                            s.ref_object(&k);
+                                        })
+                                    }),
                                 ),
                             ],
                         },
