@@ -467,6 +467,12 @@ impl IdMap {
                     }
                     let mut i = 0usize;
                     while i < n && pushed < len {
+                        if carry_len >= carry.len() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "vbyte carry overflow: malformed vbyte sequence",
+                            ));
+                        }
                         carry[carry_len] = buf[i];
                         carry_len += 1;
                         i += 1;
@@ -498,6 +504,12 @@ impl IdMap {
                     }
                     let mut i = 0usize;
                     while i < n && pushed < len {
+                        if carry_len >= carry.len() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "vbyte carry overflow: malformed vbyte sequence",
+                            ));
+                        }
                         carry[carry_len] = buf[i];
                         carry_len += 1;
                         i += 1;

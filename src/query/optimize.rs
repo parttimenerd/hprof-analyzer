@@ -54,7 +54,9 @@ pub fn reorder_predicates(plan: &mut QueryPlan) {
 /// truncating); or any late-phase op / UNION / subquery needs the complete
 /// match set (dominators, retained joins, refwalk, semi-joins all force a full
 /// scan). In those cases `scan_limit` stays `None` and the full semantic LIMIT
-/// is applied later.
+/// is applied later. Note: `plan.limit` already includes OFFSET via `scan_limit(q)`,
+/// so setting `scan_limit = plan.limit` is correct; no additional OFFSET adjustment
+/// is needed here.
 pub fn pushdown_limit(plan: &mut QueryPlan) {
     let safe = plan.limit.is_some()
         && !plan.order_sensitive

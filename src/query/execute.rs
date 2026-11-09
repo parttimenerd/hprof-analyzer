@@ -1777,13 +1777,21 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob)
             }
             // OQL-37: length() on a String instance must return character count.
-            // Evaluate the receiver: if it resolves to a Str, return chars().count();
-            // otherwise fall back to the @length attribute (array length).
+            // Try evaluating the receiver expression first (covers the case where
+            // the receiver is already a Str literal or a string field); for
+            // String instances accessed via the FROM alias, fall back to decoding
+            // the string via ToString and counting its characters.
             "length" => {
                 let recv_val = self.eval_expr(receiver, src_idx, class_id, blob);
                 match recv_val {
                     QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
-                    _ => self.project_attr(&Attr::Length, src_idx, class_id, blob),
+                    _ => {
+                        // The receiver is a String object reference — decode it first.
+                        match self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob) {
+                            QueryValue::Str(s) => QueryValue::Int(s.chars().count() as i64),
+                            _ => self.project_attr(&Attr::Length, src_idx, class_id, blob),
+                        }
+                    }
                 }
             }
             // ── String-manipulation functions ──────────────────────────────────
@@ -1961,7 +1969,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     if ty == HprofType::Boolean {
                         QueryValue::Bool(b != 0)
                     } else {
-                        QueryValue::Int(b as i64)
+                        // E-07: byte is signed in Java; sign-extend 0xFF → -1.
+                        QueryValue::Int(b as i8 as i64)
                     }
                 })
                 .unwrap_or(QueryValue::Null),
@@ -2308,8 +2317,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                                 });
                             match gb_match {
                                 Some((j, _)) => key.get(j).cloned().unwrap_or(QueryValue::Null),
-                                // Fallback: take the first key value if available.
-                                None => key.first().cloned().unwrap_or(QueryValue::Null),
+                                // E-01: no matching GROUP BY key → NULL, not first key.
+                                None => QueryValue::Null,
                             }
                         }
                     })
@@ -3164,6 +3173,14 @@ pub(crate) fn cast_query_value(
         CastTarget::Bool => match value {
             QueryValue::Bool(_) => value,
             QueryValue::Int(i) => QueryValue::Bool(i != 0),
+            // OQL-63: Float-to-bool follows the same non-zero rule as Int; NaN → NULL.
+            QueryValue::Float(f) => {
+                if f.is_nan() {
+                    QueryValue::Null
+                } else {
+                    QueryValue::Bool(f != 0.0)
+                }
+            }
             QueryValue::Str(ref s) => {
                 if s.eq_ignore_ascii_case("true") || s == "1" {
                     QueryValue::Bool(true)

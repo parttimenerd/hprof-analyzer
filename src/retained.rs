@@ -153,7 +153,7 @@ pub fn compute_retained(
             };
 
             // sp_new = depth the child will have on the stack (1-based, vroot is depth 1).
-            let sp_new = (stk.len() + 1) as u32;
+            let sp_new = (stk.len() + 1).min(u32::MAX as usize) as u32;
 
             // B2 tally: the child's dominator depth (vroot's direct children = 1)
             // is sp_new - 1. Every reachable node is pushed exactly once here, so

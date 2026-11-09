@@ -1421,21 +1421,22 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
     };
 
     // Project a single row according to the SELECT list (non-aggregate path).
-    let project_row = |row: &Vec<QueryValue>| -> Vec<QueryValue> {
+    // `available_cols` is the slice of column names available in `row` at projection time.
+    let project_row_with = |row: &[QueryValue], available_cols: &[String]| -> Vec<QueryValue> {
         if is_star {
-            row.clone()
+            row.to_vec()
         } else {
             q.select
                 .iter()
                 .map(|item| match item {
                     SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
-                        if let Some(pos) = col_names.iter().position(|c| c == f) {
+                        if let Some(pos) = available_cols.iter().position(|c| c == f) {
                             row.get(pos).cloned().unwrap_or(QueryValue::Null)
                         } else {
                             QueryValue::Null
                         }
                     }
-                    SelectItem::Expr(expr) => eval_expr_on_row(expr, col_names, row),
+                    SelectItem::Expr(expr) => eval_expr_on_row(expr, available_cols, row),
                     SelectItem::Star => row.first().cloned().unwrap_or(QueryValue::Null),
                     _ => QueryValue::Null,
                 })
@@ -1595,14 +1596,34 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         }
     } else {
         // Non-aggregate: project each filtered row.
-        filtered.iter().map(|row| project_row(row)).collect()
+        // OQL-68: when JOINs are present, defer projection to after the join so that
+        // RHS columns are available for SELECT items; pre-project only when no joins.
+        if plan.join_plans.is_empty() {
+            filtered
+                .iter()
+                .map(|row| project_row_with(row, col_names))
+                .collect()
+        } else {
+            // Pass through full VALUES rows; projection happens post-join below.
+            filtered.iter().map(|row| (*row).clone()).collect()
+        }
     };
 
     // Build an intermediate result (before JOINs, ORDER BY, and LIMIT).
+    // When JOINs are present the intermediate uses the raw VALUES columns; projection
+    // is applied after the join so that SELECT can reference RHS columns (OQL-68).
+    let pre_join_cols: Vec<QueryColumn> = if plan.join_plans.is_empty() {
+        out_cols.clone()
+    } else {
+        col_names
+            .iter()
+            .map(|c| QueryColumn { name: c.clone() })
+            .collect()
+    };
     let intermediate = QueryResult {
         name: String::new(),
         oql: String::new(),
-        columns: out_cols,
+        columns: pre_join_cols,
         rows,
         row_count: 0, // placeholder; will be recomputed after JOINs
         truncated: false,
@@ -1614,6 +1635,18 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
 
     // Apply JOIN clauses (expands columns by appending RHS columns).
     let mut joined = apply_joins_to_result(intermediate, &plan.join_plans, None);
+
+    // OQL-68: now that all columns from both sides are in `joined`, apply the SELECT
+    // projection so that only the requested columns appear in the output.
+    if !plan.join_plans.is_empty() {
+        let all_col_names: Vec<String> = joined.columns.iter().map(|c| c.name.clone()).collect();
+        joined.rows = joined
+            .rows
+            .iter()
+            .map(|row| project_row_with(row, &all_col_names))
+            .collect();
+        joined.columns = out_cols.clone();
+    }
 
     // Apply ORDER BY using existing multi-key sort helper.
     if let Some(order_by) = &q.order_by {
@@ -1675,11 +1708,20 @@ fn eval_expr_on_row(
             Value::Null => QueryValue::Null,
         },
         Expr::Attr(Attr::Field(f)) => {
-            if let Some(pos) = col_names.iter().position(|c| c == f) {
-                row.get(pos).cloned().unwrap_or(QueryValue::Null)
+            // OQL-61: qualified column refs like `t.x` store the full dotted name;
+            // strip the table alias prefix so they resolve against the projected column.
+            let bare = f.rsplit_once('.').map(|(_, col)| col).unwrap_or(f.as_str());
+            let lookup = if let Some(pos) = col_names.iter().position(|c| c == f) {
+                Some(pos)
+            } else if bare != f {
+                col_names.iter().position(|c| c == bare)
             } else {
-                QueryValue::Null
-            }
+                None
+            };
+            lookup
+                .and_then(|pos| row.get(pos))
+                .cloned()
+                .unwrap_or(QueryValue::Null)
         }
         Expr::Unary { op, arg } => {
             let v = eval_expr_on_row(arg, col_names, row);
@@ -1697,6 +1739,40 @@ fn eval_expr_on_row(
         } => {
             let recv_val = eval_expr_on_row(receiver, col_names, row);
             eval_method_on_qv(&recv_val, name, args, col_names, row)
+        }
+        // OQL-66: COALESCE in JOIN ON must evaluate properly.
+        Expr::Coalesce(args) => {
+            for arg in args {
+                let v = eval_expr_on_row(arg, col_names, row);
+                if !matches!(v, QueryValue::Null) {
+                    return v;
+                }
+            }
+            QueryValue::Null
+        }
+        Expr::NullIf { lhs, rhs } => {
+            let lv = eval_expr_on_row(lhs, col_names, row);
+            let rv = eval_expr_on_row(rhs, col_names, row);
+            if crate::query::execute::qv_value_eq_pub(&lv, &rv) {
+                QueryValue::Null
+            } else {
+                lv
+            }
+        }
+        Expr::Cast { expr, target } => {
+            let v = eval_expr_on_row(expr, col_names, row);
+            crate::query::execute::cast_query_value(v, *target)
+        }
+        Expr::Case { branches, else_ } => {
+            for (pred, then_expr) in branches {
+                if eval_pred_on_row(pred, col_names, row) {
+                    return eval_expr_on_row(then_expr, col_names, row);
+                }
+            }
+            else_
+                .as_ref()
+                .map(|e| eval_expr_on_row(e, col_names, row))
+                .unwrap_or(QueryValue::Null)
         }
         // Unsupported (heap attrs, subqueries, etc.) → Null.
         _ => QueryValue::Null,
@@ -1943,15 +2019,13 @@ pub fn apply_joins_to_result(
         // We use a string representation of the key value (instead of QueryValue directly)
         // since f64 doesn't implement Hash.
         let rhs_col_names = rhs_cols.clone();
-        let qv_to_key = |qv: &crate::query::model::QueryValue| -> String {
-            use crate::query::model::QueryValue as QV;
-            match qv {
-                QV::Null => "\x00null".to_string(),
-                QV::Bool(b) => format!("\x01{b}"),
-                QV::Int(n) => format!("\x02{n}"),
-                QV::Float(f) => format!("\x03{f:?}"),
-                QV::Str(s) => format!("\x04{s}"),
-                QV::ObjRef { index, .. } => format!("\x05{index}"),
+        let qv_to_key = |qv: &crate::query::model::QueryValue| -> Option<String> {
+            // OQL-61+OQL-62: NULL keys must not match in joins (SQL semantics).
+            // OQL-62: use the canonical distinct key so equal Int/Float values join.
+            if matches!(qv, crate::query::model::QueryValue::Null) {
+                None
+            } else {
+                Some(crate::query::execute::canonical_distinct_key_pub(qv))
             }
         };
         let mut rhs_map: std::collections::HashMap<
@@ -1959,12 +2033,14 @@ pub fn apply_joins_to_result(
             Vec<Vec<crate::query::model::QueryValue>>,
         > = std::collections::HashMap::new();
         for rhs_row in &rhs_rows {
-            let key = qv_to_key(&eval_expr_on_row(
+            // NULL keys are excluded: they cannot match under SQL join semantics.
+            if let Some(key) = qv_to_key(&eval_expr_on_row(
                 &join_plan.on.rhs,
                 &rhs_col_names,
                 rhs_row,
-            ));
-            rhs_map.entry(key).or_default().push(rhs_row.clone());
+            )) {
+                rhs_map.entry(key).or_default().push(rhs_row.clone());
+            }
         }
 
         // Expand output columns.
@@ -1982,23 +2058,33 @@ pub fn apply_joins_to_result(
                 &lhs_col_names,
                 lhs_row,
             ));
-            if let Some(matching_rhs_rows) = rhs_map.get(&lhs_key) {
-                for rhs_row in matching_rhs_rows {
-                    let mut combined = lhs_row.clone();
-                    combined.extend_from_slice(rhs_row);
-                    new_rows.push(combined);
-                }
-            } else {
-                match join_plan.kind {
-                    crate::query::ast::JoinKind::Inner => {
-                        // No match: drop this LHS row.
-                    }
-                    crate::query::ast::JoinKind::Left => {
-                        // No match: emit LHS + Nulls.
+            // NULL key on LHS never matches (SQL NULL semantics).
+            if let Some(lhs_key) = lhs_key {
+                if let Some(matching_rhs_rows) = rhs_map.get(&lhs_key) {
+                    for rhs_row in matching_rhs_rows {
                         let mut combined = lhs_row.clone();
-                        combined.extend_from_slice(&null_rhs_row);
+                        combined.extend_from_slice(rhs_row);
                         new_rows.push(combined);
                     }
+                } else {
+                    match join_plan.kind {
+                        crate::query::ast::JoinKind::Inner => {
+                            // No match: drop this LHS row.
+                        }
+                        crate::query::ast::JoinKind::Left => {
+                            // No match: emit LHS + Nulls.
+                            let mut combined = lhs_row.clone();
+                            combined.extend_from_slice(&null_rhs_row);
+                            new_rows.push(combined);
+                        }
+                    }
+                }
+            } else {
+                // NULL LHS key: for LEFT JOIN emit LHS + Nulls; for INNER JOIN drop.
+                if join_plan.kind == crate::query::ast::JoinKind::Left {
+                    let mut combined = lhs_row.clone();
+                    combined.extend_from_slice(&null_rhs_row);
+                    new_rows.push(combined);
                 }
             }
         }

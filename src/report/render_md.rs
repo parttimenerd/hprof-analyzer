@@ -458,7 +458,7 @@ fn render_query_chart(q: &crate::query::model::QueryResult, out: &mut String) {
     let max = pairs.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
     let label_w = pairs
         .iter()
-        .map(|(l, _)| l.len())
+        .map(|(l, _)| l.chars().count())
         .max()
         .unwrap_or(0)
         .min(40);
@@ -466,8 +466,10 @@ fn render_query_chart(q: &crate::query::model::QueryResult, out: &mut String) {
     let _ = writeln!(out, "```");
     for (label, value) in &pairs {
         let bar = ascii_bar(*value, max, 40);
-        let lbl = if label.len() > label_w {
-            format!("{}…", &label[..label_w.saturating_sub(1)])
+        let char_count = label.chars().count();
+        let lbl = if char_count > label_w {
+            let truncated: String = label.chars().take(label_w.saturating_sub(1)).collect();
+            format!("{truncated}…")
         } else {
             format!("{label:label_w$}")
         };

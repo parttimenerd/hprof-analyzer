@@ -8283,3 +8283,123 @@ fn oql58_array_rows_support_identity_methods() {
         );
     }
 }
+
+/// OQL-64: ORDER BY on adjacent large integers above 2^53 must use exact i64 ordering,
+/// not f64 which rounds them to the same value.
+#[test]
+fn oql64_order_by_large_integers_exact() {
+    // 9007199254740992 and 9007199254740993 are equal when cast to f64 (both above 2^53).
+    let out = run_values_query(
+        r#"SELECT x FROM (VALUES (9007199254740993), (9007199254740992)) AS t(x) ORDER BY x ASC"#,
+    );
+    let rows: Vec<i64> = out
+        .lines()
+        .filter_map(|l| l.trim().parse::<i64>().ok())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![9007199254740992_i64, 9007199254740993_i64],
+        "ORDER BY large ints must use exact i64 ordering:\n{out}"
+    );
+}
+
+/// OQL-67: Parsing -9223372036854775808 (i64::MIN) must not panic.
+#[test]
+fn oql67_i64_min_literal_does_not_panic() {
+    let out = run_values_query(
+        r#"SELECT -9223372036854775808 AS x FROM (VALUES (1)) AS t(v)"#,
+    );
+    assert!(
+        out.contains("-9223372036854775808"),
+        "i64::MIN literal must parse and evaluate without panic:\n{out}"
+    );
+}
+
+/// OQL-63: CAST(float AS BOOL) must behave like CAST(int AS BOOL).
+#[test]
+fn oql63_cast_float_to_bool() {
+    let out = run_values_query(
+        r#"SELECT CAST(0.0 AS BOOL), CAST(3.14 AS BOOL) FROM (VALUES (1)) AS t(v)"#,
+    );
+    // Row must contain false and true (not two NULLs).
+    assert!(
+        out.contains("false"),
+        "CAST(0.0 AS BOOL) must be false:\n{out}"
+    );
+    assert!(
+        out.contains("true"),
+        "CAST(3.14 AS BOOL) must be true:\n{out}"
+    );
+}
+
+/// OQL-68: SELECT of a subset of columns after JOIN must not append unselected RHS columns.
+#[test]
+fn oql68_join_select_subset_does_not_append_rhs() {
+    // SELECT x only; the RHS has y and label, but they must not appear in the output.
+    let out = run_values_query(
+        r#"SELECT x FROM (VALUES (1)) AS t(x) INNER JOIN (VALUES (1, "one")) AS v(y, label) ON x = y"#,
+    );
+    let data_rows = extract_data_rows(&out);
+    assert_eq!(data_rows.len(), 1, "expected exactly one row:\n{out}");
+    // The row must contain only one column (x = 1), not three.
+    let cells: Vec<&str> = data_rows[0].split('|').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
+    assert_eq!(
+        cells.len(),
+        1,
+        "SELECT x after JOIN must return 1 column, got {}: {}\nfull output:\n{out}",
+        cells.len(),
+        data_rows[0]
+    );
+    assert!(cells[0].contains('1'), "expected x=1, got: {}\nfull output:\n{out}", cells[0]);
+}
+
+/// OQL-61: Qualified table.column aliases in JOIN ON must resolve correctly.
+#[test]
+fn oql61_qualified_join_on_resolves_correctly() {
+    // t.x = v.x: only the row where x matches (2) should appear.
+    let out = run_values_query(
+        r#"SELECT t.x FROM (VALUES (1), (2)) AS t(x) INNER JOIN (VALUES (2, "two")) AS v(x, label) ON t.x = v.x"#,
+    );
+    let data_rows = extract_data_rows(&out);
+    assert_eq!(
+        data_rows.len(),
+        1,
+        "qualified ON must match only 1 row (x=2), got {}:\n{out}",
+        data_rows.len()
+    );
+    assert!(
+        data_rows[0].contains('2'),
+        "joined row must contain x=2:\n{out}"
+    );
+}
+
+/// OQL-62: JOIN keys must treat equal Int and Float as the same key.
+#[test]
+fn oql62_join_int_float_equality() {
+    let out = run_values_query(
+        r#"SELECT * FROM (VALUES (1)) AS t(x) INNER JOIN (VALUES (1.0)) AS v(y) ON x = y"#,
+    );
+    let data_rows = extract_data_rows(&out);
+    assert_eq!(
+        data_rows.len(),
+        1,
+        "Int(1) and Float(1.0) must join: expected 1 row, got {}:\n{out}",
+        data_rows.len()
+    );
+}
+
+/// OQL-66: COALESCE in JOIN ON must evaluate as a key, not silently return NULL.
+#[test]
+fn oql66_coalesce_in_join_on_evaluates() {
+    let out = run_values_query(
+        r#"SELECT * FROM (VALUES (1)) AS t(x) INNER JOIN (VALUES (1)) AS v(y) ON COALESCE(x, 0) = y"#,
+    );
+    let data_rows = extract_data_rows(&out);
+    assert_eq!(
+        data_rows.len(),
+        1,
+        "COALESCE(x, 0) = y must join: expected 1 row, got {}:
+{out}",
+        data_rows.len()
+    );
+}

@@ -402,7 +402,7 @@ struct DesyncErr {
 /// end of `buf`. Used only inside Phase 1 recovery-aware decode.
 #[inline]
 fn decode_checked(buf: &[u8], pos: usize) -> Option<(u32, usize)> {
-    if pos > buf.len() {
+    if pos >= buf.len() {
         return None;
     }
     let (v, c) = vbyte::decode_one(&buf[pos..]);
