@@ -1489,12 +1489,21 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                             QueryValue::Int(n as i64)
                         }
                         AggFunc::Sum => {
-                            let sum = vals.iter().fold(0.0f64, |acc, v| match v {
-                                QueryValue::Int(n) => acc + *n as f64,
-                                QueryValue::Float(f) => acc + f,
-                                _ => acc,
-                            });
-                            QueryValue::Float(sum)
+                            // E-04: preserve Int type when all operands are Int.
+                            let all_int = vals.iter().all(|v| matches!(v, QueryValue::Int(_)));
+                            if all_int {
+                                let sum: i64 = vals.iter().filter_map(|v| {
+                                    if let QueryValue::Int(n) = v { Some(*n) } else { None }
+                                }).fold(0i64, i64::saturating_add);
+                                QueryValue::Int(sum)
+                            } else {
+                                let sum = vals.iter().fold(0.0f64, |acc, v| match v {
+                                    QueryValue::Int(n) => acc + *n as f64,
+                                    QueryValue::Float(f) => acc + f,
+                                    _ => acc,
+                                });
+                                QueryValue::Float(sum)
+                            }
                         }
                         AggFunc::Min => vals
                             .iter()

@@ -6052,7 +6052,9 @@ fn result_to_json(res: &QueryResult) -> String {
                 out.push_str(
                     &s.replace('\\', "\\\\")
                         .replace('"', "\\\"")
-                        .replace('\n', "\\n"),
+                        .replace('\n', "\\n")
+                        .replace('\r', "\\r")
+                        .replace('\t', "\\t"),
                 );
                 out.push('"');
             }
