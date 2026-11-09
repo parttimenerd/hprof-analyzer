@@ -6648,7 +6648,7 @@ mod tests {
         // Many Thread instances (>= SHUTDOWN_HOOK_FLOOR = 200)
         r.overview
             .histogram
-            .push(hist_row("java.lang.Thread", 300, 1024 * 300));
+            .push(hist_row("java.lang.Thread", 300, 1024 * 1024 * 2));
         let s = ShutdownHookAccumulation
             .eval(&r)
             .expect("Thread count + ApplicationShutdownHooks must fire");

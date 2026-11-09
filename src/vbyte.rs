@@ -31,11 +31,13 @@ pub fn decode_one(buf: &[u8]) -> (u32, usize) {
         // reach 32 (which would be UB / a wrapping shift on malformed input).
         if shift >= 32 {
             // D-03: scan forward to the next terminal byte so subsequent decodes
-            // start at a byte-aligned position, not mid-sequence.
+            // start at a byte-aligned position, not mid-sequence. Cap at the
+            // current index + 1 so malformed all-continuation streams don't
+            // over-consume beyond the max 5-byte u32 window.
             let consumed = buf[i + 1..]
                 .iter()
                 .position(|&b| b & 0x80 == 0)
-                .map_or(buf.len(), |p| i + 1 + p + 1);
+                .map_or(i + 1, |p| i + 1 + p + 1);
             return (val, consumed);
         }
     }

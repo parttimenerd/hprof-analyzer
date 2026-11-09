@@ -82,8 +82,8 @@ static EXTRA_PATTERN_SPECS: &[(&str, &str)] = &[
     // HTTP Basic auth header value (base64-encoded user:pass)
     ("HTTP Basic auth header",          r"Basic [A-Za-z0-9+/]{16,}={0,2}"),
     // URL query parameters carrying credentials
-    ("URL with API key param",          r"[^?]*[?&](?:api[_-]?key|apikey|api_secret)=[^ &]{8,}"),
-    ("URL with credential param",       r"[^?]*[?&](?:password|passwd|secret|token|access_token)=[^ &]{6,}"),
+    ("URL with API key param",          r".*[?&](?:api[_-]?key|apikey|api_secret)=[^ &]{8,}.*"),
+    ("URL with credential param",       r".*[?&](?:password|passwd|secret|token|access_token)=[^ &]{6,}.*"),
     // Credit card numbers (space or dash separated)
     ("Credit card number",              r"[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}"),
     // Spring-style property values: password=, Password:, etc.
