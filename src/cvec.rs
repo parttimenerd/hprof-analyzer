@@ -405,8 +405,8 @@ impl CompressedU64 {
                 len,
             }),
             Codec::Deflate9 | Codec::Deflate1 => {
-                let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len * 8) };
-                let blob = deflate_compress(bytes, deflate_level(codec))?;
+                let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+                let blob = deflate_compress(&bytes, deflate_level(codec))?;
                 Ok(Self {
                     codec,
                     blob,
