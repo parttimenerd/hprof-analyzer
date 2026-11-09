@@ -609,7 +609,8 @@ where
             .map(|(u, p)| match u {
                 None | Some(UnaryOp::Pos) => p,
                 Some(UnaryOp::Neg) => match p {
-                    Expr::Lit(Value::Int(n)) => Expr::Lit(Value::Int(-n)),
+                    // Use wrapping_neg to handle i64::MIN without overflow panic (OQL-67).
+                    Expr::Lit(Value::Int(n)) => Expr::Lit(Value::Int(n.wrapping_neg())),
                     Expr::Lit(Value::Float(f)) => Expr::Lit(Value::Float(-f)),
                     other => Expr::Unary {
                         op: UnaryOp::Neg,
@@ -763,8 +764,9 @@ where
                 Token::Str(s) => Value::Str(s),
             };
             // Negative numeric literals: `-42` lexes as Minus + Int; `-0.0` as Minus + Float.
+            // Use wrapping_neg for Int to handle -i64::MIN without panic (OQL-67).
             let neg_lit = just(Token::Minus).ignore_then(select! {
-                Token::Int(n) => Value::Int(-n),
+                Token::Int(n) => Value::Int(n.wrapping_neg()),
                 Token::Float(f) => Value::Float(-f),
             });
             let null_val = ident_ci("NULL").to(Value::Null);

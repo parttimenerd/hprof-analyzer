@@ -3770,14 +3770,18 @@ pub(crate) fn sort_rows_with_src_multi(
 /// kind rank so the sort never panics on `f64` NaN or mixed columns.
 pub(crate) fn total_cmp_query_value(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    fn num(v: &QueryValue) -> Option<f64> {
+    // OQL-64: Int/Int uses i64::cmp to avoid f64 precision loss above 2^53.
+    if let (QueryValue::Int(x), QueryValue::Int(y)) = (a, b) {
+        return x.cmp(y);
+    }
+    fn to_f64(v: &QueryValue) -> Option<f64> {
         match v {
             QueryValue::Int(i) => Some(*i as f64),
             QueryValue::Float(f) => Some(*f),
             _ => None,
         }
     }
-    if let (Some(x), Some(y)) = (num(a), num(b)) {
+    if let (Some(x), Some(y)) = (to_f64(a), to_f64(b)) {
         return x.partial_cmp(&y).unwrap_or_else(|| {
             // NaN handling: push NaN to the end deterministically.
             match (x.is_nan(), y.is_nan()) {
