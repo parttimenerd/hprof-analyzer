@@ -618,7 +618,10 @@ impl IndexCache {
         let result = id_map.index_of(addr);
         unsafe {
             *self.keys.get_unchecked_mut(slot) = addr;
-            *self.vals.get_unchecked_mut(slot) = result.map(|i| i as u32).unwrap_or(u32::MAX);
+            // IDMAP-06: saturate to u32::MAX rather than wrapping for indices >= 4B.
+            *self.vals.get_unchecked_mut(slot) = result
+                .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+                .unwrap_or(u32::MAX);
         }
         result
     }

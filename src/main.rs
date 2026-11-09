@@ -1073,7 +1073,9 @@ fn run_detect_secrets(input: &str, progress: ProgressWhen, verbatim: bool, forma
                         .collect::<Vec<_>>()
                         .join(",")
                 };
-                println!("{}\t{}\t{}", f.category, locs, display_value);
+                // SEC-07: escape control chars so tabs/newlines don't break TSV structure.
+                let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+                println!("{}\t{}\t{}", clean(&f.category), clean(&locs), clean(&display_value));
             }
         }
         SecretsFormat::Human => {
