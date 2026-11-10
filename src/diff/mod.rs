@@ -38,6 +38,44 @@ mod tests {
         self, HistRow, LeakSuspects, Report, SCHEMA_VERSION, Suspect, SystemOverview, TopConsumers,
     };
 
+    fn mk_suspect(pretty_class: &str, retained: u64, shallow: u64) -> Suspect {
+        Suspect {
+            is_single: false,
+            pretty_class: pretty_class.to_string(),
+            instance_count: 1,
+            retained,
+            shallow,
+            path: vec![],
+            accumulation_obj_1based: None,
+            accumulation_class: None,
+            accumulation_retained: None,
+            dominated: vec![],
+            dominated_total_count: 0,
+            dominated_shown: 0,
+            dominated_by_class: vec![],
+            keywords: vec![],
+            root_type_label: String::new(),
+            root_path: None,
+            dominator_tree: None,
+            merged_paths: None,
+        }
+    }
+
+    /// Build a `Report` with one suspect and `overview.total_shallow` set to
+    /// `total_shallow`. Keeps the two fields in sync so tests can't accidentally
+    /// leave the denominator at the default 1000.
+    fn suspect_report(
+        pretty_class: &str,
+        retained: u64,
+        shallow: u64,
+        total_shallow: u64,
+    ) -> Report {
+        let mut r = base_report(vec![]);
+        r.overview.total_shallow = total_shallow;
+        r.leaks.suspects = vec![mk_suspect(pretty_class, retained, shallow)];
+        r
+    }
+
     fn hist(name: &str, inst: u64, sh: u64, ret: u64) -> HistRow {
         HistRow {
             pretty_class: name.to_string(),
@@ -521,28 +559,16 @@ mod tests {
 
     #[test]
     fn suspect_pct_rounding_end_to_end() {
-        let mut ours = base_report(vec![]);
-        ours.overview.total_shallow = 12_187_000;
-        ours.leaks.suspects = vec![Suspect {
-            is_single: false,
-            pretty_class: "scala.concurrent.stm.ccstm.InTxnImpl".to_string(),
-            instance_count: 94,
-            retained: 2_791_424,
-            shallow: 13_536,
-            path: vec![],
-            accumulation_obj_1based: None,
-            accumulation_class: None,
-            accumulation_retained: None,
-            dominated: vec![],
-            dominated_total_count: 0,
-            dominated_shown: 0,
-            dominated_by_class: vec![],
-            keywords: vec![],
-            root_type_label: String::new(),
-            root_path: None,
-            dominator_tree: None,
-            merged_paths: None,
-        }];
+        // retained=2_791_424 / total_shallow=12_187_000 -> "22.91"; MAT prints
+        // "22.90" (its own rounding).  Both round to the same 2dp string only
+        // when compared against the correct denominator — this test would silently
+        // fail if total_shallow were left at the default 1000.
+        let ours = suspect_report(
+            "scala.concurrent.stm.ccstm.InTxnImpl",
+            2_791_424,
+            13_536,
+            12_187_000,
+        );
         let mut mat = MatReport::default();
         mat.suspects = vec![MatSuspect {
             class_name: "scala.concurrent.stm.ccstm.InTxnImpl".to_string(),
@@ -995,40 +1021,19 @@ mod tests {
     // A non-Class suspect with the same kind of delta FAILs (name-gated).
     #[test]
     fn suspect_java_lang_class_retained_and_pct_exempt() {
-        let mut ours = base_report(vec![]);
-        ours.overview.total_shallow = 12_187_000;
-        let mk = |name: &str, ret: u64| Suspect {
-            is_single: false,
-            pretty_class: name.to_string(),
-            instance_count: 1,
-            retained: ret,
-            shallow: 100,
-            path: vec![],
-            accumulation_obj_1based: None,
-            accumulation_class: None,
-            accumulation_retained: None,
-            dominated: vec![],
-            dominated_total_count: 0,
-            dominated_shown: 0,
-            dominated_by_class: vec![],
-            keywords: vec![],
-            root_type_label: String::new(),
-            root_path: None,
-            dominator_tree: None,
-            merged_paths: None,
-        };
+        const DENOM: u64 = 12_187_000;
         // ours: java.lang.Class retained 1,996,000 -> pct 16.38%; MAT roots
         // more -> 2,100,000 -> pct 17.23% (differs in the 2nd decimal, so the
         // pct exemption exercises the MatClassObjectRootingGap branch rather
         // than the Rounding branch).
-        ours.leaks.suspects = vec![mk("java.lang.Class", 1_996_000)];
+        let ours = suspect_report("java.lang.Class", 1_996_000, 100, DENOM);
         let mut mat = MatReport::default();
         mat.suspects = vec![MatSuspect {
             class_name: "java.lang.Class".into(),
             instance_count: Some(2793),
             retained: 2_100_000,
             // MAT's printed pct is round(MAT_retained / denom).
-            pct: (2_100_000.0 / 12_187_000.0) * 100.0,
+            pct: (2_100_000.0 / DENOM as f64) * 100.0,
         }];
         let mut r = DiffResult::default();
         compare_suspects(&mat, &ours, &mut r);
@@ -1048,18 +1053,17 @@ mod tests {
             Tier::Explainable(Explanation::MatClassObjectRootingGap { .. })
         ));
 
-        // The exemption is name-gated: an identical delta on a non-Class suspect
-        // FAILs.
-        ours.leaks.suspects = vec![mk("scala.Foo", 1_996_000)];
+        // The exemption is name-gated: an identical delta on a non-Class suspect FAILs.
+        let ours2 = suspect_report("scala.Foo", 1_996_000, 100, DENOM);
         let mut mat2 = MatReport::default();
         mat2.suspects = vec![MatSuspect {
             class_name: "scala.Foo".into(),
             instance_count: Some(10),
             retained: 2_100_000,
-            pct: (2_100_000.0 / 12_187_000.0) * 100.0,
+            pct: (2_100_000.0 / DENOM as f64) * 100.0,
         }];
         let mut r2 = DiffResult::default();
-        compare_suspects(&mat2, &ours, &mut r2);
+        compare_suspects(&mat2, &ours2, &mut r2);
         assert!(r2.n_fail() >= 1);
     }
 }
