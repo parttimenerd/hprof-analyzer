@@ -2723,10 +2723,13 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                     }
                 };
                 let mut out = Vec::new();
+                // Guard against inverted spans (start > end) which ariadne panics on.
+                let label_range = span.start.min(span.end)
+                    ..span.start.max(span.end).max(span.start + 1).min(src.len());
                 Report::build(ReportKind::Error, ("query", span.into_range()))
                     .with_message(&msg)
                     .with_label(
-                        Label::new(("query", span.into_range()))
+                        Label::new(("query", label_range))
                             .with_message(&msg)
                             .with_color(Color::Red),
                     )
