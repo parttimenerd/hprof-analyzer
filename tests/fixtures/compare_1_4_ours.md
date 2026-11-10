@@ -7,12 +7,12 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 - `r1` = dump_1_mnemonics.hprof
 - `r2` = dump_4_philosophers.hprof
 
-**Verdict:** Heap grew 3.3% (+377.4 KB shallow); largest driver `scala.concurrent.stm.ccstm.InTxnImpl` (+3.7 MB retained). Gross retained churn: +13.2 MB grown / −33.9 MB reclaimed across steps. 2 new suspects.
+**Verdict:** Heap grew 3.3% (+376.5 KB shallow); largest driver `scala.concurrent.stm.ccstm.InTxnImpl` (+3.7 MB retained). Gross retained churn: +13.2 MB grown / 33.9 MB reclaimed across steps. 2 new suspects.
 
 ### Headline Totals
 
 - **Δ Objects (r1→rN):** −98,418
-- **Δ Shallow heap (r1→rN):** +377.4 KB
+- **Δ Shallow heap (r1→rN):** +376.5 KB
 - **Gross growth (classes that grew, r1→rN):** +13.2 MB
 - **Gross reclaimed (classes that shrank, r1→rN):** −33.9 MB
 - **Gross Retained churn (growth + reclaimed, r1→rN):** +47.2 MB
@@ -27,10 +27,10 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |      0 B |   1.0 MB |   +1.0 MB |
 | `scala.concurrent.stm.ccstm.Handle[]`                                 |      0 B |   1.0 MB |   +1.0 MB |
 | `java.util.zip.ZipFile$Source`                                        | 446.6 KB |   1.3 MB | +876.2 KB |
-| `java.lang.Object[]`                                                  |   2.9 MB |   3.7 MB | +825.1 KB |
+| `java.lang.Object[]`                                                  |   2.9 MB |   3.7 MB | +824.6 KB |
 | `int[]`                                                               | 106.7 KB | 875.9 KB | +769.2 KB |
 | `java.lang.ref.SoftReference`                                         | 605.2 KB |   1.1 MB | +525.8 KB |
-| `java.util.jar.JarFile`                                               | 593.3 KB |   1.1 MB | +525.0 KB |
+| `java.util.jar.JarFile`                                               | 593.3 KB |   1.1 MB | +524.8 KB |
 | `java.util.jar.Manifest`                                              | 590.3 KB |   1.1 MB | +521.9 KB |
 | `scala.concurrent.stm.skel.CallbackList`                              |      0 B | 417.2 KB | +417.2 KB |
 | `scala.Function1[]`                                                   |      0 B | 399.1 KB | +399.1 KB |
@@ -38,11 +38,11 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 | `java.util.LinkedHashMap`                                             | 338.1 KB | 507.4 KB | +169.3 KB |
 | `java.net.URLClassLoader`                                             |  81.0 KB | 243.7 KB | +162.7 KB |
 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |      0 B | 157.5 KB | +157.5 KB |
-| `java.lang.Class`                                                     |   3.5 MB |   3.6 MB |  +98.6 KB |
+| `java.lang.Class`                                                     |   3.5 MB |   3.6 MB |  +98.0 KB |
 | `java.util.concurrent.ConcurrentHashMap`                              | 526.3 KB | 611.6 KB |  +85.3 KB |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                       | 519.6 KB | 604.7 KB |  +85.1 KB |
 | `java.util.ArrayList`                                                 |  76.0 KB | 150.9 KB |  +74.9 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`                         | 390.1 KB | 463.1 KB |  +73.0 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`                         | 390.1 KB | 463.0 KB |  +73.0 KB |
 | `scala.concurrent.stm.skel.SimpleRandom$`                             |      0 B |  64.5 KB |  +64.5 KB |
 | `java.lang.ThreadLocal$ThreadLocalMap`                                |   4.4 KB |  54.6 KB |  +50.2 KB |
 | `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`                        |   4.4 KB |  51.5 KB |  +47.1 KB |
@@ -119,7 +119,7 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 
 | Suspect                   |     r1 |     r2 | Δ(r1→rN) |
 | ------------------------- | -----: | -----: | -------: |
-| `scala.runtime.LazyVals$` | 2.5 MB | 2.5 MB |   −104 B |
+| `scala.runtime.LazyVals$` | 2.5 MB | 2.5 MB |   −112 B |
 
 ### Disappeared Leak Suspects
 

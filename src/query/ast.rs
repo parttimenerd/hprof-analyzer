@@ -25,9 +25,13 @@ pub struct Query {
     pub limit: Option<u64>,
     /// `OFFSET n` rows to skip after ordering and before applying LIMIT.
     pub offset: Option<u64>,
-    /// `UNION`-separated tail branches, concatenated (UNION ALL semantics).
+    /// `UNION`-separated tail branches, concatenated with UNION/UNION ALL semantics
+    /// (see `union_all` for the distinction).
     /// Each branch is itself a `Query` with an empty `union_branches`.
     pub union_branches: Vec<Query>,
+    /// `true` if this query uses `UNION ALL` (keep duplicates), `false` if plain `UNION` (deduplicate).
+    /// Only meaningful when `union_branches` is non-empty; ignored otherwise.
+    pub union_all: bool,
     /// Union-wide trailing `LIMIT n` applied to the WHOLE `UNION` result (after
     /// branch concatenation), matching Eclipse MAT. `None` for single queries and
     /// when no trailing union LIMIT is present. Distinct from `limit`, which is
@@ -442,6 +446,8 @@ pub enum Predicate {
     And(Box<Predicate>, Box<Predicate>),
     Or(Box<Predicate>, Box<Predicate>),
     Not(Box<Predicate>),
+    /// `true` or `false` literal — useful in `WHERE true` / `WHERE false`.
+    Bool(bool),
     Compare {
         lhs: Expr,
         op: CompareOp,

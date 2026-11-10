@@ -1142,6 +1142,7 @@ fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
             expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred)
         }
         Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => false,
+        Predicate::Bool(b) => *b,
     }
 }
 /// Evaluate an expression in the late window where multiple late attrs are live:
@@ -1608,6 +1609,7 @@ fn eval_late_pred_multi(
         // subquery re-execution). Separate from `_ => true` for clarity — these
         // are intentional pass-throughs, not missing cases.
         Predicate::InSubquery { .. } | Predicate::Exists { .. } => true,
+        Predicate::Bool(b) => *b,
     }
 }
 

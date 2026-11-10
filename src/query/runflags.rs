@@ -253,6 +253,7 @@ fn scan_predicate(pred: &Predicate, used: &mut BranchUse) {
         Predicate::InstanceOf(_) => {}
         // EXISTS inner is a standalone query; no outer edge attrs to scan.
         Predicate::Exists { .. } => {}
+        Predicate::Bool(_) => {}
     }
 }
 

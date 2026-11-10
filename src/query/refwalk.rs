@@ -276,6 +276,7 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             }
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
             Predicate::Exists { .. } => {}
+            Predicate::Bool(_) => {}
         }
     }
 
@@ -411,6 +412,7 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             }
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
             Predicate::Exists { .. } => {}
+            Predicate::Bool(_) => {}
         }
     }
 
@@ -494,6 +496,7 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
             Predicate::Compare { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => false,
             Predicate::Exists { .. } => false,
+            Predicate::Bool(_) => false,
         }
     }
 
@@ -560,6 +563,7 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             Predicate::Compare { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => false,
             Predicate::Exists { .. } => false,
+            Predicate::Bool(_) => false,
         }
     }
 

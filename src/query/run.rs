@@ -1794,6 +1794,9 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         sort_rows_by_columns(&mut joined.rows, &keys);
     }
 
+    // Window functions (ROW_NUMBER, RANK, etc.) need the sorted result.
+    crate::query::execute::apply_window_functions(&mut joined.rows, &joined.columns, q, 0, &[]);
+
     // E-05: SELECT DISTINCT on VALUES — deduplicate before OFFSET/LIMIT so that
     // the caller gets unique rows even on a VALUES-only short-circuit path.
     if q.distinct {
@@ -1989,6 +1992,16 @@ fn eval_method_on_qv(
                 }
                 QueryValue::Str(result)
             }
+            "replace" if args.len() == 2 => {
+                let pat = eval_expr_on_row(&args[0], col_names, row);
+                let rep = eval_expr_on_row(&args[1], col_names, row);
+                match (pat, rep) {
+                    (QueryValue::Str(p), QueryValue::Str(r)) => {
+                        QueryValue::Str(s.replace(p.as_str(), r.as_str()))
+                    }
+                    _ => QueryValue::Null,
+                }
+            }
             _ => QueryValue::Null,
         },
         _ => QueryValue::Null,
@@ -2110,6 +2123,7 @@ fn eval_pred_on_row_with_sets(
             };
             set.contains(&canonical_key(&lhs_val))
         }
+        Predicate::Bool(b) => *b,
         // Conservative: include row for unsupported predicate types.
         _ => true,
     }
@@ -2138,6 +2152,7 @@ fn eval_pred_on_row(
             let rv = eval_expr_on_row(rhs, col_names, row);
             compare_values(&lv, *op, &rv, None)
         }
+        Predicate::Bool(b) => *b,
         // Conservative: include row for unsupported predicate types.
         _ => true,
     }
@@ -3169,6 +3184,9 @@ pub struct UnionGroup {
     pub count: usize,
     pub union_limit: Option<u64>,
     pub distinct: bool,
+    /// `true` when the original query used `UNION ALL`; `false` for plain `UNION`
+    /// (which deduplicates rows). Ignored when `count == 1`.
+    pub union_all: bool,
     pub limit: Option<u64>,
     /// Rows to skip after sorting/dedup, before applying LIMIT.
     pub offset: Option<u64>,
@@ -3236,6 +3254,7 @@ pub fn expand_union_queries(
             // is applied when the branch slots are re-collapsed.
             union_limit: plan.union_limit,
             distinct: q.distinct,
+            union_all: q.union_all,
             // The per-query LIMIT was cleared from the scan plan for DISTINCT queries;
             // capture it here from the AST so collapse can apply it post-dedup.
             limit: q.limit,
@@ -3325,6 +3344,11 @@ pub fn collapse_union_results(
                     }
                 }
             }
+        }
+        // Plain UNION (not UNION ALL) deduplicates rows across branches.
+        // UNION ALL keeps all rows; SELECT DISTINCT deduplicates the final result.
+        if g.count > 1 && !g.union_all {
+            result = stable_dedup(result);
         }
         // DISTINCT: stable first-occurrence dedup on the full row tuple, then
         // apply the deferred per-query LIMIT. This path is only entered when
@@ -4546,6 +4570,7 @@ mod tests {
                     count: 1,
                     union_limit: None,
                     distinct: false,
+                    union_all: false,
                     limit: None,
                     offset: None,
                     intersect_count: 0,
@@ -4557,6 +4582,7 @@ mod tests {
                     count: 3,
                     union_limit: None,
                     distinct: false,
+                    union_all: false,
                     limit: None,
                     offset: None,
                     intersect_count: 0,
@@ -4584,6 +4610,7 @@ mod tests {
                 count: 1,
                 union_limit: None,
                 distinct: false,
+                union_all: false,
                 limit: None,
                 offset: None,
                 intersect_count: 0,
@@ -4595,6 +4622,7 @@ mod tests {
                 count: 3,
                 union_limit: None,
                 distinct: false,
+                union_all: false,
                 limit: None,
                 offset: None,
                 intersect_count: 0,
@@ -4621,6 +4649,7 @@ mod tests {
             count: 2,
             union_limit: Some(3),
             distinct: false,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,
@@ -4646,6 +4675,7 @@ mod tests {
             count: 2,
             union_limit: Some(99),
             distinct: false,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,
@@ -4666,6 +4696,7 @@ mod tests {
             count: 2,
             union_limit: Some(0),
             distinct: false,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,
@@ -4687,6 +4718,7 @@ mod tests {
             count: 2,
             union_limit: None,
             distinct: false,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,
@@ -4708,6 +4740,7 @@ mod tests {
             count: 2,
             union_limit: Some(3),
             distinct: false,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,
@@ -4760,6 +4793,7 @@ mod tests {
                 count: 1,
                 union_limit: None,
                 distinct: false,
+                union_all: false,
                 limit: None,
                 offset: None,
                 intersect_count: 0,
@@ -4771,6 +4805,7 @@ mod tests {
                 count: 1,
                 union_limit: None,
                 distinct: false,
+                union_all: false,
                 limit: None,
                 offset: None,
                 intersect_count: 0,
@@ -4794,6 +4829,7 @@ mod tests {
                 count: 1,
                 union_limit: None,
                 distinct: true,
+                union_all: false,
                 limit: None,
                 offset: None,
                 intersect_count: 0,
@@ -4861,6 +4897,7 @@ mod tests {
             count: 2,
             union_limit: None,
             distinct: true,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,
@@ -4908,6 +4945,7 @@ mod tests {
             count: 1,
             union_limit: None,
             distinct: true,
+            union_all: false,
             limit: None,
             offset: None,
             intersect_count: 0,

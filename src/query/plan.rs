@@ -582,6 +582,7 @@ fn pred_for_each_attr(p: &Predicate, f: &mut impl FnMut(&Attr)) {
         Predicate::InSubquery { lhs, .. } => f(lhs),
         // EXISTS inner is a standalone query; it carries no outer attrs to walk.
         Predicate::Exists { .. } => {}
+        Predicate::Bool(_) => {}
     }
 }
 
@@ -752,7 +753,10 @@ fn check_method_arity_in_pred(pred: &Predicate, check: &mut impl FnMut(&str, usi
             check_method_arity_in_expr(lhs, check);
             check_method_arity_in_expr(rhs, check);
         }
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => {}
+        Predicate::InstanceOf(_)
+        | Predicate::InSubquery { .. }
+        | Predicate::Exists { .. }
+        | Predicate::Bool(_) => {}
     }
 }
 
@@ -1864,6 +1868,7 @@ fn collect_in_subplans(
         }
         Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
         Predicate::Exists { .. } => Ok(()),
+        Predicate::Bool(_) => Ok(()),
     }
 }
 
@@ -1909,6 +1914,7 @@ fn collect_exists_subplans(
         Predicate::Compare { .. } | Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => {
             Ok(())
         }
+        Predicate::Bool(_) => Ok(()),
     }
 }
 /// addresses, so the inner must `SELECT @objectAddress` or `SELECT @objectId`,
@@ -2507,7 +2513,10 @@ fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::Hash
         // A nested IN-subquery is checked on its own via reject_if_correlated;
         // its inner heads are relative to the inner query, not this one.
         // Same for EXISTS: inner is a standalone non-correlated query.
-        Predicate::InSubquery { .. } | Predicate::InstanceOf(_) | Predicate::Exists { .. } => {}
+        Predicate::InSubquery { .. }
+        | Predicate::InstanceOf(_)
+        | Predicate::Exists { .. }
+        | Predicate::Bool(_) => {}
     }
 }
 
@@ -2569,6 +2578,7 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
             }
             Ok(())
         }
+        Predicate::Bool(_) => Ok(()),
     }
 }
 /// histogram-only path can answer without touching per-object data:
@@ -2730,6 +2740,7 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             }
             Ok(())
         }
+        Predicate::Bool(_) => Ok(()),
     }
 }
 
@@ -2850,6 +2861,7 @@ fn pred_cost(pred: &Predicate) -> PredCost {
                 }
             }
         }
+        Predicate::Bool(_) => PredCost::Scalar,
     }
 }
 

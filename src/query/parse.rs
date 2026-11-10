@@ -66,6 +66,8 @@ pub enum Token {
     Divide,
     #[token("%")]
     Percent,
+    #[token("||")]
+    Concat,
 
     // @attribute — capture the name after '@' (must be non-empty).
     #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
@@ -170,6 +172,7 @@ fn token_display(t: &Token) -> String {
         Token::Minus => "'-'".into(),
         Token::Divide => "'/'".into(),
         Token::Percent => "'%'".into(),
+        Token::Concat => "'||'".into(),
         Token::At(s) => format!("'@{s}'"),
         Token::Str(s) => format!("\"{s}\""),
         Token::Float(f) => format!("{f}"),
@@ -188,18 +191,32 @@ pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
         let span = lex.span();
         match res {
             Ok(tok) => {
-                // Split `ident*` (no dot) into `Ident(ident)` + `Star` so that
+                // Split `ident*suffix` (no dot) at the first `*` so that
                 // `n*2` parses as multiplication rather than a glob field name.
+                // `n*` (glob tail, ends with *) also becomes Ident("n") + Star.
                 // Dotted patterns like `java.lang.*` are left intact — they can only
                 // appear as class names in FROM/INSTANCEOF/path() contexts where
                 // any_ident() is called explicitly.
                 if let Token::Ident(ref s) = tok {
-                    if s.ends_with('*') && !s.contains('.') && s.len() > 1 {
-                        let base = s[..s.len() - 1].to_string();
-                        let star_pos = span.end - 1;
-                        out.push((Token::Ident(base), (span.start..star_pos).into()));
-                        out.push((Token::Star, (star_pos..span.end).into()));
-                        continue;
+                    if let Some(star_idx) = s.find('*') {
+                        if !s.contains('.') && star_idx > 0 {
+                            let base = s[..star_idx].to_string();
+                            let star_pos = span.start + star_idx;
+                            out.push((Token::Ident(base), (span.start..star_pos).into()));
+                            out.push((Token::Star, (star_pos..star_pos + 1).into()));
+                            // Re-lex the suffix after the `*` (e.g. `2` in `n*2`).
+                            let suffix_start = star_pos + 1;
+                            if suffix_start < span.end {
+                                let suffix_src = &src[suffix_start..span.end];
+                                let suffix_tokens = tokenize_spanned(suffix_src)?;
+                                for (t, s2) in suffix_tokens {
+                                    let adjusted: SimpleSpan =
+                                        (suffix_start + s2.start..suffix_start + s2.end).into();
+                                    out.push((t, adjusted));
+                                }
+                            }
+                            continue;
+                        }
                     }
                 }
                 out.push((tok, (span.start..span.end).into()));
@@ -672,7 +689,7 @@ where
             },
         );
 
-        mul.clone().foldl(
+        let add = mul.clone().foldl(
             just(Token::Plus)
                 .to(ArithOp::Add)
                 .or(just(Token::Minus).to(ArithOp::Sub))
@@ -683,7 +700,17 @@ where
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             },
-        )
+        );
+
+        // String concatenation operator || treated as CONCAT function
+        add.clone()
+            .foldl(just(Token::Concat).then(add).repeated(), |lhs, (_, rhs)| {
+                Expr::Method {
+                    receiver: Box::new(lhs),
+                    name: "concat".to_string(),
+                    args: vec![rhs],
+                }
+            })
     });
 
     // Symbolic comparison operators tokenized by logos.
@@ -1054,7 +1081,11 @@ where
                     inner: Box::new(inner),
                     negated: false,
                 });
+            let bool_lit = ident_ci("TRUE")
+                .to(Predicate::Bool(true))
+                .or(ident_ci("FALSE").to(Predicate::Bool(false)));
             let primary = paren
+                .or(bool_lit)
                 .or(instanceof)
                 .or(in_subquery)
                 .or(in_list)
@@ -1166,32 +1197,43 @@ where
                 },
             );
 
-            // `PERCENTILE(<arg>, <p>)` — two-arg aggregate.
+            // `PERCENTILE(<arg>, <p>)` — two-arg aggregate. The percentile
+            // value may be given as an integer (e.g. 95) or as a float in [0,1]
+            // (e.g. 0.95), which is multiplied by 100 and rounded.
             let percentile_item = ident_ci("PERCENTILE")
                 .ignore_then(just(Token::LParen))
                 .ignore_then(item.clone())
                 .then_ignore(just(Token::Comma))
-                .then(select! { Token::Int(n) => n })
+                .then(select! { Token::Int(n) => n as f64 }.or(select! { Token::Float(f) => f }))
                 .then_ignore(just(Token::RParen))
-                .validate(|((arg, _alias), p): ((SelectItem, Option<String>), i64), e, emitter| {
-                    if !(1..=100).contains(&p) {
-                        emitter.emit(Rich::custom(
-                            e.span(),
-                            format!(
-                                "PERCENTILE(<arg>, p): p must be an integer between 1 and 100, got {p}"
-                            ),
-                        ));
-                    }
-                    let clamped = p.clamp(1, 100) as u8;
-                    (
-                        SelectItem::Aggregate {
-                            func: AggFunc::Percentile(clamped),
-                            arg: Box::new(arg),
-                            filter: None,
-                        },
-                        None::<String>,
-                    )
-                });
+                .validate(
+                    |((arg, _alias), p): ((SelectItem, Option<String>), f64), e, emitter| {
+                        // Accept either int form (1–100) or fraction form (0.0–1.0).
+                        let p_int = if p > 0.0 && p <= 1.0 {
+                            (p * 100.0).round() as i64
+                        } else {
+                            p as i64
+                        };
+                        if !(1..=100).contains(&p_int) {
+                            emitter.emit(Rich::custom(
+                                e.span(),
+                                format!(
+                                    "PERCENTILE(<arg>, p): p must be an integer between 1 and 100 \
+                                     (or a fraction 0.01–1.0), got {p}"
+                                ),
+                            ));
+                        }
+                        let clamped = p_int.clamp(1, 100) as u8;
+                        (
+                            SelectItem::Aggregate {
+                                func: AggFunc::Percentile(clamped),
+                                arg: Box::new(arg),
+                                filter: None,
+                            },
+                            None::<String>,
+                        )
+                    },
+                );
 
             let path_operand =
                 any_ident()
@@ -1569,7 +1611,15 @@ where
                 let objects_noop = ident_ci("OBJECTS").ignore_then(from_source.clone());
                 objects_of_class.or(objects_noop).or(from_source)
             })
-            .then(any_ident().and_is(reserved_ident().not()).or_not())
+            // FROM alias: optional bare ident or AS-prefixed ident.
+            // `AS alias` is the standard SQL form; bare ident is also accepted for
+            // compatibility. `AS` is in RESERVED so must be consumed explicitly here.
+            .then(
+                ident_ci("AS")
+                    .ignore_then(any_ident())
+                    .or(any_ident().and_is(reserved_ident().not()))
+                    .or_not(),
+            )
             // JOIN clauses: (INNER | LEFT (OUTER?)?) JOIN <source> AS alias (cols) ON expr = expr
             .then({
                 // RHS source: VALUES inline table, virtual table name, or subquery.
@@ -1748,6 +1798,7 @@ where
                         limit,
                         offset,
                         union_branches: Vec::new(),
+                        union_all: false,
                         union_limit: None,
                         group_by,
                         having,
@@ -1795,21 +1846,21 @@ where
         .ignore_then(base_query.clone())
         .repeated()
         .collect::<Vec<Query>>();
+    // UNION (ALL)? branch: `UNION ALL` keeps duplicates, plain `UNION` deduplicates.
+    let union_with_all = ident_ci("UNION")
+        .ignore_then(ident_ci("ALL").or_not().map(|a| a.is_some()))
+        .then(union_branch)
+        .map(|(is_all, (q, paren))| (q, paren, is_all));
     base_query
         .clone()
-        .then(
-            ident_ci("UNION")
-                .ignore_then(union_branch)
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
+        .then(union_with_all.repeated().collect::<Vec<_>>())
         .then(intersect_tail)
         .then(except_tail)
         .then(trailing_limit)
         .then_ignore(end())
         .validate(
             |((((mut head, union_tail), intersects), excepts), trailing): (
-                (((Query, Vec<(Query, bool)>), Vec<Query>), Vec<Query>),
+                (((Query, Vec<(Query, bool, bool)>), Vec<Query>), Vec<Query>),
                 Option<u64>,
             ),
              e,
@@ -1827,8 +1878,11 @@ where
                 //     form matches MAT too. A LIMIT written INSIDE a branch's own
                 //     parens is a genuine per-branch limit and is left untouched
                 //     (we only lift when the last branch was NOT parenthesized).
-                let last_was_paren = union_tail.last().map(|(_, p)| *p).unwrap_or(false);
-                head.union_branches = union_tail.into_iter().map(|(q, _)| q).collect();
+                let last_was_paren = union_tail.last().map(|(_, p, _)| *p).unwrap_or(false);
+                // If ANY branch uses UNION ALL, treat the whole chain as UNION ALL
+                // (standard SQL: all branches must be consistent).
+                head.union_all = union_tail.iter().any(|(_, _, is_all)| *is_all);
+                head.union_branches = union_tail.into_iter().map(|(q, _, _)| q).collect();
                 if !head.union_branches.is_empty() {
                     if let Some(n) = trailing {
                         head.union_limit = Some(n);
@@ -1964,6 +2018,7 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
         Predicate::InstanceOf(_) => {}
         // EXISTS inner is normalized when it is parsed; the outer has no alias to normalize.
         Predicate::Exists { .. } => {}
+        Predicate::Bool(_) => {}
     }
 }
 
@@ -2167,6 +2222,8 @@ pub const RESERVED: &[&str] = &[
     // Set operation keywords.
     "INTERSECT",
     "EXCEPT",
+    // UNION ALL modifier.
+    "ALL",
     // JOIN keywords.
     "JOIN",
     "INNER",
@@ -2893,6 +2950,7 @@ mod tests {
             limit,
             offset: None,
             union_branches: Vec::new(),
+            union_all: false,
             union_limit: None,
             group_by: Vec::new(),
             having: None,

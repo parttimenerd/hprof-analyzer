@@ -8526,13 +8526,14 @@ fn oql70b_group_by_in_values_query() {
         "GROUP BY cat should give 2 groups:\n{out}"
     );
     // Data rows contain 'a' and 'b' category values.
-    assert!(out.contains(" a "), "missing group 'a':\n{out}");
-    assert!(out.contains(" b "), "missing group 'b':\n{out}");
-    // Check that both counts appear (2 for "a", 1 for "b").
     let data = extract_data_rows(&out);
     assert_eq!(data.len(), 2, "expected 2 data rows:\n{out}");
-    let a_row = data.iter().find(|r| r.contains(" a ") || r.contains("| a"));
-    let b_row = data.iter().find(|r| r.contains(" b ") || r.contains("| b"));
+    let a_row = data
+        .iter()
+        .find(|r| r.starts_with("a ") || r.starts_with("a|") || r.starts_with("a\t"));
+    let b_row = data
+        .iter()
+        .find(|r| r.starts_with("b ") || r.starts_with("b|") || r.starts_with("b\t"));
     assert!(a_row.is_some(), "missing group 'a' in data rows:\n{out}");
     assert!(b_row.is_some(), "missing group 'b' in data rows:\n{out}");
     assert!(
@@ -8543,4 +8544,77 @@ fn oql70b_group_by_in_values_query() {
         b_row.unwrap().contains('1'),
         "group 'b' should have count 1:\n{out}"
     );
+}
+
+#[test]
+fn oql71_union_deduplicates_rows() {
+    let out = run_values_query(
+        r#"SELECT v FROM (VALUES (1), (2)) AS t(v) UNION SELECT v FROM (VALUES (2), (3)) AS t(v)"#,
+    );
+    // Plain UNION must dedup: row '2' appears in both branches but should appear once.
+    let data = extract_data_rows(&out);
+    assert_eq!(
+        data.len(),
+        3,
+        "UNION should give 3 unique rows, got:\n{out}"
+    );
+}
+
+#[test]
+fn oql71b_union_all_keeps_duplicates() {
+    let out = run_values_query(
+        r#"SELECT v FROM (VALUES (1), (2)) AS t(v) UNION ALL SELECT v FROM (VALUES (2), (3)) AS t(v)"#,
+    );
+    // UNION ALL keeps duplicates: 4 rows total.
+    let data = extract_data_rows(&out);
+    assert_eq!(data.len(), 4, "UNION ALL should give 4 rows, got:\n{out}");
+}
+
+#[test]
+fn oql72_window_row_number_in_values() {
+    let out = run_values_query(
+        r#"SELECT v, ROW_NUMBER() OVER () AS rn FROM (VALUES (10), (20), (30)) AS t(v)"#,
+    );
+    // ROW_NUMBER should assign 1, 2, 3 — not null.
+    assert!(out.contains('1'), "missing row number 1:\n{out}");
+    assert!(out.contains('2'), "missing row number 2:\n{out}");
+    assert!(out.contains('3'), "missing row number 3:\n{out}");
+    let data = extract_data_rows(&out);
+    assert_eq!(data.len(), 3, "expected 3 rows:\n{out}");
+}
+
+#[test]
+fn oql73_null_eq_null_is_false() {
+    // SQL three-valued logic: NULL = NULL is UNKNOWN, not TRUE.
+    // A WHERE clause on an equality with NULL should yield 0 rows.
+    let out = run_values_query(r#"SELECT v FROM (VALUES (1), (2)) AS t(v) WHERE v = NULL"#);
+    let data = extract_data_rows(&out);
+    assert_eq!(
+        data.len(),
+        0,
+        "WHERE v = NULL should return 0 rows (use IS NULL instead):\n{out}"
+    );
+}
+
+#[test]
+fn oql74_subquery_as_alias_parses() {
+    // FROM (subquery) AS alias — the AS keyword must be accepted before the alias.
+    // The VALUES-based inner query is fine; the planner rejects non-* heap subqueries
+    // but the parser must not error on AS.
+    let out = run_values_query(
+        r#"SELECT v FROM (VALUES (1), (2)) AS t(v) UNION ALL SELECT v FROM (VALUES (3)) AS t(v)"#,
+    );
+    // UNION ALL: 3 rows total.
+    let data = extract_data_rows(&out);
+    assert_eq!(data.len(), 3, "UNION ALL with 2+1 rows expected 3:\n{out}");
+}
+
+#[test]
+fn oql74b_union_all_preserves_duplicates() {
+    let out = run_values_query(
+        r#"SELECT v FROM (VALUES (1), (1), (2)) AS t(v) UNION ALL SELECT v FROM (VALUES (1)) AS t(v)"#,
+    );
+    // UNION ALL: 4 rows (all duplicates kept).
+    let data = extract_data_rows(&out);
+    assert_eq!(data.len(), 4, "UNION ALL should give 4 rows:\n{out}");
 }

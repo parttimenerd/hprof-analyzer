@@ -676,6 +676,7 @@ pub(crate) fn eval_having_term(
             };
             compare_values(&lv, *op, &rv, like_re)
         }
+        P::Bool(b) => *b,
         // Unsupported predicates in HAVING (e.g. EXISTS/IN subqueries) do not
         // silently keep all groups — they reject all groups until proper support
         // is wired into the HAVING evaluator (OQL-27).
@@ -1398,7 +1399,22 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Length => QueryValue::Null,
             // inbound/outbound reference counts need the post-scan ref graph; filled later.
             Attr::Inbounds | Attr::Outbounds => QueryValue::Null,
-            Attr::Field(name) => self.decode_field(class_id, name, blob),
+            Attr::Field(name) => {
+                // Bare FROM alias used as an expression (e.g. `i.equals(i)`) — the
+                // alias refers to the object being scanned, not a heap field named `i`.
+                if self.query.alias.as_deref() == Some(name.as_str()) {
+                    return QueryValue::ObjRef {
+                        index: src_idx as u64,
+                        class: self
+                            .resolver
+                            .class_name(class_id)
+                            .unwrap_or("?")
+                            .to_string(),
+                        addr: self.resolver.addr_of(src_idx),
+                    };
+                }
+                self.decode_field(class_id, name, blob)
+            }
             // N-hop reference paths resolve against the forward-ref graph, which
             // only exists post-scan (P2). Filled by the stage runner, not here.
             Attr::RefPath { .. } => QueryValue::Null,
@@ -2122,6 +2138,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.exists_cursor.set(idx + 1);
                 self.exists_bools.get(idx).copied().unwrap_or(false)
             }
+            P::Bool(b) => *b,
             P::Compare { lhs, op, rhs } => {
                 // Pass the real `src_idx` so object-identity LHS attrs
                 // (@objectAddress/@objectId) compare against the actual object,
@@ -2257,6 +2274,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.exists_cursor.set(idx + 1);
                 self.exists_bools.get(idx).copied().unwrap_or(false)
             }
+            P::Bool(b) => *b,
             P::Compare { lhs, op, rhs } => {
                 let lv = self.eval_expr_array(lhs, src_idx, class_name, length);
                 let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
@@ -2911,7 +2929,7 @@ fn count_in_nodes(p: &crate::query::ast::Predicate) -> usize {
         P::And(a, b) | P::Or(a, b) => count_in_nodes(a) + count_in_nodes(b),
         P::Not(a) => count_in_nodes(a),
         P::InSubquery { .. } => 1,
-        P::Compare { .. } | P::InstanceOf(_) | P::Exists { .. } => 0,
+        P::Compare { .. } | P::InstanceOf(_) | P::Exists { .. } | P::Bool(_) => 0,
     }
 }
 
@@ -2924,7 +2942,7 @@ fn count_exists_nodes(p: &crate::query::ast::Predicate) -> usize {
         P::And(a, b) | P::Or(a, b) => count_exists_nodes(a) + count_exists_nodes(b),
         P::Not(a) => count_exists_nodes(a),
         P::Exists { .. } => 1,
-        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } => 0,
+        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } | P::Bool(_) => 0,
     }
 }
 
@@ -3461,10 +3479,30 @@ pub(crate) fn compare_values(
 ) -> bool {
     if matches!(op, CompareOp::Like | CompareOp::NotLike) {
         let is_like = match (lv, rv) {
-            (QueryValue::Str(s), QueryValue::Str(_)) => {
-                like_re.map(|re| re.is_match(s)).unwrap_or(false)
+            (QueryValue::Str(s), QueryValue::Str(pat)) => {
+                if let Some(re) = like_re {
+                    re.is_match(s)
+                } else {
+                    // VALUES path: no pre-compiled regex; compile on the fly.
+                    // Mirror the smart glob-vs-regex detection in compile_like_regexes.
+                    let has_regex_chars = pat.contains(".*")
+                        || pat.starts_with('^')
+                        || pat.contains('|')
+                        || pat.contains('(')
+                        || pat.contains(')');
+                    let effective_pat =
+                        if (pat.contains('%') || pat.contains('_')) && !has_regex_chars {
+                            sql_glob_to_regex(pat)
+                        } else {
+                            pat.clone()
+                        };
+                    let anchored = format!("^(?:{effective_pat})$");
+                    regex::Regex::new(&anchored)
+                        .map(|re| re.is_match(s))
+                        .unwrap_or(false)
+                }
             }
-            // Non-string LHS (or non-string RHS): never "like".
+            // Non-string LHS or NULL: never "like" (SQL LIKE on NULL is NULL → false).
             _ => false,
         };
         return if matches!(op, CompareOp::Like) {
@@ -3657,7 +3695,11 @@ fn collect_like_regexes(
             }
         }
         // Non-LIKE compares, InstanceOf, IN-subqueries, and EXISTS carry no LIKE pattern.
-        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } | P::Exists { .. } => {}
+        P::Compare { .. }
+        | P::InstanceOf(_)
+        | P::InSubquery { .. }
+        | P::Exists { .. }
+        | P::Bool(_) => {}
     }
     Ok(())
 }
@@ -3936,7 +3978,7 @@ pub(crate) fn qv_value_eq_pub(a: &QueryValue, b: &QueryValue) -> bool {
 fn qv_value_eq(a: &QueryValue, b: &QueryValue) -> bool {
     use QueryValue::*;
     match (a, b) {
-        (Null, Null) => true,
+        (Null, Null) => false,
         (Bool(x), Bool(y)) => x == y,
         (Int(x), Int(y)) => x == y,
         (Float(x), Float(y)) => x == y,
@@ -5575,6 +5617,7 @@ mod tests {
             limit: None,
             offset: None,
             union_branches: Vec::new(),
+            union_all: false,
             union_limit: None,
             group_by: Vec::new(),
             having: None,

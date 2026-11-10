@@ -1501,6 +1501,7 @@ mod tests {
             limit: None,
             offset: None,
             union_branches: vec![],
+            union_all: false,
             union_limit: None,
             group_by: vec![],
             having: None,
