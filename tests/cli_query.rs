@@ -8618,3 +8618,26 @@ fn oql74b_union_all_preserves_duplicates() {
     let data = extract_data_rows(&out);
     assert_eq!(data.len(), 4, "UNION ALL should give 4 rows:\n{out}");
 }
+
+#[test]
+fn oql75_nested_case_when() {
+    // Nested CASE WHEN: THEN value itself is another CASE expression.
+    let out = run_values_query(
+        r#"SELECT CASE WHEN x > 4 THEN "high" ELSE CASE WHEN x > 2 THEN "mid" ELSE "low" END END FROM (VALUES (1), (3), (5)) AS t(x)"#,
+    );
+    assert!(out.contains("low"), "x=1 should give 'low':\n{out}");
+    assert!(out.contains("mid"), "x=3 should give 'mid':\n{out}");
+    assert!(out.contains("high"), "x=5 should give 'high':\n{out}");
+}
+
+#[test]
+fn oql75b_where_boolean_literal() {
+    // WHERE true — boolean literal in predicate.
+    let out = run_values_query(r#"SELECT v FROM (VALUES (1), (2), (3)) AS t(v) WHERE true"#);
+    let data = extract_data_rows(&out);
+    assert_eq!(data.len(), 3, "WHERE true should return all 3 rows:\n{out}");
+
+    let out2 = run_values_query(r#"SELECT v FROM (VALUES (1), (2), (3)) AS t(v) WHERE false"#);
+    let data2 = extract_data_rows(&out2);
+    assert_eq!(data2.len(), 0, "WHERE false should return 0 rows:\n{out2}");
+}

@@ -1125,22 +1125,26 @@ where
 
         // CASE WHEN <pred> THEN <expr> [WHEN <pred> THEN <expr>]* [ELSE <expr>] END
         // Defined here (inside base_query) so it can reuse `predicate`.
-        let case_expr = ident_ci("CASE")
-            .ignore_then(
-                ident_ci("WHEN")
-                    .ignore_then(predicate.clone())
-                    .then_ignore(ident_ci("THEN"))
-                    .then(expr.clone())
-                    .repeated()
-                    .at_least(1)
-                    .collect::<Vec<_>>(),
-            )
-            .then(ident_ci("ELSE").ignore_then(expr.clone()).or_not())
-            .then_ignore(ident_ci("END"))
-            .map(|(branches, else_)| Expr::Case {
-                branches,
-                else_: else_.map(Box::new),
-            });
+        // Wrapped in `recursive` so that THEN/ELSE can themselves be nested CASE exprs.
+        let case_expr = recursive(|case_expr| {
+            let then_expr = case_expr.clone().map(|e| e).or(expr.clone());
+            ident_ci("CASE")
+                .ignore_then(
+                    ident_ci("WHEN")
+                        .ignore_then(predicate.clone())
+                        .then_ignore(ident_ci("THEN"))
+                        .then(then_expr.clone())
+                        .repeated()
+                        .at_least(1)
+                        .collect::<Vec<_>>(),
+                )
+                .then(ident_ci("ELSE").ignore_then(then_expr).or_not())
+                .then_ignore(ident_ci("END"))
+                .map(|(branches, else_)| Expr::Case {
+                    branches,
+                    else_: else_.map(Box::new),
+                })
+        });
 
         // select item: AGG(item) | path(a, b) | toString(s) | * | case_expr | expr
         // Each item may be followed by an optional `AS <name>` alias.
@@ -3847,6 +3851,30 @@ mod tests {
         let spec = q.from.class_spec().expect("class source");
         assert!(!spec.is_regex, "bare-glob FROM must NOT be regex");
         assert_eq!(spec.class_name, "com.acme.*");
+    }
+
+    #[test]
+    fn from_quoted_array_type_parses() {
+        // "byte[]" is a valid Java type name but an invalid regex (unclosed char class).
+        // The parser must accept it and compile_from_regex must fall back to literal match.
+        let q = parse(r#"SELECT * FROM "byte[]""#).unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert!(spec.is_regex, "quoted FROM sets is_regex");
+        assert_eq!(spec.class_name, "byte[]");
+        // compile_from_regex must succeed (fallback to escaped literal).
+        assert!(
+            crate::query::execute::compile_from_regex(spec).is_ok(),
+            "compile_from_regex must not fail for 'byte[]'"
+        );
+    }
+
+    #[test]
+    fn nested_case_when_parses() {
+        // CASE WHEN ... THEN CASE WHEN ... ELSE ... END ELSE ... END
+        let q = parse(
+            r#"SELECT CASE WHEN x > 4 THEN "hi" ELSE CASE WHEN x > 2 THEN "mid" ELSE "lo" END END FROM java.lang.Object"#,
+        );
+        assert!(q.is_ok(), "nested CASE WHEN must parse: {:?}", q.err());
     }
 
     #[test]

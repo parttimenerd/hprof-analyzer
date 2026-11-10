@@ -2988,12 +2988,22 @@ pub fn compile_from_regex(
     let anchored = format!("^(?:{})$", spec.class_name);
     match regex::Regex::new(&anchored) {
         Ok(re) => Ok(Some(re)),
-        Err(e) => Err(crate::query::QueryError(format!(
-            "invalid regex in FROM \"{}\": {} \
-             (the quoted FROM target is matched as a Java-style regex; \
-             fix the pattern or use a bare class name / `pkg.*` glob instead)",
-            spec.class_name, e
-        ))),
+        Err(_) => {
+            // The quoted string is not a valid regex (e.g. "byte[]" — `[]` is an
+            // unclosed character class). Fall back to treating it as a literal class
+            // name by escaping all regex metacharacters. This makes `FROM "byte[]"`
+            // behave like `FROM byte[]` (exact match), which is the user's intent.
+            let escaped = regex::escape(&spec.class_name);
+            let anchored = format!("^(?:{escaped})$");
+            regex::Regex::new(&anchored).map(Some).map_err(|e| {
+                crate::query::QueryError(format!(
+                    "invalid regex in FROM \"{}\": {} \
+                     (the quoted FROM target is matched as a Java-style regex; \
+                     fix the pattern or use a bare class name / `pkg.*` glob instead)",
+                    spec.class_name, e
+                ))
+            })
+        }
     }
 }
 
