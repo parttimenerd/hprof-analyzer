@@ -252,11 +252,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Add cross-compilation target
-        run: rustup target add ${{ matrix.target }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -273,6 +268,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: Add cross-compilation target
+        run: rustup target add ${{ matrix.target }}
 
       - name: Build
         run: |
