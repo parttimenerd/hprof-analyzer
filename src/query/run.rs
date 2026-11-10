@@ -2300,7 +2300,27 @@ pub fn apply_joins_and_project(
         return joined;
     }
 
-    let out_cols: Vec<QueryColumn> = query_columns(q);
+    // Collect all JOIN RHS aliases so we can strip them from column names.
+    // e.g. `v.label` → `label` when `v` is a join alias.
+    let join_aliases: Vec<&str> = joins.iter().map(|jp| jp.source.alias()).collect();
+
+    let strip_join_alias = |name: String| -> String {
+        for alias in &join_aliases {
+            let prefix = format!("{alias}.");
+            if let Some(stripped) = name.strip_prefix(prefix.as_str()) {
+                return stripped.to_string();
+            }
+        }
+        name
+    };
+
+    let out_cols: Vec<QueryColumn> = query_columns(q)
+        .into_iter()
+        .map(|mut c| {
+            c.name = strip_join_alias(c.name);
+            c
+        })
+        .collect();
     let all_col_names: Vec<String> = joined.columns.iter().map(|c| c.name.clone()).collect();
 
     let project_row = |row: &[QueryValue]| -> Vec<QueryValue> {

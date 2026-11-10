@@ -4104,14 +4104,7 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         Attr::ToString(a) => format!("toString({a})"),
         Attr::ToHex(inner) => format!("toHex({})", expr_name(inner)),
         Attr::Field(f) => f.clone(),
-        Attr::RefPath { hops, tail, role } => {
-            // Single-hop table-qualified column refs like `t.name` or `v.label` in
-            // SELECT should display as just the field name (`name`, `label`), not
-            // `t.name` / `v.label`.  Multi-hop real field traversals keep the full
-            // dotted form so the output is unambiguous.
-            if hops.len() == 1 && *role == crate::query::ast::RefRole::ProjectionOnly {
-                return attr_name(tail);
-            }
+        Attr::RefPath { hops, tail, .. } => {
             let mut s = hops.join(".");
             s.push('.');
             s.push_str(&attr_name(tail));
