@@ -1215,8 +1215,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             return false;
         }
         match self.plan.scan_limit {
-            Some(lim) => self.matched >= lim,
-            None => false,
+            // OQL-4: LIMIT 0 is a zero-length request, not an early-stopped scan.
+            // scan_limit=0 would make scan_satisfied() return true before any rows
+            // are visited, causing truncated=true even though the user asked for 0 rows.
+            Some(lim) if lim > 0 => self.matched >= lim,
+            _ => false,
         }
     }
 

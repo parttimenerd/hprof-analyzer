@@ -1508,17 +1508,15 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     let cross_phase = uses_retained(q);
     if cross_phase {
         needs.retained = true;
-        // PERCENTILE/MEDIAN collect their argument's values at scan time, but a
-        // cross-phase (retained) query scans in index-only carry mode with no
-        // scan-time accumulator — the values would never be gathered. Reject at
-        // plan time with an actionable message rather than returning an empty
-        // percentile. (Mirrors the toString-late aggregate guard below.)
-        if q.select.iter().any(select_uses_percentile) {
+        // PERCENTILE/MEDIAN without GROUP BY: the scan runs in index-only carry mode
+        // with no per-value accumulator, so the values would never be gathered. Reject.
+        // With GROUP BY, join_retained_group_by collects values in the late phase (OQL-54).
+        if q.select.iter().any(select_uses_percentile) && q.group_by.is_empty() {
             return Err(QueryError(
-                "PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize; \
-                 retained size is computed in a later phase where per-value \
-                 collection is unavailable. Compute the percentile over a \
-                 scan-time attribute (e.g. @usedHeapSize) instead"
+                "PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize without \
+                 GROUP BY; retained size is computed in a later phase where per-value \
+                 collection is unavailable. Add a GROUP BY clause, or compute the \
+                 percentile over a scan-time attribute (e.g. @usedHeapSize) instead"
                     .into(),
             ));
         }

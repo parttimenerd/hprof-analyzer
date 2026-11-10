@@ -921,7 +921,11 @@ pub(crate) fn resume_with_string_values(
                             if r.rows.len() > lim {
                                 r.rows.truncate(lim);
                                 r.row_count = lim as u64;
-                                r.truncated = true;
+                                // OQL-4: LIMIT 0 is an explicit "give me nothing"
+                                // request, not a data cap — don't mark truncated.
+                                if lim > 0 {
+                                    r.truncated = true;
+                                }
                             }
                         }
                     }
@@ -1430,8 +1434,37 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                 .iter()
                 .map(|item| match item {
                     SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
-                        if let Some(pos) = available_cols.iter().position(|c| c == f) {
-                            row.get(pos).cloned().unwrap_or(QueryValue::Null)
+                        // OQL-61: qualified refs like `t.x` may not match when the
+                        // join has flattened columns to bare names. Strip the table
+                        // alias prefix and retry (mirrors eval_expr_on_row logic).
+                        let bare = f.rsplit_once('.').map(|(_, col)| col).unwrap_or(f.as_str());
+                        let pos = available_cols.iter().position(|c| c == f).or_else(|| {
+                            if bare != f {
+                                available_cols.iter().position(|c| c == bare)
+                            } else {
+                                None
+                            }
+                        });
+                        pos.and_then(|p| row.get(p))
+                            .cloned()
+                            .unwrap_or(QueryValue::Null)
+                    }
+                    // OQL-61: `t.x` normalizes to RefPath{hops:["t"], tail:Field("x")} when
+                    // the FROM alias is not stripped (VALUES queries have q.alias=None).
+                    // A single-hop RefPath in a VALUES context is just a table-qualified
+                    // column ref; look up the tail field name in the available columns.
+                    SelectItem::Attr(crate::query::ast::Attr::RefPath {
+                        hops,
+                        tail,
+                        role: crate::query::ast::RefRole::ProjectionOnly,
+                    }) if hops.len() == 1 => {
+                        if let crate::query::ast::Attr::Field(col) = tail.as_ref() {
+                            available_cols
+                                .iter()
+                                .position(|c| c == col)
+                                .and_then(|p| row.get(p))
+                                .cloned()
+                                .unwrap_or(QueryValue::Null)
                         } else {
                             QueryValue::Null
                         }

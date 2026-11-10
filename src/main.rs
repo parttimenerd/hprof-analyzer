@@ -3379,17 +3379,14 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             || p.needs.gc_roots
     });
 
-    // Short-circuit VALUES-only batches: no HPROF scan needed at all.
-    let mut query_results = if parsed
+    // OQL-55: VALUES-only batches and subquery batches both route through
+    // run_single_dump so that execute_values_query is called exactly once
+    // (calling it here and then collapse_union_results would double-apply
+    // OFFSET+LIMIT).
+    let values_only = parsed
         .iter()
-        .all(|(q, _)| matches!(q.from, crate::query::ast::FromSource::Values { .. }))
-    {
-        let results: Vec<query::model::QueryResult> = parsed
-            .iter()
-            .map(|(q, plan)| query::run::execute_values_query(q, plan))
-            .collect();
-        query::run::collapse_union_results(results, &union_groups)
-    } else if uses_subqueries {
+        .all(|(q, _)| matches!(q.from, crate::query::ast::FromSource::Values { .. }));
+    let mut query_results = if values_only || uses_subqueries {
         query::run::run_single_dump(input, &parsed, opts.reachable_only)?
     } else if needs_full {
         run_oql_escalated(input, &flat, &union_groups, opts.reachable_only, &opts)?

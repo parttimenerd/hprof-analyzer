@@ -44,17 +44,6 @@ fn stage_limit(q: &Query) -> Option<u64> {
     }
 }
 
-/// S-02: apply OFFSET drain to a row vec. `stage_limit` over-collects by
-/// `offset` rows; this removes them before the result is returned.
-fn drain_offset(rows: &mut Vec<Vec<crate::query::model::QueryValue>>, q: &Query) {
-    if let Some(off) = q.offset {
-        let n = (off as usize).min(rows.len());
-        if n > 0 {
-            rows.drain(..n);
-        }
-    }
-}
-
 /// Human-readable label for an HPROF GC-root sub-tag (`types::heap::ROOT_*`), for
 /// `@GCRoots`/`@GCRootInfo`/`@info` in analyze mode. Labels follow MAT's GC-root
 /// naming (matching `report::format::gc_root_type_label`); an unrecognised code
@@ -643,7 +632,7 @@ fn dominator_rows(
         .map(|s| s.to_string())
         .or_else(|| q.select.first().map(crate::query::execute::column_name))
         .unwrap_or_else(|| "*".to_string());
-    let mut rows: Vec<Vec<QueryValue>> = indices
+    let rows: Vec<Vec<QueryValue>> = indices
         .iter()
         .map(|&i| {
             vec![QueryValue::ObjRef {
@@ -653,8 +642,7 @@ fn dominator_rows(
             }]
         })
         .collect();
-    // S-02: drain OFFSET rows (stage_limit over-collects by offset rows).
-    drain_offset(&mut rows, q);
+    // OFFSET is applied by collapse_union_results after stage_limit over-collects.
     QueryResult {
         name: entry.name.clone(),
         oql: String::new(),
@@ -865,8 +853,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
             truncated = true;
         }
     }
-    // S-02: drain OFFSET rows (stage_limit over-collects by offset rows).
-    drain_offset(&mut rows, q);
+    // OFFSET is applied by collapse_union_results after stage_limit over-collects.
 
     QueryResult {
         name: entry.name.clone(),
@@ -1080,8 +1067,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             truncated = true;
         }
     }
-    // S-02: drain OFFSET rows.
-    drain_offset(&mut out_rows, q);
+    // OFFSET is applied by collapse_union_results after stage_limit over-collects.
 
     QueryResult {
         name: entry.name.clone(),
@@ -2079,8 +2065,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
             truncated = true;
         }
     }
-    // S-02: drain OFFSET rows.
-    drain_offset(&mut rows, q);
+    // OFFSET is applied by collapse_union_results after stage_limit over-collects.
     let note = if !have_offsets {
         Some(
             "array element data requires offset index; run `load_dump` or `heap load` \
@@ -3189,8 +3174,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
             truncated = true;
         }
     }
-    // S-02: drain OFFSET rows.
-    drain_offset(&mut out_rows, q);
+    // OFFSET is applied by collapse_union_results after stage_limit over-collects.
     QueryResult {
         name: entry.name.clone(),
         oql: String::new(),
