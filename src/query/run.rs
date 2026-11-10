@@ -2336,6 +2336,21 @@ pub fn run_single_dump(
             if let Some(src) = inner_src_by_slot.get(&slot) {
                 filter_result_by_src(r, src, dfn);
             }
+            // Re-apply the inner LIMIT after the reachable-only prune: the inner
+            // scan deferred its LIMIT (row_src was armed so early-stop was
+            // disabled), so the inner result may still exceed plan.limit after
+            // pruning. Without this, FROM-subquery identity sets contain ALL
+            // reachable objects instead of the intended LIMIT-N subset.
+            if let Some(lim) = inners.get(slot).and_then(|i| i.plan.limit) {
+                let lim = lim as usize;
+                if r.rows.len() > lim {
+                    r.rows.truncate(lim);
+                    r.row_count = lim as u64;
+                    if lim > 0 {
+                        r.truncated = true;
+                    }
+                }
+            }
         }
     }
 
